@@ -50,10 +50,11 @@ pnpm check         # tous les contrôles qualité
 
 - `src/app` : routes, layout et styles globaux ;
 - `src/components` : composants d'interface et de mise en page ;
-- `src/features` : domaines fonctionnels isolés (agents, approbations, tâches) ;
-- `src/config` : configuration et validation de l'environnement ;
-- `src/server` : futurs adaptateurs API, services et repositories ;
-- `src/types` : contrats métier partagés ;
+- `src/core` : domaine pur — contrats Zod (`core/contracts`, source unique de
+  vérité), politique d'autorisation et cycle de vie des tâches ;
+- `src/features` : données de démonstration typées par les contrats ;
+- `src/config` : validation de l'environnement à la demande (`loadEnv`) ;
+- `src/server` : ports de services, implémentations en mémoire et journal d'audit ;
 - `docs` : architecture, décisions et feuille de route ;
 - `tests` : emplacement réservé aux futurs tests transverses.
 
@@ -61,7 +62,10 @@ pnpm check         # tous les contrôles qualité
 
 La conversation ne déclenche aucune action. Les agents affichés sont des données de démonstration.
 Il n'existe ni base PostgreSQL, ni API publique, ni authentification, ni connexion à GitHub, OpenAI,
-Anthropic, n8n ou Dolibarr.
+Anthropic, n8n ou Dolibarr. Le journal d'audit et les services sont en mémoire : ils perdent leur
+état à chaque redémarrage, ne sont pas fiables entre plusieurs processus et ne constituent aucune
+garantie d'audit de production. Leur remplacement par PostgreSQL est prévu (voir la feuille de route
+et [l'ADR-0002](docs/decisions/0002-zod-contracts-and-in-memory-services.md)).
 
 ## Prochaines étapes
 

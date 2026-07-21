@@ -1,29 +1,31 @@
-export type TaskStatus = "completed" | "pending_approval" | "queued";
+import type { Task } from "@/core/contracts";
 
-export interface DemoTask {
-  id: string;
-  title: string;
-  agentName: string;
-  status: TaskStatus;
-}
-
-export const demoTasks: readonly DemoTask[] = [
+export const demoTasks = [
   {
     id: "task-001",
     title: "Diagnostic du socle ICOS",
-    agentName: "CTO",
-    status: "completed",
+    assignedAgentId: "agent-cto",
+    status: "succeeded",
+    actionIds: [],
+    createdAt: "2026-07-20T09:00:00.000Z",
+    updatedAt: "2026-07-20T17:30:00.000Z",
   },
   {
     id: "task-002",
     title: "Politique d’approbation",
-    agentName: "Contrôle qualité",
-    status: "pending_approval",
+    assignedAgentId: "agent-quality",
+    status: "awaiting_approval",
+    actionIds: [],
+    createdAt: "2026-07-21T08:00:00.000Z",
+    updatedAt: "2026-07-21T08:15:00.000Z",
   },
   {
     id: "task-003",
     title: "Cartographie des intégrations",
-    agentName: "Infrastructure",
+    assignedAgentId: "agent-infra",
     status: "queued",
+    actionIds: [],
+    createdAt: "2026-07-21T08:05:00.000Z",
+    updatedAt: "2026-07-21T08:05:00.000Z",
   },
-];
+] satisfies readonly Task[];

@@ -7,7 +7,7 @@ export default function Home() {
   return (
     <main className="shell">
       <Sidebar />
-      <section className="workspace">
+      <section className="workspace" id="overview">
         <header className="topbar">
           <div>
             <p className="eyebrow">Cockpit opérationnel</p>
@@ -25,7 +25,7 @@ export default function Home() {
         </div>
 
         <div className="dashboard-grid">
-          <section className="conversation-panel panel">
+          <section className="conversation-panel panel" id="conversation">
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Canal principal</p>
