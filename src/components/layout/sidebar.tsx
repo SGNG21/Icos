@@ -1,4 +1,11 @@
-const navigation = ["Vue d’ensemble", "Conversation", "Agents", "Tâches", "Approbations"];
+// L'entrée « Approbations » sera ajoutée au Lot 1B avec son écran :
+// une ancre ne doit pas pointer vers une section inexistante.
+const navigation = [
+  { label: "Vue d’ensemble", anchor: "overview" },
+  { label: "Conversation", anchor: "conversation" },
+  { label: "Agents", anchor: "agents" },
+  { label: "Tâches", anchor: "tasks" },
+];
 
 export function Sidebar() {
   return (
@@ -15,10 +22,10 @@ export function Sidebar() {
         <p className="nav-label">Pilotage</p>
         <ul>
           {navigation.map((item, index) => (
-            <li key={item}>
-              <a className={index === 0 ? "active" : undefined} href={`#${item.toLowerCase()}`}>
+            <li key={item.anchor}>
+              <a className={index === 0 ? "active" : undefined} href={`#${item.anchor}`}>
                 <span className="nav-glyph" aria-hidden="true" />
-                {item}
+                {item.label}
               </a>
             </li>
           ))}

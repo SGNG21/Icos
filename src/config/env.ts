@@ -1,7 +1,13 @@
 import { z } from "zod";
 
-const optionalSecret = z.string().min(1).optional();
-const optionalUrl = z.url().optional();
+/**
+ * Les variables optionnelles vides (`FOO=`) sont traitées comme absentes :
+ * copier `.env.example` tel quel reste valide.
+ */
+const emptyAsUndefined = (value: unknown) => (value === "" ? undefined : value);
+
+const optionalSecret = z.preprocess(emptyAsUndefined, z.string().min(1).optional());
+const optionalUrl = z.preprocess(emptyAsUndefined, z.url().optional());
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -15,4 +21,13 @@ const envSchema = z.object({
   DOLIBARR_API_KEY: optionalSecret,
 });
 
-export const env = envSchema.parse(process.env);
+export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Validation à la demande : aucune exécution au chargement du module, afin que
+ * l'application démarre sans aucun service externe configuré. Les intégrations
+ * restent désactivées tant que leurs adaptateurs n'existent pas.
+ */
+export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
+  return envSchema.parse(source);
+}
