@@ -13,6 +13,12 @@ export interface AuditQuery {
  */
 export interface AuditLog {
   append(entry: AuditEntry): AuditEntry;
+  /**
+   * Ajoute plusieurs entrées de façon atomique : toutes les entrées sont
+   * validées avant qu'aucune ne soit écrite. Si l'une est invalide, aucune
+   * n'est enregistrée.
+   */
+  appendMany(entries: readonly AuditEntry[]): readonly AuditEntry[];
   list(): readonly AuditEntry[];
   query(filter: AuditQuery): readonly AuditEntry[];
 }
@@ -34,6 +40,18 @@ export class InMemoryAuditLog implements AuditLog {
     const validated = auditEntrySchema.parse(entry);
     this.entries.push(structuredClone(validated));
     return structuredClone(validated);
+  }
+
+  /**
+   * Ajoute plusieurs entrées de façon atomique : toutes sont d'abord validées ;
+   * ce n'est qu'ensuite qu'elles sont écrites. Une entrée invalide fait lever
+   * avant toute écriture, de sorte qu'aucune entrée partielle ne subsiste.
+   */
+  appendMany(entries: readonly AuditEntry[]): readonly AuditEntry[] {
+    const validated = entries.map((entry) => auditEntrySchema.parse(entry));
+    const stored = validated.map((entry) => structuredClone(entry));
+    this.entries.push(...stored);
+    return stored.map((entry) => structuredClone(entry));
   }
 
   list(): readonly AuditEntry[] {

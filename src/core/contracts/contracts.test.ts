@@ -122,6 +122,18 @@ describe("auditEntrySchema", () => {
     expect(auditEntrySchema.safeParse(invalid).success).toBe(false);
   });
 
+  it("accepte un nombre fini dans details", () => {
+    const valid = { ...validAuditEntry, details: { count: 3 } };
+    expect(auditEntrySchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("rejette NaN, Infinity et -Infinity dans details", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const invalid = { ...validAuditEntry, details: { value } };
+      expect(auditEntrySchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+
   it("rejette un type d'événement inconnu", () => {
     expect(auditEntrySchema.safeParse({ ...validAuditEntry, eventType: "boot" }).success).toBe(
       false,

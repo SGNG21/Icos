@@ -50,7 +50,9 @@ export const executionStatusSchema = z.enum(["not_started", "refused", "succeede
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
-    z.number(),
+    // Nombres finis uniquement : NaN, Infinity et -Infinity ne sont pas
+    // sérialisables en JSON et sont rejetés.
+    z.number().finite(),
     z.boolean(),
     z.null(),
     z.array(jsonValueSchema),

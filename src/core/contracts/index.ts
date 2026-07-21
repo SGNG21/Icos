@@ -3,4 +3,5 @@ export * from "./agent";
 export * from "./task";
 export * from "./action";
 export * from "./approval";
+export * from "./action-decision";
 export * from "./audit";

@@ -1,10 +1,9 @@
-// L'entrée « Approbations » sera ajoutée au Lot 1B avec son écran :
-// une ancre ne doit pas pointer vers une section inexistante.
 const navigation = [
   { label: "Vue d’ensemble", anchor: "overview" },
   { label: "Conversation", anchor: "conversation" },
   { label: "Agents", anchor: "agents" },
   { label: "Tâches", anchor: "tasks" },
+  { label: "Approbations", anchor: "approvals" },
 ];
 
 export function Sidebar() {

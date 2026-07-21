@@ -54,9 +54,20 @@ pnpm check         # tous les contrôles qualité
   vérité), politique d'autorisation et cycle de vie des tâches ;
 - `src/features` : données de démonstration typées par les contrats ;
 - `src/config` : validation de l'environnement à la demande (`loadEnv`) ;
-- `src/server` : ports de services, implémentations en mémoire et journal d'audit ;
+- `src/server` : ports de services, implémentations en mémoire, journal d'audit,
+  unité de travail transactionnelle, use cases, couche HTTP et container ;
+- `src/app/api` : Route Handlers internes simulés (runtime Node.js, dynamiques) ;
 - `docs` : architecture, décisions et feuille de route ;
 - `tests` : emplacement réservé aux futurs tests transverses.
+
+## API interne (simulée)
+
+Une API interne expose le domaine sans aucune intégration externe : `GET
+/api/agents`, `GET|POST /api/tasks`, `POST /api/tasks/[id]/transition`, `GET
+/api/actions`, `POST /api/actions/[id]/decision`, `GET /api/audit`. Le cockpit lit
+directement le container côté serveur (rendu dynamique) et le panneau
+Approbations effectue ses décisions via ces routes. Voir
+[l'ADR-0003](docs/decisions/0003-internal-api-and-composition.md).
 
 ## Limites actuelles
 
@@ -64,8 +75,11 @@ La conversation ne déclenche aucune action. Les agents affichés sont des donn�
 Il n'existe ni base PostgreSQL, ni API publique, ni authentification, ni connexion à GitHub, OpenAI,
 Anthropic, n8n ou Dolibarr. Le journal d'audit et les services sont en mémoire : ils perdent leur
 état à chaque redémarrage, ne sont pas fiables entre plusieurs processus et ne constituent aucune
-garantie d'audit de production. Leur remplacement par PostgreSQL est prévu (voir la feuille de route
-et [l'ADR-0002](docs/decisions/0002-zod-contracts-and-in-memory-services.md)).
+garantie d'audit de production. L'approbation d'une action enregistre une décision et un audit mais
+ne déclenche **aucune** exécution réelle ; l'identité du décideur (`decidedBy`) est une étiquette
+déclarative non authentifiée. Leur remplacement par PostgreSQL est prévu (voir la feuille de route,
+[l'ADR-0002](docs/decisions/0002-zod-contracts-and-in-memory-services.md) et
+[l'ADR-0003](docs/decisions/0003-internal-api-and-composition.md)).
 
 ## Prochaines étapes
 

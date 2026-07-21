@@ -606,3 +606,154 @@ kbd {
     flex-direction: column;
   }
 }
+
+/* --- Panneau Approbations (Lot 1B) --- */
+.approvals-panel {
+  padding: 20px;
+}
+
+.approvals-note {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.approvals-error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  color: #8a2f2f;
+  font-size: 12px;
+  background: #fbeaea;
+  border: 1px solid #f0cccc;
+  border-radius: 8px;
+}
+
+.approvals-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.approvals-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-item {
+  padding: 14px;
+  background: #f7f9f7;
+  border: 1px solid #e2e8e3;
+  border-radius: 12px;
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-head strong {
+  font-size: 13px;
+}
+
+.risk-chip {
+  padding: 3px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+}
+
+.risk-read_only {
+  color: #35706f;
+  background: #e0efee;
+}
+
+.risk-reversible {
+  color: #6a5410;
+  background: #f7edcf;
+}
+
+.risk-sensitive {
+  color: #8a2f2f;
+  background: #f6dcdc;
+}
+
+.approval-initiator {
+  display: block;
+  margin: 6px 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approval-actions button {
+  padding: 8px 14px;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--forest);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.approval-actions button.ghost {
+  color: var(--forest);
+  background: transparent;
+  border: 1px solid #cfd7d1;
+}
+
+.approval-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.approval-reject label {
+  display: block;
+  margin-bottom: 6px;
+  color: #56635c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.approval-reject textarea {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  background: white;
+  border: 1px solid #cfd7d1;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.approval-result {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.outcome-allowed {
+  color: #31815a;
+}
+
+.outcome-awaiting_approval {
+  color: #6a5410;
+}
+
+.outcome-refused {
+  color: #8a2f2f;
+}

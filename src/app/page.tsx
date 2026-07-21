@@ -1,9 +1,20 @@
 import { AgentGrid } from "@/components/features/agent-grid";
+import { ApprovalsPanel } from "@/components/features/approvals-panel";
 import { CommandComposer } from "@/components/features/command-composer";
 import { RecentTasks } from "@/components/features/recent-tasks";
 import { Sidebar } from "@/components/layout/sidebar";
+import { getContainer } from "@/server/container";
+
+// Le cockpit lit un état mutable en mémoire : rendu dynamique obligatoire, pas
+// de pré-rendu statique ni de cache de rendu.
+export const dynamic = "force-dynamic";
 
 export default function Home() {
+  const container = getContainer();
+  const agents = container.agents.list();
+  const tasks = container.tasks.list();
+  const pendingActions = container.actions.list({ approvalStatus: "pending" });
+
   return (
     <main className="shell">
       <Sidebar />
@@ -48,7 +59,8 @@ export default function Home() {
           </section>
 
           <aside className="activity-column">
-            <RecentTasks />
+            <RecentTasks tasks={tasks} agents={agents} />
+            <ApprovalsPanel initialActions={pendingActions} agents={agents} />
             <section className="panel guardrail-card">
               <p className="eyebrow">Garde-fous</p>
               <h2>Contrôle humain actif</h2>
@@ -61,7 +73,7 @@ export default function Home() {
           </aside>
         </div>
 
-        <AgentGrid />
+        <AgentGrid agents={agents} />
       </section>
     </main>
   );

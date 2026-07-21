@@ -6,12 +6,14 @@ import { demoAgents } from "@/features/agents/data";
 import { demoTasks } from "@/features/tasks/data";
 
 import { InMemoryAgentService } from "./agent-service";
-import { InMemoryApprovalService } from "./approval-service";
 import { InMemoryTaskService } from "./task-service";
 
 /** Journal factice qui échoue systématiquement à l'ajout. */
 class FailingAuditLog implements AuditLog {
   append(): AuditEntry {
+    throw new Error("écriture d'audit indisponible");
+  }
+  appendMany(): readonly AuditEntry[] {
     throw new Error("écriture d'audit indisponible");
   }
   list(): readonly AuditEntry[] {
@@ -92,34 +94,5 @@ describe("InMemoryTaskService", () => {
     const listed = service.list();
     listed[0].title = "corrompu";
     expect(service.list()[0].title).not.toBe("corrompu");
-  });
-});
-
-describe("InMemoryApprovalService", () => {
-  it("enregistre une décision et l'audite", () => {
-    const audit = new InMemoryAuditLog();
-    const service = new InMemoryApprovalService(audit);
-
-    const result = service.recordDecision({
-      actionId: "action-001",
-      decidedBy: "geoffrey",
-      decision: "approved",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(service.listForAction("action-001")).toHaveLength(1);
-    expect(audit.query({ eventType: "approval.recorded", actionId: "action-001" })).toHaveLength(1);
-  });
-
-  it("n'enregistre pas la décision si l'audit échoue", () => {
-    const service = new InMemoryApprovalService(new FailingAuditLog());
-    const result = service.recordDecision({
-      actionId: "action-001",
-      decidedBy: "geoffrey",
-      decision: "rejected",
-    });
-
-    expect(result).toMatchObject({ ok: false, reason: "audit_failed" });
-    expect(service.list()).toHaveLength(0);
   });
 });

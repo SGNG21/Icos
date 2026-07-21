@@ -14,18 +14,47 @@ internes et les règles métier dans un seul déploiement, tout en gardant des f
    tâches (`core/tasks`). Aucune dépendance à l'infrastructure.
 4. `features` fournit des données de démonstration typées par les contrats.
 5. `server` héberge les ports de services et leurs implémentations en mémoire,
-   ainsi que le journal d'audit ; il accueillera les adaptateurs de persistance.
-6. `config` valide la configuration à la demande (`loadEnv`) ; les intégrations
+   le journal d'audit, l'unité de travail transactionnelle, les use cases
+   d'orchestration (`server/usecases`), la couche HTTP (`server/http`) et le
+   container de composition (`server/container.ts`). Il accueillera les
+   adaptateurs de persistance.
+6. `app/api` expose les Route Handlers internes (runtime Node.js, rendu
+   dynamique) ; ils délèguent toute orchestration aux use cases.
+7. `config` valide la configuration à la demande (`loadEnv`) ; les intégrations
    restent optionnelles et inactives.
 
 ```text
-Interface → cas d'usage → politiques d'autorisation → ports → adaptateurs externes
-                              ↓
-                         journal d'audit
+Interface → Route Handlers → use cases → politiques d'autorisation → ports → adaptateurs externes
+                                 ↓
+                    unité de travail → journal d'audit
 ```
 
 Une intégration ne devra jamais être appelée directement depuis un composant. Chaque action portera
 son niveau de risque, l'agent initiateur, son état d'approbation et un résultat journalisable.
+
+## API interne (Lot 1B, simulée)
+
+Routes internes, sans intégration externe ni persistance réelle :
+
+| Méthode | Route                        | Rôle                          |
+| ------- | ---------------------------- | ----------------------------- |
+| GET     | `/api/agents`                | liste des agents              |
+| GET     | `/api/tasks`                 | liste des tâches              |
+| POST    | `/api/tasks`                 | création simulée d'une tâche  |
+| POST    | `/api/tasks/[id]/transition` | transition contrôlée          |
+| GET     | `/api/actions`               | liste des actions (filtrable) |
+| POST    | `/api/actions/[id]/decision` | approbation/rejet humain      |
+| GET     | `/api/audit`                 | journal d'audit filtré        |
+
+Le container est mémoïsé sur `globalThis` et réservé au runtime Node.js. Son état
+est **volatil** : il peut survivre à certains rechargements de modules en
+développement sans garantie, et il est réinitialisé au redémarrage, au
+déploiement, au démarrage à froid serverless ; chaque instance a son propre état.
+La décision d'exécution résout toujours l'agent depuis `action.initiatedByAgentId`
+via `AgentService` — jamais un agent fourni par l'appelant. La décision humaine
+(approbation + action + audit) est appliquée par une unité de travail
+transactionnelle en mémoire, tout-ou-rien. `decidedBy` est une étiquette
+déclarative non authentifiée.
 
 ## Niveaux d'autorisation
 
