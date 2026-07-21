@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { InMemoryActionDecisionStore } from "@/server/services/in-memory/action-decision-store";
-import { InMemoryActionService } from "@/server/services/in-memory/action-service";
-import { InMemoryAgentService } from "@/server/services/in-memory/agent-service";
-import { InMemoryApprovalService } from "@/server/services/in-memory/approval-service";
+import { InMemoryActionRepository } from "@/server/services/in-memory/action-repository";
+import { InMemoryAgentRepository } from "@/server/services/in-memory/agent-repository";
+import { InMemoryApprovalRepository } from "@/server/services/in-memory/approval-repository";
 import { InMemoryActionDecisionUnitOfWork } from "@/server/uow/in-memory-action-decision-uow";
 
 import { recordActionDecision } from "./record-action-decision";
@@ -28,12 +28,15 @@ function harness(opts: { agents: Agent[]; tasks: Task[]; actions: AgentAction[] 
   let counter = 0;
   return {
     audit,
-    actions: new InMemoryActionService(store),
-    approvals: new InMemoryApprovalService(store),
+    actions: new InMemoryActionRepository(store),
+    approvals: new InMemoryApprovalRepository(store),
     deps: {
-      actions: new InMemoryActionService(store),
-      agents: new InMemoryAgentService(opts.agents),
-      tasks: { getById: (id: string) => opts.tasks.find((task) => task.id === id) },
+      actions: new InMemoryActionRepository(store),
+      agents: new InMemoryAgentRepository(opts.agents),
+      tasks: {
+        getById: (id: string): Promise<Task | null> =>
+          Promise.resolve(opts.tasks.find((task) => task.id === id) ?? null),
+      },
       uow,
       now: () => "2026-07-21T10:00:00.000Z",
       newId: (prefix: string) => `${prefix}-${++counter}`,
@@ -52,7 +55,7 @@ const pendingSensitive: AgentAction = {
 };
 
 describe("recordActionDecision", () => {
-  it("résout l'agent depuis l'action : l'initiateur gouverne la décision d'exécution", () => {
+  it("résout l'agent depuis l'action : l'initiateur gouverne la décision d'exécution", async () => {
     // Un agent de haut niveau existe, mais l'initiateur (niveau 1) doit gouverner.
     const h = harness({
       agents: [agent("agent-op", 1), agent("agent-ceo", 3)],
@@ -60,7 +63,7 @@ describe("recordActionDecision", () => {
       actions: [{ ...pendingSensitive, risk: "reversible" }],
     });
 
-    const result = recordActionDecision(h.deps, {
+    const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
       command: { decidedByLabel: "Opérateur", decision: "approved" },
     });
@@ -74,18 +77,18 @@ describe("recordActionDecision", () => {
         reason: "insufficient_authorization",
       });
     }
-    expect(h.approvals.listForAction("action-x")).toHaveLength(1);
-    expect(h.actions.getById("action-x")?.approvalStatus).toBe("approved");
+    expect(await h.approvals.listForAction("action-x")).toHaveLength(1);
+    expect((await h.actions.getById("action-x"))?.approvalStatus).toBe("approved");
   });
 
-  it("autorise l'exécution d'une action sensible approuvée par un opérateur suffisant", () => {
+  it("autorise l'exécution d'une action sensible approuvée par un opérateur suffisant", async () => {
     const h = harness({
       agents: [agent("agent-op", 2)],
       tasks: [],
       actions: [pendingSensitive],
     });
 
-    const result = recordActionDecision(h.deps, {
+    const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
       command: { decidedByLabel: "Opérateur", decision: "approved" },
     });
@@ -97,32 +100,32 @@ describe("recordActionDecision", () => {
     expect(h.audit.list()).toHaveLength(2);
   });
 
-  it("détecte un agent initiateur absent AVANT toute mutation", () => {
+  it("détecte un agent initiateur absent AVANT toute mutation", async () => {
     const h = harness({
       agents: [],
       tasks: [],
       actions: [pendingSensitive],
     });
 
-    const result = recordActionDecision(h.deps, {
+    const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
       command: { decidedByLabel: "Opérateur", decision: "approved" },
     });
 
     expect(result).toMatchObject({ ok: false, reason: "agent_not_found" });
-    expect(h.approvals.list()).toHaveLength(0);
+    expect(await h.approvals.list()).toHaveLength(0);
     expect(h.audit.list()).toHaveLength(0);
-    expect(h.actions.getById("action-x")?.approvalStatus).toBe("pending");
+    expect((await h.actions.getById("action-x"))?.approvalStatus).toBe("pending");
   });
 
-  it("refuse une action déjà décidée", () => {
+  it("refuse une action déjà décidée", async () => {
     const h = harness({
       agents: [agent("agent-op", 2)],
       tasks: [],
       actions: [{ ...pendingSensitive, approvalStatus: "approved" }],
     });
 
-    const result = recordActionDecision(h.deps, {
+    const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
       command: { decidedByLabel: "Opérateur", decision: "rejected", reason: "trop tard" },
     });
@@ -131,7 +134,7 @@ describe("recordActionDecision", () => {
     expect(h.audit.list()).toHaveLength(0);
   });
 
-  it("refuse une référence action ↔ tâche incohérente", () => {
+  it("refuse une référence action ↔ tâche incohérente", async () => {
     const h = harness({
       agents: [agent("agent-op", 2)],
       tasks: [
@@ -147,13 +150,13 @@ describe("recordActionDecision", () => {
       actions: [{ ...pendingSensitive, taskId: "task-x" }],
     });
 
-    const result = recordActionDecision(h.deps, {
+    const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
       command: { decidedByLabel: "Opérateur", decision: "approved" },
     });
 
     expect(result).toMatchObject({ ok: false, reason: "inconsistent_reference" });
-    expect(h.approvals.list()).toHaveLength(0);
+    expect(await h.approvals.list()).toHaveLength(0);
     expect(h.audit.list()).toHaveLength(0);
   });
 });

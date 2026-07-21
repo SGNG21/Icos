@@ -24,8 +24,8 @@ export async function POST(
       return apiError("invalid_input", "décision invalide", zodDetails(parsed.error));
     }
 
-    const container = getContainer();
-    const result = recordActionDecision(
+    const container = await getContainer();
+    const result = await recordActionDecision(
       {
         actions: container.actions,
         agents: container.agents,

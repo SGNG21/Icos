@@ -7,9 +7,10 @@ import { createTask } from "@/server/usecases/create-task";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function GET(): Response {
+export async function GET(): Promise<Response> {
   try {
-    return json({ tasks: getContainer().tasks.list() });
+    const container = await getContainer();
+    return json({ tasks: await container.tasks.list() });
   } catch {
     return apiError("internal_error", "erreur interne");
   }
@@ -27,8 +28,11 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const container = getContainer();
-    const result = createTask({ tasks: container.tasks, agents: container.agents }, parsed.data);
+    const container = await getContainer();
+    const result = await createTask(
+      { tasks: container.tasks, agents: container.agents },
+      parsed.data,
+    );
     if (!result.ok) {
       return apiError(result.reason, result.message);
     }

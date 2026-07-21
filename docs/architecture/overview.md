@@ -13,15 +13,30 @@ internes et les règles métier dans un seul déploiement, tout en gardant des f
    vérité), politique d'autorisation (`core/authorization`) et cycle de vie des
    tâches (`core/tasks`). Aucune dépendance à l'infrastructure.
 4. `features` fournit des données de démonstration typées par les contrats.
-5. `server` héberge les ports de services et leurs implémentations en mémoire,
-   le journal d'audit, l'unité de travail transactionnelle, les use cases
-   d'orchestration (`server/usecases`), la couche HTTP (`server/http`) et le
-   container de composition (`server/container.ts`). Il accueillera les
-   adaptateurs de persistance.
+5. `server` héberge les **ports de repositories** (`server/repositories/ports.ts`,
+   asynchrones) et leurs implémentations en mémoire, le journal d'audit, le port
+   et l'implémentation de l'unité de travail transactionnelle (`server/uow`), les
+   use cases d'orchestration (`server/usecases`), la couche HTTP (`server/http`),
+   la sélection de backend (`server/persistence.ts`) et le container de
+   composition (`server/container.ts`). Il accueillera les repositories
+   PostgreSQL.
 6. `app/api` expose les Route Handlers internes (runtime Node.js, rendu
    dynamique) ; ils délèguent toute orchestration aux use cases.
 7. `config` valide la configuration à la demande (`loadEnv`) ; les intégrations
    restent optionnelles et inactives.
+
+Les accès aux entités sont **asynchrones** (`Promise`), ce qui prépare un
+backend PostgreSQL derrière les mêmes ports. Une ressource absente est
+représentée par `null`. Les fonctions purement métier restent synchrones.
+
+### Sélection du backend
+
+`PERSISTENCE=memory|postgres` est résolue de façon déterministe, **sans bascule
+silencieuse** : dev/test sans valeur → `memory` ; production sans valeur →
+erreur ; `postgres` → erreur « backend non implémenté » (Lot 2A-2), jamais de
+repli mémoire. `getContainer()` mémoïse une `Promise<Container>` sur `globalThis`
+(instance unique en cas d'appels concurrents) et **libère le cache si
+l'initialisation échoue**.
 
 ```text
 Interface → Route Handlers → use cases → politiques d'autorisation → ports → adaptateurs externes

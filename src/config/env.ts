@@ -9,8 +9,11 @@ const emptyAsUndefined = (value: unknown) => (value === "" ? undefined : value);
 const optionalSecret = z.preprocess(emptyAsUndefined, z.string().min(1).optional());
 const optionalUrl = z.preprocess(emptyAsUndefined, z.url().optional());
 
+const persistenceSchema = z.preprocess(emptyAsUndefined, z.enum(["memory", "postgres"]).optional());
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PERSISTENCE: persistenceSchema,
   DATABASE_URL: optionalUrl,
   OPENAI_API_KEY: optionalSecret,
   ANTHROPIC_API_KEY: optionalSecret,

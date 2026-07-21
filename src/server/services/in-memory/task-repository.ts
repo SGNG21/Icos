@@ -3,24 +3,24 @@ import { randomUUID } from "node:crypto";
 import { taskSchema, type AuditEntry, type Task, type TaskStatus } from "@/core/contracts";
 import { transitionTask } from "@/core/tasks/lifecycle";
 import type { AuditLog } from "@/server/audit/in-memory-audit-log";
-
 import type {
   CreateTaskInput,
   CreateTaskResult,
-  TaskService,
+  TaskRepository,
   TransitionTaskResult,
-} from "../ports";
+} from "@/server/repositories/ports";
 
 /**
- * Implémentation temporaire en mémoire (voir avertissement dans
+ * Repository en mémoire des tâches (voir avertissement dans
  * `src/server/audit/in-memory-audit-log.ts`).
  *
  * Chaque mutation suit l'ordre : valider la commande, préparer le nouvel état,
- * préparer et valider l'entrée d'audit, enregistrer l'audit, puis appliquer la
- * mutation. Si l'écriture d'audit échoue, la mutation n'est pas appliquée.
- * Une véritable atomicité transactionnelle exigera PostgreSQL.
+ * écrire l'audit, puis appliquer la mutation ; si l'audit échoue, la mutation
+ * n'est pas appliquée. Les méthodes sont `async` (port), mais leur corps ne
+ * contient aucun `await` : l'écriture d'audit (journal SYNCHRONE interne) et la
+ * mutation restent atomiques au sein d'une instance JavaScript.
  */
-export class InMemoryTaskService implements TaskService {
+export class InMemoryTaskRepository implements TaskRepository {
   private readonly tasks: Task[];
 
   constructor(
@@ -30,16 +30,16 @@ export class InMemoryTaskService implements TaskService {
     this.tasks = seed.map((task) => taskSchema.parse(structuredClone(task)));
   }
 
-  list(): readonly Task[] {
+  async list(): Promise<Task[]> {
     return this.tasks.map((task) => structuredClone(task));
   }
 
-  getById(id: string): Task | undefined {
+  async getById(id: string): Promise<Task | null> {
     const task = this.tasks.find((candidate) => candidate.id === id);
-    return task ? structuredClone(task) : undefined;
+    return task ? structuredClone(task) : null;
   }
 
-  create(input: CreateTaskInput): CreateTaskResult {
+  async create(input: CreateTaskInput): Promise<CreateTaskResult> {
     const now = new Date().toISOString();
     const candidate: Task = {
       id: `task-${randomUUID()}`,
@@ -78,7 +78,7 @@ export class InMemoryTaskService implements TaskService {
     return { ok: true, task: structuredClone(parsed.data) };
   }
 
-  transition(taskId: string, to: TaskStatus): TransitionTaskResult {
+  async transition(taskId: string, to: TaskStatus): Promise<TransitionTaskResult> {
     const index = this.tasks.findIndex((candidate) => candidate.id === taskId);
     if (index === -1) {
       return { ok: false, reason: "task_not_found", message: `tâche inconnue : ${taskId}` };
