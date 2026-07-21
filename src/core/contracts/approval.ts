@@ -11,6 +11,9 @@ export const approvalDecisionSchema = z.enum(["approved", "rejected"]);
 export const approvalSchema = z.object({
   id: idSchema,
   actionId: idSchema,
+  // Étiquette déclarative NON authentifiée du décideur (aucune authentification
+  // réelle au Lot 1B). Alimentée par `decidedByLabel` côté API. Ne jamais la
+  // présenter comme une identité vérifiée.
   decidedBy: z.string().min(1),
   decision: approvalDecisionSchema,
   reason: z.string().optional(),

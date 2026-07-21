@@ -20,7 +20,9 @@ describe("InMemoryAuditLog", () => {
   it("expose uniquement des opérations de lecture et d'ajout (append-only)", () => {
     const log = new InMemoryAuditLog();
     const publicApi = Object.getOwnPropertyNames(Object.getPrototypeOf(log));
-    expect(publicApi.sort()).toEqual(["append", "constructor", "list", "query"].sort());
+    expect(publicApi.sort()).toEqual(
+      ["append", "appendMany", "constructor", "list", "query"].sort(),
+    );
     expect(publicApi).not.toContain("delete");
     expect(publicApi).not.toContain("update");
     expect(publicApi).not.toContain("clear");

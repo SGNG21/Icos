@@ -1,6 +1,4 @@
-import type { TaskStatus } from "@/core/contracts";
-import { demoAgents } from "@/features/agents/data";
-import { demoTasks } from "@/features/tasks/data";
+import type { Agent, Task, TaskStatus } from "@/core/contracts";
 
 const taskStatusLabel: Record<TaskStatus, string> = {
   draft: "Brouillon",
@@ -12,7 +10,7 @@ const taskStatusLabel: Record<TaskStatus, string> = {
   cancelled: "Annulé",
 };
 
-// Réutilise les classes CSS existantes de globals.css (inchangé pendant ce lot).
+// Réutilise les classes CSS existantes de globals.css.
 const taskIndicatorClass: Record<TaskStatus, string> = {
   draft: "",
   queued: "",
@@ -23,14 +21,19 @@ const taskIndicatorClass: Record<TaskStatus, string> = {
   cancelled: "",
 };
 
-function agentName(agentId: string | undefined): string {
-  if (!agentId) {
-    return "Non assigné";
-  }
-  return demoAgents.find((agent) => agent.id === agentId)?.name ?? agentId;
+export interface RecentTasksProps {
+  tasks: readonly Task[];
+  agents: readonly Agent[];
 }
 
-export function RecentTasks() {
+export function RecentTasks({ tasks, agents }: RecentTasksProps) {
+  const agentName = (agentId: string | undefined): string => {
+    if (!agentId) {
+      return "Non assigné";
+    }
+    return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+  };
+
   return (
     <section className="panel task-panel" id="tasks">
       <div className="panel-heading compact">
@@ -41,7 +44,7 @@ export function RecentTasks() {
         <span className="badge">Simulation</span>
       </div>
       <ul className="task-list">
-        {demoTasks.map((task) => (
+        {tasks.map((task) => (
           <li key={task.id}>
             <span className={`task-indicator ${taskIndicatorClass[task.status]}`.trim()} />
             <div>
