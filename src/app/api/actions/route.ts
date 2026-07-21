@@ -6,7 +6,7 @@ import { actionQuerySchema } from "@/server/http/schemas";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request): Response {
+export async function GET(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const raw = url.searchParams.get("approvalStatus");
@@ -15,7 +15,8 @@ export function GET(request: Request): Response {
       return apiError("invalid_input", "filtre invalide", zodDetails(parsed.error));
     }
 
-    return json({ actions: getContainer().actions.list(parsed.data) });
+    const container = await getContainer();
+    return json({ actions: await container.actions.list(parsed.data) });
   } catch {
     return apiError("internal_error", "erreur interne");
   }

@@ -4,18 +4,18 @@ import { demoActions } from "@/features/actions/data";
 import { demoAgents } from "@/features/agents/data";
 import { demoTasks } from "@/features/tasks/data";
 
-import { buildContainer } from "./container";
+import { buildMemoryContainer } from "./container";
 
-describe("buildContainer", () => {
-  it("compose le container avec les seeds cohérents par défaut", () => {
-    const container = buildContainer();
-    expect(container.agents.list().length).toBe(demoAgents.length);
-    expect(container.actions.list({ approvalStatus: "pending" }).length).toBeGreaterThan(0);
+describe("buildMemoryContainer", () => {
+  it("compose le container avec les seeds cohérents par défaut", async () => {
+    const container = buildMemoryContainer();
+    expect((await container.agents.list()).length).toBe(demoAgents.length);
+    expect((await container.actions.list({ approvalStatus: "pending" })).length).toBeGreaterThan(0);
   });
 
   it("échoue explicitement si une action référence une tâche qui ne la liste pas", () => {
     expect(() =>
-      buildContainer({
+      buildMemoryContainer({
         agents: demoAgents,
         tasks: demoTasks.map((task) =>
           task.id === "task-002" ? { ...task, actionIds: [] } : task,
@@ -27,7 +27,7 @@ describe("buildContainer", () => {
 
   it("échoue si une action est initiée par un agent inexistant", () => {
     expect(() =>
-      buildContainer({
+      buildMemoryContainer({
         agents: demoAgents,
         tasks: demoTasks,
         actions: demoActions.map((action) =>

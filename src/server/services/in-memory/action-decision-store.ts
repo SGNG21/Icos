@@ -5,7 +5,7 @@ import {
   type Approval,
 } from "@/core/contracts";
 
-import type { ActionQuery } from "../ports";
+import type { ActionQuery } from "@/server/repositories/ports";
 
 /**
  * Source unique de vérité en mémoire pour les actions et les approbations.
@@ -40,6 +40,16 @@ export class InMemoryActionDecisionStore {
 
   hasAction(id: string): boolean {
     return this.actions.some((candidate) => candidate.id === id);
+  }
+
+  /** Statut d'approbation courant d'une action (synchrone, sans copie). */
+  approvalStatusOf(id: string): AgentAction["approvalStatus"] | null {
+    return this.actions.find((candidate) => candidate.id === id)?.approvalStatus ?? null;
+  }
+
+  /** Vrai si une décision a déjà été enregistrée pour cette action. */
+  hasApprovalForAction(actionId: string): boolean {
+    return this.approvals.some((approval) => approval.actionId === actionId);
   }
 
   listApprovals(): readonly Approval[] {

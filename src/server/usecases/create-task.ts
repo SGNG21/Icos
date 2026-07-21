@@ -1,8 +1,8 @@
 import type { Task } from "@/core/contracts";
-import type { AgentLookup, CreateTaskInput, TaskService } from "@/server/services/ports";
+import type { AgentLookup, CreateTaskInput, TaskRepository } from "@/server/repositories/ports";
 
 export interface CreateTaskDeps {
-  tasks: TaskService;
+  tasks: TaskRepository;
   agents: AgentLookup;
 }
 
@@ -23,8 +23,11 @@ export type CreateTaskUseCaseResult =
  * - absent : tâche non assignée, autorisée ;
  * - présent : l'agent doit exister, sinon `agent_not_found`.
  */
-export function createTask(deps: CreateTaskDeps, input: CreateTaskInput): CreateTaskUseCaseResult {
-  if (input.assignedAgentId !== undefined && !deps.agents.getById(input.assignedAgentId)) {
+export async function createTask(
+  deps: CreateTaskDeps,
+  input: CreateTaskInput,
+): Promise<CreateTaskUseCaseResult> {
+  if (input.assignedAgentId !== undefined && !(await deps.agents.getById(input.assignedAgentId))) {
     return {
       ok: false,
       reason: "agent_not_found",

@@ -24,8 +24,9 @@ export async function POST(
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const result = transitionTask(
-      { tasks: getContainer().tasks },
+    const container = await getContainer();
+    const result = await transitionTask(
+      { tasks: container.tasks },
       { taskId: id, to: parsed.data.to },
     );
 

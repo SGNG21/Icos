@@ -4,9 +4,10 @@ import { apiError, json } from "@/server/http/respond";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function GET(): Response {
+export async function GET(): Promise<Response> {
   try {
-    return json({ agents: getContainer().agents.list() });
+    const container = await getContainer();
+    return json({ agents: await container.agents.list() });
   } catch {
     return apiError("internal_error", "erreur interne");
   }

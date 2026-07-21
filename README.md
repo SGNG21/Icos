@@ -54,8 +54,9 @@ pnpm check         # tous les contrôles qualité
   vérité), politique d'autorisation et cycle de vie des tâches ;
 - `src/features` : données de démonstration typées par les contrats ;
 - `src/config` : validation de l'environnement à la demande (`loadEnv`) ;
-- `src/server` : ports de services, implémentations en mémoire, journal d'audit,
-  unité de travail transactionnelle, use cases, couche HTTP et container ;
+- `src/server` : ports de repositories (asynchrones), implémentations en mémoire,
+  journal d'audit, unité de travail transactionnelle, use cases, couche HTTP,
+  sélection de backend et container ;
 - `src/app/api` : Route Handlers internes simulés (runtime Node.js, dynamiques) ;
 - `docs` : architecture, décisions et feuille de route ;
 - `tests` : emplacement réservé aux futurs tests transverses.
@@ -68,6 +69,18 @@ Une API interne expose le domaine sans aucune intégration externe : `GET
 directement le container côté serveur (rendu dynamique) et le panneau
 Approbations effectue ses décisions via ces routes. Voir
 [l'ADR-0003](docs/decisions/0003-internal-api-and-composition.md).
+
+## Backend de persistance
+
+Les accès aux entités passent par des **ports de repositories asynchrones**,
+prêts à recevoir une implémentation PostgreSQL. La variable `PERSISTENCE`
+sélectionne le backend de façon explicite, sans bascule silencieuse :
+
+- `memory` : backend en mémoire (défaut en développement et test) ;
+- `postgres` : non encore implémenté (Lot 2A-2) — produit une erreur explicite ;
+- en production, `PERSISTENCE` doit être défini explicitement.
+
+Voir [l'ADR-0004](docs/decisions/0004-async-ports-and-backend-selection.md).
 
 ## Limites actuelles
 

@@ -7,7 +7,7 @@ import { GET as getActions } from "./actions/route";
 import { POST as postDecision } from "./actions/[id]/decision/route";
 import { GET as getAudit } from "./audit/route";
 
-const CONTAINER_KEY = "__icosContainer__";
+const CONTAINER_KEY = "__icosContainerPromise__";
 
 beforeEach(() => {
   // Réinitialise le singleton mémoire : chaque test repart des seeds de démo.
@@ -28,7 +28,7 @@ function params(id: string) {
 
 describe("GET /api/agents", () => {
   it("liste les agents et interdit le cache", async () => {
-    const response = getAgents();
+    const response = await getAgents();
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     const data = (await response.json()) as { agents: unknown[] };
@@ -91,7 +91,9 @@ describe("POST /api/tasks/[id]/transition", () => {
 
 describe("GET /api/actions", () => {
   it("liste les actions en attente", async () => {
-    const response = getActions(new Request("http://localhost/api/actions?approvalStatus=pending"));
+    const response = await getActions(
+      new Request("http://localhost/api/actions?approvalStatus=pending"),
+    );
     expect(response.status).toBe(200);
     const data = (await response.json()) as { actions: unknown[] };
     expect(data.actions.length).toBeGreaterThan(0);
@@ -185,7 +187,7 @@ describe("GET /api/audit", () => {
       params("action-001"),
     );
 
-    const response = getAudit(
+    const response = await getAudit(
       new Request("http://localhost/api/audit?eventType=approval.recorded&actionId=action-001"),
     );
     expect(response.status).toBe(200);
@@ -196,7 +198,7 @@ describe("GET /api/audit", () => {
 
 describe("GET /api/tasks", () => {
   it("liste les tâches", async () => {
-    const response = getTasks();
+    const response = await getTasks();
     expect(response.status).toBe(200);
     const data = (await response.json()) as { tasks: unknown[] };
     expect(data.tasks.length).toBeGreaterThan(0);

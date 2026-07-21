@@ -8,14 +8,15 @@ import type {
   Task,
 } from "@/core/contracts";
 import { decideExecution, type ExecutionDecision } from "@/core/authorization/decide";
-import type { ActionDecisionUnitOfWork, ActionService, AgentLookup } from "@/server/services/ports";
+import type { ActionRepository, AgentLookup } from "@/server/repositories/ports";
+import type { ActionDecisionUnitOfWork } from "@/server/uow/ports";
 
 export interface TaskLookup {
-  getById(id: string): Task | undefined;
+  getById(id: string): Promise<Task | null>;
 }
 
 export interface RecordActionDecisionDeps {
-  actions: ActionService;
+  actions: ActionRepository;
   agents: AgentLookup;
   tasks: TaskLookup;
   uow: ActionDecisionUnitOfWork;
@@ -44,16 +45,16 @@ export type RecordActionDecisionResult =
  * avec l'action mise à jour et l'agent RÉSOLU côté serveur — jamais un agent ou
  * un niveau fourni par l'appelant.
  */
-export function recordActionDecision(
+export async function recordActionDecision(
   deps: RecordActionDecisionDeps,
   input: { actionId: string; command: ActionDecisionCommand },
-): RecordActionDecisionResult {
+): Promise<RecordActionDecisionResult> {
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const { actionId, command } = input;
 
   // 2. charger l'action
-  const action = deps.actions.getById(actionId);
+  const action = await deps.actions.getById(actionId);
   if (!action) {
     return { ok: false, reason: "action_not_found", message: `action introuvable : ${actionId}` };
   }
@@ -68,7 +69,7 @@ export function recordActionDecision(
   }
 
   // 4. résoudre l'agent depuis l'action, AVANT toute mutation
-  const agent = deps.agents.getById(action.initiatedByAgentId);
+  const agent = await deps.agents.getById(action.initiatedByAgentId);
   if (!agent) {
     return {
       ok: false,
@@ -79,7 +80,7 @@ export function recordActionDecision(
 
   // 5. vérifier les références liées (cohérence bidirectionnelle action ↔ tâche)
   if (action.taskId !== undefined) {
-    const task = deps.tasks.getById(action.taskId);
+    const task = await deps.tasks.getById(action.taskId);
     if (!task || !task.actionIds.includes(action.id)) {
       return {
         ok: false,
@@ -125,7 +126,11 @@ export function recordActionDecision(
   ];
 
   // 7. appliquer la transaction simulée
-  const committed = deps.uow.commitDecision({ approval, action: updatedAction, auditEntries });
+  const committed = await deps.uow.commitDecision({
+    approval,
+    action: updatedAction,
+    auditEntries,
+  });
   if (!committed.ok) {
     return { ok: false, reason: committed.reason, message: committed.message };
   }

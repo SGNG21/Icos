@@ -7,7 +7,7 @@ import type { AuditQuery } from "@/server/audit/in-memory-audit-log";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request): Response {
+export async function GET(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const candidate = {
@@ -23,7 +23,8 @@ export function GET(request: Request): Response {
     }
 
     const filter: AuditQuery = parsed.data;
-    return json({ entries: getContainer().auditLog.query(filter) });
+    const container = await getContainer();
+    return json({ entries: await container.audit.query(filter) });
   } catch {
     return apiError("internal_error", "erreur interne");
   }

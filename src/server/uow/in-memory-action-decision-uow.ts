@@ -1,23 +1,26 @@
 import type { AgentAction, Approval, AuditEntry } from "@/core/contracts";
 import type { AuditLog } from "@/server/audit/in-memory-audit-log";
-import type { ActionDecisionUnitOfWork, CommitDecisionResult } from "@/server/services/ports";
 import type { InMemoryActionDecisionStore } from "@/server/services/in-memory/action-decision-store";
+
+import type { ActionDecisionUnitOfWork, CommitDecisionResult } from "./ports";
+
+const TERMINAL: ReadonlySet<AgentAction["approvalStatus"]> = new Set(["approved", "rejected"]);
 
 /**
  * Unité de travail transactionnelle EN MÉMOIRE pour une décision humaine.
  *
- * Séquence garantissant l'absence d'état partiel :
- * 1. vérifier que l'action existe encore dans le store (sinon rien n'est
- *    appliqué : ni approbation, ni audit) ;
- * 2. écrire TOUTES les entrées d'audit de façon atomique (`appendMany` valide
- *    toutes les entrées avant d'en écrire une seule) ; en cas d'échec, ni
- *    l'approbation ni l'action ne sont modifiées ;
- * 3. appliquer l'approbation et l'action mise à jour par une écriture
- *    synchrone unique qui ne peut plus échouer.
+ * `commitDecision` est déclarée `async` (port asynchrone), mais son corps ne
+ * contient AUCUN `await` : la section critique — revérification de l'état,
+ * validation des entrées d'audit, `appendMany`, application de la décision —
+ * s'exécute de façon entièrement synchrone au moment de l'appel, donc
+ * NON INTERRUPTIBLE au sein d'une instance JavaScript. Elle utilise directement
+ * le store et le journal d'audit SYNCHRONES internes, jamais des repositories
+ * asynchrones.
  *
- * Ce n'est PAS une transaction réelle : il n'existe aucune isolation ni
- * durabilité. PostgreSQL remplacera cette unité par une vraie transaction
- * atomique (roadmap phase 1).
+ * PORTÉE DE LA GARANTIE : cette atomicité vaut uniquement à l'intérieur d'une
+ * instance JS. Elle N'assure PAS la durabilité, ni la cohérence entre plusieurs
+ * processus/instances, ni l'isolation distribuée. Ces propriétés viendront de la
+ * transaction PostgreSQL (Lot 2A-2), derrière le même port public.
  */
 export class InMemoryActionDecisionUnitOfWork implements ActionDecisionUnitOfWork {
   constructor(
@@ -25,18 +28,29 @@ export class InMemoryActionDecisionUnitOfWork implements ActionDecisionUnitOfWor
     private readonly auditLog: AuditLog,
   ) {}
 
-  commitDecision(input: {
+  async commitDecision(input: {
     approval: Approval;
     action: AgentAction;
     auditEntries: readonly AuditEntry[];
-  }): CommitDecisionResult {
+  }): Promise<CommitDecisionResult> {
     const { approval, action, auditEntries } = input;
 
-    if (!this.store.hasAction(action.id)) {
+    // --- Début de section critique synchrone (aucun await ci-dessous) ---
+    const currentStatus = this.store.approvalStatusOf(action.id);
+    if (currentStatus === null) {
       return {
         ok: false,
         reason: "action_not_found",
         message: `action introuvable : ${action.id}`,
+      };
+    }
+
+    // Défense au point de mutation : statut terminal ou décision déjà présente.
+    if (TERMINAL.has(currentStatus) || this.store.hasApprovalForAction(action.id)) {
+      return {
+        ok: false,
+        reason: "already_decided",
+        message: `l'action ${action.id} a déjà reçu une décision définitive`,
       };
     }
 
@@ -50,8 +64,8 @@ export class InMemoryActionDecisionUnitOfWork implements ActionDecisionUnitOfWor
       };
     }
 
-    // Écriture synchrone finale : ne peut plus échouer une fois l'audit écrit.
     this.store.applyDecision(approval, action);
+    // --- Fin de section critique synchrone ---
 
     return { ok: true, approval, action };
   }

@@ -9,11 +9,13 @@ import { getContainer } from "@/server/container";
 // de pré-rendu statique ni de cache de rendu.
 export const dynamic = "force-dynamic";
 
-export default function Home() {
-  const container = getContainer();
-  const agents = container.agents.list();
-  const tasks = container.tasks.list();
-  const pendingActions = container.actions.list({ approvalStatus: "pending" });
+export default async function Home() {
+  const container = await getContainer();
+  const [agents, tasks, pendingActions] = await Promise.all([
+    container.agents.list(),
+    container.tasks.list(),
+    container.actions.list({ approvalStatus: "pending" }),
+  ]);
 
   return (
     <main className="shell">
