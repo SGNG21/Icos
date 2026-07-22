@@ -1,8 +1,12 @@
+import { forbidden, redirect } from "next/navigation";
+import { headers } from "next/headers";
+
 import { AgentGrid } from "@/components/features/agent-grid";
 import { ApprovalsPanel } from "@/components/features/approvals-panel";
 import { CommandComposer } from "@/components/features/command-composer";
 import { RecentTasks } from "@/components/features/recent-tasks";
 import { Sidebar } from "@/components/layout/sidebar";
+import { resolveCockpitAccess } from "@/server/auth/cockpit-access";
 import { getContainer } from "@/server/container";
 
 // Le cockpit lit un état mutable en mémoire : rendu dynamique obligatoire, pas
@@ -11,6 +15,14 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const container = await getContainer();
+  const access = await resolveCockpitAccess(container, await headers());
+  if (access.kind === "redirect") {
+    redirect("/login?next=%2F");
+  }
+  if (access.kind === "forbidden") {
+    forbidden();
+  }
+
   const [agents, tasks, pendingActions] = await Promise.all([
     container.agents.list(),
     container.tasks.list(),
