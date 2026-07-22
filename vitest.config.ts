@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -13,5 +13,8 @@ export default defineConfig({
       reporter: ["text", "json", "html"],
     },
     include: ["src/**/*.test.ts"],
+    // Les tests d'intégration PostgreSQL (Docker/Testcontainers) sont exécutés
+    // séparément via `pnpm test:integration`.
+    exclude: [...configDefaults.exclude, "**/*.integration.test.ts"],
   },
 });

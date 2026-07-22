@@ -29,6 +29,16 @@ Les accès aux entités sont **asynchrones** (`Promise`), ce qui prépare un
 backend PostgreSQL derrière les mêmes ports. Une ressource absente est
 représentée par `null`. Les fonctions purement métier restent synchrones.
 
+### Persistance PostgreSQL (fondation, Lot 2A-2a)
+
+`src/server/database` porte le schéma Drizzle, le client (postgres.js), les
+migrations (`drizzle/`) et les mappings ligne↔contrat (revalidés par Zod).
+`src/server/repositories/postgres` fournit les repositories PostgreSQL satisfaisant
+les ports asynchrones. Source unique de la relation tâche↔actions : `actions.task_id`
+(`Task.actionIds` dérivé en lecture). Tests d'intégration réels via Testcontainers
+(`pnpm test:integration`, Docker requis, ignorés sinon) ; `pnpm test` reste sans
+Docker. Le câblage au container et la transaction de décision arrivent au Lot 2A-2b.
+
 ### Sélection du backend
 
 `PERSISTENCE=memory|postgres` est résolue de façon déterministe, **sans bascule
