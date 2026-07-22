@@ -7,6 +7,12 @@ export const auditEventTypeSchema = z.enum([
   "task.transitioned",
   "approval.recorded",
   "action.decided",
+  // Identité & sécurité (Lot 2B-1a). D'autres (login/logout/session/accès) seront
+  // ajoutés lorsqu'un flux les produira réellement (Lots 2B-1b/2B-1c).
+  "user.created",
+  "role.changed",
+  "auth.bootstrap.succeeded",
+  "auth.bootstrap.failed",
 ]);
 
 export const auditActorSchema = z.object({
