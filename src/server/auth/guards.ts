@@ -26,7 +26,7 @@ export async function requireSession(
     throw new AuthGuardError("session_expired");
   }
   if (session.user.status !== "active") {
-    throw new AuthGuardError("account_disabled");
+    throw new AuthGuardError("account_disabled", session.user.id);
   }
   return session;
 }
@@ -38,7 +38,7 @@ export async function requireRole(
 ): Promise<AuthenticatedSession> {
   const session = await requireSession(container, headers);
   if (!authorization.hasRole(session, requiredRole)) {
-    throw new AuthGuardError("forbidden");
+    throw new AuthGuardError("forbidden", session.user.id);
   }
   return session;
 }
@@ -50,7 +50,7 @@ export async function requirePermission(
 ): Promise<AuthenticatedSession> {
   const session = await requireSession(container, headers);
   if (!authorization.can(session, permission)) {
-    throw new AuthGuardError("forbidden");
+    throw new AuthGuardError("forbidden", session.user.id);
   }
   return session;
 }

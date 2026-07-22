@@ -34,7 +34,7 @@ describe("container postgres — chemins d'erreur (sans Docker)", () => {
     process.env.DATABASE_URL = "postgres://icos:icos@127.0.0.1:1/icos";
     await resetContainer();
 
-    const response = await getAgents();
+    const response = await getAgents(new Request("http://localhost/api/agents"));
     expect(response.status).toBe(503);
     const body = (await response.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("persistence_unavailable");

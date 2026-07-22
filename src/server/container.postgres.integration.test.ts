@@ -93,7 +93,7 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
       jsonRequest("http://localhost/api/tasks", { title: "Nouvelle" }),
     );
     expect(response.status).toBe(201);
-    const list = await getTasks();
+    const list = await getTasks(new Request("http://localhost/api/tasks"));
     const data = (await list.json()) as { tasks: { title: string }[] };
     expect(data.tasks.map((t) => t.title)).toContain("Nouvelle");
   });

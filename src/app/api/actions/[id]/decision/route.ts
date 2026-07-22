@@ -1,6 +1,7 @@
 import { actionDecisionCommandSchema } from "@/core/contracts";
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
+import { protectRoute } from "@/server/http/protect-route";
 import { zodDetails } from "@/server/http/errors";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { recordActionDecision } from "@/server/usecases/record-action-decision";
@@ -13,8 +14,19 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   try {
-    const { id } = await ctx.params;
+    const container = await getContainer();
+    const authError = await protectRoute({
+      container,
+      request,
+      route: "api.actions.decision",
+      permission: "approvals.decide",
+      sameOrigin: true,
+    });
+    if (authError) {
+      return authError;
+    }
 
+    const { id } = await ctx.params;
     const body = await readJson(request);
     if (!body.ok) {
       return apiError("invalid_input", "corps JSON invalide");
@@ -25,7 +37,6 @@ export async function POST(
       return apiError("invalid_input", "décision invalide", zodDetails(parsed.error));
     }
 
-    const container = await getContainer();
     const result = await recordActionDecision(
       {
         actions: container.actions,
