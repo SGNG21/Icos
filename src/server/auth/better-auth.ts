@@ -28,7 +28,12 @@ export function createBetterAuth(db: Database, config: BetterAuthConfig) {
     }),
     // `autoSignIn: false` : la création d'utilisateur (dont le bootstrap) ne crée
     // AUCUNE session durable ; la connexion se fera explicitement (Lot 2B-1b).
-    emailAndPassword: { enabled: true, minPasswordLength: 12, autoSignIn: false },
+    emailAndPassword: {
+      enabled: true,
+      disableSignUp: true,
+      minPasswordLength: 12,
+      autoSignIn: false,
+    },
     session: {
       expiresIn: 60 * 60 * 24 * 7,
       updateAge: 60 * 60 * 24,

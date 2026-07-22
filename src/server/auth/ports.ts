@@ -24,6 +24,16 @@ export interface RoleRepository {
 export type CreateHumanUserResult =
   { ok: true; userId: string } | { ok: false; reason: "already_exists" | "invalid_input" };
 
+/** Façade HTTP étroite : les réponses ICOS ne transportent jamais le token natif. */
+export interface AuthHttpGateway {
+  signIn(input: {
+    email: string;
+    password: string;
+    headers: Headers;
+  }): Promise<{ headers: Headers; userId: string }>;
+  signOut(headers: Headers): Promise<{ headers: Headers; success: boolean }>;
+}
+
 /**
  * Façade étroite ICOS au-dessus de Better Auth. Les routes ICOS ne dépendent que
  * de cette interface (pas des internes de Better Auth). Le handler Better Auth

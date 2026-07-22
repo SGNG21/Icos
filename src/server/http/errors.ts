@@ -2,6 +2,10 @@ import type { ZodError } from "zod";
 
 /** Union typée et stable des codes d'erreur exposés par l'API interne. */
 export type ApiErrorCode =
+  | "unauthenticated"
+  | "session_expired"
+  | "forbidden"
+  | "account_disabled"
   | "invalid_input"
   | "not_found"
   | "invalid_transition"
@@ -22,6 +26,10 @@ export interface ApiErrorBody {
 }
 
 const statusByCode: Record<ApiErrorCode, number> = {
+  unauthenticated: 401,
+  session_expired: 401,
+  forbidden: 403,
+  account_disabled: 403,
   invalid_input: 400,
   not_found: 404,
   invalid_transition: 409,

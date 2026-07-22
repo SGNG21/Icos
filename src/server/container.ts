@@ -4,8 +4,9 @@ import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
 import { loadEnv, resolveAuthConfig, type AuthConfig, type Env } from "@/config/env";
 import { AuthenticationService } from "@/server/auth/authentication-service";
-import { createBetterAuth } from "@/server/auth/better-auth";
-import type { AuthGateway, RoleRepository } from "@/server/auth/ports";
+import { createBetterAuth, type IcosBetterAuth } from "@/server/auth/better-auth";
+import { BetterAuthHttpGateway } from "@/server/auth/http-gateway";
+import type { AuthGateway, AuthHttpGateway, RoleRepository } from "@/server/auth/ports";
 import { PostgresHumanUserRepository } from "@/server/repositories/postgres/human-user-repository";
 import { PostgresRoleRepository } from "@/server/repositories/postgres/role-repository";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
@@ -53,6 +54,8 @@ export interface Container {
    * (backend mémoire ou secret absent). L'auth réelle exige PostgreSQL.
    */
   auth?: AuthGateway;
+  /** Façade login/logout, présente avec la même instance Better Auth que `auth`. */
+  authHttp?: AuthHttpGateway;
   /** Rôles applicatifs ICOS (présent avec le backend PostgreSQL). */
   roles?: RoleRepository;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
@@ -106,6 +109,25 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
  * éventuellement ouvert. Les migrations ne sont PAS appliquées ici : elles
  * relèvent d'une commande explicite (`pnpm db:migrate`).
  */
+export function composeAuthentication(
+  db: ReturnType<typeof createDatabase>["db"],
+  roles: RoleRepository,
+  config: AuthConfig,
+  createAuth: (db: ReturnType<typeof createDatabase>["db"], config: AuthConfig) => IcosBetterAuth =
+    createBetterAuth,
+): { auth: AuthGateway; authHttp: AuthHttpGateway } {
+  const betterAuth = createAuth(db, config);
+  return {
+    auth: new AuthenticationService(
+      betterAuth,
+      new PostgresHumanUserRepository(db),
+      roles,
+      db,
+    ),
+    authHttp: new BetterAuthHttpGateway(betterAuth),
+  };
+}
+
 export async function buildPostgresContainer(
   url: string,
   authConfig?: AuthConfig,
@@ -125,16 +147,9 @@ export async function buildPostgresContainer(
 
   // Rôles ICOS + auth humaine (construite uniquement si config valide fournie).
   const roles = new PostgresRoleRepository(handle.db);
-  let auth: AuthGateway | undefined;
-  if (authConfig) {
-    const betterAuth = createBetterAuth(handle.db, authConfig);
-    auth = new AuthenticationService(
-      betterAuth,
-      new PostgresHumanUserRepository(handle.db),
-      roles,
-      handle.db,
-    );
-  }
+  const authentication = authConfig
+    ? composeAuthentication(handle.db, roles, authConfig)
+    : undefined;
 
   return {
     agents: new PostgresAgentRepository(handle.db),
@@ -143,7 +158,8 @@ export async function buildPostgresContainer(
     approvals: new PostgresApprovalRepository(handle.db),
     audit: new PostgresAuditRepository(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
-    auth,
+    auth: authentication?.auth,
+    authHttp: authentication?.authHttp,
     roles,
     close: handle.close,
   };
