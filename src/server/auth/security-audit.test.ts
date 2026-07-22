@@ -57,16 +57,19 @@ describe("appendSecurityAudit", () => {
         reason: "forbidden",
       },
     ],
-  ])("ajoute un événement %s avec un acteur et des détails contrôlés", async (input, actor, details) => {
-    const append = vi.fn(async (entry: AuditEntry) => entry);
+  ])(
+    "ajoute un événement %s avec un acteur et des détails contrôlés",
+    async (input, actor, details) => {
+      const append = vi.fn(async (entry: AuditEntry) => entry);
 
-    const result = await appendSecurityAudit(auditRepository(append), input);
+      const result = await appendSecurityAudit(auditRepository(append), input);
 
-    expect(result).toMatchObject({ eventType: input.eventType, actor, details });
-    expect(result.id).toMatch(/^[a-z0-9][a-z0-9_-]+$/);
-    expect(Date.parse(result.occurredAt)).not.toBeNaN();
-    expect(append).toHaveBeenCalledOnce();
-  });
+      expect(result).toMatchObject({ eventType: input.eventType, actor, details });
+      expect(result.id).toMatch(/^[a-z0-9][a-z0-9_-]+$/);
+      expect(Date.parse(result.occurredAt)).not.toBeNaN();
+      expect(append).toHaveBeenCalledOnce();
+    },
+  );
 
   it("utilise un acteur système pour un refus sans utilisateur connu", async () => {
     const result = await appendSecurityAudit(auditRepository(), {

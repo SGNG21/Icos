@@ -7,9 +7,9 @@ import {
 } from "@/core/identity";
 
 /**
- * Autorisation applicative ICOS (PURE, sans I/O). Point d'entrée unique pour les
- * futurs guards HTTP (Lot 2B-1b), afin qu'ils ne dépendent pas directement de
- * `core/identity`. Un utilisateur désactivé ne dispose d'aucune permission.
+ * Autorisation applicative ICOS (PURE, sans I/O). Point d'entrée unique des
+ * guards HTTP, afin qu'ils ne dépendent pas directement de `core/identity`. Un
+ * utilisateur désactivé ne dispose d'aucune permission.
  */
 export class AuthorizationService {
   can(session: AuthenticatedSession, permission: Permission): boolean {

@@ -53,6 +53,7 @@
 ### Task 1: Contrats d’erreur et session fail-closed
 
 **Files:**
+
 - Create: `src/server/auth/errors.ts`
 - Create: `src/server/auth/authentication-service.test.ts`
 - Modify: `src/server/auth/authentication-service.ts:15-29`
@@ -60,25 +61,28 @@
 - Test: `src/server/http/errors.test.ts`
 
 **Interfaces:**
+
 - Produces: `AuthFailureCode = "unauthenticated" | "session_expired" | "forbidden" | "account_disabled"`.
 - Produces: `AuthGuardError extends Error` avec propriété `code: AuthFailureCode`.
 - Consumes later: `httpStatusFor(code)` retourne 401/403 selon le code.
 
 - [ ] **Step 1: Write failing tests** vérifiant les statuts 401/403 et qu’un utilisateur Better Auth avec `status` absent, nul ou inconnu n’est jamais projeté comme actif.
 - [ ] **Step 2: Run** `pnpm vitest run src/server/http/errors.test.ts src/server/auth/authentication-service.test.ts` et confirmer un échec dû aux codes absents et au fallback `active`.
-- [ ] **Step 3: Implement minimally** l’union, les statuts et une projection stricte avec `userStatusSchema.safeParse`; retourner `null` pour toute projection invalide plutôt que d’activer implicitement le compte.
+- [ ] **Step 3: Implement minimally** l’union, les statuts et une projection stricte avec `userStatusSchema.safeParse`; lever `AuthGuardError("account_disabled")` pour toute projection invalide afin de la distinguer d’une session absente, plutôt que d’activer implicitement le compte.
 - [ ] **Step 4: Run** la même commande et attendre tous les tests verts.
 - [ ] **Step 5: Commit** `git add src/server/auth src/server/http && git commit -m "feat: enforce fail-closed auth sessions"`.
 
 ### Task 2: Guards centralisés et hiérarchie de rôles
 
 **Files:**
+
 - Create: `src/server/auth/guards.ts`
 - Create: `src/server/auth/guards.test.ts`
 - Modify: `src/server/auth/authorization-service.ts`
 - Modify: `src/server/auth/ports.ts`
 
 **Interfaces:**
+
 - Produces: `requireSession(container: Pick<Container, "auth">, headers: Headers): Promise<AuthenticatedSession>`.
 - Produces: `requireRole(container, headers, requiredRole: Role): Promise<AuthenticatedSession>`.
 - Produces: `requirePermission(container, headers, permission: Permission): Promise<AuthenticatedSession>`.
@@ -94,6 +98,7 @@
 ### Task 3: Audits de sécurité et conversion HTTP
 
 **Files:**
+
 - Create: `src/server/auth/security-audit.ts`
 - Create: `src/server/auth/security-audit.test.ts`
 - Create: `src/server/http/auth-response.ts`
@@ -101,6 +106,7 @@
 - Modify: `src/core/contracts/audit.ts`
 
 **Interfaces:**
+
 - Produces: `appendSecurityAudit(audit, input)` dont `input.reason` est une enum sûre et dont les détails acceptés sont limités à méthode, route, permission/rôle et raison.
 - Produces: `authErrorResponse(error: AuthGuardError): Response`.
 - Produit les événements `auth.login.succeeded`, `auth.login.rejected`, `auth.logout.succeeded`, `auth.access.denied`.
@@ -114,10 +120,12 @@
 ### Task 4: Vérification d’origine
 
 **Files:**
+
 - Create: `src/server/http/origin.ts`
 - Create: `src/server/http/origin.test.ts`
 
 **Interfaces:**
+
 - Produces: `isSameOriginMutation(request: Request): boolean`.
 - Produces: `requireSameOrigin(request: Request): void`, levant `AuthGuardError("forbidden")`.
 
@@ -130,6 +138,7 @@
 ### Task 5: Façade HTTP Better Auth et inscription privée
 
 **Files:**
+
 - Create: `src/server/auth/http-gateway.ts`
 - Create: `src/server/auth/http-gateway.test.ts`
 - Modify: `src/server/auth/better-auth.ts`
@@ -137,6 +146,7 @@
 - Modify: `src/server/container.ts`
 
 **Interfaces:**
+
 - Produces: `AuthHttpGateway.signIn(input: { email: string; password: string; headers: Headers }): Promise<{ headers: Headers; userId: string }>`.
 - Produces: `AuthHttpGateway.signOut(headers: Headers): Promise<{ headers: Headers; success: boolean }>`.
 - Le résultat public ne contient jamais de token, mais l’adaptateur peut le garder dans une variable éphémère sans le journaliser.
@@ -152,10 +162,12 @@
 ### Task 6: Handler `/api/auth/[...all]`
 
 **Files:**
+
 - Create: `src/app/api/auth/[...all]/route.ts`
 - Create: `src/app/api/auth/[...all]/route.test.ts`
 
 **Interfaces:**
+
 - Consumes: `container.authHttp`, `container.auth`, `appendSecurityAudit`.
 - Produces: `POST(request, { params }): Promise<Response>`.
 - Allowlist exacte: `sign-in/email`, `sign-out`; toute autre route/méthode est 404.
@@ -170,6 +182,7 @@
 ### Task 7: Protéger les six Route Handlers
 
 **Files:**
+
 - Modify: `src/app/api/agents/route.ts`
 - Modify: `src/app/api/tasks/route.ts`
 - Modify: `src/app/api/tasks/[id]/transition/route.ts`
@@ -179,6 +192,7 @@
 - Modify: `src/app/api/routes.test.ts`
 
 **Interfaces:**
+
 - Consumes: `requirePermission`, `requireSameOrigin`, `authErrorResponse`, audits d’accès refusé.
 - Permissions exactes documentées dans la spécification.
 
@@ -193,6 +207,7 @@
 ### Task 8: Navigation locale, proxy UX et cockpit serveur
 
 **Files:**
+
 - Create: `src/auth-navigation.ts`
 - Create: `src/auth-navigation.test.ts`
 - Create: `src/proxy.ts`
@@ -201,6 +216,7 @@
 - Create: `src/app/page.test.tsx` si le projet permet un test de composant sans nouvelle dépendance ; sinon couvrir le guard via test unitaire et le build Next.
 
 **Interfaces:**
+
 - Produces: `safeNextPath(candidate: string | null): string`.
 - Le proxy ne consomme que `request.cookies.has("icos.session_token")` et ne dépend d’aucun module DB/auth serveur.
 - Le cockpit consomme `requirePermission(container, headers(), "cockpit.read")` avant tout repository.
@@ -216,6 +232,7 @@
 ### Task 9: Page de connexion et déconnexion accessible
 
 **Files:**
+
 - Create: `src/app/login/page.tsx`
 - Create: `src/components/auth/login-form.tsx`
 - Create: `src/components/auth/logout-button.tsx`
@@ -224,6 +241,7 @@
 - Modify: `src/styles/globals.css`
 
 **Interfaces:**
+
 - `LoginForm({ nextPath: string })` POSTe uniquement `{ email, password }` vers `/api/auth/sign-in/email`.
 - `LogoutButton` POSTe vers `/api/auth/sign-out` puis appelle `router.replace("/login")`.
 - Aucun composant client ne décide un rôle ou une permission.
@@ -239,10 +257,12 @@
 ### Task 10: Intégration PostgreSQL 16 complète
 
 **Files:**
+
 - Create: `src/server/auth/auth-application.integration.test.ts`
 - Modify: helpers de test existants uniquement si nécessaire, sans secret réel.
 
 **Interfaces:**
+
 - Consumes: `startPostgres`, migrations existantes, `buildPostgresContainer`, handler auth et handlers protégés.
 - Utilise des secrets factices déterministes (`"x".repeat(40)`) et ne place jamais un token en fixture persistante ou snapshot.
 
@@ -255,6 +275,7 @@
 ### Task 11: Documentation et vérification complète
 
 **Files:**
+
 - Modify: `docs/architecture/overview.md` et/ou `docs/decisions/0007-identity-and-authentication.md` seulement pour refléter le comportement désormais livré.
 - Review: tous les fichiers modifiés.
 

@@ -2,6 +2,7 @@ import { APIError } from "better-auth/api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession, HumanUser } from "@/core/identity";
+import { AuthGuardError } from "@/server/auth/errors";
 import type { AuthGateway, AuthHttpGateway } from "@/server/auth/ports";
 import { buildMemoryContainer, type Container } from "@/server/container";
 import type { AuditRepository } from "@/server/repositories/ports";
@@ -171,9 +172,35 @@ describe("POST /api/auth/[...all]", () => {
     ]);
   });
 
-  it("révoque et refuse une session créée pour un compte désactivé", async () => {
+  it("reste contrôlé si l'audit et la compensation de connexion échouent", async () => {
+    const revokeSession = vi.fn<(headers: Headers) => Promise<void>>(async () => {
+      throw new Error("revocation unavailable sentinel");
+    });
+    const append = vi.fn(async () => {
+      throw new Error("audit unavailable sentinel");
+    });
+    const base = buildMemoryContainer();
+    installContainer({
+      auth: authGateway({ revokeSession }),
+      audit: { ...base.audit, append },
+    });
+
+    const response = await POST(request("sign-in/email"), context("sign-in", "email"));
+    const result = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(result).not.toContain("audit unavailable sentinel");
+    expect(result).not.toContain("revocation unavailable sentinel");
+    expect(revokeSession).toHaveBeenCalledOnce();
+    expect(revokeSession.mock.calls[0]?.[0].get("cookie")).toContain("icos.session_token=opaque");
+  });
+
+  it("refuse un compte désactivé même si la révocation échoue", async () => {
     const disabledUser: HumanUser = { ...activeUser, status: "disabled" };
-    const revokeUserSessions = vi.fn(async () => {});
+    const revokeUserSessions = vi.fn(async () => {
+      throw new Error("revocation unavailable");
+    });
     const auth = authGateway({
       readHumanUser: vi.fn(async () => disabledUser),
       revokeUserSessions,
@@ -204,6 +231,23 @@ describe("POST /api/auth/[...all]", () => {
     const revokeUserSessions = vi.fn(async () => {});
     const auth = authGateway({
       readSession: vi.fn(async () => null),
+      revokeUserSessions,
+    });
+    installContainer({ auth });
+
+    const response = await POST(request("sign-in/email"), context("sign-in", "email"));
+
+    expect(response.status).toBe(403);
+    expect((await body(response)).error?.code).toBe("account_disabled");
+    expect(revokeUserSessions).toHaveBeenCalledWith(activeUser.id);
+  });
+
+  it("normalise comme compte désactivé une projection autoritaire invalide", async () => {
+    const revokeUserSessions = vi.fn(async () => {});
+    const auth = authGateway({
+      readSession: vi.fn(async () => {
+        throw new AuthGuardError("account_disabled", activeUser.id);
+      }),
       revokeUserSessions,
     });
     installContainer({ auth });
@@ -329,5 +373,43 @@ describe("POST /api/auth/[...all]", () => {
         details: {},
       }),
     );
+  });
+
+  it("déconnecte une session même si la projection autoritaire du compte est invalide", async () => {
+    const readSession = vi.fn(async () => {
+      throw new AuthGuardError("account_disabled", activeUser.id);
+    });
+    const signOut = vi.fn(async () => ({
+      headers: new Headers({
+        "set-cookie": "icos.session_token=; Max-Age=0; HttpOnly; SameSite=Lax",
+      }),
+      success: true,
+    }));
+    const container = installContainer({
+      auth: authGateway({ readSession }),
+      authHttp: authHttpGateway({ signOut }),
+    });
+    const logoutRequest = request(
+      "sign-out",
+      {},
+      {
+        cookie: "icos.session_token=opaque",
+      },
+    );
+
+    const response = await POST(logoutRequest, context("sign-out"));
+
+    expect(response.status).toBe(200);
+    expect(await body(response)).toEqual({ success: true });
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(readSession).toHaveBeenCalledBefore(signOut);
+    expect(signOut).toHaveBeenCalledWith(logoutRequest.headers);
+    expect(await container.audit.list()).toEqual([
+      expect.objectContaining({
+        eventType: "auth.logout.succeeded",
+        actor: { kind: "human", id: activeUser.id },
+        details: {},
+      }),
+    ]);
   });
 });

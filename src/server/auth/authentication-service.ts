@@ -5,6 +5,7 @@ import type { Database } from "@/server/database/client";
 import { session as sessionTable, user as userTable } from "@/server/database/auth-schema";
 
 import type { IcosBetterAuth } from "./better-auth";
+import { AuthGuardError } from "./errors";
 import type {
   AuthGateway,
   CreateHumanUserResult,
@@ -18,6 +19,10 @@ interface BetterAuthUser {
   email: string;
   name?: string | null;
   status?: string | null;
+}
+
+interface BetterAuthSession {
+  userId?: string;
 }
 
 function toHumanUser(u: BetterAuthUser): HumanUser | null {
@@ -56,6 +61,7 @@ export class AuthenticationService implements AuthGateway {
     if (await this.users.findByEmail(input.email)) {
       return { ok: false, reason: "already_exists" };
     }
+    let createdUserId: string | undefined;
     try {
       const context = await this.auth.$context;
       const createdUser = await context.internalAdapter.createUser({
@@ -64,6 +70,7 @@ export class AuthenticationService implements AuthGateway {
         emailVerified: false,
         status: "active",
       });
+      createdUserId = createdUser.id;
       const password = await context.password.hash(input.password);
       await context.internalAdapter.linkAccount({
         userId: createdUser.id,
@@ -73,6 +80,9 @@ export class AuthenticationService implements AuthGateway {
       });
       return { ok: true, userId: createdUser.id };
     } catch (error) {
+      if (createdUserId) {
+        await this.deleteHumanUser(createdUserId).catch(() => {});
+      }
       const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
       if (message.includes("exist") || message.includes("already")) {
         return { ok: false, reason: "already_exists" };
@@ -96,12 +106,17 @@ export class AuthenticationService implements AuthGateway {
 
   async readSession(headers: Headers): Promise<AuthenticatedSession | null> {
     const result = await this.auth.api.getSession({ headers });
-    if (!result?.user) {
+    if (!result) {
       return null;
     }
-    const user = toHumanUser(result.user as BetterAuthUser);
+    if (!result.user) {
+      const userId = (result.session as BetterAuthSession | undefined)?.userId;
+      throw new AuthGuardError("account_disabled", userId);
+    }
+    const rawUser = result.user as BetterAuthUser;
+    const user = toHumanUser(rawUser);
     if (!user) {
-      return null;
+      throw new AuthGuardError("account_disabled", rawUser.id);
     }
     const roles = await this.roles.listRoles(user.id);
     return { user, roles };
