@@ -15,6 +15,11 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PERSISTENCE: persistenceSchema,
   DATABASE_URL: optionalUrl,
+  // Authentification humaine (Better Auth). Requis lorsque l'auth réelle est
+  // composée (backend postgres). Aucune valeur réelle committée.
+  BETTER_AUTH_SECRET: optionalSecret,
+  BETTER_AUTH_URL: optionalUrl,
+  ICOS_OWNER_EMAIL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   OPENAI_API_KEY: optionalSecret,
   ANTHROPIC_API_KEY: optionalSecret,
   GITHUB_TOKEN: optionalSecret,
@@ -25,6 +30,29 @@ const envSchema = z.object({
 });
 
 export type Env = z.infer<typeof envSchema>;
+
+/** Configuration d'authentification résolue (secret ≥ 32 caractères, URL). */
+export interface AuthConfig {
+  secret: string;
+  baseURL: string;
+}
+
+/**
+ * Résout la configuration d'authentification réelle. Échoue explicitement si le
+ * secret (≥ 32 caractères) ou l'URL manquent — jamais de valeur par défaut
+ * faible, jamais de secret journalisé.
+ */
+export function resolveAuthConfig(env: Env): AuthConfig {
+  if (env.BETTER_AUTH_SECRET === undefined || env.BETTER_AUTH_SECRET.length < 32) {
+    throw new Error(
+      "BETTER_AUTH_SECRET est requis (≥ 32 caractères) pour l'authentification humaine.",
+    );
+  }
+  if (env.BETTER_AUTH_URL === undefined) {
+    throw new Error("BETTER_AUTH_URL est requis pour l'authentification humaine.");
+  }
+  return { secret: env.BETTER_AUTH_SECRET, baseURL: env.BETTER_AUTH_URL };
+}
 
 /**
  * Validation à la demande : aucune exécution au chargement du module, afin que

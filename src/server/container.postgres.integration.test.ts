@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Agent, AgentAction, Task } from "@/core/contracts";
-import { loadEnv } from "@/config/env";
 import { actionToRow, agentToRow, taskToRow } from "@/server/database/mappers";
 import { actions, agents, tasks } from "@/server/database/schema";
 import {
@@ -12,7 +11,6 @@ import {
   type PgContext,
 } from "@/server/database/testing/pg-support";
 
-import { GET as getAgents } from "@/app/api/agents/route";
 import { GET as getTasks, POST as postTask } from "@/app/api/tasks/route";
 import { POST as postTransition } from "@/app/api/tasks/[id]/transition/route";
 import { POST as postDecision } from "@/app/api/actions/[id]/decision/route";

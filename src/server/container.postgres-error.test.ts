@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadEnv } from "@/config/env";
 import { GET as getAgents } from "@/app/api/agents/route";
 
-import { createContainer, getContainer, resetContainer } from "./container";
+import { createContainer, resetContainer } from "./container";
 
 const savedPersistence = process.env.PERSISTENCE;
 const savedUrl = process.env.DATABASE_URL;

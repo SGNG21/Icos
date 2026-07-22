@@ -6,7 +6,7 @@ import { defineConfig } from "drizzle-kit";
  * commandes en ligne (migrate/studio) et proviennent de l'environnement.
  */
 export default defineConfig({
-  schema: "./src/server/database/schema.ts",
+  schema: ["./src/server/database/schema.ts", "./src/server/database/auth-schema.ts"],
   out: "./drizzle",
   dialect: "postgresql",
   strict: true,

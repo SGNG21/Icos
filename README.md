@@ -92,6 +92,36 @@ Voir [l'ADR-0004](docs/decisions/0004-async-ports-and-backend-selection.md),
 [l'ADR-0005](docs/decisions/0005-postgres-persistence-with-drizzle.md) et
 [l'ADR-0006](docs/decisions/0006-postgres-transaction-and-activation.md).
 
+## Identité et authentification humaine (fondation)
+
+L'authentification humaine repose sur **Better Auth** (email/mot de passe, sessions
+en base révocables), derrière une façade ICOS. ICOS conserve ses propres rôles
+(`owner`/`admin`/`operator`/`viewer`, table `user_roles`) et sa matrice de
+permissions — strictement séparés de l'identité des agents IA (`Agent.authorizationLevel`).
+L'auth réelle exige PostgreSQL (`BETTER_AUTH_SECRET`/`BETTER_AUTH_URL`). Aucune
+route n'est encore protégée (Lot 2B-1b). Voir
+[l'ADR-0007](docs/decisions/0007-identity-and-authentication.md).
+
+### Bootstrap du premier `owner`
+
+Les migrations doivent être appliquées au préalable (`pnpm db:migrate`). La
+commande ne s'exécute **jamais** automatiquement, refuse un second bootstrap
+initial, et n'affiche aucun secret :
+
+```bash
+PERSISTENCE=postgres \
+DATABASE_URL="<postgres-url>" \
+BETTER_AUTH_SECRET="<high-entropy-secret>" \
+BETTER_AUTH_URL="http://localhost:3000" \
+ICOS_OWNER_EMAIL="owner@example.com" \
+ICOS_OWNER_PASSWORD="<temporary-password>" \
+pnpm auth:bootstrap
+```
+
+Le mot de passe (`ICOS_OWNER_PASSWORD`) est transmis **ponctuellement** au
+processus puis retiré : il ne doit rester ni dans un fichier shell, ni dans
+l'historique, ni dans un `.env` partagé.
+
 ## Limites actuelles
 
 La conversation ne déclenche aucune action. Les agents affichés sont des données de démonstration.

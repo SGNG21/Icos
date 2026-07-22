@@ -2,7 +2,12 @@ import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
-import { loadEnv, type Env } from "@/config/env";
+import { loadEnv, resolveAuthConfig, type AuthConfig, type Env } from "@/config/env";
+import { AuthenticationService } from "@/server/auth/authentication-service";
+import { createBetterAuth } from "@/server/auth/better-auth";
+import type { AuthGateway, RoleRepository } from "@/server/auth/ports";
+import { PostgresHumanUserRepository } from "@/server/repositories/postgres/human-user-repository";
+import { PostgresRoleRepository } from "@/server/repositories/postgres/role-repository";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { createDatabase } from "@/server/database/client";
 import { PersistenceUnavailableError } from "@/server/database/errors";
@@ -42,6 +47,14 @@ export interface Container {
   approvals: ApprovalRepository;
   audit: AuditRepository;
   decisionUow: ActionDecisionUnitOfWork;
+  /**
+   * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
+   * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
+   * (backend mémoire ou secret absent). L'auth réelle exige PostgreSQL.
+   */
+  auth?: AuthGateway;
+  /** Rôles applicatifs ICOS (présent avec le backend PostgreSQL). */
+  roles?: RoleRepository;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
   close: () => Promise<void>;
 }
@@ -93,7 +106,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
  * éventuellement ouvert. Les migrations ne sont PAS appliquées ici : elles
  * relèvent d'une commande explicite (`pnpm db:migrate`).
  */
-export async function buildPostgresContainer(url: string): Promise<Container> {
+export async function buildPostgresContainer(
+  url: string,
+  authConfig?: AuthConfig,
+): Promise<Container> {
   const handle = createDatabase(url);
   try {
     // Connectivité + présence du schéma en une sonde (échoue si la table
@@ -107,6 +123,19 @@ export async function buildPostgresContainer(url: string): Promise<Container> {
     throw new PersistenceUnavailableError("connexion impossible ou schéma absent");
   }
 
+  // Rôles ICOS + auth humaine (construite uniquement si config valide fournie).
+  const roles = new PostgresRoleRepository(handle.db);
+  let auth: AuthGateway | undefined;
+  if (authConfig) {
+    const betterAuth = createBetterAuth(handle.db, authConfig);
+    auth = new AuthenticationService(
+      betterAuth,
+      new PostgresHumanUserRepository(handle.db),
+      roles,
+      handle.db,
+    );
+  }
+
   return {
     agents: new PostgresAgentRepository(handle.db),
     tasks: new PostgresTaskRepository(handle.db),
@@ -114,6 +143,8 @@ export async function buildPostgresContainer(url: string): Promise<Container> {
     approvals: new PostgresApprovalRepository(handle.db),
     audit: new PostgresAuditRepository(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
+    auth,
+    roles,
     close: handle.close,
   };
 }
@@ -141,7 +172,12 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
     if (!env.DATABASE_URL) {
       throw new PersistenceConfigError("DATABASE_URL est requis lorsque PERSISTENCE=postgres.");
     }
-    return buildPostgresContainer(env.DATABASE_URL);
+    // Auth composée seulement si le secret/URL Better Auth sont fournis.
+    const authConfig =
+      env.BETTER_AUTH_SECRET !== undefined && env.BETTER_AUTH_URL !== undefined
+        ? resolveAuthConfig(env)
+        : undefined;
+    return buildPostgresContainer(env.DATABASE_URL, authConfig);
   }
 
   return buildMemoryContainer(options.seeds);

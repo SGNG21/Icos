@@ -44,6 +44,18 @@ postgres, aucun fallback mémoire). Tests d'intégration réels via Testcontaine
 (`pnpm test:integration`, Docker requis, ignorés sinon) ; `pnpm test` reste sans
 Docker. Les indisponibilités de persistance produisent un HTTP `503`.
 
+### Identité & authentification (fondation, Lot 2B-1a)
+
+`src/core/identity` porte les contrats PURS (rôles, permissions, statut, session
+projetée) et la matrice `owner ⊇ admin ⊇ operator ⊇ viewer`, sans I/O ni import
+de Better Auth. `src/server/auth` héberge la façade (`AuthenticationService`,
+`AuthorizationService`) au-dessus de **Better Auth** (email/mot de passe, sessions
+en base, cookies), et le use case `bootstrapOwner` (premier owner, idempotent).
+Les tables `user`/`session`/`account`/`verification` (Better Auth) et `user_roles`
+(ICOS) sont ajoutées par la migration `0002`. L'auth réelle exige PostgreSQL ;
+`user_roles` est distinct d'`agents.authorization_level`. Aucune route protégée à
+ce stade (Lot 2B-1b).
+
 ### Sélection du backend
 
 `PERSISTENCE=memory|postgres` est résolue de façon déterministe, **sans bascule
