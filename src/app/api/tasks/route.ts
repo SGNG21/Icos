@@ -1,5 +1,6 @@
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
+import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { createTaskBodySchema } from "@/server/http/schemas";
@@ -8,9 +9,19 @@ import { createTask } from "@/server/usecases/create-task";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+export async function GET(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
+    const authError = await protectRoute({
+      container,
+      request,
+      route: "api.tasks",
+      permission: "cockpit.read",
+    });
+    if (authError) {
+      return authError;
+    }
+
     return json({ tasks: await container.tasks.list() });
   } catch (error) {
     return toErrorResponse(error);
@@ -19,6 +30,18 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    const container = await getContainer();
+    const authError = await protectRoute({
+      container,
+      request,
+      route: "api.tasks",
+      permission: "tasks.write",
+      sameOrigin: true,
+    });
+    if (authError) {
+      return authError;
+    }
+
     const body = await readJson(request);
     if (!body.ok) {
       return apiError("invalid_input", "corps JSON invalide");
@@ -29,7 +52,6 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const container = await getContainer();
     const result = await createTask(
       { tasks: container.tasks, agents: container.agents },
       parsed.data,

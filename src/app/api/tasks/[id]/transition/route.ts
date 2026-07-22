@@ -1,5 +1,6 @@
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
+import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { transitionBodySchema } from "@/server/http/schemas";
@@ -13,8 +14,19 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   try {
-    const { id } = await ctx.params;
+    const container = await getContainer();
+    const authError = await protectRoute({
+      container,
+      request,
+      route: "api.tasks.transition",
+      permission: "tasks.write",
+      sameOrigin: true,
+    });
+    if (authError) {
+      return authError;
+    }
 
+    const { id } = await ctx.params;
     const body = await readJson(request);
     if (!body.ok) {
       return apiError("invalid_input", "corps JSON invalide");
@@ -25,7 +37,6 @@ export async function POST(
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const container = await getContainer();
     const result = await transitionTask(
       { tasks: container.tasks },
       { taskId: id, to: parsed.data.to },
