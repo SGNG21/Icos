@@ -9,6 +9,8 @@ export type ApiErrorCode =
   | "agent_not_found"
   | "inconsistent_reference"
   | "audit_failed"
+  | "persistence_unavailable"
+  | "transient_conflict"
   | "internal_error";
 
 export interface ApiErrorBody {
@@ -27,6 +29,8 @@ const statusByCode: Record<ApiErrorCode, number> = {
   agent_not_found: 422,
   inconsistent_reference: 422,
   audit_failed: 500,
+  persistence_unavailable: 503,
+  transient_conflict: 503,
   internal_error: 500,
 };
 

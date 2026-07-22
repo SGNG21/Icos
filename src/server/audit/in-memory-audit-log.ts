@@ -1,4 +1,5 @@
 import { auditEntrySchema, type AuditEntry, type AuditEventType } from "@/core/contracts";
+import { compareAuditEntries } from "@/core/ordering";
 
 export interface AuditQuery {
   eventType?: AuditEventType;
@@ -55,7 +56,7 @@ export class InMemoryAuditLog implements AuditLog {
   }
 
   list(): readonly AuditEntry[] {
-    return this.entries.map((entry) => structuredClone(entry));
+    return this.entries.map((entry) => structuredClone(entry)).sort(compareAuditEntries);
   }
 
   query(filter: AuditQuery): readonly AuditEntry[] {
@@ -67,6 +68,7 @@ export class InMemoryAuditLog implements AuditLog {
           (filter.taskId === undefined || entry.taskId === filter.taskId) &&
           (filter.actionId === undefined || entry.actionId === filter.actionId),
       )
-      .map((entry) => structuredClone(entry));
+      .map((entry) => structuredClone(entry))
+      .sort(compareAuditEntries);
   }
 }

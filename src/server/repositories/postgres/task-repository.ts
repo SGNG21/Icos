@@ -33,7 +33,11 @@ export class PostgresTaskRepository implements TaskRepository {
   }
 
   async list(): Promise<Task[]> {
-    const taskRows = await this.db.select().from(tasks);
+    // Ordre déterministe : created_at ASC, id ASC.
+    const taskRows = await this.db
+      .select()
+      .from(tasks)
+      .orderBy(asc(tasks.createdAt), asc(tasks.id));
     const actionRows = await this.db
       .select({ id: actions.id, taskId: actions.taskId })
       .from(actions)

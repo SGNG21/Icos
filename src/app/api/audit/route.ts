@@ -1,4 +1,5 @@
 import { getContainer } from "@/server/container";
+import { toErrorResponse } from "@/server/http/map-error";
 import { zodDetails } from "@/server/http/errors";
 import { apiError, json } from "@/server/http/respond";
 import { auditQuerySchema } from "@/server/http/schemas";
@@ -25,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
     const filter: AuditQuery = parsed.data;
     const container = await getContainer();
     return json({ entries: await container.audit.query(filter) });
-  } catch {
-    return apiError("internal_error", "erreur interne");
+  } catch (error) {
+    return toErrorResponse(error);
   }
 }

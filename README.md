@@ -77,18 +77,20 @@ prêts à recevoir une implémentation PostgreSQL. La variable `PERSISTENCE`
 sélectionne le backend de façon explicite, sans bascule silencieuse :
 
 - `memory` : backend en mémoire (défaut en développement et test) ;
-- `postgres` : fondation posée (schéma Drizzle, migrations, repositories) mais pas
-  encore câblée au container — produit une erreur explicite jusqu'au Lot 2A-2b ;
+- `postgres` : backend PostgreSQL **actif** (repositories + transaction atomique
+  `FOR UPDATE` + audit append-only) ; exige `DATABASE_URL`, sonde connexion et
+  schéma, et échoue sans fallback mémoire si indisponible (HTTP `503`) ;
 - en production, `PERSISTENCE` doit être défini explicitement.
 
-La couche PostgreSQL (Drizzle + postgres.js) vit dans `src/server/database` et
-`src/server/repositories/postgres`. Migrations : `pnpm db:generate` puis
-`pnpm db:migrate` (nécessite `DATABASE_URL`). Tests d'intégration réels :
-`pnpm test:integration` (nécessite Docker ; ignoré sinon). `pnpm test` reste
-indépendant de Docker.
+La couche PostgreSQL (Drizzle + postgres.js) vit dans `src/server/database`,
+`src/server/repositories/postgres` et `src/server/uow`. Migrations : `pnpm db:generate`
+puis `pnpm db:migrate` (nécessite `DATABASE_URL`) — jamais appliquées automatiquement
+au démarrage. Tests d'intégration réels : `pnpm test:integration` (nécessite Docker ;
+ignoré sinon). `pnpm test` reste indépendant de Docker.
 
-Voir [l'ADR-0004](docs/decisions/0004-async-ports-and-backend-selection.md) et
-[l'ADR-0005](docs/decisions/0005-postgres-persistence-with-drizzle.md).
+Voir [l'ADR-0004](docs/decisions/0004-async-ports-and-backend-selection.md),
+[l'ADR-0005](docs/decisions/0005-postgres-persistence-with-drizzle.md) et
+[l'ADR-0006](docs/decisions/0006-postgres-transaction-and-activation.md).
 
 ## Limites actuelles
 

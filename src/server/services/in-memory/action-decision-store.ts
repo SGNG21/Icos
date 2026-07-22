@@ -4,6 +4,7 @@ import {
   type AgentAction,
   type Approval,
 } from "@/core/contracts";
+import { compareActions, compareApprovals } from "@/core/ordering";
 
 import type { ActionQuery } from "@/server/repositories/ports";
 
@@ -30,7 +31,8 @@ export class InMemoryActionDecisionStore {
         (action) =>
           filter?.approvalStatus === undefined || action.approvalStatus === filter.approvalStatus,
       )
-      .map((action) => structuredClone(action));
+      .map((action) => structuredClone(action))
+      .sort(compareActions);
   }
 
   getAction(id: string): AgentAction | undefined {
@@ -53,13 +55,14 @@ export class InMemoryActionDecisionStore {
   }
 
   listApprovals(): readonly Approval[] {
-    return this.approvals.map((approval) => structuredClone(approval));
+    return this.approvals.map((approval) => structuredClone(approval)).sort(compareApprovals);
   }
 
   listApprovalsForAction(actionId: string): readonly Approval[] {
     return this.approvals
       .filter((approval) => approval.actionId === actionId)
-      .map((approval) => structuredClone(approval));
+      .map((approval) => structuredClone(approval))
+      .sort(compareApprovals);
   }
 
   /**

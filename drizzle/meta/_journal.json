@@ -8,6 +8,13 @@
       "when": 1784705830094,
       "tag": "0000_fluffy_charles_xavier",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784712090651,
+      "tag": "0001_append_only_audit",
+      "breakpoints": true
     }
   ]
 }

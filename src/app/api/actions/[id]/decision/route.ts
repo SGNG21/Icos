@@ -1,5 +1,6 @@
 import { actionDecisionCommandSchema } from "@/core/contracts";
 import { getContainer } from "@/server/container";
+import { toErrorResponse } from "@/server/http/map-error";
 import { zodDetails } from "@/server/http/errors";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { recordActionDecision } from "@/server/usecases/record-action-decision";
@@ -43,7 +44,7 @@ export async function POST(
     }
 
     return json({ approval: result.approval, action: result.action, execution: result.execution });
-  } catch {
-    return apiError("internal_error", "erreur interne");
+  } catch (error) {
+    return toErrorResponse(error);
   }
 }

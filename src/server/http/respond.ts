@@ -20,11 +20,16 @@ export function json(data: unknown, init?: ResponseInit): Response {
   });
 }
 
-export function apiError(code: ApiErrorCode, message: string, details?: unknown): Response {
+export function apiError(
+  code: ApiErrorCode,
+  message: string,
+  details?: unknown,
+  headers?: Record<string, string>,
+): Response {
   const body: ApiErrorBody = {
     error: { code, message, ...(details === undefined ? {} : { details }) },
   };
-  return json(body, { status: httpStatusFor(code) });
+  return json(body, { status: httpStatusFor(code), headers });
 }
 
 /** Lit et parse le corps JSON d'une requête ; renvoie une erreur typée sinon. */

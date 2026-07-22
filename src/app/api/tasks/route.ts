@@ -1,4 +1,5 @@
 import { getContainer } from "@/server/container";
+import { toErrorResponse } from "@/server/http/map-error";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { createTaskBodySchema } from "@/server/http/schemas";
@@ -11,8 +12,8 @@ export async function GET(): Promise<Response> {
   try {
     const container = await getContainer();
     return json({ tasks: await container.tasks.list() });
-  } catch {
-    return apiError("internal_error", "erreur interne");
+  } catch (error) {
+    return toErrorResponse(error);
   }
 }
 
@@ -38,7 +39,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     return json({ task: result.task }, { status: 201 });
-  } catch {
-    return apiError("internal_error", "erreur interne");
+  } catch (error) {
+    return toErrorResponse(error);
   }
 }

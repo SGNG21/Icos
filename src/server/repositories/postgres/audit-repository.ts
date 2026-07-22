@@ -1,4 +1,4 @@
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, asc, eq, type SQL } from "drizzle-orm";
 
 import { auditEntrySchema, type AuditEntry } from "@/core/contracts";
 import type { AuditQuery } from "@/server/audit/in-memory-audit-log";
@@ -30,7 +30,11 @@ export class PostgresAuditRepository implements AuditRepository {
   }
 
   async list(): Promise<AuditEntry[]> {
-    const rows = await this.db.select().from(auditEntries).orderBy(desc(auditEntries.occurredAt));
+    // Ordre déterministe : occurred_at ASC, id ASC (chronologique).
+    const rows = await this.db
+      .select()
+      .from(auditEntries)
+      .orderBy(asc(auditEntries.occurredAt), asc(auditEntries.id));
     return rows.map(rowToAuditEntry);
   }
 
@@ -53,7 +57,7 @@ export class PostgresAuditRepository implements AuditRepository {
       .select()
       .from(auditEntries)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(auditEntries.occurredAt));
+      .orderBy(asc(auditEntries.occurredAt), asc(auditEntries.id));
     return rows.map(rowToAuditEntry);
   }
 }

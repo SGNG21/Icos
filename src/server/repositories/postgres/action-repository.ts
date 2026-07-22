@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import type { AgentAction } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
@@ -10,12 +10,14 @@ export class PostgresActionRepository implements ActionRepository {
   constructor(private readonly db: Database) {}
 
   async list(filter?: ActionQuery): Promise<AgentAction[]> {
+    // Ordre déterministe : created_at (= requestedAt) ASC, id ASC.
     const rows = filter?.approvalStatus
       ? await this.db
           .select()
           .from(actions)
           .where(eq(actions.approvalStatus, filter.approvalStatus))
-      : await this.db.select().from(actions);
+          .orderBy(asc(actions.createdAt), asc(actions.id))
+      : await this.db.select().from(actions).orderBy(asc(actions.createdAt), asc(actions.id));
     return rows.map(rowToAction);
   }
 
