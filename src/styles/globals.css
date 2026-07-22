@@ -757,3 +757,170 @@ kbd {
 .outcome-refused {
   color: #8a2f2f;
 }
+
+/* --- Authentification humaine (Lot 2B-1b) --- */
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px 20px;
+}
+
+.login-card {
+  width: min(460px, 100%);
+  padding: clamp(28px, 6vw, 48px);
+  background: rgb(255 255 255 / 94%);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgb(33 54 43 / 10%);
+}
+
+.login-brand {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 32px;
+  place-items: center;
+  color: var(--forest);
+  font-family: Georgia, serif;
+  font-size: 26px;
+  font-weight: 700;
+  background: var(--mint);
+  border-radius: 12px;
+}
+
+.login-card h1 {
+  margin-bottom: 14px;
+  font-size: clamp(34px, 8vw, 48px);
+}
+
+.login-intro {
+  margin-bottom: 28px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.login-form,
+.form-field {
+  display: grid;
+}
+
+.login-form {
+  gap: 18px;
+}
+
+.form-field {
+  gap: 7px;
+}
+
+.form-field label {
+  color: #46534c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.form-field input {
+  width: 100%;
+  padding: 12px 13px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #c8d2cb;
+  border-radius: 9px;
+  outline: none;
+}
+
+.form-field input:focus-visible,
+.login-form button:focus-visible,
+.logout-control button:focus-visible {
+  outline: 3px solid rgb(167 221 191 / 55%);
+  outline-offset: 2px;
+}
+
+.form-field input:focus-visible {
+  border-color: #4f7d66;
+}
+
+.login-form button,
+.logout-control button {
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.login-form button {
+  min-height: 44px;
+  padding: 11px 16px;
+  color: white;
+  font-weight: 700;
+  background: var(--forest);
+  border: 0;
+}
+
+.login-form button:disabled,
+.logout-control button:disabled,
+.form-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.auth-error {
+  min-height: 20px;
+  margin: -4px 0 0;
+  color: #8a2f2f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.logout-control {
+  margin-top: 16px;
+}
+
+.logout-control button {
+  width: 100%;
+  padding: 9px 12px;
+  color: #dce8e0;
+  font-size: 12px;
+  font-weight: 700;
+  background: transparent;
+  border: 1px solid rgb(255 255 255 / 18%);
+}
+
+.logout-control button:hover:not(:disabled) {
+  color: white;
+  background: rgb(255 255 255 / 8%);
+}
+
+.sidebar-auth-error {
+  min-height: 0;
+  margin: 8px 0 0;
+  color: #f0baba;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.sidebar-auth-error:empty {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .sidebar-footer {
+    display: block;
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+
+  .logout-control {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-shell {
+    align-items: start;
+    padding: 16px;
+  }
+
+  .login-card {
+    padding: 28px 22px;
+  }
+}
