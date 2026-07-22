@@ -2,15 +2,6 @@ import type { Env } from "@/config/env";
 
 export type Backend = "memory" | "postgres";
 
-/** Configuration `PERSISTENCE=postgres` valide mais backend pas encore fourni. */
-export class BackendNotImplementedError extends Error {
-  readonly code = "backend_not_implemented" as const;
-  constructor(backend: Backend) {
-    super(`Le backend de persistance « ${backend} » n'est pas encore implémenté (Lot 2A-2).`);
-    this.name = "BackendNotImplementedError";
-  }
-}
-
 /** Configuration de persistance invalide (ex. production sans `PERSISTENCE`). */
 export class PersistenceConfigError extends Error {
   readonly code = "persistence_config_invalid" as const;
@@ -27,8 +18,8 @@ export class PersistenceConfigError extends Error {
  * - test sans `PERSISTENCE` → `memory` ;
  * - production sans `PERSISTENCE` → erreur ;
  * - `PERSISTENCE=memory` → `memory` ;
- * - `PERSISTENCE=postgres` → `postgres` (le container lèvera ensuite
- *   `BackendNotImplementedError` — aucun repli vers `memory`) ;
+ * - `PERSISTENCE=postgres` → `postgres` (le container exige `DATABASE_URL` et
+ *   sonde la connexion/schéma — aucun repli vers `memory`) ;
  * - valeur inconnue → déjà rejetée par la validation Zod de `loadEnv`.
  */
 export function resolvePersistence(env: Env): Backend {

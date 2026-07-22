@@ -1,4 +1,5 @@
 import { getContainer } from "@/server/container";
+import { toErrorResponse } from "@/server/http/map-error";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { transitionBodySchema } from "@/server/http/schemas";
@@ -41,7 +42,7 @@ export async function POST(
     }
 
     return json({ task: result.task });
-  } catch {
-    return apiError("internal_error", "erreur interne");
+  } catch (error) {
+    return toErrorResponse(error);
   }
 }

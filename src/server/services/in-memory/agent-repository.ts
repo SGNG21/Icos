@@ -1,4 +1,5 @@
 import { agentSchema, type Agent } from "@/core/contracts";
+import { compareAgents } from "@/core/ordering";
 
 import type { AgentRepository } from "@/server/repositories/ports";
 
@@ -16,7 +17,7 @@ export class InMemoryAgentRepository implements AgentRepository {
   }
 
   async list(): Promise<Agent[]> {
-    return this.agents.map((agent) => structuredClone(agent));
+    return this.agents.map((agent) => structuredClone(agent)).sort(compareAgents);
   }
 
   async getById(id: string): Promise<Agent | null> {

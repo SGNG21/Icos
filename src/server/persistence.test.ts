@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadEnv } from "@/config/env";
 
 import { createContainer } from "./container";
-import {
-  BackendNotImplementedError,
-  PersistenceConfigError,
-  resolvePersistence,
-} from "./persistence";
+import { PersistenceConfigError, resolvePersistence } from "./persistence";
 
 describe("resolvePersistence", () => {
   it("développement sans PERSISTENCE → memory", () => {
@@ -49,17 +45,17 @@ describe("createContainer (sélection de backend)", () => {
     expect((await container.agents.list()).length).toBeGreaterThan(0);
   });
 
-  it("PERSISTENCE=postgres → backend_not_implemented, jamais de repli mémoire", async () => {
+  it("PERSISTENCE=postgres sans DATABASE_URL → erreur, jamais de repli mémoire", async () => {
     await expect(
       createContainer({ env: loadEnv({ PERSISTENCE: "postgres" }) }),
-    ).rejects.toBeInstanceOf(BackendNotImplementedError);
+    ).rejects.toBeInstanceOf(PersistenceConfigError);
 
     // Confirmation explicite : aucun container mémoire n'est renvoyé.
     let container: unknown = null;
     try {
       container = await createContainer({ env: loadEnv({ PERSISTENCE: "postgres" }) });
     } catch (error) {
-      expect((error as BackendNotImplementedError).code).toBe("backend_not_implemented");
+      expect((error as PersistenceConfigError).code).toBe("persistence_config_invalid");
     }
     expect(container).toBeNull();
   });

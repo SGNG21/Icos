@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { taskSchema, type AuditEntry, type Task, type TaskStatus } from "@/core/contracts";
+import { compareTasks } from "@/core/ordering";
 import { transitionTask } from "@/core/tasks/lifecycle";
 import type { AuditLog } from "@/server/audit/in-memory-audit-log";
 import type {
@@ -31,7 +32,7 @@ export class InMemoryTaskRepository implements TaskRepository {
   }
 
   async list(): Promise<Task[]> {
-    return this.tasks.map((task) => structuredClone(task));
+    return this.tasks.map((task) => structuredClone(task)).sort(compareTasks);
   }
 
   async getById(id: string): Promise<Task | null> {
