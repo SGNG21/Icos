@@ -1,5 +1,6 @@
 import {
   hasPermission,
+  ROLE_RANK,
   type AuthenticatedSession,
   type Permission,
   type Role,
@@ -19,6 +20,9 @@ export class AuthorizationService {
   }
 
   hasRole(session: AuthenticatedSession, role: Role): boolean {
-    return session.user.status === "active" && session.roles.includes(role);
+    return (
+      session.user.status === "active" &&
+      session.roles.some((grantedRole) => ROLE_RANK[grantedRole] >= ROLE_RANK[role])
+    );
   }
 }

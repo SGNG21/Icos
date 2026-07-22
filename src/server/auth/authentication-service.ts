@@ -20,12 +20,16 @@ interface BetterAuthUser {
   status?: string | null;
 }
 
-function toHumanUser(u: BetterAuthUser): HumanUser {
+function toHumanUser(u: BetterAuthUser): HumanUser | null {
+  const status = userStatusSchema.safeParse(u.status);
+  if (!status.success) {
+    return null;
+  }
   return {
     id: u.id,
     email: u.email,
     name: u.name ?? undefined,
-    status: userStatusSchema.catch("active").parse(u.status ?? "active"),
+    status: status.data,
   };
 }
 
@@ -53,10 +57,21 @@ export class AuthenticationService implements AuthGateway {
       return { ok: false, reason: "already_exists" };
     }
     try {
-      const result = await this.auth.api.signUpEmail({
-        body: { email: input.email, password: input.password, name: input.name ?? input.email },
+      const context = await this.auth.$context;
+      const createdUser = await context.internalAdapter.createUser({
+        email: input.email,
+        name: input.name ?? input.email,
+        emailVerified: false,
+        status: "active",
       });
-      return { ok: true, userId: result.user.id };
+      const password = await context.password.hash(input.password);
+      await context.internalAdapter.linkAccount({
+        userId: createdUser.id,
+        accountId: createdUser.id,
+        providerId: "credential",
+        password,
+      });
+      return { ok: true, userId: createdUser.id };
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
       if (message.includes("exist") || message.includes("already")) {
@@ -85,6 +100,9 @@ export class AuthenticationService implements AuthGateway {
       return null;
     }
     const user = toHumanUser(result.user as BetterAuthUser);
+    if (!user) {
+      return null;
+    }
     const roles = await this.roles.listRoles(user.id);
     return { user, roles };
   }
