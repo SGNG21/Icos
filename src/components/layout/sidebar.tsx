@@ -1,3 +1,5 @@
+import { LogoutButton } from "@/components/auth/logout-button";
+
 const navigation = [
   { label: "Vue d’ensemble", anchor: "overview" },
   { label: "Conversation", anchor: "conversation" },
@@ -39,6 +41,7 @@ export function Sidebar() {
             <small>Exécution verrouillée</small>
           </div>
         </div>
+        <LogoutButton />
       </div>
     </aside>
   );
