@@ -44,7 +44,10 @@ describe("requireSession", () => {
   it("refuse une requête sans credential avant toute lecture de session", async () => {
     const readSession = vi.fn(async () => session(["viewer"]));
 
-    await expectCode(requireSession({ auth: gateway(readSession) }, new Headers()), "unauthenticated");
+    await expectCode(
+      requireSession({ auth: gateway(readSession) }, new Headers()),
+      "unauthenticated",
+    );
     expect(readSession).not.toHaveBeenCalled();
   });
 
@@ -58,13 +61,14 @@ describe("requireSession", () => {
     expect(readSession).toHaveBeenCalledOnce();
   });
 
-  it("refuse un compte désactivé", async () => {
+  it("refuse un compte désactivé et conserve le refus si la révocation échoue", async () => {
     const readSession = vi.fn(async () => session(["owner"], "disabled"));
+    const auth = gateway(readSession);
+    auth.revokeUserSessions = vi.fn(async () => {
+      throw new Error("revocation unavailable");
+    });
 
-    await expectCode(
-      requireSession({ auth: gateway(readSession) }, credentialHeaders()),
-      "account_disabled",
-    );
+    await expectCode(requireSession({ auth }, credentialHeaders()), "account_disabled");
   });
 
   it("retourne une session active validée autoritairement", async () => {

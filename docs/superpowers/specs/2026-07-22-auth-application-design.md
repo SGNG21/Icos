@@ -15,7 +15,7 @@ Le lot n’ajoute ni inscription publique, ni administration des utilisateurs, n
 - Les sessions sont validées autoritairement en base ; `session.cookieCache` reste désactivé.
 - Le proxy n’est qu’une optimisation de navigation. Toutes les autorisations sont vérifiées côté serveur.
 - La matrice de permissions existante dans `src/core/identity/permissions.ts` n’est ni copiée ni remplacée.
-- Les migrations `0000`, `0001` et `0002` restent inchangées. Aucune migration additive n’est nécessaire.
+- Les migrations `0000`, `0001` et `0002` restent inchangées. La migration additive `0003` étend uniquement la contrainte des types d’événements d’audit aux quatre événements produits par ce lot.
 - Aucun cookie, token, mot de passe, hash, secret, `DATABASE_URL`, en-tête sensible, erreur SQL brute ou stack trace n’est exposé ou audité.
 
 ## Architecture retenue
@@ -79,15 +79,15 @@ Le cockpit exécute `requirePermission("cockpit.read")` avant toute lecture de r
 
 Matrice des routes existantes :
 
-| Route | Permission |
-| --- | --- |
-| `GET /api/agents` | `cockpit.read` |
-| `GET /api/tasks` | `cockpit.read` |
-| `POST /api/tasks` | `tasks.write` |
-| `POST /api/tasks/[id]/transition` | `tasks.write` |
-| `GET /api/actions` | `cockpit.read` |
+| Route                             | Permission         |
+| --------------------------------- | ------------------ |
+| `GET /api/agents`                 | `cockpit.read`     |
+| `GET /api/tasks`                  | `cockpit.read`     |
+| `POST /api/tasks`                 | `tasks.write`      |
+| `POST /api/tasks/[id]/transition` | `tasks.write`      |
+| `GET /api/actions`                | `cockpit.read`     |
 | `POST /api/actions/[id]/decision` | `approvals.decide` |
-| `GET /api/audit` | `audit.read.full` |
+| `GET /api/audit`                  | `audit.read.full`  |
 
 `audit.read.limited` n’autorise pas la réponse complète de la route d’audit. Une vue réduite n’est pas définie dans ce lot.
 

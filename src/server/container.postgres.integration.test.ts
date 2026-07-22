@@ -1,6 +1,8 @@
+import { splitSetCookieHeader } from "better-auth/cookies";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Agent, AgentAction, Task } from "@/core/contracts";
+import { loadEnv } from "@/config/env";
 import { actionToRow, agentToRow, taskToRow } from "@/server/database/mappers";
 import { actions, agents, tasks } from "@/server/database/schema";
 import {
@@ -11,23 +13,48 @@ import {
   type PgContext,
 } from "@/server/database/testing/pg-support";
 
+import { POST as postAuth } from "@/app/api/auth/[...all]/route";
 import { GET as getTasks, POST as postTask } from "@/app/api/tasks/route";
 import { POST as postTransition } from "@/app/api/tasks/[id]/transition/route";
 import { POST as postDecision } from "@/app/api/actions/[id]/decision/route";
 import { GET as getAudit } from "@/app/api/audit/route";
 
-import { buildMemoryContainer, getContainer, resetContainer } from "./container";
+import {
+  buildMemoryContainer,
+  createContainer,
+  getContainer,
+  resetContainer,
+  type Container,
+} from "./container";
 
-const savedPersistence = process.env.PERSISTENCE;
-const savedUrl = process.env.DATABASE_URL;
 const ISO = "2026-07-22T10:00:00.000Z";
+const PASSWORD = "correct horse battery staple";
+const CONTAINER_KEY = "__icosContainerPromise__";
 
-function jsonRequest(url: string, body: unknown): Request {
+function jsonRequest(url: string, body: unknown, cookie: string): Request {
   return new Request(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      cookie,
+      "content-type": "application/json",
+      origin: new URL(url).origin,
+      "sec-fetch-site": "same-origin",
+    },
     body: JSON.stringify(body),
   });
+}
+
+function authContext(...all: string[]) {
+  return { params: Promise.resolve({ all }) };
+}
+
+function requestCookie(response: Response): string {
+  const cookie = splitSetCookieHeader(response.headers.get("set-cookie") ?? "")
+    .map((value) => value.split(";", 1)[0])
+    .filter(Boolean)
+    .join("; ");
+  if (!cookie) throw new Error("cookie de session absent");
+  return cookie;
 }
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
@@ -62,38 +89,62 @@ const action = (id: string, taskId: string, agentId: string): AgentAction => ({
 
 describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)", () => {
   let ctx: PgContext;
+  let container: Container;
+  let cookie: string;
 
   beforeAll(async () => {
     ctx = await startPostgres();
-    process.env.PERSISTENCE = "postgres";
-    process.env.DATABASE_URL = ctx.container.getConnectionUri();
+    container = await createContainer({
+      env: loadEnv({
+        PERSISTENCE: "postgres",
+        DATABASE_URL: ctx.container.getConnectionUri(),
+        BETTER_AUTH_SECRET: "x".repeat(40),
+        BETTER_AUTH_URL: "http://localhost",
+      }),
+    });
+    (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
   }, 120_000);
 
   afterAll(async () => {
     await resetContainer();
-    if (savedPersistence === undefined) delete process.env.PERSISTENCE;
-    else process.env.PERSISTENCE = savedPersistence;
-    if (savedUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = savedUrl;
     await stopPostgres(ctx);
   });
 
   beforeEach(async () => {
     await truncateAll(ctx.handle);
     await ctx.handle.db.insert(agents).values([agentToRow(agent("agent-op", 2))]);
+    if (!container.auth || !container.roles) throw new Error("auth non composée");
+    const created = await container.auth.createHumanUser({
+      email: "operator@icos.test",
+      password: PASSWORD,
+    });
+    if (!created.ok) throw new Error("création humaine refusée");
+    await container.roles.grantRole(created.userId, "operator");
+    const response = await postAuth(
+      new Request("http://localhost/api/auth/sign-in/email", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://localhost",
+          "sec-fetch-site": "same-origin",
+        },
+        body: JSON.stringify({ email: "operator@icos.test", password: PASSWORD }),
+      }),
+      authContext("sign-in", "email"),
+    );
+    cookie = requestCookie(response);
   });
 
   it("le container postgres lit les agents", async () => {
-    const container = await getContainer();
     expect((await container.agents.list())[0]?.id).toBe("agent-op");
   });
 
   it("route POST /api/tasks crée une tâche persistée", async () => {
     const response = await postTask(
-      jsonRequest("http://localhost/api/tasks", { title: "Nouvelle" }),
+      jsonRequest("http://localhost/api/tasks", { title: "Nouvelle" }, cookie),
     );
     expect(response.status).toBe(201);
-    const list = await getTasks(new Request("http://localhost/api/tasks"));
+    const list = await getTasks(new Request("http://localhost/api/tasks", { headers: { cookie } }));
     const data = (await list.json()) as { tasks: { title: string }[] };
     expect(data.tasks.map((t) => t.title)).toContain("Nouvelle");
   });
@@ -101,7 +152,7 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
   it("route POST /api/tasks/[id]/transition applique la transition", async () => {
     await ctx.handle.db.insert(tasks).values(taskToRow({ ...task("task-t"), actionIds: [] }));
     const response = await postTransition(
-      jsonRequest("http://localhost/api/tasks/task-t/transition", { to: "running" }),
+      jsonRequest("http://localhost/api/tasks/task-t/transition", { to: "running" }, cookie),
       params("task-t"),
     );
     expect(response.status).toBe(200);
@@ -114,10 +165,14 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
       .values(actionToRow(action("action-d", "task-d", "agent-op")));
 
     const response = await postDecision(
-      jsonRequest("http://localhost/api/actions/action-d/decision", {
-        decidedByLabel: "Opérateur (simulé)",
-        decision: "approved",
-      }),
+      jsonRequest(
+        "http://localhost/api/actions/action-d/decision",
+        {
+          decidedByLabel: "Opérateur (simulé)",
+          decision: "approved",
+        },
+        cookie,
+      ),
       params("action-d"),
     );
     expect(response.status).toBe(200);
@@ -125,7 +180,9 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
     expect(data.execution.outcome).toBe("allowed");
 
     // Audit chronologique via la route.
-    const audit = await getAudit(new Request("http://localhost/api/audit?actionId=action-d"));
+    const audit = await getAudit(
+      new Request("http://localhost/api/audit?actionId=action-d", { headers: { cookie } }),
+    );
     const auditData = (await audit.json()) as { entries: { occurredAt: string }[] };
     expect(auditData.entries.length).toBeGreaterThanOrEqual(2);
   });

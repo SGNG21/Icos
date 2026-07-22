@@ -26,8 +26,8 @@ export function createBetterAuth(db: Database, config: BetterAuthConfig) {
       provider: "pg",
       schema: { user, session, account, verification },
     }),
-    // `autoSignIn: false` : la création d'utilisateur (dont le bootstrap) ne crée
-    // AUCUNE session durable ; la connexion se fera explicitement (Lot 2B-1b).
+    // `autoSignIn: false` : la création interne d'utilisateur ne crée AUCUNE
+    // session durable ; seule la connexion explicite peut ouvrir une session web.
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,

@@ -26,6 +26,7 @@ export async function requireSession(
     throw new AuthGuardError("session_expired");
   }
   if (session.user.status !== "active") {
+    await container.auth.revokeUserSessions(session.user.id).catch(() => {});
     throw new AuthGuardError("account_disabled", session.user.id);
   }
   return session;

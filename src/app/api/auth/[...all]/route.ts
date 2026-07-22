@@ -78,7 +78,7 @@ async function requireAuthOrigin(
 }
 
 async function rejectDisabledAccount(container: Container, userId: string): Promise<Response> {
-  await container.auth?.revokeUserSessions(userId);
+  await container.auth?.revokeUserSessions(userId).catch(() => {});
   await appendSecurityAudit(container.audit, {
     eventType: "auth.login.rejected",
     reason: "account_disabled",
@@ -120,16 +120,29 @@ async function signIn(container: Container, request: Request): Promise<Response>
 
     const authoritativeHeaders = new Headers(request.headers);
     applySetCookies(authoritativeHeaders, setCookieValues(result.headers));
-    const session = await container.auth.readSession(authoritativeHeaders);
+    let session;
+    try {
+      session = await container.auth.readSession(authoritativeHeaders);
+    } catch (error) {
+      if (error instanceof AuthGuardError && error.code === "account_disabled") {
+        return rejectDisabledAccount(container, result.userId);
+      }
+      throw error;
+    }
 
     if (!session || session.user.id !== result.userId || session.user.status !== "active") {
       return rejectDisabledAccount(container, result.userId);
     }
 
-    await appendSecurityAudit(container.audit, {
-      eventType: "auth.login.succeeded",
-      userId: result.userId,
-    });
+    try {
+      await appendSecurityAudit(container.audit, {
+        eventType: "auth.login.succeeded",
+        userId: result.userId,
+      });
+    } catch (error) {
+      await container.auth.revokeSession(authoritativeHeaders);
+      throw error;
+    }
 
     return authSuccess(result.headers);
   } catch (error) {
@@ -156,17 +169,27 @@ async function signOut(container: Container, request: Request): Promise<Response
   }
 
   try {
-    const session = await container.auth.readSession(request.headers);
+    let userId: string | undefined;
+    try {
+      const session = await container.auth.readSession(request.headers);
+      userId = session?.user.id;
+    } catch (error) {
+      if (!(error instanceof AuthGuardError) || error.code !== "account_disabled") {
+        throw error;
+      }
+      userId = error.userId;
+    }
+
     const result = await container.authHttp.signOut(request.headers);
 
     if (!result.success) {
       return apiError("internal_error", "erreur interne");
     }
 
-    if (session) {
+    if (userId) {
       await appendSecurityAudit(container.audit, {
         eventType: "auth.logout.succeeded",
-        userId: session.user.id,
+        userId,
       }).catch(() => {});
     }
 

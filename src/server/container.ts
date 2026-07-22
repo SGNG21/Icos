@@ -113,17 +113,14 @@ export function composeAuthentication(
   db: ReturnType<typeof createDatabase>["db"],
   roles: RoleRepository,
   config: AuthConfig,
-  createAuth: (db: ReturnType<typeof createDatabase>["db"], config: AuthConfig) => IcosBetterAuth =
-    createBetterAuth,
+  createAuth: (
+    db: ReturnType<typeof createDatabase>["db"],
+    config: AuthConfig,
+  ) => IcosBetterAuth = createBetterAuth,
 ): { auth: AuthGateway; authHttp: AuthHttpGateway } {
   const betterAuth = createAuth(db, config);
   return {
-    auth: new AuthenticationService(
-      betterAuth,
-      new PostgresHumanUserRepository(db),
-      roles,
-      db,
-    ),
+    auth: new AuthenticationService(betterAuth, new PostgresHumanUserRepository(db), roles, db),
     authHttp: new BetterAuthHttpGateway(betterAuth),
   };
 }

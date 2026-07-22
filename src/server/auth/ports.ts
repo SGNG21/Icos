@@ -35,9 +35,8 @@ export interface AuthHttpGateway {
 }
 
 /**
- * Façade étroite ICOS au-dessus de Better Auth. Les routes ICOS ne dépendent que
- * de cette interface (pas des internes de Better Auth). Le handler Better Auth
- * public (`/api/auth/*`) et les guards HTTP arrivent au Lot 2B-1b.
+ * Façade étroite ICOS au-dessus de Better Auth. Les routes et guards ICOS ne
+ * dépendent que de cette interface, jamais des internes de Better Auth.
  */
 export interface AuthGateway {
   createHumanUser(input: {
@@ -49,7 +48,10 @@ export interface AuthGateway {
   readHumanUserByEmail(email: string): Promise<HumanUser | null>;
   /** Suppression (cascade compte/sessions/rôles) — utilisée en compensation. */
   deleteHumanUser(userId: string): Promise<void>;
-  /** Session authentifiée projetée ICOS (utilisateur + rôles), ou `null`. */
+  /**
+   * Session projetée ICOS, `null` si elle n'existe plus, ou erreur
+   * `account_disabled` si l'identité associée est absente ou invalide.
+   */
   readSession(headers: Headers): Promise<AuthenticatedSession | null>;
   revokeSession(headers: Headers): Promise<void>;
   revokeUserSessions(userId: string): Promise<void>;

@@ -20,7 +20,7 @@ function authReturning(user: Record<string, unknown>): IcosBetterAuth {
   } as unknown as IcosBetterAuth;
 }
 
-function rolesWith(listRoles = vi.fn(async () => ["viewer"] as ("viewer")[])): RoleRepository {
+function rolesWith(listRoles = vi.fn(async () => ["viewer"] as "viewer"[])): RoleRepository {
   return {
     listRoles,
     grantRole: async () => undefined,
@@ -87,15 +87,66 @@ describe("AuthenticationService.createHumanUser", () => {
     });
     expect(context.newSession).toBeNull();
   });
+
+  it("retourne un résultat contrôlé même si la compensation échoue", async () => {
+    const createUser = vi.fn(async () => ({ id: "human-partial" }));
+    const linkAccount = vi.fn(async () => {
+      throw new Error("link failed");
+    });
+    const deleteHumanUser = vi.fn(async () => {
+      throw new Error("delete failed");
+    });
+    const service = new AuthenticationService(
+      {
+        $context: Promise.resolve({
+          internalAdapter: { createUser, linkAccount },
+          password: { hash: vi.fn(async () => "stored-password-hash") },
+        }),
+      } as unknown as IcosBetterAuth,
+      users,
+      rolesWith(),
+      {
+        delete: vi.fn(() => ({ where: deleteHumanUser })),
+      } as unknown as Database,
+    );
+
+    await expect(
+      service.createHumanUser({
+        email: "partial@icos.test",
+        password: "correct horse battery staple",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "invalid_input" });
+    expect(deleteHumanUser).toHaveBeenCalledOnce();
+  });
 });
 
 describe("AuthenticationService.readSession", () => {
+  it("distingue un utilisateur absent d'une session inexistante", async () => {
+    const listRoles = vi.fn(async () => ["viewer"] as "viewer"[]);
+    const service = new AuthenticationService(
+      {
+        api: {
+          getSession: async () => ({ session: { userId: "human-1" } }),
+        },
+      } as unknown as IcosBetterAuth,
+      users,
+      rolesWith(listRoles),
+      unusedDatabase,
+    );
+
+    await expect(service.readSession(new Headers())).rejects.toMatchObject({
+      code: "account_disabled",
+      userId: "human-1",
+    });
+    expect(listRoles).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["absent", undefined],
     ["nul", null],
     ["inconnu", "locked"],
   ])("refuse en mode fail-closed un statut %s", async (_label, status) => {
-    const listRoles = vi.fn(async () => ["viewer"] as ("viewer")[]);
+    const listRoles = vi.fn(async () => ["viewer"] as "viewer"[]);
     const service = new AuthenticationService(
       authReturning({
         id: "human-1",
@@ -108,7 +159,10 @@ describe("AuthenticationService.readSession", () => {
       unusedDatabase,
     );
 
-    await expect(service.readSession(new Headers())).resolves.toBeNull();
+    await expect(service.readSession(new Headers())).rejects.toMatchObject({
+      code: "account_disabled",
+      userId: "human-1",
+    });
     expect(listRoles).not.toHaveBeenCalled();
   });
 

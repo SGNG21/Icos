@@ -39,10 +39,7 @@ type AccessDeniedAudit = {
 };
 
 export type SecurityAuditInput =
-  | LoginSucceededAudit
-  | LoginRejectedAudit
-  | LogoutSucceededAudit
-  | AccessDeniedAudit;
+  LoginSucceededAudit | LoginRejectedAudit | LogoutSucceededAudit | AccessDeniedAudit;
 
 function detailsFor(input: SecurityAuditInput): AuditEntry["details"] {
   switch (input.eventType) {
@@ -71,9 +68,7 @@ export async function appendSecurityAudit(
     id: `audit-${randomUUID()}`,
     occurredAt: new Date().toISOString(),
     eventType: input.eventType,
-    actor: input.userId
-      ? { kind: "human", id: input.userId }
-      : { kind: "system", id: "icos-auth" },
+    actor: input.userId ? { kind: "human", id: input.userId } : { kind: "system", id: "icos-auth" },
     details: detailsFor(input),
   });
 }
