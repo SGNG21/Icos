@@ -33,7 +33,11 @@ export function canCreateTaskInScope(input: {
     return true;
   }
 
-  return (
-    input.assignedAgentId !== undefined && scopeContainsAgent(input.scope, input.assignedAgentId)
-  );
+  // Unassigned tasks are allowed for any scope — the restriction only
+  // applies when a specific agent is targeted.
+  if (input.assignedAgentId === undefined) {
+    return true;
+  }
+
+  return scopeContainsAgent(input.scope, input.assignedAgentId);
 }

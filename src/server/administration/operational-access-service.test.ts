@@ -67,9 +67,9 @@ describe("prédicats de portée", () => {
     expect(scopeContainsAgent(linked, "agent-b")).toBe(false);
   });
 
-  it("autorise les tâches non assignées globalement mais exige un agent lié localement", () => {
+  it("autorise les tâches non assignées quelle que soit la portée et exige un agent lié localement pour les assignées", () => {
     expect(canCreateTaskInScope({ scope: global })).toBe(true);
-    expect(canCreateTaskInScope({ scope: linked })).toBe(false);
+    expect(canCreateTaskInScope({ scope: linked })).toBe(true);
     expect(canCreateTaskInScope({ scope: linked, assignedAgentId: "agent-a" })).toBe(true);
     expect(canCreateTaskInScope({ scope: linked, assignedAgentId: "agent-b" })).toBe(false);
   });

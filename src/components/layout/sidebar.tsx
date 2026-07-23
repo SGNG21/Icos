@@ -8,7 +8,7 @@ const navigation = [
   { label: "Approbations", anchor: "approvals" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ showAdministration = false }: { showAdministration?: boolean }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -30,6 +30,14 @@ export function Sidebar() {
               </a>
             </li>
           ))}
+          {showAdministration && (
+            <li>
+              <a href="/admin/users">
+                <span className="nav-glyph" aria-hidden="true" />
+                Administration
+              </a>
+            </li>
+          )}
         </ul>
       </nav>
 

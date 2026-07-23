@@ -41,7 +41,7 @@ export class InMemoryTaskRepository implements TaskRepository {
     return scope.kind === "global"
       ? tasks
       : tasks.filter(
-          (task) => task.assignedAgentId !== undefined && scope.agentIds.has(task.assignedAgentId),
+          (task) => task.assignedAgentId === undefined || scope.agentIds.has(task.assignedAgentId),
         );
   }
 
@@ -55,7 +55,8 @@ export class InMemoryTaskRepository implements TaskRepository {
     if (
       task === null ||
       scope.kind === "global" ||
-      (task.assignedAgentId !== undefined && scope.agentIds.has(task.assignedAgentId))
+      task.assignedAgentId === undefined ||
+      scope.agentIds.has(task.assignedAgentId)
     ) {
       return task;
     }

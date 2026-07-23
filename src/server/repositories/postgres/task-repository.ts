@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 
 import { taskSchema, type AuditEntry, type Task, type TaskStatus } from "@/core/contracts";
 import { transitionTask as transitionLifecycle } from "@/core/tasks/lifecycle";
@@ -80,14 +80,15 @@ export class PostgresTaskRepository implements TaskRepository {
     }
 
     const agentIds = [...scope.agentIds];
-    if (agentIds.length === 0) {
-      return [];
-    }
+    const condition =
+      agentIds.length === 0
+        ? isNull(tasks.assignedAgentId)
+        : or(inArray(tasks.assignedAgentId, agentIds), isNull(tasks.assignedAgentId));
 
     const taskRows = await this.db
       .select()
       .from(tasks)
-      .where(inArray(tasks.assignedAgentId, agentIds))
+      .where(condition)
       .orderBy(asc(tasks.createdAt), asc(tasks.id));
     return this.hydrate(taskRows);
   }
@@ -101,16 +102,22 @@ export class PostgresTaskRepository implements TaskRepository {
   }
 
   async getByIdForScope(id: string, scope: AgentScope): Promise<Task | null> {
-    const rows =
-      scope.kind === "global"
-        ? await this.db.select().from(tasks).where(eq(tasks.id, id)).limit(1)
-        : scope.agentIds.size === 0
-          ? []
-          : await this.db
-              .select()
-              .from(tasks)
-              .where(and(eq(tasks.id, id), inArray(tasks.assignedAgentId, [...scope.agentIds])))
-              .limit(1);
+    if (scope.kind === "global") {
+      const rows = await this.db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
+      if (!rows[0]) return null;
+      return rowToTask(rows[0], await this.actionIdsFor(id));
+    }
+
+    const agentIds = [...scope.agentIds];
+    const condition =
+      agentIds.length === 0
+        ? and(eq(tasks.id, id), isNull(tasks.assignedAgentId))
+        : and(
+            eq(tasks.id, id),
+            or(inArray(tasks.assignedAgentId, agentIds), isNull(tasks.assignedAgentId)),
+          );
+
+    const rows = await this.db.select().from(tasks).where(condition).limit(1);
 
     if (!rows[0]) {
       return null;

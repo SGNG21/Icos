@@ -107,7 +107,7 @@ describe("InMemoryTaskRepository", () => {
     expect((await repo.list())[0].title).not.toBe("corrompu");
   });
 
-  it("cache les tâches non assignées et hors portée liée", async () => {
+  it("rend les tâches non assignées visibles en portée liée et cache les hors portée", async () => {
     const unassigned = {
       ...demoTasks[0],
       id: "task-unassigned",
@@ -117,10 +117,15 @@ describe("InMemoryTaskRepository", () => {
     const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
 
     expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
-    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual(["task-001"]);
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual([
+      "task-001",
+      "task-unassigned",
+    ]);
     expect(await repo.getByIdForScope("task-001", linked)).not.toBeNull();
     expect(await repo.getByIdForScope("task-002", linked)).toBeNull();
-    expect(await repo.getByIdForScope("task-unassigned", linked)).toBeNull();
-    expect(await repo.listForScope({ kind: "linked", agentIds: new Set() })).toEqual([]);
+    expect(await repo.getByIdForScope("task-unassigned", linked)).not.toBeNull();
+    expect(
+      (await repo.listForScope({ kind: "linked", agentIds: new Set() })).map(({ id }) => id),
+    ).toEqual(["task-unassigned"]);
   });
 });
