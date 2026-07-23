@@ -153,7 +153,7 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied')`,
+      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
@@ -161,5 +161,51 @@ export const auditEntries = pgTable(
     index("audit_task_idx").on(t.taskId),
     index("audit_actor_label_idx").on(t.actorLabel),
     index("audit_occurred_at_idx").on(t.occurredAt),
+  ],
+);
+
+export const capabilities = pgTable(
+  "capabilities",
+  {
+    id: text("id").primaryKey(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    category: text("category").notNull(),
+    status: text("status").notNull(),
+    provenance: jsonb("provenance"),
+    riskHint: text("risk_hint"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("capabilities_key_unique").on(t.key),
+    check(
+      "capabilities_status_check",
+      sql`${t.status} in ('proposed','active','deprecated','retired')`,
+    ),
+    index("capabilities_status_idx").on(t.status),
+  ],
+);
+
+export const agentCapabilities = pgTable(
+  "agent_capabilities",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "restrict" }),
+    capabilityId: text("capability_id")
+      .notNull()
+      .references(() => capabilities.id, { onDelete: "restrict" }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull(),
+    assignedByUserId: text("assigned_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+  },
+  (t) => [
+    unique("agent_capabilities_agent_capability_unique").on(t.agentId, t.capabilityId),
+    index("agent_capabilities_agent_idx").on(t.agentId),
+    index("agent_capabilities_capability_idx").on(t.capabilityId),
   ],
 );

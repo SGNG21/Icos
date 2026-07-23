@@ -33,7 +33,7 @@ export const capabilitySchema = z.object({
   description: z.string().optional(),
   category: z.string().min(1),
   status: capabilityStatusSchema,
-  provenance: z.record(z.string()).optional(),
+  provenance: z.record(z.string(), z.string()).optional(),
   riskHint: z.string().optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
