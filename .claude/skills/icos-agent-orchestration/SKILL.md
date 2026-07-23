@@ -128,7 +128,12 @@ sans privilège implicite ».
   invocable et sa promotion ne peut modifier aucune policy.
 - Eval de promotion sur un corpus versionné : qualité, régressions, refus et
   faux positifs sont mesurés avant toute activation d'un skill ou d'une règle
-  de routage apprise.
+  de routage apprise. Réussir cette eval est nécessaire mais jamais suffisant
+  pour activer ou promouvoir un skill : elle ne confère par elle-même aucune
+  autorisation d'activation, et la revue de sécurité (`icos-security`) ainsi
+  que la validation humaine explicite restent obligatoires avant tout passage
+  à `approved`/`active`. Aucune promotion automatique ne peut résulter du seul
+  score d'une eval.
 
 ## Définition de done
 
