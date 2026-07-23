@@ -53,9 +53,12 @@ Aucune dépendance nouvelle.
   corps JSON → validation métier → exécution (suivre `protect-route.ts`).
 - Les permissions exactes (`capabilities.read/create/status.write`,
   `agentCapabilities.read/write`) et le chemin API de la relation
-  Agent↔Capability sont **`VERIFY_AFTER_2B2`** : à reconfirmer contre l'état
-  réel de `feat/user-agent-administration` une fois fusionné, avant de les
-  figer dans `permissions.ts` et dans les routes.
+  Agent↔Capability sont **`CONFIRMED`** : vérifiés contre main/7b99c41
+  (Lot 2B-2 fusionné), alignés sur le modèle resource-action granulaire
+  (14 permissions, pas d'omnibus). Rôle minimal : `admin` pour
+  `capabilities.create`, `capabilities.status.write` et
+  `agentCapabilities.write` (gouvernance de la flotte d'agents) ;
+  `viewer` pour les lectures.
 - L'implémentation ne fournit **pas** l'Orchestrateur : seule la primitive
   `resolveActiveCapability` est fournie.
 
@@ -81,9 +84,10 @@ Aucune dépendance nouvelle.
 - `src/app/api/capabilities/[id]/status/route.ts` — `PATCH` (transition
   uniquement).
 - `src/app/api/agents/[id]/capabilities/route.ts` — `GET`/`POST`
-  (**VERIFY_AFTER_2B2** pour le chemin et les permissions exactes).
+  (**`CONFIRMED`** : chemin cohérent avec `api/agents/[id]/links` du Lot
+  2B-2).
 - `src/app/api/agents/[id]/capabilities/[capabilityId]/route.ts` — `DELETE`
-  (**VERIFY_AFTER_2B2**).
+  (**`CONFIRMED`**).
 - `drizzle/000X_capability_registry.sql` — migration additive (numéro réel à
   déterminer à l'implémentation).
 - Fichiers de test correspondants sous `tests/` (unitaires + intégration),
@@ -97,10 +101,10 @@ Aucune dépendance nouvelle.
   `agent_capability.granted`, `agent_capability.revoked`.
 - `src/core/contracts/index.ts` — export du nouveau `capability.ts`.
 - `src/core/identity/permissions.ts` — ajout des permissions
-  **VERIFY_AFTER_2B2** (`capabilities.read`, `capabilities.create`,
+  **`CONFIRMED`** (`capabilities.read`, `capabilities.create`,
   `capabilities.status.write`, `agentCapabilities.read`,
-  `agentCapabilities.write`) — à confirmer contre le modèle définitif du Lot
-  2B-2 avant d'être ajoutées telles quelles.
+  `agentCapabilities.write`) — vérifiées contre le modèle définitif du Lot
+  2B-2 fusionné (resource-action granulaire, 14 permissions existantes).
 - `src/core/ordering.ts` — ajout de `compareCapabilities` (par `createdAt`
   ASC, `id` ASC, cohérent avec les autres comparateurs).
 - `src/server/container.ts` — exposition de `capabilities` et
@@ -210,7 +214,7 @@ Aucune dépendance nouvelle.
 - [ ] **Step 4: Run** — doit passer.
 - [ ] **Step 5: Commit** `git add src/server/services/capability-service.ts tests/server/services/capability-service.test.ts && git commit -m "feat: implement capability service with audited transitions"`
 
-## Task 5: Permissions et câblage du container — `VERIFY_AFTER_2B2`
+## Task 5: Permissions et câblage du container — `CONFIRMED`
 
 **Files:**
 - Modify: `src/core/identity/permissions.ts`
@@ -220,24 +224,21 @@ Aucune dépendance nouvelle.
 **Interfaces:**
 - Produced: permissions `capabilities.read`, `capabilities.create`,
   `capabilities.status.write`, `agentCapabilities.read`,
-  `agentCapabilities.write` — **à valider contre l'état réel du Lot 2B-2
-  fusionné avant d'écrire ce fichier** ; ne pas ajouter mécaniquement si le
-  modèle définitif du Lot 2B-2 suggère un découpage différent.
+  `agentCapabilities.write` — **`CONFIRMED`** contre main/7b99c41 (Lot 2B-2
+  fusionné). Découpage resource-action granulaire validé, cohérent avec les
+  14 permissions existantes.
 - Produced: `Container.capabilities`, `Container.agentCapabilities`.
 
-- [ ] **Step 0 (préalable obligatoire)** : relire `feat/user-agent-administration`
-      fusionné (ou son état final) pour confirmer le découpage définitif des
-      permissions liées aux ressources agent — ajuster la liste ci-dessus en
-      conséquence avant d'écrire du code.
+- [x] **Step 0 (préalable obligatoire)** : ~~relire `feat/user-agent-administration`~~ **`CONFIRMED`** : main/7b99c41 vérifié, permissions `CONFIRMED` dans le design §6.
 - [ ] **Step 1: Write failing tests** pour chaque nouvelle permission
       (rôle minimal requis, héritage correct).
 - [ ] **Step 2: Run** — doit échouer.
 - [ ] **Step 3: Implement** l'ajout des permissions et le câblage du
       container (mémoire + Postgres).
 - [ ] **Step 4: Run** — doit passer.
-- [ ] **Step 5: Commit** `git add src/core/identity/permissions.ts src/server/container.ts tests/core/identity/permissions.test.ts && git commit -m "feat: wire capability permissions and container (VERIFY_AFTER_2B2)"`
+- [ ] **Step 5: Commit** `git add src/core/identity/permissions.ts src/server/container.ts tests/core/identity/permissions.test.ts && git commit -m "feat: wire capability permissions and container"`
 
-## Task 6: Routes API — `VERIFY_AFTER_2B2` pour la relation Agent↔Capability
+## Task 6: Routes API — `CONFIRMED` pour la relation Agent↔Capability
 
 **Files:**
 - Create: `src/app/api/capabilities/route.ts`
@@ -259,11 +260,10 @@ Aucune dépendance nouvelle.
 - [ ] **Step 2: Run** — doit échouer.
 - [ ] **Step 3: Implement** les routes.
 - [ ] **Step 4: Run** — doit passer.
-- [ ] **Step 5: Note explicite** : si le chemin/les permissions de la
-      relation Agent↔Capability n'ont pas encore été confirmés
-      (`VERIFY_AFTER_2B2` non levé), ne pas déclarer cette route
-      « fonctionnelle » dans le critère d'acceptation global du lot — la
-      limiter à un `GET` en lecture seule si nécessaire.
+- [ ] **Step 5: Note explicite** : le chemin et les permissions de la
+      relation Agent↔Capability sont **`CONFIRMED`** (vérifiés contre
+      main/7b99c41). Les routes `GET`/`POST`/`DELETE` sont du périmètre
+      complet de C1.
 - [ ] **Step 6: Commit** `git add src/app/api/capabilities src/app/api/agents tests/app/api/capabilities.test.ts tests/app/api/agent-capabilities.test.ts && git commit -m "feat: expose capability and agent-capability routes"`
 
 ## Task 7: Push et pull request sans fusion

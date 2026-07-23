@@ -12,10 +12,9 @@ Modèle de référence : **Agent = QUI**, **Capability = QUOI**, **Skill =
 COMMENT**, **Tool = AVEC QUOI**, **Policy = SI**. Une déclaration de
 Capability n'est jamais elle-même une permission.
 
-Les points dont la forme finale dépend de l'intégration du Lot 2B-2
-(`feat/user-agent-administration`, non fusionné) sont marqués
-**`VERIFY_AFTER_2B2`** et ne doivent pas être considérés comme figés avant
-cette vérification.
+Les points dont la forme finale dépendait de l'intégration du Lot 2B-2
+(`feat/user-agent-administration`, PR #10, fusionnée dans main au SHA
+7b99c41) ont été vérifiés et marqués **`CONFIRMED`** ci-dessous.
 
 ## Contraintes invariantes
 
@@ -23,9 +22,8 @@ cette vérification.
   `pnpm-lock.yaml`, `CLAUDE.md`.
 - Aucune migration réelle appliquée ; toute migration future est additive et
   numérotée à l'index réellement disponible au moment de l'implémentation
-  (actuellement `0000`–`0003` sur cette branche, plus une migration
-  supplémentaire portée par le Lot 2B-2 non fusionné — le prochain numéro
-  n'est donc pas figé ici).
+  (actuellement `0000`–`0004` sur main — le prochain index disponible est
+  `0005`).
 - Aucune dépendance nouvelle.
 - Ne modifie ni PR #8 ni PR #9.
 - C1 **n'implémente pas l'Orchestrateur** : seule une primitive pure de
@@ -113,9 +111,8 @@ besoin concret de C2/D2/D4 l'exigera.
 
 Correction 5 valide le principe : la relation est explicite et gouvernée,
 mais **ne doit pas copier mécaniquement** `HumanAgentLink`. Vérification
-faite : `human_agent_links` n'existe pas sur cette branche ; sur la branche
-Lot 2B-2 (`feat/user-agent-administration`, non fusionnée), elle a la forme
-suivante (confirmée par lecture directe) :
+faite : `human_agent_links` existe sur main (créée par la migration
+`0004_new_white_tiger.sql` du Lot 2B-2) avec la forme suivante :
 
 ```
 human_agent_links(id, human_user_id → user.id RESTRICT,
@@ -157,7 +154,7 @@ Invariants préservés :
 Pas de champ `relation` de type supervision ici : la sémantique est
 « assignation de capacité », pas « lien de supervision ».
 
-### 5. API de la relation Agent ↔ Capability — `VERIFY_AFTER_2B2`
+### 5. API de la relation Agent ↔ Capability — `CONFIRMED`
 
 Le modèle `agent_capabilities` ci-dessus ne suffit pas seul : son
 administration nécessite un contrat d'API minimal. Proposition conceptuelle,
@@ -172,17 +169,15 @@ alignée sur les conventions confirmées du Lot 2B-2 (`agentLinks.read` /
 - `DELETE /api/agents/[id]/capabilities/[capabilityId]` — révoque
   l'assignation. Permission indicative : `agentCapabilities.write`.
 
-**`VERIFY_AFTER_2B2`** : le chemin exact, le nommage des permissions, et la
-convention de nesting (`api/agents/[id]/capabilities` vs. une ressource de
-premier niveau `api/agent-capabilities`) doivent être confirmés une fois le
-Lot 2B-2 fusionné, pour rester cohérent avec ses conventions définitives
-(`api/agents/[id]/links` observé sur cette branche). **Si l'administration
-de cette relation est différée**, elle ne doit pas être déclarée
-« fonctionnelle » dans les critères d'acceptation de C1 — seul le modèle de
-données et la lecture seule minimale (`GET`) seraient alors du périmètre
-garanti.
+**`CONFIRMED`** : le chemin `api/agents/[id]/capabilities` est cohérent
+avec les conventions du Lot 2B-2 fusionné (`api/agents/[id]/links`,
+`api/users/[id]`, `api/tasks`, `api/actions`). Le nommage des permissions
+(`agentCapabilities.read`, `agentCapabilities.write`) suit le modèle
+resource-action granulaire confirmé (`users.read`, `users.create`,
+`agentLinks.read`, etc.). L'administration complète (`GET`/`POST`/`DELETE`)
+est du périmètre C1.
 
-### 6. Permissions — `VERIFY_AFTER_2B2`
+### 6. Permissions — `CONFIRMED`
 
 Correction 4 : une permission unique `capabilities.manage` est trop large,
 en particulier au vu du découpage déjà observé sur le Lot 2B-2 (constaté
@@ -197,11 +192,15 @@ omnibus). Proposition conceptuelle à confirmer après fusion :
 - `agentCapabilities.read`
 - `agentCapabilities.write`
 
-**`VERIFY_AFTER_2B2`** : ce découpage ne doit pas être ajouté mécaniquement
-si le modèle définitif du Lot 2B-2 conduit à un meilleur découpage (par
-exemple une permission `capabilities.update` séparée de `capabilities.
-status.write` selon ce que la revue de sécurité de 2B-2 retient). Ne pas
-fixer ces permissions dans `permissions.ts` avant cette vérification.
+**`CONFIRMED`** : le modèle définitif du Lot 2B-2 fusionné utilise un
+découpage resource-action granulaire (14 permissions, pas d'omnibus). Le
+découpage proposé (`capabilities.read`, `capabilities.create`,
+`capabilities.status.write`, `agentCapabilities.read`,
+`agentCapabilities.write`) est cohérent et sera ajouté tel quel dans
+`permissions.ts` lors de l'implémentation C1. Rôle minimal : `admin` pour
+`capabilities.create`, `capabilities.status.write` et
+`agentCapabilities.write` (gouvernance de la flotte d'agents) ;
+`viewer` pour les permissions en lecture.
 
 ### 7. Lifecycle — transitions autorisées
 
@@ -325,18 +324,18 @@ nouveaux types d'événements listés en §8.
 
 ## Interface API prévue
 
-Voir §5 (relation Agent↔Capability, `VERIFY_AFTER_2B2`). Pour la Capability
+Voir §5 (relation Agent↔Capability, `CONFIRMED`). Pour la Capability
 elle-même (hors relation), contrat minimal envisagé (non détaillé ici tant
 que non prioritaire pour C1) :
 
 - `GET /api/capabilities` — liste, filtrable par `status`. Permission :
-  `capabilities.read` (`VERIFY_AFTER_2B2`).
+  `capabilities.read` (`CONFIRMED`).
 - `POST /api/capabilities` — création (`status` initial toujours
-  `proposed`). Permission : `capabilities.create` (`VERIFY_AFTER_2B2`).
+  `proposed`). Permission : `capabilities.create` (`CONFIRMED`).
 - `PATCH /api/capabilities/[id]/status` — transition de lifecycle
   uniquement (jamais de mutation directe de `status` via l'endpoint
   générique de mise à jour). Permission : `capabilities.status.write`
-  (`VERIFY_AFTER_2B2`).
+  (`CONFIRMED`).
 
 Toute route suit l'ordre de vérification confirmé dans
 `protect-route.ts` : container → session → permission → origine → corps
@@ -391,9 +390,9 @@ C1 :
 - `capability_status_history` en tant que table séparée (voir §2).
 - Toute classification de risque authoritative portée par Capability (reste
   entièrement de la responsabilité de D1 Policy/Approval).
-- Le chemin exact et le nommage définitif des permissions et de l'API de la
-  relation Agent↔Capability, jusqu'à fusion et vérification du Lot 2B-2
-  (`VERIFY_AFTER_2B2`, §5 et §6).
+- ~~Le chemin exact et le nommage définitif des permissions et de l'API de la
+  relation Agent↔Capability~~ — **`CONFIRMED`** (vérifié contre main/7b99c41,
+  §5 et §6).
 - Relation Skill↔Capability (mentionnée dans la mission d'origine comme
   « future ») — non modélisée ici, à traiter dans un lot dédié une fois le
   modèle Skill lui-même stabilisé.
