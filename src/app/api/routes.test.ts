@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession, Role } from "@/core/identity";
+import type { HumanAdministrationService } from "@/server/administration/human-administration-service";
 import type { AuthGateway } from "@/server/auth/ports";
 import { buildMemoryContainer, type Container } from "@/server/container";
 
+import { GET as getAdminAgents } from "./admin/agents/route";
 import { GET as getActions } from "./actions/route";
+import { GET as getAgentLinks, POST as postAgentLink } from "./users/[id]/agent-links/route";
+import { DELETE as deleteAgentLink } from "./users/[id]/agent-links/[agentId]/route";
+import { PATCH as patchUserRole } from "./users/[id]/role/route";
+import { PATCH as patchUserStatus } from "./users/[id]/status/route";
+import { GET as getUsers, POST as postUser } from "./users/route";
 import { POST as postDecision } from "./actions/[id]/decision/route";
 import { GET as getAgents } from "./agents/route";
 import { GET as getAudit } from "./audit/route";
@@ -60,6 +67,105 @@ beforeEach(() => {
   delete (globalThis as Record<string, unknown>)[CONTAINER_KEY];
 });
 
+/** Installation par défaut avec l'administration mockée retournant un service fonctionnel. */
+function installAdminRole(role: Role): Container & { mockAdmin: HumanAdministrationService } {
+  const mockAdmin: HumanAdministrationService = {
+    listUsers: async () => [],
+    createHuman: async () => ({
+      ok: true,
+      value: {
+        id: "new-id",
+        email: "created@icos.test",
+        name: "Created",
+        status: "active",
+        role: "viewer",
+      },
+      changed: true,
+    }),
+    replaceRole: async () => ({
+      ok: true,
+      value: {
+        id: "target",
+        email: "target@icos.test",
+        name: "Target",
+        status: "active",
+        role: "admin",
+      },
+      changed: true,
+    }),
+    setStatus: async () => ({
+      ok: true,
+      value: {
+        id: "target",
+        email: "target@icos.test",
+        name: "Target",
+        status: "disabled",
+        role: "viewer",
+      },
+      changed: true,
+    }),
+    listLinks: async () => ({ ok: true, value: [], changed: false }),
+    createLink: async () => ({
+      ok: true,
+      value: {
+        id: "link-new",
+        humanUserId: "target",
+        agentId: "agent-001",
+        relation: "operator",
+        createdAt: new Date().toISOString(),
+        createdByHumanUserId: "human-1",
+      },
+      changed: true,
+    }),
+    removeLink: async () => ({
+      ok: true,
+      value: {
+        id: "link-001",
+        humanUserId: "target",
+        agentId: "agent-001",
+        relation: "observer",
+        createdAt: new Date().toISOString(),
+        createdByHumanUserId: "human-1",
+      },
+      changed: true,
+    }),
+    authorizedTarget: async () => ({
+      ok: true,
+      target: {
+        id: "target",
+        email: "target@icos.test",
+        name: "Target",
+        status: "active",
+        role: "viewer",
+      },
+    }),
+    runMutation: async () => ({ ok: true, value: {} as never, changed: true }),
+    deny: async () => ({
+      ok: false,
+      reason: "forbidden",
+      message: "opération administrative refusée",
+    }),
+    compensate: async () => ({
+      ok: false,
+      reason: "internal_error",
+      message: "administration humaine indisponible",
+    }),
+  } as unknown as HumanAdministrationService;
+
+  const base = buildMemoryContainer();
+  const container: Container = {
+    ...base,
+    auth: authGateway(authenticatedSession(role)),
+    humanAdministration: mockAdmin,
+    operationalAccess: undefined,
+    users: undefined,
+    agentLinks: undefined,
+    humanAdministrationUow: undefined,
+  };
+  (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
+  return { ...container, mockAdmin };
+}
+
 function getRequest(path: string, authenticated = true): Request {
   return new Request(`${APP_ORIGIN}${path}`, {
     headers: authenticated ? { cookie: SESSION_COOKIE } : undefined,
@@ -87,6 +193,10 @@ function jsonRequest(
 
 function params(id: string) {
   return { params: Promise.resolve({ id }) };
+}
+
+function agentLinkParams(id: string, agentId: string) {
+  return { params: Promise.resolve({ id, agentId }) };
 }
 
 async function errorCode(response: Response): Promise<string | undefined> {
@@ -460,6 +570,717 @@ describe("POST /api/actions/[id]/decision", () => {
 
     expect(response.status).toBe(409);
     expect(await errorCode(response)).toBe("already_decided");
+  });
+});
+
+describe("matrice de refus container mémoire", () => {
+  it("retourne persistence_unavailable si l'administration n'est pas montée", async () => {
+    installRole("admin");
+    const responses = await Promise.all([
+      getUsers(getRequest("/api/users")),
+      postUser(
+        jsonRequest("/api/users", {
+          email: "new@icos.test",
+          password: "correct horse battery staple",
+          role: "viewer",
+        }),
+      ),
+      patchUserRole(jsonRequest("/api/users/human-2/role", { role: "admin" }), params("human-2")),
+      patchUserStatus(
+        jsonRequest("/api/users/human-2/status", { status: "disabled" }),
+        params("human-2"),
+      ),
+      getAgentLinks(getRequest("/api/users/human-2/agent-links"), params("human-2")),
+      postAgentLink(
+        jsonRequest("/api/users/human-2/agent-links", {
+          agentId: "agent-001",
+          relation: "operator",
+        }),
+        params("human-2"),
+      ),
+      deleteAgentLink(
+        jsonRequest("/api/users/human-2/agent-links/agent-001", {}),
+        agentLinkParams("human-2", "agent-001"),
+      ),
+      getAdminAgents(getRequest("/api/admin/agents")),
+    ]);
+
+    for (const response of responses) {
+      expect(response.status).toBe(503);
+      expect(await errorCode(response)).toBe("persistence_unavailable");
+    }
+  });
+});
+
+describe("GET /api/users", () => {
+  it("refuse viewer à lire les utilisateurs", async () => {
+    installAdminRole("viewer");
+    const response = await getUsers(getRequest("/api/users"));
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("autorise admin à lire les utilisateurs", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "listUsers").mockResolvedValue([
+      { id: "human-1", email: "admin@icos.test", name: "Admin", status: "active", role: "owner" },
+    ]);
+
+    const response = await getUsers(getRequest("/api/users"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { users: unknown[] };
+    expect(data.users).toHaveLength(1);
+  });
+
+  it("refuse sans session", async () => {
+    installAdminRole("admin");
+    const response = await getUsers(getRequest("/api/users", false));
+
+    expect(response.status).toBe(401);
+  });
+
+  it("audite sans exposer de secret", async () => {
+    const container = installAdminRole("admin");
+    await getUsers(getRequest("/api/users"));
+
+    const entries = await container.audit.list();
+    expect(JSON.stringify(entries)).not.toMatch(/cookie|token|secret|password|hash|headers/i);
+  });
+});
+
+describe("POST /api/users", () => {
+  it("refuse viewer à créer un utilisateur", async () => {
+    installAdminRole("viewer");
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "new@icos.test",
+        password: "correct horse battery staple",
+        name: "New",
+        role: "viewer",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuse un corps supplémentaire", async () => {
+    installAdminRole("admin");
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "new@icos.test",
+        password: "correct horse battery staple",
+        role: "viewer",
+        injected: true,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("refuse un mot de passe trop court", async () => {
+    installAdminRole("admin");
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "new@icos.test",
+        password: "short",
+        role: "viewer",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("refuse un email invalide", async () => {
+    installAdminRole("admin");
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "invalid",
+        password: "correct horse battery staple",
+        role: "viewer",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("répond 201 sur création valide et audite", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const createSpy = vi.spyOn(mockAdmin, "createHuman").mockResolvedValue({
+      ok: true,
+      value: {
+        id: "created-id",
+        email: "new@icos.test",
+        name: "New",
+        status: "active",
+        role: "viewer",
+      },
+      changed: true,
+    });
+
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "new@icos.test",
+        password: "correct horse battery staple",
+        name: "New",
+        role: "viewer",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(createSpy).toHaveBeenCalled();
+    const data = (await response.json()) as { user: { id?: string } };
+    expect(data.user?.id).toBe("created-id");
+  });
+
+  it("mappe déjà existant en 409 sans révéler l'origine", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "createHuman").mockResolvedValue({
+      ok: false,
+      reason: "already_exists",
+      message: "doublon",
+    });
+
+    const response = await postUser(
+      jsonRequest("/api/users", {
+        email: "duplicate@icos.test",
+        password: "correct horse battery staple",
+        role: "viewer",
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("already_exists");
+  });
+
+  it("refuse cross-origin avant lecture du corps", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const call = vi.spyOn(mockAdmin, "createHuman");
+    const response = await postUser(
+      jsonRequest(
+        "/api/users",
+        { email: "new@icos.test", password: "correct horse battery staple", role: "viewer" },
+        { origin: "https://evil.test" },
+      ),
+    );
+
+    expect(response.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/users/[id]/role", () => {
+  it("refuse owner à s'auto-modifier", async () => {
+    installAdminRole("owner");
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-1/role", { role: "admin" }),
+      params("human-1"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuse cross-origin avant lecture du corps", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const call = vi.spyOn(mockAdmin, "replaceRole");
+    const request = jsonRequest(
+      "/api/users/human-2/role",
+      { role: "viewer" },
+      { origin: "https://evil.test" },
+    );
+
+    const response = await patchUserRole(request, params("human-2"));
+
+    expect(response.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("valide et exécute une mutation rôle valide", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "replaceRole").mockResolvedValue({
+      ok: true,
+      value: {
+        id: "human-2",
+        email: "target@icos.test",
+        name: "Target",
+        status: "active",
+        role: "admin",
+      },
+      changed: true,
+    });
+
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-2/role", { role: "admin" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { user: { role?: string } };
+    expect(data.user?.role).toBe("admin");
+  });
+
+  it("rejette un rôle invalide", async () => {
+    installAdminRole("admin");
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-2/role", { role: "superadmin" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("rejette 409 last_owner", async () => {
+    const { mockAdmin } = installAdminRole("owner");
+    vi.spyOn(mockAdmin, "replaceRole").mockResolvedValue({
+      ok: false,
+      reason: "last_owner",
+      message: "refusé",
+    });
+
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-2/role", { role: "viewer" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("last_owner");
+  });
+
+  it("rejette 404 si la cible est absente", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "replaceRole").mockResolvedValue({
+      ok: false,
+      reason: "not_found",
+      message: "cible inconnue",
+    });
+
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-x/role", { role: "viewer" }),
+      params("human-x"),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await errorCode(response)).toBe("not_found");
+  });
+
+  it("rejette 403 si l'acteur est insuffisant", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "replaceRole").mockResolvedValue({
+      ok: false,
+      reason: "forbidden",
+      message: "refusé",
+    });
+
+    const response = await patchUserRole(
+      jsonRequest("/api/users/human-2/role", { role: "viewer" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("ne révèle pas de secret", async () => {
+    const container = installAdminRole("admin");
+    await patchUserRole(
+      jsonRequest("/api/users/human-2/role", { role: "admin" }),
+      params("human-2"),
+    );
+
+    expect(JSON.stringify(await container.audit.list())).not.toMatch(
+      /cookie|token|secret|password|hash|headers/i,
+    );
+  });
+});
+
+describe("PATCH /api/users/[id]/status", () => {
+  it("refuse viewer à mettre à jour un statut", async () => {
+    installAdminRole("viewer");
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-2/status", { status: "disabled" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse auto-désactivation", async () => {
+    installAdminRole("admin");
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-1/status", { status: "disabled" }),
+      params("human-1"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("valide et exécute une mutation statut", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "setStatus").mockResolvedValue({
+      ok: true,
+      value: {
+        id: "human-2",
+        email: "target@icos.test",
+        name: "Target",
+        status: "disabled",
+        role: "viewer",
+      },
+      changed: true,
+    });
+
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-2/status", { status: "disabled" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { user: { status?: string } };
+    expect(data.user?.status).toBe("disabled");
+  });
+
+  it("rejette un statut invalide", async () => {
+    installAdminRole("admin");
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-2/status", { status: "archived" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("rejette 404 si la cible est absente", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "setStatus").mockResolvedValue({
+      ok: false,
+      reason: "not_found",
+      message: "cible inconnue",
+    });
+
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-x/status", { status: "disabled" }),
+      params("human-x"),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await errorCode(response)).toBe("not_found");
+  });
+
+  it("rejette 409 si c'est le dernier owner", async () => {
+    const { mockAdmin } = installAdminRole("owner");
+    vi.spyOn(mockAdmin, "setStatus").mockResolvedValue({
+      ok: false,
+      reason: "last_owner",
+      message: "refusé",
+    });
+
+    const response = await patchUserStatus(
+      jsonRequest("/api/users/human-2/status", { status: "disabled" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("last_owner");
+  });
+
+  it("refuse cross-origin avant validation", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const call = vi.spyOn(mockAdmin, "setStatus");
+    const response = await patchUserStatus(
+      jsonRequest(
+        "/api/users/human-2/status",
+        { status: "disabled" },
+        { origin: "https://evil.test" },
+      ),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/users/[id]/agent-links", () => {
+  it("refuse viewer", async () => {
+    installAdminRole("viewer");
+    const response = await getAgentLinks(
+      getRequest("/api/users/human-2/agent-links"),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("répond 404 si l'administration signale une cible absente", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "listLinks").mockResolvedValue({
+      ok: false,
+      reason: "not_found",
+      message: "cible absente",
+    });
+
+    const response = await getAgentLinks(
+      getRequest("/api/users/human-x/agent-links"),
+      params("human-x"),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await errorCode(response)).toBe("not_found");
+  });
+
+  it("autorise admin à lire des liens", async () => {
+    installAdminRole("admin");
+    const response = await getAgentLinks(
+      getRequest("/api/users/human-2/agent-links"),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe("POST /api/users/[id]/agent-links", () => {
+  it("refuse cross-origin", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const call = vi.spyOn(mockAdmin, "createLink");
+    const response = await postAgentLink(
+      jsonRequest(
+        "/api/users/human-2/agent-links",
+        { agentId: "agent-001", relation: "operator" },
+        { origin: "https://attacker.test" },
+      ),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("valide un lien et retourne 201", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "createLink").mockResolvedValue({
+      ok: true,
+      value: {
+        id: "link-001",
+        humanUserId: "human-2",
+        agentId: "agent-001",
+        relation: "operator",
+        createdAt: new Date().toISOString(),
+        createdByHumanUserId: "human-1",
+      },
+      changed: true,
+    });
+
+    const response = await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-001", relation: "operator" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(201);
+  });
+
+  it("rejette un agent inconnu (404)", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "createLink").mockResolvedValue({
+      ok: false,
+      reason: "not_found",
+      message: "agent absent",
+    });
+
+    const response = await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-x", relation: "operator" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await errorCode(response)).toBe("not_found");
+  });
+
+  it("rejette une relation inconnue (400)", async () => {
+    installAdminRole("admin");
+    const response = await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-001", relation: "manager" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("refuse viewer", async () => {
+    installAdminRole("viewer");
+    const response = await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-001", relation: "operator" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("mappe déjà existant en 409", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "createLink").mockResolvedValue({
+      ok: false,
+      reason: "already_exists",
+      message: "doublon",
+    });
+
+    const response = await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-001", relation: "operator" }),
+      params("human-2"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("already_exists");
+  });
+
+  it("ne révèle pas de secret dans les audits", async () => {
+    const container = installAdminRole("admin");
+    await postAgentLink(
+      jsonRequest("/api/users/human-2/agent-links", { agentId: "agent-001", relation: "operator" }),
+      params("human-2"),
+    );
+
+    expect(JSON.stringify(await container.audit.list())).not.toMatch(
+      /cookie|token|secret|password|hash|headers/i,
+    );
+  });
+});
+
+describe("DELETE /api/users/[id]/agent-links/[agentId]", () => {
+  it("refuse auto-suppression", async () => {
+    installAdminRole("admin");
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-1/agent-links/agent-001", {}),
+      agentLinkParams("human-1", "agent-001"),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse si la paire est absente (404)", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "removeLink").mockResolvedValue({
+      ok: false,
+      reason: "not_found",
+      message: "lien absent",
+    });
+
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-x", {}),
+      agentLinkParams("human-2", "agent-x"),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("supprime une paire valide et retourne 204", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    vi.spyOn(mockAdmin, "removeLink").mockResolvedValue({
+      ok: true,
+      value: {
+        id: "link-001",
+        humanUserId: "human-2",
+        agentId: "agent-001",
+        relation: "observer",
+        createdAt: new Date().toISOString(),
+        createdByHumanUserId: "human-1",
+      },
+      changed: true,
+    });
+
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-001", {}),
+      agentLinkParams("human-2", "agent-001"),
+    );
+
+    expect(response.status).toBe(204);
+  });
+
+  it("refuse viewer", async () => {
+    installAdminRole("viewer");
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-001", {}),
+      agentLinkParams("human-2", "agent-001"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuse cross-origin", async () => {
+    const { mockAdmin } = installAdminRole("admin");
+    const call = vi.spyOn(mockAdmin, "removeLink");
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-001", {}, { origin: "https://evil.test" }),
+      agentLinkParams("human-2", "agent-001"),
+    );
+
+    expect(response.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("refuse si le dernier owner tente une suppression", async () => {
+    const { mockAdmin } = installAdminRole("owner");
+    vi.spyOn(mockAdmin, "removeLink").mockResolvedValue({
+      ok: false,
+      reason: "last_owner",
+      message: "refusé",
+    });
+
+    const response = await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-001", {}),
+      agentLinkParams("human-2", "agent-001"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("last_owner");
+  });
+
+  it("ne révèle pas de secret", async () => {
+    const container = installAdminRole("admin");
+    await deleteAgentLink(
+      jsonRequest("/api/users/human-2/agent-links/agent-001", {}),
+      agentLinkParams("human-2", "agent-001"),
+    );
+
+    expect(JSON.stringify(await container.audit.list())).not.toMatch(
+      /cookie|token|secret|password|hash|headers/i,
+    );
+  });
+});
+
+describe("GET /api/admin/agents", () => {
+  it("refuse operator", async () => {
+    installAdminRole("operator");
+    const response = await getAdminAgents(getRequest("/api/admin/agents"));
+
+    expect(response.status).toBe(403);
+  });
+
+  it("retourne la liste globale pour admin", async () => {
+    installAdminRole("admin");
+    const response = await getAdminAgents(getRequest("/api/admin/agents"));
+
+    expect(response.status).toBe(200);
+  });
+
+  it("ne filtre pas les agents par rattachement", async () => {
+    installAdminRole("admin");
+    const response = await getAdminAgents(getRequest("/api/admin/agents"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { agents: unknown[] };
+    expect(data.agents.length).toBeGreaterThan(0);
   });
 });
 

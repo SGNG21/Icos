@@ -15,6 +15,8 @@ export type ApiErrorCode =
   | "audit_failed"
   | "persistence_unavailable"
   | "transient_conflict"
+  | "already_exists"
+  | "last_owner"
   | "internal_error";
 
 export interface ApiErrorBody {
@@ -39,6 +41,8 @@ const statusByCode: Record<ApiErrorCode, number> = {
   audit_failed: 500,
   persistence_unavailable: 503,
   transient_conflict: 503,
+  already_exists: 409,
+  last_owner: 409,
   internal_error: 500,
 };
 
