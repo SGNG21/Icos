@@ -23,15 +23,25 @@ export default async function Home() {
     forbidden();
   }
 
+  const scope = container.operationalAccess
+    ? await container.operationalAccess.resolveScope(access.session)
+    : null;
+
   const [agents, tasks, pendingActions] = await Promise.all([
-    container.agents.list(),
-    container.tasks.list(),
-    container.actions.list({ approvalStatus: "pending" }),
+    scope ? container.agents.listForScope(scope) : container.agents.list(),
+    scope ? container.tasks.listForScope(scope) : container.tasks.list(),
+    scope
+      ? container.actions.listForScope(scope, { approvalStatus: "pending" })
+      : container.actions.list({ approvalStatus: "pending" }),
   ]);
+
+  const showAdministration =
+    container.humanAdministration !== undefined &&
+    access.session.roles.some((r) => r === "admin" || r === "owner");
 
   return (
     <main className="shell">
-      <Sidebar />
+      <Sidebar showAdministration={showAdministration} />
       <section className="workspace" id="overview">
         <header className="topbar">
           <div>

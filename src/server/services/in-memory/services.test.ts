@@ -39,6 +39,17 @@ describe("InMemoryAgentRepository", () => {
     expect((await repo.getById("agent-cto"))?.name).toBe("CTO");
     expect(await repo.getById("inconnu")).toBeNull();
   });
+
+  it("applique la portée aux listes et recherches sans exposer les autres agents", async () => {
+    const repo = new InMemoryAgentRepository(demoAgents);
+    const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
+
+    expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual(["agent-cto"]);
+    expect(await repo.getByIdForScope("agent-cto", linked)).not.toBeNull();
+    expect(await repo.getByIdForScope("agent-ceo", linked)).toBeNull();
+    expect(await repo.listForScope({ kind: "linked", agentIds: new Set() })).toEqual([]);
+  });
 });
 
 describe("InMemoryTaskRepository", () => {
@@ -94,5 +105,27 @@ describe("InMemoryTaskRepository", () => {
     const listed = await repo.list();
     listed[0].title = "corrompu";
     expect((await repo.list())[0].title).not.toBe("corrompu");
+  });
+
+  it("rend les tâches non assignées visibles en portée liée et cache les hors portée", async () => {
+    const unassigned = {
+      ...demoTasks[0],
+      id: "task-unassigned",
+      assignedAgentId: undefined,
+    };
+    const repo = new InMemoryTaskRepository(new InMemoryAuditLog(), [...demoTasks, unassigned]);
+    const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
+
+    expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual([
+      "task-001",
+      "task-unassigned",
+    ]);
+    expect(await repo.getByIdForScope("task-001", linked)).not.toBeNull();
+    expect(await repo.getByIdForScope("task-002", linked)).toBeNull();
+    expect(await repo.getByIdForScope("task-unassigned", linked)).not.toBeNull();
+    expect(
+      (await repo.listForScope({ kind: "linked", agentIds: new Set() })).map(({ id }) => id),
+    ).toEqual(["task-unassigned"]);
   });
 });

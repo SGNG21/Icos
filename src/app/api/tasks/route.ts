@@ -1,3 +1,4 @@
+import { canCreateTaskInScope } from "@/server/administration/operational-access-service";
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
@@ -12,17 +13,21 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.tasks",
       permission: "cockpit.read",
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
-    return json({ tasks: await container.tasks.list() });
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    return json({ tasks: await container.tasks.listForScope(scope) });
   } catch (error) {
     return toErrorResponse(error);
   }
@@ -31,15 +36,15 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.tasks",
       permission: "tasks.write",
       sameOrigin: true,
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     const body = await readJson(request);
@@ -50,6 +55,14 @@ export async function POST(request: Request): Promise<Response> {
     const parsed = createTaskBodySchema.safeParse(body.value);
     if (!parsed.success) {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
+    }
+
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    if (!canCreateTaskInScope({ scope, assignedAgentId: parsed.data.assignedAgentId })) {
+      return apiError("forbidden", "agent hors portée");
     }
 
     const result = await createTask(

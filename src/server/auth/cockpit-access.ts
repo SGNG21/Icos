@@ -1,10 +1,11 @@
+import type { AuthenticatedSession } from "@/core/identity";
 import type { Container } from "@/server/container";
 
 import { AuthGuardError, type AuthFailureCode } from "./errors";
 import { requirePermission } from "./guards";
 
 export type CockpitAccess =
-  | { kind: "allowed" }
+  | { kind: "allowed"; session: AuthenticatedSession }
   | {
       kind: "redirect";
       code: Extract<AuthFailureCode, "unauthenticated" | "session_expired">;
@@ -20,8 +21,8 @@ export async function resolveCockpitAccess(
   headers: Headers,
 ): Promise<CockpitAccess> {
   try {
-    await requirePermission(container, headers, "cockpit.read");
-    return { kind: "allowed" };
+    const session = await requirePermission(container, headers, "cockpit.read");
+    return { kind: "allowed", session };
   } catch (error) {
     if (!(error instanceof AuthGuardError)) {
       throw error;

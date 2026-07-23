@@ -134,6 +134,18 @@ describe("auditEntrySchema", () => {
     }
   });
 
+  it.each([
+    "human_user.created",
+    "human_user.role_changed",
+    "human_user.enabled",
+    "human_user.disabled",
+    "human_agent_link.created",
+    "human_agent_link.removed",
+    "human_user.administration_denied",
+  ] as const)("accepte l'événement administratif %s", (eventType) => {
+    expect(auditEntrySchema.safeParse({ ...validAuditEntry, eventType }).success).toBe(true);
+  });
+
   it("rejette un type d'événement inconnu", () => {
     expect(auditEntrySchema.safeParse({ ...validAuditEntry, eventType: "boot" }).success).toBe(
       false,

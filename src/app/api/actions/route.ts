@@ -11,14 +11,14 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.actions",
       permission: "cockpit.read",
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     const url = new URL(request.url);
@@ -28,7 +28,11 @@ export async function GET(request: Request): Promise<Response> {
       return apiError("invalid_input", "filtre invalide", zodDetails(parsed.error));
     }
 
-    return json({ actions: await container.actions.list(parsed.data) });
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    return json({ actions: await container.actions.listForScope(scope, parsed.data) });
   } catch (error) {
     return toErrorResponse(error);
   }

@@ -15,15 +15,15 @@ export async function POST(
 ): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.tasks.transition",
       permission: "tasks.write",
       sameOrigin: true,
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     const { id } = await ctx.params;
@@ -35,6 +35,14 @@ export async function POST(
     const parsed = transitionBodySchema.safeParse(body.value);
     if (!parsed.success) {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
+    }
+
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    if (!(await container.tasks.getByIdForScope(id, scope))) {
+      return apiError("not_found", "tâche introuvable");
     }
 
     const result = await transitionTask(

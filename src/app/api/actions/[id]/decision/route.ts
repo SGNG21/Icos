@@ -15,15 +15,15 @@ export async function POST(
 ): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.actions.decision",
       permission: "approvals.decide",
       sameOrigin: true,
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     const { id } = await ctx.params;
@@ -35,6 +35,14 @@ export async function POST(
     const parsed = actionDecisionCommandSchema.safeParse(body.value);
     if (!parsed.success) {
       return apiError("invalid_input", "décision invalide", zodDetails(parsed.error));
+    }
+
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    if (!(await container.actions.getByIdForScope(id, scope))) {
+      return apiError("not_found", "action introuvable");
     }
 
     const result = await recordActionDecision(

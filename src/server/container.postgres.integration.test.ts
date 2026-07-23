@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
 import { loadEnv } from "@/config/env";
 import { actionToRow, agentToRow, taskToRow } from "@/server/database/mappers";
-import { actions, agents, tasks } from "@/server/database/schema";
+import { actions, agents, humanAgentLinks, tasks } from "@/server/database/schema";
 import {
   dockerAvailable,
   startPostgres,
@@ -120,6 +120,15 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
     });
     if (!created.ok) throw new Error("création humaine refusée");
     await container.roles.grantRole(created.userId, "operator");
+    // Link the operator to agent-op so scope resolution works for decisions.
+    await ctx.handle.db.insert(humanAgentLinks).values({
+      id: "link-1",
+      humanUserId: created.userId,
+      agentId: "agent-op",
+      relation: "operator",
+      createdAt: new Date(),
+      createdByHumanUserId: created.userId,
+    });
     const response = await postAuth(
       new Request("http://localhost/api/auth/sign-in/email", {
         method: "POST",

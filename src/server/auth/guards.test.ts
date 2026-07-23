@@ -114,8 +114,6 @@ describe("requirePermission", () => {
     ["operator", "tasks.write", true],
     ["operator", "agents.manage", false],
     ["admin", "agents.manage", true],
-    ["admin", "owners.manage", false],
-    ["owner", "owners.manage", true],
   ] as const)("rôle %s et permission %s: %s", async (role, permission, allowed) => {
     const result = requirePermission(
       { auth: gateway(async () => session([role])) },

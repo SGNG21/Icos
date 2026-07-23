@@ -61,6 +61,96 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
     expect(await repo.list()).toHaveLength(1);
   });
 
+  it("filtre les agents en SQL selon la portée et masque les recherches hors portée", async () => {
+    const repo = new PostgresAgentRepository(ctx.handle.db);
+    await ctx.handle.db.insert(agents).values(
+      agentToRow({
+        ...seedAgent,
+        id: "agent-other",
+        name: "Autre",
+      }),
+    );
+    const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
+
+    expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual(["agent-cto"]);
+    expect(await repo.getByIdForScope("agent-cto", linked)).toEqual(seedAgent);
+    expect(await repo.getByIdForScope("agent-other", linked)).toBeNull();
+    expect(await repo.listForScope({ kind: "linked", agentIds: new Set() })).toEqual([]);
+  });
+
+  it("filtre les tâches assignées en SQL et rend les tâches non assignées visibles", async () => {
+    await ctx.handle.db.insert(agents).values(
+      agentToRow({
+        ...seedAgent,
+        id: "agent-other",
+        name: "Autre",
+      }),
+    );
+    const repo = new PostgresTaskRepository(ctx.handle.db);
+    const linkedTask = await repo.create({ title: "Liée", assignedAgentId: "agent-cto" });
+    const otherTask = await repo.create({
+      title: "Hors portée",
+      assignedAgentId: "agent-other",
+    });
+    const unassignedTask = await repo.create({ title: "Non assignée" });
+    if (!linkedTask.ok || !otherTask.ok || !unassignedTask.ok) {
+      throw new Error("création de tâche échouée");
+    }
+    const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
+
+    expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual([
+      linkedTask.task.id,
+      unassignedTask.task.id,
+    ]);
+    expect(await repo.getByIdForScope(linkedTask.task.id, linked)).not.toBeNull();
+    expect(await repo.getByIdForScope(otherTask.task.id, linked)).toBeNull();
+    expect(await repo.getByIdForScope(unassignedTask.task.id, linked)).not.toBeNull();
+    expect(
+      (await repo.listForScope({ kind: "linked", agentIds: new Set() })).map(({ id }) => id),
+    ).toEqual([unassignedTask.task.id]);
+  });
+
+  it("filtre les actions en SQL avant le statut et masque les recherches hors portée", async () => {
+    await ctx.handle.db.insert(agents).values(
+      agentToRow({
+        ...seedAgent,
+        id: "agent-other",
+        name: "Autre",
+      }),
+    );
+    const repo = new PostgresActionRepository(ctx.handle.db);
+    await ctx.handle.db.insert(actions).values([
+      actionToRow(action({ id: "action-linked" })),
+      actionToRow(
+        action({
+          id: "action-linked-approved",
+          approvalStatus: "approved",
+        }),
+      ),
+      actionToRow(
+        action({
+          id: "action-other",
+          initiatedByAgentId: "agent-other",
+        }),
+      ),
+    ]);
+    const linked = { kind: "linked", agentIds: new Set(["agent-cto"]) } as const;
+
+    expect(await repo.listForScope({ kind: "global" })).toEqual(await repo.list());
+    expect((await repo.listForScope(linked)).map(({ id }) => id)).toEqual([
+      "action-linked",
+      "action-linked-approved",
+    ]);
+    expect(
+      (await repo.listForScope(linked, { approvalStatus: "approved" })).map(({ id }) => id),
+    ).toEqual(["action-linked-approved"]);
+    expect(await repo.getByIdForScope("action-linked", linked)).not.toBeNull();
+    expect(await repo.getByIdForScope("action-other", linked)).toBeNull();
+    expect(await repo.listForScope({ kind: "linked", agentIds: new Set() })).toEqual([]);
+  });
+
   it("crée une tâche et écrit l'audit dans la même transaction", async () => {
     const tasks = new PostgresTaskRepository(ctx.handle.db);
     const audit = new PostgresAuditRepository(ctx.handle.db);
