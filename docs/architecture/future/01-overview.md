@@ -181,40 +181,15 @@ externes exécutent. Aucun runtime ne devient la source de vérité métier.
 
 ## 4. Invariants non négociables
 
-Ces invariants gouvernent toute décision prise dans ce document, qu'elle s'inspire de Holding IA,
-d'OpenJarvis, ou du Master Plan lui-même. Ils priment sur toute optimisation ou emprunt de pattern.
+La liste canonique et unique des invariants architecturaux ICOS vit désormais dans
+[00-executive-summary.md § Invariants finaux](./00-executive-summary.md#invariants-finaux) ; ce
+document ne la duplique plus, pour éviter toute dérive entre deux formulations.
 
-1. **PostgreSQL reste authoritative.** Aucune source dérivée (mémoire vectorielle, cache, graphe de
-   connaissances) ne devient la vérité métier.
-2. **L'Event Journal (`audit_entries`) n'est jamais remplacé par un EventBus technique.** Un EventBus
-   (pub/sub interne, traces d'exécution) peut coexister comme mécanisme de *notification*, mais
-   l'écriture d'audit métier reste append-only en base relationnelle, avant exécution.
-3. **Un Scheduler ne remplace pas Temporal automatiquement.** Un scheduler persistant simple (cron,
-   tâches périodiques) est légitime pour de la planification sans état de reprise complexe ; un
-   moteur de workflow durable (Temporal ou équivalent) n'est introduit que lorsque la Mission a
-   besoin de reprise multi-étapes avec état intermédiaire garanti (voir
-   [08-technology-timeline.md](./08-technology-timeline.md)).
-4. **La mémoire ne devient jamais la vérité métier.** Toute information mémorisée porte une source,
-   un niveau de confiance et une portée (Master Plan §11) ; en cas de conflit avec PostgreSQL,
-   PostgreSQL gagne toujours (voir CAS 8 du [catalogue de tests](./10-behavioral-tests.md)).
-5. **Aucun agent ne contourne jamais le Policy/Approval Engine**, quel que soit le chemin
-   d'exécution (skill, outil MCP, scheduler, proactivité). Une action `sensitive` (ou niveau ≥ 2 du
-   Master Plan §5) passe toujours par la même porte d'évaluation, qu'elle soit déclenchée par un
-   humain, un agent ou un événement programmé.
-6. **Aucun agent ne peut augmenter ses propres permissions** ni celles d'un autre agent (Master Plan
-   invariant 1, §6).
-7. **L'identité humaine et l'identité agent restent distinctes** (rôle humain ≠ niveau d'autonomie
-   agent) — extension stricte du principe déjà posé par le Lot 2B-1b.
-8. **OmniRoute est la source de vérité technique de son runtime.** Providers, comptes, credentials,
-   OAuth, catalogue modèles, quotas, health, pricing technique, circuit breakers, retries et fallback
-   ne sont pas dupliqués dans ICOS. ICOS conserve uniquement ses policies métier, restrictions et
-   projections dérivées.
-9. **OmniRoute Memory et skills ne remplacent pas les domaines ICOS.** Sa mémoire optimise le contexte
-   d'inférence ; la mémoire ICOS porte clients/projets/missions/faits/décisions. Ses skills techniques
-   ne remplacent pas le Skill Registry ICOS, son trust lifecycle ou ses hard gates.
-10. **Les défenses OmniRoute sont une couche supplémentaire, pas la frontière d'autorité ICOS.** Un
-    mode fail-open de guardrail n'est jamais suffisant pour autoriser une action ; Policy,
-    Authorization, Approval et Tool permissions restent obligatoires côté ICOS.
+Résumé très court pour la lecture de ce chapitre : PostgreSQL authoritative, Memory jamais vérité
+métier, EventBus ≠ Event Journal, Scheduler ≠ Temporal, MCP ≠ permission, Heartbeat ≠ autorité,
+OmniRoute = routage technique / ICOS = policy métier, aucun contournement de Policy/Approval, aucune
+auto-élévation de permission, identité humaine ≠ identité agent, aucun retry/fallback ne double un
+effet externe.
 
 ## 5. Ce que ce document ne fait pas
 

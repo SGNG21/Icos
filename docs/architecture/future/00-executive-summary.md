@@ -225,16 +225,44 @@ ne connaît jamais l'implémentation sous-jacente.
 
 ## Invariants finaux
 
-1. PostgreSQL reste authoritative.
-2. Memory ≠ état authoritative.
-3. EventBus ≠ Event Journal immuable.
-4. Scheduler ≠ Temporal.
-5. MCP ≠ permission model.
-6. Heartbeat ≠ autorité.
-7. OmniRoute reste le moteur de routage technique ; ICOS reste le Control Plane.
-8. Aucun agent ne contourne Policy/Approval.
-9. Aucun agent n'accède directement à un credential provider.
-10. Aucun retry/fallback ne provoque de double action externe.
+> Liste canonique et unique des invariants architecturaux ICOS. [01-overview.md](./01-overview.md#4-invariants-non-négociables)
+> y renvoie plutôt que de la dupliquer.
+
+1. **PostgreSQL reste authoritative.** Aucune source dérivée (mémoire vectorielle, cache, graphe de
+   connaissances) ne devient la vérité métier.
+2. **Memory n'est jamais la vérité métier.** Toute information mémorisée porte une source, un niveau
+   de confiance et une portée (Master Plan §11) ; en cas de conflit avec PostgreSQL, PostgreSQL
+   gagne toujours (voir CAS 8 du [catalogue de tests](./10-behavioral-tests.md)).
+3. **EventBus ne remplace pas l'Event Journal.** Un EventBus (pub/sub interne, traces d'exécution)
+   peut coexister comme mécanisme de notification, mais l'écriture d'audit métier (`audit_entries`)
+   reste append-only en base relationnelle, avant exécution.
+4. **Scheduler ne remplace pas Temporal automatiquement.** Un scheduler persistant simple (cron,
+   tâches périodiques) est légitime pour de la planification sans état de reprise complexe ; un
+   moteur de workflow durable (Temporal ou équivalent) n'est introduit que lorsque la Mission a
+   besoin de reprise multi-étapes avec état intermédiaire garanti (voir
+   [08-technology-timeline.md](./08-technology-timeline.md)).
+5. **MCP n'est pas un permission model.** Protocole d'intégration, jamais frontière d'autorisation ni
+   protocole intra-domaine universel.
+6. **Heartbeat n'est pas une autorité.** Une proposition du `ProactiveAgent` passe toujours par le
+   Policy Engine ; aucune auto-approbation de niveau trivial.
+7. **OmniRoute reste le moteur de routage technique.** Providers, comptes, credentials, OAuth,
+   catalogue modèles, quotas, health, pricing technique, circuit breakers, retries et fallback ne
+   sont pas dupliqués dans ICOS.
+8. **ICOS définit les politiques de sélection.** ICOS reste le Control Plane métier (policies,
+   restrictions, projections dérivées) au-dessus du routage technique d'OmniRoute.
+9. **Aucun agent ne possède de credential provider.** Aucun agent n'accède directement à un
+   credential provider.
+10. **Aucun agent ne choisit librement son provider.** La sélection modèle reste gouvernée par ICOS,
+    jamais par choix libre d'un agent.
+11. **Aucun agent/canal/skill ne contourne Policy/Approval.** Quel que soit le chemin d'exécution
+    (skill, outil MCP, scheduler, proactivité, canal), une action sensible (niveau ≥ 2 du Master Plan
+    §5) passe toujours par la même porte d'évaluation.
+12. **Aucun retry/fallback ne provoque de double action externe.** L'`idempotencyKey` et
+    l'`ExecutionRecord` garantissent qu'aucun effet externe n'est dupliqué.
+13. **Aucun agent ne peut augmenter ses propres permissions** ni celles d'un autre agent (Master Plan
+    invariant 1, §6).
+14. **L'identité humaine et l'identité agent restent distinctes** (rôle humain ≠ niveau d'autonomie
+    agent).
 
 ## Cinq prochains lots recommandés
 
