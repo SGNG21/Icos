@@ -2,11 +2,14 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { safeNextPath } from "./auth-navigation";
 
-const SESSION_COOKIE_NAME = "icos.session_token";
+const SESSION_COOKIE_NAMES = ["icos.session_token", "__Secure-icos.session_token"] as const;
 
 /** Redirection UX optimiste ; l'autorisation réelle reste dans les composants serveur. */
 export function proxy(request: NextRequest): NextResponse {
-  if (request.nextUrl.pathname === "/login" || request.cookies.has(SESSION_COOKIE_NAME)) {
+  if (
+    request.nextUrl.pathname === "/login" ||
+    SESSION_COOKIE_NAMES.some((name) => request.cookies.has(name))
+  ) {
     return NextResponse.next();
   }
 
