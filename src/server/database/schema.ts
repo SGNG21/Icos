@@ -11,6 +11,8 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
+import { user } from "./auth-schema";
+
 /**
  * Schéma Drizzle de la persistance ICOS (Lot 2A-2a).
  *
@@ -36,6 +38,34 @@ export const agents = pgTable(
   (t) => [
     check("agents_status_check", sql`${t.status} in ('available','standby','offline')`),
     check("agents_auth_level_check", sql`${t.authorizationLevel} between 0 and 3`),
+  ],
+);
+
+export const humanAgentLinks = pgTable(
+  "human_agent_links",
+  {
+    id: text("id").primaryKey(),
+    humanUserId: text("human_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "restrict" }),
+    relation: text("relation").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    createdByHumanUserId: text("created_by_human_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+  },
+  (t) => [
+    unique("human_agent_links_human_user_agent_unique").on(t.humanUserId, t.agentId),
+    check(
+      "human_agent_links_relation_check",
+      sql`${t.relation} in ('supervisor','operator','observer')`,
+    ),
+    index("human_agent_links_human_user_idx").on(t.humanUserId),
+    index("human_agent_links_agent_idx").on(t.agentId),
+    index("human_agent_links_created_by_idx").on(t.createdByHumanUserId),
   ],
 );
 
@@ -123,7 +153,7 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied')`,
+      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
