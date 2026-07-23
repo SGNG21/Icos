@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { auditEntries } from "@/server/database/schema";
+import { userRoles } from "@/server/database/auth-schema";
+import { auditEntries, humanAgentLinks } from "@/server/database/schema";
 import {
   dockerAvailable,
   startPostgres,
@@ -9,6 +10,8 @@ import {
   truncateAll,
   type PgContext,
 } from "@/server/database/testing/pg-support";
+import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
+import { PostgresHumanUserRepository } from "@/server/repositories/postgres/human-user-repository";
 
 const ADMINISTRATION_AUDIT_EVENTS = [
   "human_user.created",
@@ -183,6 +186,116 @@ describe.skipIf(!dockerAvailable)("Administration humains-agents (intégration P
     await expect(
       ctx.handle.db.execute(sql`DELETE FROM "user" WHERE id = 'human-actor'`),
     ).rejects.toThrow();
+  });
+
+  it("liste et recherche les humains avec leur rôle effectif", async () => {
+    await seedIdentities();
+    await ctx.handle.db.insert(userRoles).values([
+      {
+        userId: "human-target",
+        role: "viewer",
+        grantedAt: new Date("2026-07-23T08:00:00.000Z"),
+      },
+      {
+        userId: "human-target",
+        role: "operator",
+        grantedAt: new Date("2026-07-23T08:01:00.000Z"),
+      },
+      {
+        userId: "human-actor",
+        role: "admin",
+        grantedAt: new Date("2026-07-23T08:02:00.000Z"),
+      },
+    ]);
+    const users = new PostgresHumanUserRepository(ctx.handle.db);
+
+    expect(await users.list()).toEqual([
+      {
+        id: "human-actor",
+        email: "actor@icos.test",
+        name: "Actor",
+        status: "active",
+        role: "admin",
+      },
+      {
+        id: "human-other",
+        email: "other@icos.test",
+        name: "Other",
+        status: "active",
+        role: null,
+      },
+      {
+        id: "human-target",
+        email: "target@icos.test",
+        name: "Target",
+        status: "active",
+        role: "operator",
+      },
+    ]);
+    expect(await users.findById("human-target")).toMatchObject({
+      id: "human-target",
+      role: "operator",
+    });
+    expect(await users.findByEmail("TARGET@ICOS.TEST")).toMatchObject({
+      id: "human-target",
+      role: "operator",
+    });
+    expect(await users.findById("human-missing")).toBeNull();
+  });
+
+  it("liste les liens de façon déterministe et déduit les IDs agents", async () => {
+    await seedIdentities();
+    await ctx.handle.db.insert(humanAgentLinks).values([
+      {
+        id: "link-z",
+        humanUserId: "human-target",
+        agentId: "agent-other",
+        relation: "observer",
+        createdAt: new Date("2026-07-23T08:01:00.000Z"),
+        createdByHumanUserId: "human-actor",
+      },
+      {
+        id: "link-b",
+        humanUserId: "human-target",
+        agentId: "agent-linked",
+        relation: "operator",
+        createdAt: new Date("2026-07-23T08:00:00.000Z"),
+        createdByHumanUserId: "human-actor",
+      },
+      {
+        id: "link-a",
+        humanUserId: "human-other",
+        agentId: "agent-linked",
+        relation: "supervisor",
+        createdAt: new Date("2026-07-23T08:00:00.000Z"),
+        createdByHumanUserId: "human-actor",
+      },
+    ]);
+    const links = new PostgresHumanAgentLinkRepository(ctx.handle.db);
+
+    expect(await links.listForHuman("human-target")).toEqual([
+      {
+        id: "link-b",
+        humanUserId: "human-target",
+        agentId: "agent-linked",
+        relation: "operator",
+        createdAt: "2026-07-23T08:00:00.000Z",
+        createdByHumanUserId: "human-actor",
+      },
+      {
+        id: "link-z",
+        humanUserId: "human-target",
+        agentId: "agent-other",
+        relation: "observer",
+        createdAt: "2026-07-23T08:01:00.000Z",
+        createdByHumanUserId: "human-actor",
+      },
+    ]);
+    expect(await links.listAgentIdsForHuman("human-target")).toEqual(
+      new Set(["agent-linked", "agent-other"]),
+    );
+    expect(await links.listForHuman("human-missing")).toEqual([]);
+    expect(await links.listAgentIdsForHuman("human-missing")).toEqual(new Set());
   });
 
   it("accepte les sept événements d'audit de l'administration humaine", async () => {
