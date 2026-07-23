@@ -9,14 +9,14 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.agents",
       permission: "cockpit.read",
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     return json({ agents: await container.agents.list() });

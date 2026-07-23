@@ -1,4 +1,4 @@
-import type { Permission, Role } from "@/core/identity";
+import type { AuthenticatedSession, Permission, Role } from "@/core/identity";
 import { AuthGuardError } from "@/server/auth/errors";
 import { requirePermission, requireRole } from "@/server/auth/guards";
 import { appendSecurityAudit, type SecurityAuditReason } from "@/server/auth/security-audit";
@@ -17,6 +17,9 @@ type ProtectedRoute = RouteRequirement & {
   sameOrigin?: boolean;
 };
 
+export type ProtectedRouteResult =
+  { ok: true; session: AuthenticatedSession } | { ok: false; response: Response };
+
 function reasonFor(error: AuthGuardError): Exclude<SecurityAuditReason, "invalid_credentials"> {
   switch (error.code) {
     case "unauthenticated":
@@ -31,7 +34,7 @@ function reasonFor(error: AuthGuardError): Exclude<SecurityAuditReason, "invalid
 }
 
 /** Applique le guard serveur et audite tout refus avec des métadonnées fermées. */
-export async function protectRoute(input: ProtectedRoute): Promise<Response | null> {
+export async function protectRoute(input: ProtectedRoute): Promise<ProtectedRouteResult> {
   try {
     const session = input.permission
       ? await requirePermission(input.container, input.request.headers, input.permission)
@@ -46,10 +49,13 @@ export async function protectRoute(input: ProtectedRoute): Promise<Response | nu
         ...(input.permission ? { permission: input.permission } : { role: input.role }),
         reason: "cross_origin",
       }).catch(() => {});
-      return authErrorResponse(new AuthGuardError("forbidden"));
+      return {
+        ok: false,
+        response: authErrorResponse(new AuthGuardError("forbidden")),
+      };
     }
 
-    return null;
+    return { ok: true, session };
   } catch (error) {
     if (!(error instanceof AuthGuardError)) {
       throw error;
@@ -63,6 +69,9 @@ export async function protectRoute(input: ProtectedRoute): Promise<Response | nu
       ...(input.permission ? { permission: input.permission } : { role: input.role }),
       reason: reasonFor(error),
     }).catch(() => {});
-    return authErrorResponse(error);
+    return {
+      ok: false,
+      response: authErrorResponse(error),
+    };
   }
 }

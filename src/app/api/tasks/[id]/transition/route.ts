@@ -15,15 +15,15 @@ export async function POST(
 ): Promise<Response> {
   try {
     const container = await getContainer();
-    const authError = await protectRoute({
+    const access = await protectRoute({
       container,
       request,
       route: "api.tasks.transition",
       permission: "tasks.write",
       sameOrigin: true,
     });
-    if (authError) {
-      return authError;
+    if (!access.ok) {
+      return access.response;
     }
 
     const { id } = await ctx.params;

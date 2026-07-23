@@ -68,9 +68,12 @@ describe("resolveCockpitAccess", () => {
     ).resolves.toEqual({ kind: "forbidden", code: "account_disabled" });
   });
 
-  it("autorise une session disposant de cockpit.read", async () => {
-    await expect(resolveCockpitAccess(container(session()), credentialHeaders)).resolves.toEqual({
+  it("autorise une session disposant de cockpit.read sans perdre son identité", async () => {
+    const expected = session();
+
+    await expect(resolveCockpitAccess(container(expected), credentialHeaders)).resolves.toEqual({
       kind: "allowed",
+      session: expected,
     });
   });
 });

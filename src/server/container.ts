@@ -6,6 +6,8 @@ import { loadEnv, resolveAuthConfig, type AuthConfig, type Env } from "@/config/
 import { AuthenticationService } from "@/server/auth/authentication-service";
 import { createBetterAuth, type IcosBetterAuth } from "@/server/auth/better-auth";
 import { BetterAuthHttpGateway } from "@/server/auth/http-gateway";
+import { HumanAdministrationService } from "@/server/administration/human-administration-service";
+import { OperationalAccessService } from "@/server/administration/operational-access-service";
 import type { AuthGateway, AuthHttpGateway, RoleRepository } from "@/server/auth/ports";
 import { PostgresHumanUserRepository } from "@/server/repositories/postgres/human-user-repository";
 import { PostgresRoleRepository } from "@/server/repositories/postgres/role-repository";
@@ -29,9 +31,13 @@ import type {
   AgentRepository,
   ApprovalRepository,
   AuditRepository,
+  HumanAgentLinkRepository,
+  HumanUserAdministrationRepository,
   TaskRepository,
 } from "@/server/repositories/ports";
-import type { ActionDecisionUnitOfWork } from "@/server/uow/ports";
+import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
+import { PostgresHumanAdministrationUnitOfWork } from "@/server/uow/postgres-human-administration-uow";
+import type { HumanAdministrationUnitOfWork, ActionDecisionUnitOfWork } from "@/server/uow/ports";
 import { InMemoryActionDecisionUnitOfWork } from "@/server/uow/in-memory-action-decision-uow";
 import { PostgresActionDecisionUnitOfWork } from "@/server/uow/postgres-action-decision-uow";
 import { PersistenceConfigError, resolvePersistence } from "@/server/persistence";
@@ -58,6 +64,16 @@ export interface Container {
   authHttp?: AuthHttpGateway;
   /** Rôles applicatifs ICOS (présent avec le backend PostgreSQL). */
   roles?: RoleRepository;
+  /** Utilisateurs humains administrables (présent avec le backend PostgreSQL). */
+  users?: HumanUserAdministrationRepository;
+  /** Rattachements humains-agents (présent avec le backend PostgreSQL). */
+  agentLinks?: HumanAgentLinkRepository;
+  /** Administration humaine, composée uniquement lorsqu'une auth est disponible. */
+  humanAdministration?: HumanAdministrationService;
+  /** Résolution de la portée opérationnelle par rattachements. */
+  operationalAccess?: OperationalAccessService;
+  /** Mutations d'administration humaine transactionnelles. */
+  humanAdministrationUow?: HumanAdministrationUnitOfWork;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
   close: () => Promise<void>;
 }
@@ -125,6 +141,39 @@ export function composeAuthentication(
   };
 }
 
+interface AdministrationDependencies {
+  auth?: AuthGateway;
+  users: HumanUserAdministrationRepository;
+  agentLinks: HumanAgentLinkRepository;
+  agents: AgentRepository;
+  audit: AuditRepository;
+  humanAdministrationUow: HumanAdministrationUnitOfWork;
+}
+
+export function composeAdministration(
+  input: AdministrationDependencies,
+): Pick<
+  Container,
+  "users" | "agentLinks" | "humanAdministration" | "operationalAccess" | "humanAdministrationUow"
+> {
+  return {
+    users: input.users,
+    agentLinks: input.agentLinks,
+    humanAdministration: input.auth
+      ? new HumanAdministrationService({
+          auth: input.auth,
+          users: input.users,
+          links: input.agentLinks,
+          agents: input.agents,
+          audit: input.audit,
+          uow: input.humanAdministrationUow,
+        })
+      : undefined,
+    operationalAccess: new OperationalAccessService(input.agentLinks),
+    humanAdministrationUow: input.humanAdministrationUow,
+  };
+}
+
 export async function buildPostgresContainer(
   url: string,
   authConfig?: AuthConfig,
@@ -147,17 +196,28 @@ export async function buildPostgresContainer(
   const authentication = authConfig
     ? composeAuthentication(handle.db, roles, authConfig)
     : undefined;
+  const agents = new PostgresAgentRepository(handle.db);
+  const audit = new PostgresAuditRepository(handle.db);
+  const administration = composeAdministration({
+    auth: authentication?.auth,
+    users: new PostgresHumanUserRepository(handle.db),
+    agentLinks: new PostgresHumanAgentLinkRepository(handle.db),
+    agents,
+    audit,
+    humanAdministrationUow: new PostgresHumanAdministrationUnitOfWork(handle.db),
+  });
 
   return {
-    agents: new PostgresAgentRepository(handle.db),
+    agents,
     tasks: new PostgresTaskRepository(handle.db),
     actions: new PostgresActionRepository(handle.db),
     approvals: new PostgresApprovalRepository(handle.db),
-    audit: new PostgresAuditRepository(handle.db),
+    audit,
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
     auth: authentication?.auth,
     authHttp: authentication?.authHttp,
     roles,
+    ...administration,
     close: handle.close,
   };
 }
