@@ -1,0 +1,65 @@
+# Registre des risques architecturaux
+
+> Probabilité (P) et Impact (I) : Faible / Moyen / Élevé / Critique.
+> Le propriétaire est un rôle, pas une personne. Les contrôles sont rattachés aux lots proposés.
+
+| ID | Risque | P | I | Contrôles préventifs | Détection / preuve | Propriétaire | Lot |
+|---|---|---|---|---|---|---|---|
+| R-01 | Un agent augmente ses permissions | M | Critique | Aucune API agent→authorizationLevel ; permission humaine `agents.manage`; Policy Engine fail-closed | Événement `auth.access.denied`, CAS 10 | Security / Core | D1 |
+| R-02 | Skill externe auto-installée ou auto-activée | M | Critique | Quarantaine obligatoire ; activation humaine séparée ; provenance et hash | Historique lifecycle, CAS 19-20 | Skill Governance | C2-C3, Q2 |
+| R-03 | Tool appelé hors policy | M | Critique | Tool/MCP Gateway unique ; policy vérifiée juste avant effet | CAS 9, audit `policy.denied` | Core / Integrations | G1 |
+| R-04 | Double effet externe après retry ou timeout | É | Critique | `ExecutionRecord`, idempotencyKey unique, séparation génération/exécution | CAS 4-5, contrainte unique DB | Integrations | G1 |
+| R-05 | Fallback LLM rejoue une action externe | M | Critique | Retry limité à l'inférence ; résultat modèle stocké comme proposition ; effet séparé et idempotent | CAS 17, rapprochement invocation/execution | AI Runtime / Integrations | D3, G1, R2 |
+| R-06 | Fallback vers provider incompatible avec confidentialité | M | Critique | ICOS exprime PrivacyClass/AllowedProviderClasses/fallback métier ; OmniRoute route uniquement dans cette enveloppe | CAS 18, routing explanation auditée | AI Gateway / Security | D3, R1-R2 |
+| R-07 | Credential provider exposé à un agent ou dupliqué dans ICOS | F | Critique | Secrets restent OmniRoute/secret store ; ICOS stocke uniquement `omnirouteConnectionId` et metadata métier | Absence de secret dans DB/payload/log | AI Gateway / Security | D3 |
+| R-08 | ICOS devient dépendant structurellement d'un SDK provider | M | Élevé | `AiGatewayPort` + `OmniRouteAdapter` unique ; résultat normalisé | Contract test avec fake adapter | AI Gateway | D3 |
+| R-09 | OmniRoute indisponible sans dégradation contrôlée | M | Élevé | Pause Mission ; erreur explicite ; aucun bypass direct provider | CAS 23, statut adapter | AI Gateway | D3, R2 |
+| R-10 | ICOS tente de réimplémenter OmniRoute | M | Élevé | ADR-0019 ; matrice A/B/C/D ; interdiction de registres/health/quota/router techniques ICOS | Revue ports/schémas et duplication de données | Architecture | D3, R1-R2 |
+| R-11 | Contraintes métier insuffisantes permettent une route techniquement optimale mais métierement invalide | M | Élevé | Requirements obligatoires : capability, qualité, privacy, budget, classes autorisées | CAS 24, routing explanation + eval métier | AI Gateway / Quality | D3, R1-R3 |
+| R-12 | Evals biaisées modifient automatiquement le routing | M | Élevé | EvaluationStore versionné ; minimum samples ; nouvelle policy soumise à revue | Diff de ModelPolicy, audit activation | AI Runtime / Quality | R3 |
+| R-13 | Memory devient source de vérité métier | M | Critique | Ports séparés ; provenance ; aucun contrôle d'autorisation depuis Memory ; Postgres gagne toujours | CAS 8, tests de conflit | Memory / Core | E1 |
+| R-14 | Mauvaise mémoire utilisée après correction | M | Élevé | Versionnement, validité, correction explicite, scope | CAS 22 | Memory | E1-E2 |
+| R-15 | Prompt injection via contenu ingéré | É | Critique | Marquage contenu externe non fiable ; scanners ; isolation instructions/contenu ; tool policy indépendante | Eval injection, événements security.block | Memory / Security | E2, G1 |
+| R-16 | EventBus traité comme audit durable | M | Élevé | Event Journal écrit avant publication ; EventBus reconstructible ; ADR-0011 | Réconciliation Event Journal/trace | Observability | D2-D4 |
+| R-17 | Journal d'audit modifiable ou incomplet | F | Critique | Trigger append-only existant ; événements ajoutés avant feature ; transactions unit-of-work | Test SQL update/delete refusé | Core / Security | Chaque lot |
+| R-18 | Approval confondue avec exécution | M | Critique | Entités et statuts distincts ; l'approbation n'est qu'une autorisation précise et expirante | CAS 2, 6, 7 | Core | D1, G1 |
+| R-19 | Rejet humain tardif ignoré | M | Critique | `rejected` terminal ; revalidation juste avant effet | Test race approval/reject | Core | D1, G1 |
+| R-20 | Mission impossible à stopper | M | Élevé | `cancelled` propagé aux Tasks/Runs ; gateway revérifie Mission avant effet | CAS 7 | Orchestration | D2-D4 |
+| R-21 | Crash perd l'état d'orchestration | M | Élevé | État Mission/Plan/Run en Postgres avant effet | CAS 11 | Orchestration | D2-D4 |
+| R-22 | Scheduler exécute deux fois après failover | M | Élevé | Lease et idempotencyKey ; un seul worker propriétaire ; journal de run | Test deux workers | Proactivity | S1 |
+| R-23 | Scheduler adopté à la place de Temporal alors que le besoin est durable/complexe | M | Élevé | Seuil ADR-0012 ; mesure workflows ; migration conditionnelle | Incidents de reprise, durée/pas de mission | Architecture / Orchestration | S1, T1 |
+| R-24 | Temporal introduit trop tôt | M | Moyen | D4 sans Temporal ; ADR avec critères stricts | Coût opéré vs besoin | Architecture | T1 conditionnel |
+| R-25 | Heartbeat acquiert une autorité implicite | M | Critique | Heartbeat produit observations/commandes gouvernées ; aucune API d'effet direct | CAS 16 | Proactivity / Security | P1 |
+| R-26 | Proactivité spamme l'utilisateur | É | Moyen | Déduplication, priorité, digest, quiet hours, taux maximal | Métriques notification/ack | Product / Proactivity | P1 |
+| R-27 | Channel adapter contient de la logique métier/policy | M | Élevé | Contrat canal-agnostique ; mêmes use cases ; aucun droit propre | CAS 21 | Integrations | I1-I2 |
+| R-28 | Webhook canal falsifié ou rejoué | É | Élevé | Signature, timestamp, nonce, idempotence | CAS 5 adapté au canal | Security / Integrations | I2 |
+| R-29 | Prolifération d'agents/skills fantômes | M | Élevé | Registre, lifecycle, propriétaire, capabilities, dépréciation | Rapport ghost/inactive | Governance | C1-C2 |
+| R-30 | Plan hallucine une skill inexistante | É | Élevé | Plan référence Capability ; résolution dans registre actif ; inconnu = refus | Test unknown capability/skill | Orchestration | C2, D4 |
+| R-31 | Migration 3→5 niveaux casse les invariants existants | M | Critique | ADR-0008, mapping de compatibilité, tests exhaustifs de `decideExecution` | Matrice de non-régression | Core / Security | D1 |
+| R-32 | Knowledge graph diverge de Postgres | M | Élevé | Graphe strictement dérivé, reconstruit, provenance et timestamp | CAS 8, réconciliation | Memory | E4 conditionnel |
+| R-33 | n8n redevient orchestrateur central | M | Élevé | n8n derrière Tool Gateway seulement, capabilities limitées | Revue dépendances, traces | Architecture / Integrations | G2/H1 |
+| R-34 | Coûts LLM incontrôlés ou estimation confondue avec facture | É | Élevé | Ledger qualifié, budgets business, projections OmniRoute ; cinq catégories de coût distinctes | Coût qualifié par Mission/Run/Task | AI Gateway / Finance | R1-R2 |
+| R-35 | Free tier/crédits épuisés en cours de mission | É | Moyen | OmniRoute gère quota/reset/fallback ; ICOS exprime free-tier policy et réaction métier sur projection | Projection quota + routing explanation | AI Gateway | R1-R2 |
+| R-36 | Modèle local insuffisant choisi pour coût nul | M | Élevé | QualityThreshold ICOS obligatoire ; OmniRoute optimise dans l'enveloppe ; evals métier vérifient outcome | Échecs Q1/R3 | AI Gateway / Quality | R1-R3 |
+| R-37 | NVIDIA NIM ou endpoint compatible change de dialecte | M | Moyen | Protocol translation OmniRoute ; contract test de l'Adapter, domaine inchangé | Tests de compatibilité gateway | AI Gateway | D3 |
+| R-38 | Sandbox/guardrail OmniRoute considéré comme substitut à Policy | M | Critique | Défense en profondeur ; fail-open OmniRoute explicitement insuffisant ; Policy obligatoire | Test refus ICOS malgré pass/fail-open downstream | Security | D3/G1 |
+| R-39 | Scope creep : Graphiti/Temporal/MCP partout bloquent le premier jalon | É | Élevé | Chemin critique explicite, introduction conditionnelle | Revue lot, métrique délai M1 | Architecture | Gouvernance roadmap |
+| R-40 | Catalogue/projection ICOS diverge d'OmniRoute | M | Élevé | Projection TTL, source/version/timestamp, jamais authoritative ; refresh via API/MCP | Projection stale signalée | AI Gateway | R2 |
+| R-41 | Tool MCP management OmniRoute contourne les permissions ICOS | M | Critique | Ports read/write séparés, scopes minimaux, Policy/Approval et audit sur tout write | Test write sans permission | AI Gateway / Security | R2 |
+| R-42 | Mémoire ou skills OmniRoute deviennent vérité métier ICOS | M | Critique | Frontières séparées : OmniRoute inference context/technical skills ; ICOS Memory/Skill Registry authoritative | Revue dépendances et tests CAS 8/19 | Architecture | D3, E1, C2 |
+| R-43 | Retry pipeline OmniRoute confondu avec workflow métier | M | Critique | Inference retry séparé de business activity retry ; proposal persistée puis ExecutionRecord/outbox | CAS 17, crash/replay | Orchestration / Integrations | D3, G1, T1 |
+
+## Risques critiques avant M1
+
+Les risques R-01 à R-08, R-13, R-15, R-18 à R-21, R-30 et R-31 doivent avoir un contrôle testé
+avant le jalon M1. Les autres peuvent être acceptés temporairement avec limites explicites, car leur
+composant n'est pas encore activé.
+
+## Acceptation et escalade
+
+- Un risque **Critique** ne peut pas être accepté par un agent ou une skill ; décision humaine
+  propriétaire requise et auditée.
+- Tout risque dont la probabilité ou l'impact augmente après mesure ouvre une proposition de lot ou
+  d'ADR ; il ne déclenche jamais une modification autonome de policy.
+- Les risques conditionnels Temporal/Graphiti ne justifient leur technologie que lorsqu'un incident
+  ou benchmark reproduit le problème que l'alternative simple ne résout plus.
