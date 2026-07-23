@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession, Role } from "@/core/identity";
+import { OperationalAccessService } from "@/server/administration/operational-access-service";
 import type { HumanAdministrationService } from "@/server/administration/human-administration-service";
 import type { AuthGateway } from "@/server/auth/ports";
+import type { HumanAgentLinkRepository } from "@/server/repositories/ports";
 import { buildMemoryContainer, type Container } from "@/server/container";
 
 import { GET as getAdminAgents } from "./admin/agents/route";
@@ -202,6 +204,16 @@ function agentLinkParams(id: string, agentId: string) {
 async function errorCode(response: Response): Promise<string | undefined> {
   const data = (await response.json()) as { error?: { code?: string } };
   return data.error?.code;
+}
+
+function installScopedRole(role: Role, linkedAgentIds: string[]): Container {
+  const container = installRole(role);
+  const mockLinks: HumanAgentLinkRepository = {
+    listForHuman: async () => [],
+    listAgentIdsForHuman: async () => new Set(linkedAgentIds),
+  };
+  container.operationalAccess = new OperationalAccessService(mockLinks);
+  return container;
 }
 
 describe("matrice d'autorisation HTTP", () => {
@@ -1281,6 +1293,119 @@ describe("GET /api/admin/agents", () => {
     expect(response.status).toBe(200);
     const data = (await response.json()) as { agents: unknown[] };
     expect(data.agents.length).toBeGreaterThan(0);
+  });
+});
+
+describe("portée opérationnelle liée", () => {
+  it("limite la liste des agents à la portée de l'opérateur", async () => {
+    installScopedRole("operator", ["agent-cto"]);
+
+    const response = await getAgents(getRequest("/api/agents"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { agents: { id: string }[] };
+    expect(data.agents).toHaveLength(1);
+    expect(data.agents[0].id).toBe("agent-cto");
+  });
+
+  it("retourne une liste vide pour un opérateur sans rattachement", async () => {
+    installScopedRole("operator", []);
+
+    const response = await getAgents(getRequest("/api/agents"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { agents: unknown[] };
+    expect(data.agents).toHaveLength(0);
+  });
+
+  it("offre une portée globale à admin", async () => {
+    installScopedRole("admin", []);
+
+    const response = await getAgents(getRequest("/api/agents"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { agents: unknown[] };
+    expect(data.agents.length).toBeGreaterThan(2);
+  });
+
+  it("limite les tâches visibles à la portée de l'opérateur", async () => {
+    installScopedRole("operator", ["agent-cto"]);
+
+    const response = await getTasks(getRequest("/api/tasks"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { tasks: { assignedAgentId?: string }[] };
+    for (const task of data.tasks) {
+      expect(task.assignedAgentId).toBe("agent-cto");
+    }
+  });
+
+  it("retourne une liste vide de tâches pour un opérateur sans lien", async () => {
+    installScopedRole("operator", []);
+
+    const response = await getTasks(getRequest("/api/tasks"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { tasks: unknown[] };
+    expect(data.tasks).toHaveLength(0);
+  });
+
+  it("limite les actions visibles à la portée de l'opérateur", async () => {
+    installScopedRole("operator", ["agent-development"]);
+
+    const response = await getActions(getRequest("/api/actions"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { actions: { initiatedByAgentId?: string }[] };
+    expect(data.actions.length).toBeGreaterThan(0);
+    for (const action of data.actions) {
+      expect(action.initiatedByAgentId).toBe("agent-development");
+    }
+  });
+
+  it("offre une portée globale à owner pour les actions", async () => {
+    installScopedRole("owner", []);
+
+    const response = await getActions(getRequest("/api/actions"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { actions: unknown[] };
+    expect(data.actions.length).toBeGreaterThan(2);
+  });
+
+  it("refuse la création de tâche hors portée pour operator", async () => {
+    installScopedRole("operator", ["agent-frontend"]);
+
+    const response = await postTask(
+      jsonRequest("/api/tasks", { title: "Test", assignedAgentId: "agent-cto" }),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse la transition d'une tâche hors portée (404)", async () => {
+    installScopedRole("operator", ["agent-frontend"]);
+
+    const response = await postTransition(
+      jsonRequest("/api/tasks/task-001/transition", { to: "draft" }),
+      params("task-001"),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("refuse une décision sur une action hors portée (404)", async () => {
+    installScopedRole("operator", ["agent-frontend"]);
+
+    const response = await postDecision(
+      jsonRequest("/api/actions/action-001/decision", {
+        decidedByLabel: "Opérateur",
+        decision: "approved",
+      }),
+      params("action-001"),
+    );
+
+    expect(response.status).toBe(404);
   });
 });
 

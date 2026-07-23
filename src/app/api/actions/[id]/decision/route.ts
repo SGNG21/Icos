@@ -37,6 +37,14 @@ export async function POST(
       return apiError("invalid_input", "décision invalide", zodDetails(parsed.error));
     }
 
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    if (!(await container.actions.getByIdForScope(id, scope))) {
+      return apiError("not_found", "action introuvable");
+    }
+
     const result = await recordActionDecision(
       {
         actions: container.actions,

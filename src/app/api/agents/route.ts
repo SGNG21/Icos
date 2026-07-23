@@ -19,7 +19,11 @@ export async function GET(request: Request): Promise<Response> {
       return access.response;
     }
 
-    return json({ agents: await container.agents.list() });
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    return json({ agents: await container.agents.listForScope(scope) });
   } catch (error) {
     return toErrorResponse(error);
   }

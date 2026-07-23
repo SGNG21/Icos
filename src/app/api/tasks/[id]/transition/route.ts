@@ -37,6 +37,14 @@ export async function POST(
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
+    const scope = container.operationalAccess
+      ? await container.operationalAccess.resolveScope(access.session)
+      : { kind: "global" as const };
+
+    if (!(await container.tasks.getByIdForScope(id, scope))) {
+      return apiError("not_found", "tâche introuvable");
+    }
+
     const result = await transitionTask(
       { tasks: container.tasks },
       { taskId: id, to: parsed.data.to },
