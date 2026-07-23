@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  canManageRoleChange,
   hasPermission,
   highestRole,
+  PERMISSIONS,
   ROLE_PERMISSIONS,
   wouldLeaveNoActiveOwner,
   type Role,
@@ -23,7 +23,7 @@ describe("hiérarchie des rôles", () => {
       for (const permission of lower) {
         expect(higher.has(permission)).toBe(true);
       }
-      expect(higher.size).toBeGreaterThan(lower.size);
+      expect(higher.size).toBeGreaterThanOrEqual(lower.size);
     }
   });
 });
@@ -45,47 +45,27 @@ describe("matrice de permissions", () => {
     expect(hasPermission(["viewer"], "audit.read.limited")).toBe(true);
   });
 
-  it("agents / config / gestion utilisateurs / intégrations : admin+", () => {
-    for (const p of [
+  it("agents / config / administration humaine / intégrations : admin+", () => {
+    for (const permission of [
       "agents.manage",
       "config.manage",
-      "users.manage",
+      "users.read",
+      "users.create",
+      "users.role.write",
+      "users.status.write",
+      "agentLinks.read",
+      "agentLinks.write",
       "integrations.manage",
     ] as const) {
-      expect(hasPermission(["operator"], p)).toBe(false);
-      expect(hasPermission(["admin"], p)).toBe(true);
+      expect(hasPermission(["operator"], permission)).toBe(false);
+      expect(hasPermission(["admin"], permission)).toBe(true);
+      expect(hasPermission(["owner"], permission)).toBe(true);
     }
   });
 
-  it("gestion des owners : owner uniquement", () => {
-    expect(hasPermission(["admin"], "owners.manage")).toBe(false);
-    expect(hasPermission(["owner"], "owners.manage")).toBe(true);
-  });
-});
-
-describe("gestion des rôles (autorisation)", () => {
-  it("un admin ne peut pas promouvoir en owner", () => {
-    expect(canManageRoleChange(["admin"], { kind: "grant", role: "owner" }, { roles: [] })).toEqual(
-      { ok: false, reason: "forbidden" },
-    );
-  });
-
-  it("un admin ne peut pas modifier un utilisateur owner", () => {
-    expect(
-      canManageRoleChange(["admin"], { kind: "grant", role: "operator" }, { roles: ["owner"] }),
-    ).toEqual({ ok: false, reason: "forbidden" });
-  });
-
-  it("un admin peut gérer les rôles non-owner d'un non-owner", () => {
-    expect(
-      canManageRoleChange(["admin"], { kind: "grant", role: "operator" }, { roles: ["viewer"] }),
-    ).toEqual({ ok: true });
-  });
-
-  it("un owner peut promouvoir en owner", () => {
-    expect(canManageRoleChange(["owner"], { kind: "grant", role: "owner" }, { roles: [] })).toEqual(
-      { ok: true },
-    );
+  it("retire les permissions administratives historiques", () => {
+    expect(PERMISSIONS).not.toContain("users.manage");
+    expect(PERMISSIONS).not.toContain("owners.manage");
   });
 });
 

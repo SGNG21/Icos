@@ -1,30 +1,48 @@
-import { hasPermission } from "./permissions";
-import type { Role } from "./roles";
+import { highestRole, ROLE_RANK, type Role } from "./roles";
 
-/**
- * Règles PURES de gestion des rôles (autorisation « qui peut modifier quoi »).
- * L'invariant « au moins un owner actif » est une cohérence concurrente : il est
- * garanti transactionnellement par le repository (voir PostgresRoleRepository),
- * jamais par un simple « compter puis modifier » hors transaction.
- */
+export type AdministrationOperation = "create" | "role" | "status" | "links";
 
-export type RoleChange = { kind: "grant"; role: Role } | { kind: "revoke"; role: Role };
+export type AdministrationDecision = { ok: true } | { ok: false; reason: "forbidden" };
 
-export type ManageDecision = { ok: true } | { ok: false; reason: "forbidden" };
+const forbidden: AdministrationDecision = { ok: false, reason: "forbidden" };
 
-/**
- * Un simple `admin` ne peut ni promouvoir en `owner`, ni modifier un utilisateur
- * `owner` : ces opérations exigent la permission `owners.manage` (owner). Les
- * autres modifications de rôles exigent `users.manage` (admin+).
- */
-export function canManageRoleChange(
+export function canCreateRole(
   actorRoles: readonly Role[],
-  change: RoleChange,
-  target: { roles: readonly Role[] },
-): ManageDecision {
-  const touchesOwner = change.role === "owner" || target.roles.includes("owner");
-  const permission = touchesOwner ? "owners.manage" : "users.manage";
-  return hasPermission(actorRoles, permission) ? { ok: true } : { ok: false, reason: "forbidden" };
+  requestedRole: Role,
+): AdministrationDecision {
+  const actorRole = highestRole(actorRoles);
+  if (actorRole === "owner") {
+    return { ok: true };
+  }
+
+  return actorRole === "admin" && ROLE_RANK[requestedRole] < ROLE_RANK.admin
+    ? { ok: true }
+    : forbidden;
+}
+
+export function canAdministerTarget(input: {
+  actorUserId: string;
+  actorRoles: readonly Role[];
+  targetUserId: string;
+  targetRoles: readonly Role[];
+}): AdministrationDecision {
+  if (input.actorUserId === input.targetUserId) {
+    return forbidden;
+  }
+
+  const actorRole = highestRole(input.actorRoles);
+  const targetRole = highestRole(input.targetRoles);
+  if (actorRole === null || targetRole === null) {
+    return forbidden;
+  }
+
+  if (actorRole === "owner") {
+    return { ok: true };
+  }
+
+  return actorRole === "admin" && ROLE_RANK[targetRole] < ROLE_RANK.admin
+    ? { ok: true }
+    : forbidden;
 }
 
 /**

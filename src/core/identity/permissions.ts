@@ -13,8 +13,12 @@ export const PERMISSIONS = [
   "audit.read.full",
   "agents.manage",
   "config.manage",
-  "users.manage", // gestion des utilisateurs non-owner
-  "owners.manage", // gestion des owners (owner uniquement)
+  "users.read",
+  "users.create",
+  "users.role.write",
+  "users.status.write",
+  "agentLinks.read",
+  "agentLinks.write",
   "integrations.manage",
 ] as const;
 
@@ -25,8 +29,18 @@ export type Permission = (typeof PERMISSIONS)[number];
 const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ["cockpit.read", "audit.read.limited"],
   operator: ["tasks.write", "approvals.decide", "audit.read.full"],
-  admin: ["agents.manage", "config.manage", "users.manage", "integrations.manage"],
-  owner: ["owners.manage"],
+  admin: [
+    "agents.manage",
+    "config.manage",
+    "users.read",
+    "users.create",
+    "users.role.write",
+    "users.status.write",
+    "agentLinks.read",
+    "agentLinks.write",
+    "integrations.manage",
+  ],
+  owner: [],
 };
 
 const INHERITS: Record<Role, Role | null> = {

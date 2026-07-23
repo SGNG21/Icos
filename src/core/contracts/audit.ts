@@ -16,6 +16,13 @@ export const auditEventTypeSchema = z.enum([
   "auth.login.rejected",
   "auth.logout.succeeded",
   "auth.access.denied",
+  "human_user.created",
+  "human_user.role_changed",
+  "human_user.enabled",
+  "human_user.disabled",
+  "human_agent_link.created",
+  "human_agent_link.removed",
+  "human_user.administration_denied",
 ]);
 
 export const auditActorSchema = z.object({
