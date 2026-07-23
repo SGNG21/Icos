@@ -1,7 +1,7 @@
 import { agentSchema, type Agent } from "@/core/contracts";
 import { compareAgents } from "@/core/ordering";
 
-import type { AgentRepository } from "@/server/repositories/ports";
+import type { AgentRepository, AgentScope } from "@/server/repositories/ports";
 
 /**
  * Repository en mémoire des agents (voir avertissement dans
@@ -20,8 +20,23 @@ export class InMemoryAgentRepository implements AgentRepository {
     return this.agents.map((agent) => structuredClone(agent)).sort(compareAgents);
   }
 
+  async listForScope(scope: AgentScope): Promise<Agent[]> {
+    const agents = await this.list();
+    return scope.kind === "global"
+      ? agents
+      : agents.filter((agent) => scope.agentIds.has(agent.id));
+  }
+
   async getById(id: string): Promise<Agent | null> {
     const agent = this.agents.find((candidate) => candidate.id === id);
     return agent ? structuredClone(agent) : null;
+  }
+
+  async getByIdForScope(id: string, scope: AgentScope): Promise<Agent | null> {
+    if (scope.kind === "linked" && !scope.agentIds.has(id)) {
+      return null;
+    }
+
+    return this.getById(id);
   }
 }

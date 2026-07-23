@@ -73,6 +73,21 @@ describe("InMemoryActionDecisionStore (lecture)", () => {
     const actions = new InMemoryActionRepository(new InMemoryActionDecisionStore(demoActions));
     expect(await actions.getById("action-inconnue")).toBeNull();
   });
+
+  it("applique la portée agent avant le filtre et les recherches", async () => {
+    const actions = new InMemoryActionRepository(new InMemoryActionDecisionStore(demoActions));
+    const linked = {
+      kind: "linked",
+      agentIds: new Set(["agent-development"]),
+    } as const;
+
+    expect(await actions.listForScope({ kind: "global" })).toEqual(await actions.list());
+    expect((await actions.listForScope(linked)).map(({ id }) => id)).toEqual(["action-001"]);
+    expect(await actions.listForScope(linked, { approvalStatus: "approved" })).toEqual([]);
+    expect(await actions.getByIdForScope("action-001", linked)).not.toBeNull();
+    expect(await actions.getByIdForScope("action-002", linked)).toBeNull();
+    expect(await actions.listForScope({ kind: "linked", agentIds: new Set() })).toEqual([]);
+  });
 });
 
 describe("InMemoryActionDecisionUnitOfWork (atomicité)", () => {

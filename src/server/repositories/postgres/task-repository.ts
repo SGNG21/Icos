@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { taskSchema, type AuditEntry, type Task, type TaskStatus } from "@/core/contracts";
 import { transitionTask as transitionLifecycle } from "@/core/tasks/lifecycle";
@@ -8,6 +8,7 @@ import type { Database } from "@/server/database/client";
 import { auditToRow, rowToTask, taskToRow } from "@/server/database/mappers";
 import { actions, auditEntries, tasks } from "@/server/database/schema";
 import type {
+  AgentScope,
   CreateTaskInput,
   CreateTaskResult,
   TaskRepository,
@@ -32,15 +33,20 @@ export class PostgresTaskRepository implements TaskRepository {
     return rows.map((row) => row.id);
   }
 
-  async list(): Promise<Task[]> {
-    // Ordre déterministe : created_at ASC, id ASC.
-    const taskRows = await this.db
-      .select()
-      .from(tasks)
-      .orderBy(asc(tasks.createdAt), asc(tasks.id));
+  private async hydrate(taskRows: (typeof tasks.$inferSelect)[]): Promise<Task[]> {
+    if (taskRows.length === 0) {
+      return [];
+    }
+
     const actionRows = await this.db
       .select({ id: actions.id, taskId: actions.taskId })
       .from(actions)
+      .where(
+        inArray(
+          actions.taskId,
+          taskRows.map((row) => row.id),
+        ),
+      )
       .orderBy(asc(actions.createdAt), asc(actions.id));
 
     const byTask = new Map<string, string[]>();
@@ -59,8 +65,53 @@ export class PostgresTaskRepository implements TaskRepository {
     return taskRows.map((row) => rowToTask(row, byTask.get(row.id) ?? []));
   }
 
+  async list(): Promise<Task[]> {
+    // Ordre déterministe : created_at ASC, id ASC.
+    const taskRows = await this.db
+      .select()
+      .from(tasks)
+      .orderBy(asc(tasks.createdAt), asc(tasks.id));
+    return this.hydrate(taskRows);
+  }
+
+  async listForScope(scope: AgentScope): Promise<Task[]> {
+    if (scope.kind === "global") {
+      return this.list();
+    }
+
+    const agentIds = [...scope.agentIds];
+    if (agentIds.length === 0) {
+      return [];
+    }
+
+    const taskRows = await this.db
+      .select()
+      .from(tasks)
+      .where(inArray(tasks.assignedAgentId, agentIds))
+      .orderBy(asc(tasks.createdAt), asc(tasks.id));
+    return this.hydrate(taskRows);
+  }
+
   async getById(id: string): Promise<Task | null> {
     const rows = await this.db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
+    if (!rows[0]) {
+      return null;
+    }
+    return rowToTask(rows[0], await this.actionIdsFor(id));
+  }
+
+  async getByIdForScope(id: string, scope: AgentScope): Promise<Task | null> {
+    const rows =
+      scope.kind === "global"
+        ? await this.db.select().from(tasks).where(eq(tasks.id, id)).limit(1)
+        : scope.agentIds.size === 0
+          ? []
+          : await this.db
+              .select()
+              .from(tasks)
+              .where(and(eq(tasks.id, id), inArray(tasks.assignedAgentId, [...scope.agentIds])))
+              .limit(1);
+
     if (!rows[0]) {
       return null;
     }

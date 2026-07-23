@@ -5,6 +5,7 @@ import { compareTasks } from "@/core/ordering";
 import { transitionTask } from "@/core/tasks/lifecycle";
 import type { AuditLog } from "@/server/audit/in-memory-audit-log";
 import type {
+  AgentScope,
   CreateTaskInput,
   CreateTaskResult,
   TaskRepository,
@@ -35,9 +36,31 @@ export class InMemoryTaskRepository implements TaskRepository {
     return this.tasks.map((task) => structuredClone(task)).sort(compareTasks);
   }
 
+  async listForScope(scope: AgentScope): Promise<Task[]> {
+    const tasks = await this.list();
+    return scope.kind === "global"
+      ? tasks
+      : tasks.filter(
+          (task) => task.assignedAgentId !== undefined && scope.agentIds.has(task.assignedAgentId),
+        );
+  }
+
   async getById(id: string): Promise<Task | null> {
     const task = this.tasks.find((candidate) => candidate.id === id);
     return task ? structuredClone(task) : null;
+  }
+
+  async getByIdForScope(id: string, scope: AgentScope): Promise<Task | null> {
+    const task = await this.getById(id);
+    if (
+      task === null ||
+      scope.kind === "global" ||
+      (task.assignedAgentId !== undefined && scope.agentIds.has(task.assignedAgentId))
+    ) {
+      return task;
+    }
+
+    return null;
   }
 
   async create(input: CreateTaskInput): Promise<CreateTaskResult> {

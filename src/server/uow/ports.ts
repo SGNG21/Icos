@@ -1,4 +1,6 @@
 import type { AgentAction, Approval, AuditEntry } from "@/core/contracts";
+import type { HumanAgentLink, HumanAgentRelation, Role, UserStatus } from "@/core/identity";
+import type { AdminHumanUser } from "@/server/repositories/ports";
 
 /**
  * Unité de travail transactionnelle pour une décision humaine.
@@ -28,3 +30,62 @@ export type CommitDecisionResult =
       reason: "action_not_found" | "already_decided" | "audit_failed";
       message: string;
     };
+
+export type HumanAdministrationFailureReason =
+  "not_found" | "already_exists" | "last_owner" | "audit_failed";
+
+export type HumanAdministrationResult<T> =
+  | {
+      ok: true;
+      value: T;
+      changed: boolean;
+    }
+  | {
+      ok: false;
+      reason: HumanAdministrationFailureReason;
+      message: string;
+    };
+
+export interface HumanAdministrationUnitOfWork {
+  finalizeHumanCreation(input: {
+    targetUserId: string;
+    role: Role;
+    actorUserId: string;
+    auditId: string;
+    occurredAt: string;
+  }): Promise<HumanAdministrationResult<AdminHumanUser>>;
+
+  replaceRole(input: {
+    targetUserId: string;
+    nextRole: Role;
+    actorUserId: string;
+    auditId: string;
+    occurredAt: string;
+  }): Promise<HumanAdministrationResult<AdminHumanUser>>;
+
+  setStatus(input: {
+    targetUserId: string;
+    nextStatus: UserStatus;
+    actorUserId: string;
+    auditId: string;
+    occurredAt: string;
+  }): Promise<HumanAdministrationResult<AdminHumanUser>>;
+
+  createAgentLink(input: {
+    id: string;
+    targetUserId: string;
+    agentId: string;
+    relation: HumanAgentRelation;
+    actorUserId: string;
+    auditId: string;
+    occurredAt: string;
+  }): Promise<HumanAdministrationResult<HumanAgentLink>>;
+
+  removeAgentLink(input: {
+    targetUserId: string;
+    agentId: string;
+    actorUserId: string;
+    auditId: string;
+    occurredAt: string;
+  }): Promise<HumanAdministrationResult<HumanAgentLink>>;
+}
