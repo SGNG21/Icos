@@ -58,7 +58,7 @@
 - **Tests** :
   - Unitaire : création, unicité de nom, statut lifecycle, historique immuable.
   - Intégration : les deux implémentations (mémoire, PostgreSQL) retournent les mêmes résultats.
-  - Comportemental : "Ajouter une nouvelle capability" → "Déprécier une capability" (CAS 9).
+  - Comportemental : "Ajouter une nouvelle capability" → "Déprécier une capability".
 - **Risques** :
   - Si le registre devient un goulot d'étranglement de review, prévoir un workflow de proposition
     avec approbation différée plutôt que de le rendre bypassable.
