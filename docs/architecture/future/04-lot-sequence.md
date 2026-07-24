@@ -1,17 +1,24 @@
 # Séquence recommandée des futurs lots
 
-> Cette séquence commence **après** les fondations fusionnées et tient le Lot 2B-2 pour un prérequis
-> externe en cours. Les identifiants proposés servent au cadrage ; ils ne remplacent pas la
-> numérotation officielle tant que celle-ci n'est pas validée dans `ICOS_PROGRESS.md`.
+> Cette séquence commence **après** les fondations fusionnées. Les lots COMPLIANCE-0/1/2/3 sont
+> transverses ; leurs dépendances avec les lots fonctionnels sont indiquées dans la table.
+> **COMPLIANCE-1 est un hard gate avant D1** : le Policy Engine ne peut être livré sans les
+> vérifications automatisées de classification. Le Lot 2B-2 est un prérequis externe en cours.
+> Les identifiants proposés servent au cadrage ; ils ne remplacent pas la numérotation officielle
+> tant que celle-ci n'est pas validée dans `ICOS_PROGRESS.md`.
 
 ## 1. Vue synthétique
 
 | Ordre | Lot proposé | Phase Master Plan | Résultat principal | Dépendances |
 |---:|---|---|---|---|
-| 0 | Lot 2B-2 — User-Agent Administration | B | Liens humain↔agent gouvernés | En cours ailleurs |
+| transverse | CMP-0 — Compliance Foundation | Transverse | Classification, rétention, registre, gate | Aucune ; prérequis doc. pour 2B-2 |
+| transverse | CMP-1 — Automated Compliance Checks | Transverse | Marquage des schémas, CI classification | CMP-0, C1 |
+| transverse | CMP-2 — Technical Controls | Transverse | Chiffrement C3, purge auto, consentement | CMP-1, D1 |
+| transverse | CMP-3 — Full RGPD & AI Act | Transverse | DPIA, mentions, sous-traitance, DPO | CMP-2, F1, G1 |
+| 0 | Lot 2B-2 — User-Agent Administration | B | Liens humain↔agent gouvernés | En cours ailleurs ; CMP-0 requis |
 | 1 | C1 — Capability Registry | C | Vocabulaire versionné `Capability` | 2B-2 non strict pour le stockage, requis avant usage orchestré |
 | 2 | C2 — Skill Registry & Trust Lifecycle | C | Skills avec provenance, trust, états et activation humaine | C1 |
-| 3 | D1 — Policy/Approval Engine v2 | D | Risque 0-4, policy versionnée, preview, décision CAS | Fondations existantes, C1 |
+| 3 | D1 — Policy/Approval Engine v2 | D | Risque 0-4, policy versionnée, preview, décision CAS | Fondations existantes, C1, CMP-1 (hard gate) |
 | parallèle après C2 | C3 — SkillsMP Discovery (read-only) | C | Import de candidats en quarantaine, jamais activation directe | C2 ; non bloquant pour D1-D4 |
 | 4 | D2 — Mission, Plan, Run & Event Journal | D | État durable et stoppable de l'orchestration | D1 |
 | 5 | D3 — AI Gateway / OmniRoute Business Layer | D | AiGatewayPort + contraintes métier + adapter + corrélation usage | C1, D1, D2 |
@@ -21,7 +28,8 @@
 | 10 | E2 — Ingestion + PostgreSQL FTS | E | Retrieval lexical avec chunks/provenance | E1 |
 | 11 | F1 — Contract Conversationnel v1 | F | Intention, clarification minimale, continuité | D4, E1 recommandé |
 | 12 | G1 — Tool/MCP Gateway + ExecutionRecord | G | Policy/approval/idempotence juste avant effet | D1, D2, D4 |
-| 13 | G2 — Premier connecteur métier | G | Une intégration réelle, désactivée par défaut | G1 |
+| gate | Connector compliance gate | G | Vérification de conformité avant premier envoi de données C2+ vers un connecteur réel | G1 |
+| 13 | G2 — Premier connecteur métier | G | Une intégration réelle, désactivée par défaut | G1, connector compliance gate |
 | 14 | M1 — Premier ICOS semi-autonome | D-G | Scénario Dupont bout en bout | Q1, F1, G2 |
 | 15 | R1 — AI Business Routing Policy & Usage | G | Overlay abonnement/budget + UsageLedger métier + AiRoutingPolicy | D3 + usage réel |
 | 16 | R2 — OmniRoute Operational Projections | G | Exploitation health/quota/latence/explanations d'OmniRoute | R1 |
@@ -110,9 +118,11 @@ OmniRoute ; aucune policy critique n'est auto-promue.
 
 ## 4. Les cinq prochains lots recommandés
 
-Sous réserve de l'achèvement du Lot 2B-2, les cinq prochains lots sont :
+Sous réserve de l'achèvement du Lot 2B-2, et **avec COMPLIANCE-0 comme prérequis transverse
+documentaire** désormais disponible, et **COMPLIANCE-1 comme hard gate avant D1**, les cinq
+prochains lots sont :
 
-1. **C1 — Capability Registry** ;
+1. **C1 — Capability Registry** (déjà réalisé) ;
 2. **C2 — Skill Registry & Trust Lifecycle** ;
 3. **D1 — Policy/Approval Engine v2** ;
 4. **D2 — Mission, Plan, Run & Event Journal** ;
@@ -121,3 +131,79 @@ Sous réserve de l'achèvement du Lot 2B-2, les cinq prochains lots sont :
 C3 (SkillsMP Discovery read-only) est parallèle et non bloquant après C2. D3 doit être livré avant le
 premier appel modèle de D4, mais reste volontairement minimal : aucune reconstruction des catalogues,
 credentials, quotas, health, pricing, circuit breakers, retries ou fallback OmniRoute.
+
+## 5. Lots transverses COMPLIANCE
+
+Les lots COMPLIANCE-0/1/2/3 sont **transverses** : ils s'exécutent en parallèle des phases A–K
+et imposent des gates de conformité aux lots fonctionnels. Ils ne produisent pas de fonctionnalité
+métier visible, mais sont des prérequis documentaires et techniques pour tout traitement de données
+personnelles réelles.
+
+### 5.1 COMPLIANCE-0 — Fondation documentaire
+
+- **État** : accepté (ADR-0023, 7 documents de conformité livrés).
+- **Blocant pour** : Lot 2B-2 (données personnelles dans l'administration humaine), C1 (classification
+  dans le registre), tout lot manipulant des données C2/C3.
+- **Gate** : revue de conformité humaine obligatoire avant fusion (critères CT-DOC-01 à CT-DOC-06
+  dans `docs/compliance/ICOS_COMPLIANCE_TESTS.md`).
+
+### 5.2 COMPLIANCE-1 — Vérification automatisée
+
+- Déclenché après C1 (champ `dataClassification` dans le registre).
+- Ajoute le marquage des schémas Drizzle et la validation CI.
+- **Blocant pour** : D1 (Policy Engine v2). Le Policy Engine ne peut être livré sans les vérifications automatisées de classification.
+
+### 5.3 COMPLIANCE-2 — Contrôles techniques
+
+- Déclenché après D1 (Policy Engine).
+- Implémente le chiffrement at-rest C3, la purge automatique et le consentement.
+- **Blocant pour** : Phase E (Mémoire), Phase G (Intégrations).
+
+### 5.4 COMPLIANCE-3 — Conformité complète
+
+- Déclenché après F1 (Contrat conversationnel) et G1 (Tool Gateway).
+- DPIA, mentions RGPD, sous-traitance, DPO.
+- **Blocant pour** : production avec utilisateurs réels non internes.
+
+### 5.5 Résumé des dépendances avec les lots fonctionnels
+
+```text
+CMP-0 ──┬── 2B-2 ── C1 ── C2
+        │                    │
+        ├── CMP-1 (hard gate)┤── D1 ── D2
+        │                    │         │
+        │                    └──CMP-2 ─┤
+        │                              │
+        ├── CMP-3 (après F1, G1) ──────┘
+        │
+        └──> D3 ── D4 ── G1 ── connector compliance gate ── G2 ── M1
+```
+
+### 5.6 Séquence canonique
+
+La séquence d'exécution canonique est la suivante. Les lots transverses CMP
+apparaissent à leur point de gate ; les flèches indiquent un ordre strict.
+
+```text
+C1 ──→ C2 ──→ COMPLIANCE-0 ──→ COMPLIANCE-1 ──→ D1 ──→ D2
+                                                      │
+                                                      ├──→ COMPLIANCE-2
+                                                      │        │
+                                                      │        └──→ COMPLIANCE-3
+                                                      │
+                                                      └──→ D3 ──→ D4 ──→ G1
+                                                                         │
+                                                                    connector
+                                                                    compliance
+                                                                    gate
+                                                                         │
+                                                                         └──→ G2 ──→ M1
+```
+
+**Règles :**
+- COMPLIANCE-0 est prérequis documentaire pour tout lot manipulant des données C2/C3.
+- COMPLIANCE-1 est un **hard gate** avant D1 : le Policy Engine ne peut être livré sans vérifications automatisées.
+- COMPLIANCE-2 est requis avant Phase E (Mémoire) et Phase G (Intégrations).
+- COMPLIANCE-3 est requis avant production avec utilisateurs réels non internes.
+- Le **connector compliance gate** est un point de contrôle manuel ou automatisé avant le premier envoi de données C2+ vers un connecteur métier réel (G2).
+- COMPLIANCE-0/1/2/3 sont transverses : ils ne sont pas des lots fonctionnels mais imposent des conditions sur les lots qui les suivent.

@@ -1,8 +1,8 @@
 # Backlog d'ADR proposés
 
-> Les ADR existants (0001-0007) couvrent les fondations. Ce backlog propose les décisions
-> architecturales non tranchées que les lots futurs devront résoudre explicitement, sous forme d'ADR
-> formels.
+> Les ADR existants (0001-0007, 0023) couvrent les fondations et la conformité. Ce backlog propose les
+> décisions architecturales non tranchées que les lots futurs devront résoudre explicitement, sous forme
+> d'ADR formels.
 
 ## ADR-0008 — Extension du modèle de risque : 3 niveaux → 5 niveaux
 
@@ -154,3 +154,37 @@
   preuves techniques ; les outcomes ICOS alimentent des propositions de policy. Aucun résultat ne
   promeut automatiquement une policy critique.
 - **Déclencheur** : Q1/R3.
+
+## ADR-0023 — Fondation de conformité réglementaire
+
+- **Statut** : accepté (voir `docs/decisions/0023-compliance-foundation.md`).
+- **Contenu** : Taxonomie de classification C0–C3, invariant de rétention gouvernée, Privacy by Design,
+  gate Compliance, registre des traitements, périmètre réglementaire (RGPD, ePrivacy, NIS2, AI Act, DGA).
+- **Déclencheur** : COMPLIANCE-0.
+
+## ADR-0024 — Stratégie de chiffrement des données personnelles (C3)
+
+- **Contexte** : COMPLIANCE-2 impose le chiffrement at-rest des colonnes C3. Plusieurs approches
+  possibles : chiffrement natif PostgreSQL (pgcrypto), chiffrement applicatif avec libsodium, ou
+  chiffrement via un secret store externe (Vault).
+- **Décision à prendre** : Quel niveau de chiffrement (colonne, page, disque) ? Où sont les clés ?
+  Comment l'accès déchiffré est-il audité ?
+- **Proposition** : Chiffrement au niveau colonne via extension PostgreSQL `pgcrypto` avec clé stockée
+  dans un vault externe (Vault ou équivalent). ICOS ne possède jamais la clé de déchiffrement en
+  mémoire applicative ; les accès passent par une fonction DB SECURITY DEFINER qui audite chaque
+  lecture. Alternative acceptable si vault non disponible : clé dérivée d'un secret d'application
+  (moins sécurisée, à documenter).
+- **Déclencheur** : COMPLIANCE-2, avant Phase E.
+
+## ADR-0025 — Mécanisme de consentement RGPD
+
+- **Contexte** : COMPLIANCE-2 implémente le mécanisme de consentement (Art. 7 RGPD) pour les
+  traitements optionnels (recommandations, profiling agent, mémoire conversationnelle).
+- **Décision à prendre** : Stockage du consentement (table dédiée vs champ dans user_preferences) ?
+  Preuve de consentement (timestamp, finalité, version du document) ? Retrait (désactivation immédiate
+  du traitement) ?
+- **Proposition** : Table dédiée `user_consents(user_id, purpose, version, granted_at, ip_address,
+  user_agent)` — append-only, pas de mise à jour. Le retrait ajoute une ligne `revoked_at`. La
+  dernière ligne pour chaque `(user_id, purpose)` détermine l'état courant. Aucune donnée sensible
+  dans les colonnes (pas d'email, pas de corps de formulaire).
+- **Déclencheur** : COMPLIANCE-2.
