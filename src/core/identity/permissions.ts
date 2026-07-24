@@ -20,6 +20,12 @@ export const PERMISSIONS = [
   "agentLinks.read",
   "agentLinks.write",
   "integrations.manage",
+  // Capability registry (Lot C1).
+  "capabilities.read",
+  "capabilities.create",
+  "capabilities.status.write",
+  "agentCapabilities.read",
+  "agentCapabilities.write",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -27,7 +33,7 @@ export type Permission = (typeof PERMISSIONS)[number];
 // Permissions PROPRES à chaque rôle (hors héritage) ; l'héritage est appliqué
 // ci-dessous pour produire l'ensemble cumulé.
 const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  viewer: ["cockpit.read", "audit.read.limited"],
+  viewer: ["cockpit.read", "audit.read.limited", "capabilities.read", "agentCapabilities.read"],
   operator: ["tasks.write", "approvals.decide", "audit.read.full"],
   admin: [
     "agents.manage",
@@ -39,6 +45,9 @@ const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "agentLinks.read",
     "agentLinks.write",
     "integrations.manage",
+    "capabilities.create",
+    "capabilities.status.write",
+    "agentCapabilities.write",
   ],
   owner: [],
 };

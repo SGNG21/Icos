@@ -21,10 +21,14 @@ import { InMemoryAgentRepository } from "@/server/services/in-memory/agent-repos
 import { InMemoryApprovalRepository } from "@/server/services/in-memory/approval-repository";
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
+import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
+import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { PostgresActionRepository } from "@/server/repositories/postgres/action-repository";
 import { PostgresAgentRepository } from "@/server/repositories/postgres/agent-repository";
 import { PostgresApprovalRepository } from "@/server/repositories/postgres/approval-repository";
 import { PostgresAuditRepository } from "@/server/repositories/postgres/audit-repository";
+import { PostgresCapabilityRepository } from "@/server/repositories/postgres/capability-repository";
+import { PostgresAgentCapabilityRepository } from "@/server/repositories/postgres/agent-capability-repository";
 import { PostgresTaskRepository } from "@/server/repositories/postgres/task-repository";
 import type {
   ActionRepository,
@@ -35,6 +39,7 @@ import type {
   HumanUserAdministrationRepository,
   TaskRepository,
 } from "@/server/repositories/ports";
+import type { CapabilityRepository, AgentCapabilityRepository } from "@/server/repositories/capability-ports";
 import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
 import { PostgresHumanAdministrationUnitOfWork } from "@/server/uow/postgres-human-administration-uow";
 import type { HumanAdministrationUnitOfWork, ActionDecisionUnitOfWork } from "@/server/uow/ports";
@@ -53,6 +58,8 @@ export interface Container {
   actions: ActionRepository;
   approvals: ApprovalRepository;
   audit: AuditRepository;
+  capabilities: CapabilityRepository;
+  agentCapabilities: AgentCapabilityRepository;
   decisionUow: ActionDecisionUnitOfWork;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
@@ -111,6 +118,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     actions: new InMemoryActionRepository(store),
     approvals: new InMemoryApprovalRepository(store),
     audit: new InMemoryAuditRepository(auditLog),
+    capabilities: new InMemoryCapabilityRepository(),
+    agentCapabilities: new InMemoryAgentCapabilityRepository(),
     // L'UoW mémoire dépend des collaborateurs SYNCHRONES internes (store +
     // journal), afin de préserver sa section critique non interruptible.
     decisionUow: new InMemoryActionDecisionUnitOfWork(store, auditLog),
@@ -213,6 +222,8 @@ export async function buildPostgresContainer(
     actions: new PostgresActionRepository(handle.db),
     approvals: new PostgresApprovalRepository(handle.db),
     audit,
+    capabilities: new PostgresCapabilityRepository(handle.db),
+    agentCapabilities: new PostgresAgentCapabilityRepository(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
     auth: authentication?.auth,
     authHttp: authentication?.authHttp,
