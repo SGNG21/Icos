@@ -16,7 +16,15 @@ import {
 } from "@/core/contracts";
 
 import { RepositoryMappingError } from "./errors";
-import type { actions, agents, approvals, auditEntries, capabilities, agentCapabilities, tasks } from "./schema";
+import type {
+  actions,
+  agents,
+  approvals,
+  auditEntries,
+  capabilities,
+  agentCapabilities,
+  tasks,
+} from "./schema";
 
 type AgentRow = typeof agents.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;

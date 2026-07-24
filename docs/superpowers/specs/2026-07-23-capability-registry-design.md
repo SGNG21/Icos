@@ -43,18 +43,18 @@ Le point de départ des 12 corrections est de **ne pas faire du `name` la
 seule identité stable** (correction 1) et de **ne pas fixer le risque dans
 Capability** (correction 2).
 
-| Champ         | Type                                        | Remarques |
-|---------------|----------------------------------------------|-----------|
-| `id`          | `text` PK                                    | identifiant interne, généré, jamais réutilisé comme référence métier stable inter-domaines |
-| `key`         | `text`, **unique, immuable après création**  | identifiant métier stable, ex. `code.review`, `code.write`, `crm.read` ; format proche de `idSchema` existant (`^[a-z0-9][a-z0-9_-]+$`, adapté avec un séparateur `.` pour les segments de domaine — à confirmer au moment du contrat Zod) |
-| `name`        | `text`                                       | libellé humain **mutable** — jamais utilisé comme référence stable par Task/Agent/Skill |
-| `description` | `text`, optionnel                            | |
-| `category`    | `text`                                       | regroupement fonctionnel simple (ex. `code`, `data`, `communication`) — pas une taxonomie de risque |
-| `status`      | `text` CHECK enum `proposed\|active\|deprecated\|retired` | état courant authoritatif — voir lifecycle |
-| `provenance`  | `jsonb`, optionnel                           | traçabilité d'origine (ex. import, source), jamais interprétée comme autorisation |
-| `riskHint`    | `text`, optionnel, **informationnel seul**   | jamais lu par une décision de permission ou de policy ; absence de valeur ≠ risque faible (voir invariants) |
-| `createdAt`   | `timestamptz`                                | |
-| `updatedAt`   | `timestamptz`                                | |
+| Champ         | Type                                                      | Remarques                                                                                                                                                                                                                                  |
+| ------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`          | `text` PK                                                 | identifiant interne, généré, jamais réutilisé comme référence métier stable inter-domaines                                                                                                                                                 |
+| `key`         | `text`, **unique, immuable après création**               | identifiant métier stable, ex. `code.review`, `code.write`, `crm.read` ; format proche de `idSchema` existant (`^[a-z0-9][a-z0-9_-]+$`, adapté avec un séparateur `.` pour les segments de domaine — à confirmer au moment du contrat Zod) |
+| `name`        | `text`                                                    | libellé humain **mutable** — jamais utilisé comme référence stable par Task/Agent/Skill                                                                                                                                                    |
+| `description` | `text`, optionnel                                         |                                                                                                                                                                                                                                            |
+| `category`    | `text`                                                    | regroupement fonctionnel simple (ex. `code`, `data`, `communication`) — pas une taxonomie de risque                                                                                                                                        |
+| `status`      | `text` CHECK enum `proposed\|active\|deprecated\|retired` | état courant authoritatif — voir lifecycle                                                                                                                                                                                                 |
+| `provenance`  | `jsonb`, optionnel                                        | traçabilité d'origine (ex. import, source), jamais interprétée comme autorisation                                                                                                                                                          |
+| `riskHint`    | `text`, optionnel, **informationnel seul**                | jamais lu par une décision de permission ou de policy ; absence de valeur ≠ risque faible (voir invariants)                                                                                                                                |
+| `createdAt`   | `timestamptz`                                             |                                                                                                                                                                                                                                            |
+| `updatedAt`   | `timestamptz`                                             |                                                                                                                                                                                                                                            |
 
 **Explicitement exclus du modèle** (et pourquoi) :
 
@@ -89,8 +89,8 @@ moment — pas préventivement ici.
 
 ### 3. `version` / `inputSchema` / `outputSchema` — décision retenue
 
-Correction 7 applique le test : *« Est-ce nécessaire pour C1 lui-même, ou
-seulement pour C2/D2/D4 ? »*
+Correction 7 applique le test : _« Est-ce nécessaire pour C1 lui-même, ou
+seulement pour C2/D2/D4 ? »_
 
 - **`version`** : le versionnement pertinent porte sur le **Skill** qui
   implémente la Capability (COMMENT), pas sur la Capability elle-même
@@ -127,13 +127,13 @@ L'assignation d'une Capability à un Agent est un concept métier différent :
 « cet agent est autorisé/désigné pour porter cette capacité », sans notion
 de supervision. Le modèle `agent_capabilities` est donc adapté, pas copié :
 
-| Champ                | Type                                   | Remarques |
-|----------------------|------------------------------------------|-----------|
-| `id`                 | `text` PK                              | |
-| `agentId`            | `text` → `agents.id` `ON DELETE RESTRICT` | |
-| `capabilityId`       | `text` → `capabilities.id` `ON DELETE RESTRICT` | |
-| `assignedAt`         | `timestamptz`                          | |
-| `assignedByUserId`   | `text` → `user.id` `ON DELETE RESTRICT` | qui a décidé l'assignation — jamais l'agent lui-même |
+| Champ              | Type                                            | Remarques                                            |
+| ------------------ | ----------------------------------------------- | ---------------------------------------------------- |
+| `id`               | `text` PK                                       |                                                      |
+| `agentId`          | `text` → `agents.id` `ON DELETE RESTRICT`       |                                                      |
+| `capabilityId`     | `text` → `capabilities.id` `ON DELETE RESTRICT` |                                                      |
+| `assignedAt`       | `timestamptz`                                   |                                                      |
+| `assignedByUserId` | `text` → `user.id` `ON DELETE RESTRICT`         | qui a décidé l'assignation — jamais l'agent lui-même |
 
 `UNIQUE(agent_id, capability_id)`.
 
@@ -207,12 +207,12 @@ découpage proposé (`capabilities.read`, `capabilities.create`,
 Correction 8 : `proposed → active → deprecated → retired` est validé.
 Règles de transition et d'utilisabilité (fail-closed) :
 
-| État        | Sélectionnable pour nouvel usage | Références historiques |
-|-------------|-----------------------------------|--------------------------|
-| `proposed`  | **non**                           | n/a (jamais encore actif) |
-| `active`    | **oui** — seul état sélectionnable | oui |
-| `deprecated`| **non** (pas de nouvelle sélection) | **oui** — les références déjà existantes (ex. `agent_capabilities` déjà assignées, historique d'audit) restent valides et lisibles |
-| `retired`   | **non**                           | oui, en lecture seule (audit) |
+| État         | Sélectionnable pour nouvel usage    | Références historiques                                                                                                             |
+| ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `proposed`   | **non**                             | n/a (jamais encore actif)                                                                                                          |
+| `active`     | **oui** — seul état sélectionnable  | oui                                                                                                                                |
+| `deprecated` | **non** (pas de nouvelle sélection) | **oui** — les références déjà existantes (ex. `agent_capabilities` déjà assignées, historique d'audit) restent valides et lisibles |
+| `retired`    | **non**                             | oui, en lecture seule (audit)                                                                                                      |
 
 Transitions autorisées : `proposed → active`, `active → deprecated`,
 `deprecated → active` (réactivation explicite, décision humaine),
@@ -360,11 +360,11 @@ C1 :
 ### Tests unitaires
 
 - `resolveActiveCapability("unknown.key")` → `{ usable: false, reason:
-  "unknown" }`.
+"unknown" }`.
 - `resolveActiveCapability(key)` pour une capacité `proposed`,
   `deprecated`, ou `retired` → `{ usable: false, reason: "not_active" }`.
 - `resolveActiveCapability(key)` pour une capacité `active` → `{ usable:
-  true, capability }`.
+true, capability }`.
 - Transitions de lifecycle : chaque transition autorisée réussit, chaque
   transition interdite (notamment tout départ depuis `retired`) est
   rejetée explicitement.

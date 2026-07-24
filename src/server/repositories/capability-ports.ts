@@ -6,6 +6,8 @@ export interface CapabilityRepository {
   list(): Promise<Capability[]>;
   create(capability: Capability): Promise<Capability>;
   updateStatus(id: string, status: CapabilityStatus): Promise<Capability | null>;
+  /** Supprime une capacité par son id. Retourne `true` si une ligne a été supprimée. */
+  delete(id: string): Promise<boolean>;
 }
 
 export interface AgentCapabilityRepository {

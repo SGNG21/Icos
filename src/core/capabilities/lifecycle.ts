@@ -17,8 +17,7 @@ export function isTransitionAllowed(from: CapabilityStatus, to: CapabilityStatus
 }
 
 type ResolveResult =
-  | { usable: true; capability: Capability }
-  | { usable: false; reason: "unknown" | "not_active" };
+  { usable: true; capability: Capability } | { usable: false; reason: "unknown" | "not_active" };
 
 /**
  * Résolution pure d'usabilité : répond uniquement à la question

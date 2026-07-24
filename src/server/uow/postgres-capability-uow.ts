@@ -46,6 +46,9 @@ export class PostgresCapabilityUnitOfWork implements CapabilityUnitOfWork {
       if (uniqueConstraintName(error) === "capabilities_key_unique") {
         return { ok: false, reason: "creation_failed", message: "key déjà utilisé" };
       }
+      if (uniqueConstraintName(error) === "audit_entries_pkey") {
+        return { ok: false, reason: "creation_failed", message: "collision d'identifiant d'audit" };
+      }
       return this.mapError(error, "createCapability");
     }
   }
@@ -92,6 +95,13 @@ export class PostgresCapabilityUnitOfWork implements CapabilityUnitOfWork {
         return { ok: true as const, data: { capability: rowToCapability(updated[0]) } };
       });
     } catch (error) {
+      if (uniqueConstraintName(error) === "audit_entries_pkey") {
+        return {
+          ok: false,
+          reason: "concurrent_modification",
+          message: "collision d'identifiant d'audit",
+        };
+      }
       return this.mapError(error, "changeStatus");
     }
   }
@@ -110,6 +120,9 @@ export class PostgresCapabilityUnitOfWork implements CapabilityUnitOfWork {
     } catch (error) {
       if (uniqueConstraintName(error) === "agent_capabilities_agent_capability_unique") {
         return { ok: false, reason: "grant_failed", message: "Assignation déjà existante" };
+      }
+      if (uniqueConstraintName(error) === "audit_entries_pkey") {
+        return { ok: false, reason: "grant_failed", message: "collision d'identifiant d'audit" };
       }
       return this.mapError(error, "grantCapability");
     }
@@ -134,6 +147,9 @@ export class PostgresCapabilityUnitOfWork implements CapabilityUnitOfWork {
         return { ok: true as const, data: { revoked: true } };
       });
     } catch (error) {
+      if (uniqueConstraintName(error) === "audit_entries_pkey") {
+        return { ok: false, reason: "not_found", message: "collision d'identifiant d'audit" };
+      }
       return this.mapError(error, "revokeCapability");
     }
   }

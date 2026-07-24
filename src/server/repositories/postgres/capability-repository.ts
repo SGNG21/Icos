@@ -1,6 +1,10 @@
 import { asc, eq } from "drizzle-orm";
 
-import { capabilitySchema, type Capability, type CapabilityStatus } from "@/core/contracts/capability";
+import {
+  capabilitySchema,
+  type Capability,
+  type CapabilityStatus,
+} from "@/core/contracts/capability";
 import { compareCapabilities } from "@/core/ordering";
 import type { Database } from "@/server/database/client";
 import { RepositoryMappingError } from "@/server/database/errors";
@@ -31,7 +35,11 @@ export class PostgresCapabilityRepository implements CapabilityRepository {
   }
 
   async getByKey(key: string): Promise<Capability | null> {
-    const rows = await this.db.select().from(capabilities).where(eq(capabilities.key, key)).limit(1);
+    const rows = await this.db
+      .select()
+      .from(capabilities)
+      .where(eq(capabilities.key, key))
+      .limit(1);
     return rows.length === 0 ? null : rowToCapability(rows[0]);
   }
 
@@ -55,5 +63,13 @@ export class PostgresCapabilityRepository implements CapabilityRepository {
       .where(eq(capabilities.id, id))
       .returning();
     return rows.length === 0 ? null : rowToCapability(rows[0]);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const result = await this.db
+      .delete(capabilities)
+      .where(eq(capabilities.id, id))
+      .returning({ id: capabilities.id });
+    return result.length > 0;
   }
 }

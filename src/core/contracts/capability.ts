@@ -6,12 +6,7 @@ import { idSchema, isoDateTimeSchema } from "./common";
  * Statut d'une capacité (lifecycle). `retired` est terminal :
  * aucune transition ne permet de revenir vers un état actif.
  */
-export const capabilityStatusSchema = z.enum([
-  "proposed",
-  "active",
-  "deprecated",
-  "retired",
-]);
+export const capabilityStatusSchema = z.enum(["proposed", "active", "deprecated", "retired"]);
 
 /**
  * Clé métier stable d'une capacité : segments de domaine séparés par `.`,

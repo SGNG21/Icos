@@ -18,9 +18,7 @@ export class InMemoryCapabilityRepository implements CapabilityRepository {
   }
 
   async list(): Promise<Capability[]> {
-    return this.capabilities
-      .map((cap) => structuredClone(cap))
-      .sort(compareCapabilities);
+    return this.capabilities.map((cap) => structuredClone(cap)).sort(compareCapabilities);
   }
 
   async getById(id: string): Promise<Capability | null> {
@@ -58,5 +56,12 @@ export class InMemoryCapabilityRepository implements CapabilityRepository {
     const parsed = capabilitySchema.parse(updated);
     this.capabilities[index] = parsed;
     return structuredClone(parsed);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const index = this.capabilities.findIndex((c) => c.id === id);
+    if (index === -1) return false;
+    this.capabilities.splice(index, 1);
+    return true;
   }
 }

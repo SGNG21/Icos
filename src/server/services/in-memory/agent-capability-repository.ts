@@ -1,7 +1,4 @@
-import {
-  agentCapabilitySchema,
-  type AgentCapability,
-} from "@/core/contracts/capability";
+import { agentCapabilitySchema, type AgentCapability } from "@/core/contracts/capability";
 import { RepositoryMappingError } from "@/server/database/errors";
 import type { AgentCapabilityRepository } from "@/server/repositories/capability-ports";
 
@@ -16,9 +13,7 @@ export class InMemoryAgentCapabilityRepository implements AgentCapabilityReposit
   }
 
   async listByAgent(agentId: string): Promise<AgentCapability[]> {
-    return this.items
-      .filter((ac) => ac.agentId === agentId)
-      .map((ac) => structuredClone(ac));
+    return this.items.filter((ac) => ac.agentId === agentId).map((ac) => structuredClone(ac));
   }
 
   async getById(id: string): Promise<AgentCapability | null> {
@@ -29,7 +24,9 @@ export class InMemoryAgentCapabilityRepository implements AgentCapabilityReposit
   async grant(agentCapability: AgentCapability): Promise<AgentCapability> {
     if (
       this.items.some(
-        (ac) => ac.agentId === agentCapability.agentId && ac.capabilityId === agentCapability.capabilityId,
+        (ac) =>
+          ac.agentId === agentCapability.agentId &&
+          ac.capabilityId === agentCapability.capabilityId,
       )
     ) {
       throw new RepositoryMappingError(

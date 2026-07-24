@@ -1,3 +1,4 @@
+import { auditEntrySchema } from "@/core/contracts";
 import type { AuditEntry, Capability, AgentCapability, CapabilityStatus } from "@/core/contracts";
 import { RepositoryMappingError } from "@/server/database/errors";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
@@ -9,13 +10,17 @@ import type { CapabilityUnitOfWork, CapabilityUowResult } from "./ports";
 /**
  * Unité de travail EN MÉMOIRE pour les opérations du Capability Registry.
  *
- * Chaque méthode de mutation et son audit s'exécutent en section critique
- * synchrone (aucun `await` entre la mutation et l'audit), garantissant
- * l'atomicité au sein d'une instance JavaScript.
+ * Chaque méthode garantit l'atomicité via un pattern de pré-validation suivie
+ * d'une section critique avec restauration sur échec :
  *
- * PORTÉE DE LA GARANTIE : atomicité intra-processus uniquement. Ne garantit
- * PAS la durabilité ni la cohérence multi-instances. Ces propriétés viendront
- * de la transaction PostgreSQL.
+ *   1. validation préalable de l'entrée d'audit (échec → aucune mutation) ;
+ *   2. capture de l'état pré-mutation (snapshot) ;
+ *   3. mutation métier ;
+ *   4. écriture d'audit ;
+ *   5. si l'audit échoue → restauration de l'état pré-mutation.
+ *
+ * L'implémentation PostgreSQL parallèle garantit la même sémantique via
+ * `db.transaction()` avec rollback automatique.
  */
 export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
   constructor(
@@ -28,10 +33,15 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
     capability: Capability;
     auditEntry: AuditEntry;
   }): Promise<CapabilityUowResult<{ capability: Capability }>> {
+    // 1. Pré-validation de l'entrée d'audit (échec → aucune mutation)
+    const auditValid = auditEntrySchema.safeParse(input.auditEntry);
+    if (!auditValid.success) {
+      return { ok: false, reason: "creation_failed", message: auditValid.error.message };
+    }
+
+    // 2. Mutation
     try {
       await this.capabilities.create(input.capability);
-      this.auditLog.append(input.auditEntry);
-      return { ok: true, data: { capability: input.capability } };
     } catch (error) {
       return {
         ok: false,
@@ -39,6 +49,20 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+
+    // 3. Audit avec restauration sur échec
+    try {
+      this.auditLog.append(input.auditEntry);
+    } catch (error) {
+      await this.capabilities.delete(input.capability.id).catch(() => {});
+      return {
+        ok: false,
+        reason: "creation_failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    return { ok: true, data: { capability: input.capability } };
   }
 
   async changeStatusWithAudit(input: {
@@ -47,6 +71,13 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
     targetStatus: CapabilityStatus;
     auditEntry: AuditEntry;
   }): Promise<CapabilityUowResult<{ capability: Capability }>> {
+    // 1. Pré-validation de l'entrée d'audit (échec → aucune mutation)
+    const auditValid = auditEntrySchema.safeParse(input.auditEntry);
+    if (!auditValid.success) {
+      return { ok: false, reason: "concurrent_modification", message: auditValid.error.message };
+    }
+
+    // 2. Vérifications pré-mutation
     const existing = await this.capabilities.getById(input.id);
     if (existing === null) {
       return { ok: false, reason: "not_found", message: "Capacité introuvable" };
@@ -59,6 +90,8 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
       };
     }
 
+    // 3. Mutation (snapshot du statut pré-mutation pour rollback)
+    const previousStatus = existing.status;
     const updated = await this.capabilities.updateStatus(input.id, input.targetStatus);
     if (updated === null) {
       return {
@@ -68,7 +101,18 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
       };
     }
 
-    this.auditLog.append(input.auditEntry);
+    // 4. Audit avec restauration sur échec
+    try {
+      this.auditLog.append(input.auditEntry);
+    } catch (error) {
+      await this.capabilities.updateStatus(input.id, previousStatus).catch(() => {});
+      return {
+        ok: false,
+        reason: "concurrent_modification",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     return { ok: true, data: { capability: updated } };
   }
 
@@ -76,10 +120,15 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
     agentCapability: AgentCapability;
     auditEntry: AuditEntry;
   }): Promise<CapabilityUowResult<{ id: string }>> {
+    // 1. Pré-validation de l'entrée d'audit (échec → aucune mutation)
+    const auditValid = auditEntrySchema.safeParse(input.auditEntry);
+    if (!auditValid.success) {
+      return { ok: false, reason: "grant_failed", message: auditValid.error.message };
+    }
+
+    // 2. Mutation
     try {
       await this.agentCapabilities.grant(input.agentCapability);
-      this.auditLog.append(input.auditEntry);
-      return { ok: true, data: { id: input.agentCapability.id } };
     } catch (error) {
       if (error instanceof RepositoryMappingError) {
         return { ok: false, reason: "grant_failed", message: error.message };
@@ -90,17 +139,56 @@ export class InMemoryCapabilityUnitOfWork implements CapabilityUnitOfWork {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+
+    // 3. Audit avec restauration sur échec
+    try {
+      this.auditLog.append(input.auditEntry);
+    } catch (error) {
+      await this.agentCapabilities.revoke(input.agentCapability.id).catch(() => {});
+      return {
+        ok: false,
+        reason: "grant_failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    return { ok: true, data: { id: input.agentCapability.id } };
   }
 
   async revokeCapabilityWithAudit(input: {
     id: string;
     auditEntry: AuditEntry;
   }): Promise<CapabilityUowResult<{ revoked: boolean }>> {
+    // 1. Pré-validation de l'entrée d'audit (échec → aucune mutation)
+    const auditValid = auditEntrySchema.safeParse(input.auditEntry);
+    if (!auditValid.success) {
+      return { ok: false, reason: "not_found", message: auditValid.error.message };
+    }
+
+    // 2. Snapshot de l'état pré-mutation pour rollback éventuel
+    const existing = await this.agentCapabilities.getById(input.id);
+    if (existing === null) {
+      return { ok: false, reason: "not_found", message: "Assignation introuvable" };
+    }
+
+    // 3. Mutation
     const revoked = await this.agentCapabilities.revoke(input.id);
     if (!revoked) {
       return { ok: false, reason: "not_found", message: "Assignation introuvable" };
     }
-    this.auditLog.append(input.auditEntry);
+
+    // 4. Audit avec restauration sur échec
+    try {
+      this.auditLog.append(input.auditEntry);
+    } catch (error) {
+      await this.agentCapabilities.grant(existing).catch(() => {});
+      return {
+        ok: false,
+        reason: "not_found",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     return { ok: true, data: { revoked: true } };
   }
 }

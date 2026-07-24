@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { agentCapabilities, agents, capabilities } from "@/server/database/schema";
+import { user } from "@/server/database/auth-schema";
 import {
   dockerAvailable,
   startPostgres,
@@ -48,6 +49,18 @@ describe.skipIf(!dockerAvailable)("capability schema (Testcontainers)", () => {
     });
   }
 
+  async function seedUser(id = "user-1"): Promise<void> {
+    await ctx.handle.db.insert(user).values({
+      id,
+      name: "Test User",
+      email: `${id}@test.local`,
+      emailVerified: true,
+      status: "active",
+      createdAt: new Date("2026-07-23T08:00:00.000Z"),
+      updatedAt: new Date("2026-07-23T08:00:00.000Z"),
+    });
+  }
+
   it("rejette un status hors énumération via CHECK", async () => {
     await expect(
       ctx.handle.db.execute(sql`
@@ -81,6 +94,7 @@ describe.skipIf(!dockerAvailable)("capability schema (Testcontainers)", () => {
   });
 
   it("impose UNIQUE(agent_id, capability_id) sur agent_capabilities", async () => {
+    await seedUser();
     await seedAgent();
     await seedCapability();
     await ctx.handle.db.insert(agentCapabilities).values({
@@ -102,6 +116,7 @@ describe.skipIf(!dockerAvailable)("capability schema (Testcontainers)", () => {
   });
 
   it("empêche la suppression d'un agent référencé par agent_capabilities (RESTRICT)", async () => {
+    await seedUser();
     await seedAgent();
     await seedCapability();
     await ctx.handle.db.insert(agentCapabilities).values({
@@ -117,6 +132,7 @@ describe.skipIf(!dockerAvailable)("capability schema (Testcontainers)", () => {
   });
 
   it("empêche la suppression d'une capability référencée par agent_capabilities (RESTRICT)", async () => {
+    await seedUser();
     await seedAgent();
     await seedCapability();
     await ctx.handle.db.insert(agentCapabilities).values({

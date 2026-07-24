@@ -65,6 +65,7 @@ Aucune dépendance nouvelle.
 ## File Map
 
 **Create:**
+
 - `src/core/contracts/capability.ts` — schémas Zod `capabilitySchema`,
   `capabilityStatusSchema`, `agentCapabilitySchema`.
 - `src/core/capabilities/lifecycle.ts` — `isTransitionAllowed(from, to)`,
@@ -94,6 +95,7 @@ Aucune dépendance nouvelle.
   suivant la convention existante du dépôt.
 
 **Modify:**
+
 - `src/server/database/schema.ts` — ajout des tables `capabilities` et
   `agent_capabilities` (voir design, section Persistance).
 - `src/core/contracts/audit.ts` — extension de `auditEventTypeSchema` avec
@@ -113,11 +115,13 @@ Aucune dépendance nouvelle.
 ## Task 1: Contrats Zod et modèle de lifecycle
 
 **Files:**
+
 - Create: `src/core/contracts/capability.ts`
 - Create: `src/core/capabilities/lifecycle.ts`
 - Test: `tests/core/capabilities/lifecycle.test.ts`
 
 **Interfaces:**
+
 - Produced: `capabilitySchema`, `capabilityStatusSchema` (enum
   `proposed|active|deprecated|retired`), `agentCapabilitySchema`.
 - Produced: `isTransitionAllowed(from: CapabilityStatus, to: CapabilityStatus): boolean`.
@@ -136,12 +140,14 @@ Aucune dépendance nouvelle.
 ## Task 2: Schéma Drizzle et migration additive
 
 **Files:**
+
 - Modify: `src/server/database/schema.ts`
 - Modify: `src/core/contracts/audit.ts`
 - Create: `drizzle/000X_capability_registry.sql` (numéro réel à déterminer)
 - Test: `tests/server/database/schema-capability.integration.test.ts`
 
 **Interfaces:**
+
 - Produced: tables Drizzle `capabilities`, `agentCapabilities` (voir design,
   section Persistance, pour le détail exact des colonnes/contraintes).
 - Produced: extension `auditEventTypeSchema` avec les 5 nouveaux types
@@ -162,6 +168,7 @@ Aucune dépendance nouvelle.
 ## Task 3: Repository ports et implémentations mémoire/Postgres
 
 **Files:**
+
 - Create: `src/server/repositories/capability-ports.ts`
 - Create: `src/server/repositories/memory/capability-repository.ts`
 - Create: `src/server/repositories/postgres/capability-repository.ts`
@@ -173,6 +180,7 @@ Aucune dépendance nouvelle.
   intégration)
 
 **Interfaces:**
+
 - Produced: `CapabilityRepository` (`getById`, `getByKey`, `list`, `create`,
   `updateStatus`) — retour `Promise<Capability | null>` jamais `undefined`.
 - Produced: `AgentCapabilityRepository` (`listByAgent`, `grant`, `revoke`).
@@ -193,10 +201,12 @@ Aucune dépendance nouvelle.
 ## Task 4: Service métier (cas d'usage) et audit
 
 **Files:**
+
 - Create: `src/server/services/capability-service.ts`
 - Test: `tests/server/services/capability-service.test.ts`
 
 **Interfaces:**
+
 - Produced: `createCapability(input)`, `changeCapabilityStatus(id, target)`,
   `grantCapability(agentId, capabilityId, byUserId)`,
   `revokeCapability(agentId, capabilityId)` — chacun écrivant l'événement
@@ -217,11 +227,13 @@ Aucune dépendance nouvelle.
 ## Task 5: Permissions et câblage du container — `CONFIRMED`
 
 **Files:**
+
 - Modify: `src/core/identity/permissions.ts`
 - Modify: `src/server/container.ts`
 - Test: `tests/core/identity/permissions.test.ts` (extension)
 
 **Interfaces:**
+
 - Produced: permissions `capabilities.read`, `capabilities.create`,
   `capabilities.status.write`, `agentCapabilities.read`,
   `agentCapabilities.write` — **`CONFIRMED`** contre main/7b99c41 (Lot 2B-2
@@ -241,6 +253,7 @@ Aucune dépendance nouvelle.
 ## Task 6: Routes API — `CONFIRMED` pour la relation Agent↔Capability
 
 **Files:**
+
 - Create: `src/app/api/capabilities/route.ts`
 - Create: `src/app/api/capabilities/[id]/status/route.ts`
 - Create: `src/app/api/agents/[id]/capabilities/route.ts`
@@ -248,6 +261,7 @@ Aucune dépendance nouvelle.
 - Test: `tests/app/api/capabilities.test.ts`, `tests/app/api/agent-capabilities.test.ts`
 
 **Interfaces:**
+
 - Produced: routes suivant exactement le motif de
   `src/app/api/agents/route.ts` (`runtime = "nodejs"`,
   `dynamic = "force-dynamic"`, `protectRoute`, `toErrorResponse`).
