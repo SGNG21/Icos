@@ -73,7 +73,41 @@ La gate Compliance s'applique à tout lot qui :
 Ces critères sont vérifiés par le relecteur de PR ; la gate est franchie
 lorsque tous les tests CT-DOC-01 à CT-DOC-06 sont verts.
 
-## 5. Cycle de vie des tests
+## 5. Compliance Scenario Traceability
+
+Les scénarios de conformité ci-dessous couvrent l'ensemble des invariants
+attendus d'ICOS. Aucun n'est implémenté dans COMPLIANCE-0 ; cette section
+assure la traçabilité entre chaque scénario et le lot cible qui l'implémentera.
+
+| ID | Scenario | Compliance intent | Target lot | Future automated proof |
+|---|---|---|---|---|
+| 001 | tenant isolation | Un tenant ne peut pas accéder aux données d'un autre tenant. | COMPLIANCE-1 | Tests d'intégration multi-tenant avec assertions d'isolation |
+| 002 | sensitive provider denial | Un provider sans classification adéquate est refusé pour une donnée C3. | D3 | Test unitaire AiRoutingPolicy avec profil provider incompatible |
+| 003 | AUTH_SECRET never memory | Les données AUTH_SECRET ne sont jamais stockées en mémoire agent. | COMPLIANCE-1 | Test d'intégration MemoryPort : rejet à l'écriture |
+| 004 | expired data unavailable | Une donnée au-delà de sa durée de rétention n'est plus accessible. | COMPLIANCE-2 | Test d'intégration purge worker : requête post-purge → 0 résultat |
+| 005 | significant decision human approval | Une décision significative (risk 4) nécessite approbation humaine. | D1 | Test unitaire PolicyEngine + mock ApprovalPort |
+| 006 | allowedRegions enforcement | Le transfert de données est restreint aux régions autorisées par politique. | D3 | Test unitaire AiRoutingPolicy avec contrainte géographique |
+| 007 | deletion propagation | La suppression d'un enregistrement source propage aux dépendances définies. | COMPLIANCE-2 | Test d'intégration cascade de suppression |
+| 008 | external transfer audit | Tout transfert de données C3 vers un provider externe est audité. | G1 | Test d'intégration ExecutionRecord : audit entry créée |
+| 009 | sensitive action cannot bypass approval | Une action marquée sensible ne peut pas contourner le Policy Engine. | D1 | Test unitaire : appel direct repo vs via Policy |
+| 010 | app DB role cannot TRUNCATE audit | Le rôle applicatif PostgreSQL ne peut pas TRUNCATE la table d'audit. | COMPLIANCE-1 | Test d'infra : vérification des permissions PostgreSQL |
+| 011 | cross-tenant IDOR denial | Un identifiant d'un autre tenant ne peut pas être utilisé pour accéder à des données. | COMPLIANCE-1 | Test d'intégration : requête cross-tenant → 403/404 |
+| 012 | provider without approved compliance profile denied | Un provider sans `ProviderComplianceProfile` approuvé est refusé pour toute donnée C2+. | D3 | Test unitaire AiRoutingPolicy + registry lookup |
+| 013 | memory retention requires explicit policy | La mémoire agent ne peut retenir une donnée sans politique de rétention associée. | E1 | Test d'intégration MemoryPort : retention policy required |
+| 014 | deleted source invalidates derived memory | Une mémoire dérivée est invalidée si sa source est supprimée. | E1 | Test d'intégration MemoryPort : cascade d'invalidation |
+| 015 | observability payload redaction | Les payloads C3 sont automatiquement masqués dans les traces d'observabilité. | COMPLIANCE-1 | Test d'intégration : grep pattern sur payloads exportés |
+| 016 | purpose mismatch denied | Un traitement sollicité ne correspondant à aucune finalité déclarée est refusé. | D1 | Test unitaire PolicyEngine avec purpose registry |
+| 017 | legal hold prevents destructive deletion | Une donnée sous gel (legal hold) ne peut pas être détruite par la purge automatique. | COMPLIANCE-2 | Test d'intégration purge worker + legal hold flag |
+| 018 | connector SEND requires external-effect policy | Un connecteur externe nécessite une policy de type `external_effect` pour envoyer des données. | G1 | Test unitaire ConnectorGateway + PolicyEngine |
+| 019 | provider trainingAllowed enforcement | Les données C3 ne sont jamais envoyées à un provider dont `trainingAllowed` est vrai sans consentement explicite. | D3 | Test unitaire AiRoutingPolicy avec flag training |
+| 020 | tenant-scoped export contains no foreign data | L'export des données d'un tenant ne contient aucune donnée d'un autre tenant. | COMPLIANCE-3 | Test d'intégration export + vérification tenant boundaries |
+
+Les tests documentaires (CT-DOC-*) de COMPLIANCE-0 couvrent la gate humaine en
+PR. Les scénarios ci-dessus seront résolus par les tests automatisés des lots
+cibles. Chaque lot devra ajouter une entrée dans ce tableau avec le statut de
+couverture au moment de sa PR.
+
+## 6. Cycle de vie des tests
 
 - Les tests documentaires (CT-DOC-*) s'appliquent dès COMPLIANCE-0.
 - Les tests automatisés (CT-AUTO-*) sont ajoutés au fur et à mesure des lots

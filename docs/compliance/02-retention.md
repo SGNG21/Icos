@@ -36,30 +36,30 @@ Conformément à l'invariant de sécurité 14 (Master Plan §6) :
 
 ## 3. Durées de conservation par niveau de classification
 
-| Niveau | Tag             | Durée de conservation maximale                        | Justification                                                             |
-|--------|-----------------|-------------------------------------------------------|---------------------------------------------------------------------------|
-| **C0** | `public`        | Illimitée (dans le respect des droits d'auteur tiers) | Donnée publique sans risque.                                              |
-| **C1** | `internal`      | 5 ans après la dernière activité                      | Nécessité opérationnelle (traçabilité, historique de projet).             |
-| **C2** | `confidential`  | 3 ans après la dernière activité                      | Risque significatif en cas de fuite ; durée resserrée.                    |
-| **C3** | `restricted`    | Durée strictement nécessaire à la finalité            | Conformité RGPD (minimisation, article 5.1.e) ; voir §3.1.                |
+| Niveau | Tag             | Durée de conservation maximale                        | Justification                                                             | Source |
+|--------|-----------------|-------------------------------------------------------|---------------------------------------------------------------------------|--------|
+| **C0** | `public`        | Illimitée (dans le respect des droits d'auteur tiers) | Donnée publique sans risque.                                              | ICOS_INTERNAL_POLICY |
+| **C1** | `internal`      | 5 ans après la dernière activité                      | Nécessité opérationnelle (traçabilité, historique de projet).             | ICOS_INTERNAL_POLICY |
+| **C2** | `confidential`  | 3 ans après la dernière activité                      | Risque significatif en cas de fuite ; durée resserrée.                    | ICOS_INTERNAL_POLICY |
+| **C3** | `restricted`    | Durée strictement nécessaire à la finalité            | Conformité RGPD (minimisation, article 5.1.e) ; voir §3.1.                | LEGAL_OBLIGATION |
 
 ### 3.1 Durées détaillées par type de donnée
 
-| Type de donnée                         | Classification | Durée de conservation                         | Base légale                      | Action à expiration                                |
-|----------------------------------------|----------------|-----------------------------------------------|----------------------------------|----------------------------------------------------|
-| Comptes utilisateur (identité, email)  | C3             | Durée du compte + 1 an après désactivation    | Exécution contractuelle (Art. 6.1.b) | Suppression physique (soft-delete → hard-delete après 1 an) |
-| Sessions (token, expiration)           | C2             | Expiration de la session (7 j) + révocabilité immédiate | Obligation légale / sécurité    | Suppression à l'expiration ou à la révocation      |
-| Hash de mot de passe                   | C2             | Durée du compte                               | Obligation légale                | Supprimé avec le compte                             |
-| Rôles et permissions humains           | C2             | Durée du compte                               | Exécution contractuelle          | Supprimés avec le compte                            |
-| Liens humain-agent                     | C2             | Durée du compte                               | Exécution contractuelle          | FK restrictive — supprimés avec le compte           |
-| Capacités et skills (registre)         | C1             | Durée de vie + 5 ans d'audit                  | Intérêt légitime (Art. 6.1.f)    | Archivage après dépublication                       |
-| Journal d'audit (Event Journal)        | C2             | 5 ans                                         | Obligation légale (accountability) | Purge après 5 ans (sauf contentieux)              |
-| Logs techniques (IP, routes)           | C2             | 90 jours maximum                              | Intérêt légitime (sécurité)      | Agrégation / anonymisation après 90 j              |
-| Logs d'erreur (stack traces)           | C1             | 30 jours                                      | Intérêt légitime (diagnostic)    | Suppression après 30 j                              |
-| Logs fonctionnels nominatifs           | C3             | 12 mois                                       | Intérêt légitime (Art. 6.1.f)    | Anonymisation ou purge après 12 mois                |
-| Métriques comportementales             | C3             | 12 mois (anonymisables)                       | Consentement (Art. 6.1.a)        | Anonymisation programmée à 12 mois (k > 5)          |
-| Données conversationnelles (mémoire)   | C3             | À définir dans Phase E                        | Consentement ou contrat          | Purge à définir (Phase E)                           |
-| Données intégrations (emails, docs)    | C3             | À définir dans Phase G                        | Consentement ou contrat          | Purge à définir (Phase G)                           |
+| Type de donnée                         | Classification | Durée de conservation                         | Base légale                      | Source               | Action à expiration                                |
+|----------------------------------------|----------------|-----------------------------------------------|----------------------------------|----------------------|----------------------------------------------------|
+| Comptes utilisateur (identité, email)  | C3             | Durée du compte + 1 an après désactivation    | Exécution contractuelle (Art. 6.1.b) | LEGAL_OBLIGATION   | Suppression physique (soft-delete → hard-delete après 1 an) |
+| Sessions (token, expiration)           | C2             | Expiration de la session (7 j) + révocabilité immédiate | Obligation légale / sécurité    | LEGAL_OBLIGATION    | Suppression à l'expiration ou à la révocation      |
+| Hash de mot de passe                   | C2             | Durée du compte                               | Obligation légale                | LEGAL_OBLIGATION    | Supprimé avec le compte                             |
+| Rôles et permissions humains           | C2             | Durée du compte                               | Exécution contractuelle          | CONTRACT_DEPENDENT  | Supprimés avec le compte                            |
+| Liens humain-agent                     | C2             | Durée du compte                               | Exécution contractuelle          | CONTRACT_DEPENDENT  | FK restrictive — supprimés avec le compte           |
+| Capacités et skills (registre)         | C1             | Durée de vie + 5 ans d'audit                  | Intérêt légitime (Art. 6.1.f)    | ICOS_INTERNAL_POLICY | Archivage après dépublication                       |
+| Journal d'audit (Event Journal)        | C2             | 5 ans                                         | Obligation légale (accountability) | LEGAL_OBLIGATION   | Purge après 5 ans (sauf contentieux)              |
+| Logs techniques (IP, routes)           | C2             | 90 jours maximum                              | Intérêt légitime (sécurité)      | ICOS_INTERNAL_POLICY | Agrégation / anonymisation après 90 j              |
+| Logs d'erreur (stack traces)           | C1             | 30 jours                                      | Intérêt légitime (diagnostic)    | ICOS_INTERNAL_POLICY | Suppression après 30 j                              |
+| Logs fonctionnels nominatifs           | C3             | 12 mois                                       | Intérêt légitime (Art. 6.1.f)    | PROPOSED_TO_VALIDATE | Anonymisation ou purge après 12 mois                |
+| Métriques comportementales             | C3             | 12 mois (anonymisables)                       | Consentement (Art. 6.1.a)        | PROPOSED_TO_VALIDATE — LEGAL_REVIEW_REQUIRED | Anonymisation programmée à 12 mois (k > 5)          |
+| Données conversationnelles (mémoire)   | C3             | À définir dans Phase E                        | Consentement ou contrat          | CONTRACT_DEPENDENT  | Purge à définir (Phase E)                           |
+| Données intégrations (emails, docs)    | C3             | À définir dans Phase G                        | Consentement ou contrat          | CONTRACT_DEPENDENT  | Purge à définir (Phase G)                           |
 
 ### 3.2 Données C3 — règle générale
 
