@@ -2,9 +2,18 @@
 
 | Statut    | Version |
 |-----------|---------|
-| Projet    | 0.1     |
+| Approuvé  | 1.0     |
 
-## 1. Objectif
+## 1. Identité du responsable de traitement
+
+| Champ | Valeur |
+|---|---|
+| **Nom** | ICOS |
+| **Représentant** | Geoffrey Nozza |
+| **Email** | geoffrey.nozza@gmail.com |
+| **Base juridique** | Établissement en France |
+
+## 2. Objectif
 
 Tenir le registre des activités de traitement au sens de l'article 30 du RGPD
 pour l'ensemble des traitements de données personnelles (C3) opérés par ICOS.
@@ -13,7 +22,7 @@ Ce registre est un document évolutif : toute nouvelle finalité, nouveau
 traitement ou nouveau sous-traitant fait l'objet d'une mise à jour avant mise
 en production.
 
-## 2. Traitements
+## 3. Traitements
 
 ### T-01 : Compte utilisateur
 
@@ -85,7 +94,21 @@ en production.
 | Mesures de sécurité      | Accès restreint (admin infra + sécurité).                              |
 | Sous-traitant            | Hébergeur infra.                                                        |
 
-## 3. Sous-traitants
+## 4. Traitements futurs (à documenter lors de l'implémentation)
+
+| Traitement                   | Lot       | Données prévues                                          |
+|------------------------------|-----------|----------------------------------------------------------|
+| Mémoire conversationnelle    | Phase E   | Conversations, décisions, préférences.                   |
+| Intégration Gmail            | Phase G   | E-mails, pièces jointes.                                 |
+| Intégration Google Drive     | Phase G   | Documents, métadonnées.                                  |
+| Intégration Dolibarr         | Phase G   | Clients, devis, factures.                                |
+| Orchestration IA externe     | Phase D/G | Données envoyées à des providers IA.                     |
+| CRM prospects/clients        | Phase H   | Nom, e-mail, téléphone, historique commercial.           |
+
+Toute nouvelle intégration fait l'objet d'une mise à jour de ce registre avant
+déploiement, avec validation DPO.
+
+## 5. Sous-traitants
 
 | Sous-traitant         | Service                        | Localisation des données | Garanties                                              |
 |-----------------------|--------------------------------|--------------------------|--------------------------------------------------------|
@@ -94,7 +117,7 @@ en production.
 Tout nouveau sous-traitant est ajouté avant la mise en production du service
 concerné, avec DPA signé.
 
-## 4. Droits des personnes
+## 6. Droits des personnes
 
 ICOS doit permettre l'exercice des droits RGPD suivants :
 
@@ -108,14 +131,14 @@ ICOS doit permettre l'exercice des droits RGPD suivants :
 | Portabilité (Art. 20)      | Export JSON des données du compte.                         |
 | Opposition (Art. 21)       | Traité par le DPO sous 30 jours.                           |
 
-## 5. Cycle de mise à jour
+## 7. Cycle de mise à jour
 
 - **Mise à jour obligatoire** avant tout nouveau traitement de données C3.
 - **Révision annuelle** complète du registre.
 - **Modification** d'un traitement existant : mise à jour de l'entrée avec
   historique des versions.
 
-## 6. Documents associés
+## 8. Documents associés
 
 - `01-classification.md` — définition des niveaux C0–C3 ;
 - `02-retention.md` — durées de conservation ;
