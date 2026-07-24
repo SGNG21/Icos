@@ -35,10 +35,9 @@ Une classification formelle (voir `docs/compliance/01-classification.md`) distin
 | Niveau | Classe | Exemples | Contrôles minimaux |
 |---|---|---|---|
 | C0 | Publique | Documentation publique, données agrégées non nominatives | Aucun |
-| C1 | Interne | Logs techniques non personnels, code source | Accès contrôlé par rôle ICOS |
-| C2 | Personnelle | Email, nom, téléphone, préférences, historique | Chiffrement at-rest, accès restreint, retention bornée |
-| C3 | Sensible | Données de santé, opinions politiques, biométrie (si traitées) | Chiffrement at-rest + in-transit, accès nominatif, audit renforcé, retention minimale |
-| C4 | Critique | Credentials, tokens de session, secrets, clés de chiffrement | Jamais en clair dans les logs/réponses, HSM ou vault, isolation stricte, purge immédiate si compromis |
+| C1 | Interne | Logs techniques non personnels, code source, ADR, plans | Accès contrôlé par rôle ICOS |
+| C2 | Confidentiel | Identifiants techniques (API keys, tokens), secrets, accès infra | Chiffrement at-rest, accès restreint, jamais dans les logs |
+| C3 | Restreint | Données personnelles (email, nom, téléphone, préférences, historique) | Chiffrement at-rest + in-transit, accès nominatif, audit renforcé, retention bornée |
 
 La classification est déclarée par **politique de donnée** attachée à chaque entité, jamais par
 inférence. Elle détermine le niveau de retention, de chiffrement et d'accès requis.
@@ -145,7 +144,7 @@ Les documents suivants sont créés dans `docs/compliance/` :
 
 ### Conformité aux ADR existants
 
-- **ADR-0007** (identité) : la classification C4 (credentials, tokens) renforce l'interdiction déjà
+- **ADR-0007** (identité) : la classification C2 (credentials, tokens) renforce l'interdiction déjà
   posée d'exposer des secrets dans les logs/réponses/audits.
 - **ADR-0006** (transactions) : la rétention bornée et la purge sont compatibles avec le journal
   d'audit append-only existant — l'audit n'est pas concerné par la purge de données métier.

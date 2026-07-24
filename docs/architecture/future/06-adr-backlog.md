@@ -158,7 +158,7 @@
 ## ADR-0023 — Fondation de conformité réglementaire
 
 - **Statut** : accepté (voir `docs/decisions/0023-compliance-foundation.md`).
-- **Contenu** : Taxonomie de classification C0–C4, invariant de rétention gouvernée, Privacy by Design,
+- **Contenu** : Taxonomie de classification C0–C3, invariant de rétention gouvernée, Privacy by Design,
   gate Compliance, registre des traitements, périmètre réglementaire (RGPD, ePrivacy, NIS2, AI Act, DGA).
 - **Déclencheur** : COMPLIANCE-0.
 

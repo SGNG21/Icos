@@ -48,7 +48,7 @@ Conformément à l'invariant de sécurité 14 (Master Plan §6) :
 | Type de donnée                         | Classification | Durée de conservation                         | Base légale                      | Action à expiration                                |
 |----------------------------------------|----------------|-----------------------------------------------|----------------------------------|----------------------------------------------------|
 | Comptes utilisateur (identité, email)  | C3             | Durée du compte + 1 an après désactivation    | Exécution contractuelle (Art. 6.1.b) | Suppression physique (soft-delete → hard-delete après 1 an) |
-| Sessions (token, expiration)           | C2/C4          | Expiration de la session (7 j) + révocabilité immédiate | Obligation légale / sécurité    | Suppression à l'expiration ou à la révocation      |
+| Sessions (token, expiration)           | C2             | Expiration de la session (7 j) + révocabilité immédiate | Obligation légale / sécurité    | Suppression à l'expiration ou à la révocation      |
 | Hash de mot de passe                   | C2             | Durée du compte                               | Obligation légale                | Supprimé avec le compte                             |
 | Rôles et permissions humains           | C2             | Durée du compte                               | Exécution contractuelle          | Supprimés avec le compte                            |
 | Liens humain-agent                     | C2             | Durée du compte                               | Exécution contractuelle          | FK restrictive — supprimés avec le compte           |
