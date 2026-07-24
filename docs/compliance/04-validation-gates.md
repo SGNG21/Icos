@@ -102,7 +102,8 @@ Le DPO est une personne physique désignée par l'organisation ICOS. Tant que
 l'organisation n'a pas de DPO formel, ce rôle est assuré par l'humain
 propriétaire du projet.
 
-Coordonnées : à définir (e-mail dédié conformité).
+> **Statut :** PLANNED — e-mail dédié conformité à créer avant la première gate Compliance
+> réelle (PR avec données C3). Ceci est un prérequis opérationnel de COMPLIANCE-0.
 
 ## 4. Cycle de validation
 

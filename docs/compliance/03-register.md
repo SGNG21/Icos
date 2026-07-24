@@ -112,7 +112,11 @@ déploiement, avec validation DPO.
 
 | Sous-traitant         | Service                        | Localisation des données | Garanties                                              |
 |-----------------------|--------------------------------|--------------------------|--------------------------------------------------------|
-| Hébergeur infra (TBD) | Infrastructure (compute, storage, database) | France (SOF, OVH, Scaleway ou équivalent) | Clause contractuelle RGPD, DPA signé. Pas de transfert hors UE. |
+| Hébergeur infra | Infrastructure (compute, storage, database) | France (SOF, OVH, Scaleway ou équivalent) | Clause contractuelle RGPD, DPA signé. Pas de transfert hors UE. |
+
+> **Statut :** PLANNED — fournisseur non résolu à ce stade.
+> **Note :** LEGAL_REVIEW_REQUIRED — le contrat de sous-traitance (DPA) doit être signé et
+> vérifié avant toute mise en production avec données C3.
 
 Tout nouveau sous-traitant est ajouté avant la mise en production du service
 concerné, avec DPA signé.
