@@ -1161,10 +1161,14 @@ Objectifs :
 Transverse, à mener en parallèle des phases ci-dessous et avant tout traitement de données réelles
 d’utilisateurs ou de clients :
 
-- taxonomie de classification des données ;
-- invariant de rétention gouvernée (voir invariant 14, §6) ;
-- gate Compliance en revue de PR (voir §18) ;
-- documentation `docs/compliance/` référencée (voir §29).
+- taxonomie de classification des données (voir `docs/compliance/ICOS_DATA_CLASSIFICATION.md`) ;
+- invariant de rétention gouvernée (voir invariant 14, §6 et `docs/compliance/ICOS_RETENTION_POLICY.md`) ;
+- gate Compliance en revue de PR (voir §18 et `docs/compliance/ICOS_COMPLIANCE_TESTS.md`) ;
+- baseline réglementaire (voir `docs/compliance/ICOS_REGULATORY_BASELINE.md`) ;
+- architecture privacy (voir `docs/compliance/ICOS_PRIVACY_ARCHITECTURE.md`) ;
+- registre des traitements (voir `docs/compliance/ICOS_PROCESSING_REGISTER.md`) ;
+- roadmap compliance (voir `docs/compliance/ICOS_COMPLIANCE_ROADMAP.md`) ;
+- ADR-0023 (`docs/decisions/0023-compliance-foundation.md`).
 
 ### Phase A — Fondations
 
