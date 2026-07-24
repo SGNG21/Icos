@@ -4,6 +4,7 @@ import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
+import { InMemoryCapabilityUnitOfWork } from "@/server/uow/in-memory-capability-uow";
 
 import { CapabilityService } from "./capability-service";
 
@@ -12,7 +13,8 @@ function createService() {
   const agentCapabilities = new InMemoryAgentCapabilityRepository();
   const auditLog = new InMemoryAuditLog();
   const audit = new InMemoryAuditRepository(auditLog);
-  const service = new CapabilityService(capabilities, agentCapabilities, audit);
+  const uow = new InMemoryCapabilityUnitOfWork(capabilities, agentCapabilities, auditLog);
+  const service = new CapabilityService(capabilities, agentCapabilities, uow);
   return { capabilities, agentCapabilities, audit, auditLog, service };
 }
 
@@ -122,6 +124,48 @@ describe("CapabilityService", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.reason).toBe("not_found");
+      }
+    });
+
+    it("détecte une modification concurrente sur le statut", async () => {
+      const { capabilities, service } = createService();
+      const created = await service.createCapability({
+        key: "concurrent.test",
+        name: "Concurrent Test",
+        category: "code",
+        actorLabel: "admin",
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      // Change status via service1 → proposed → active
+      await service.changeCapabilityStatus({
+        capabilityId: created.data.id,
+        targetStatus: "active",
+        actorLabel: "admin",
+      });
+
+      // Crée un service2 partageant les mêmes repositories et un expectedStatus
+      // obsolète ("proposed") via un appel direct au UoW.
+      const agentCapabilities = new InMemoryAgentCapabilityRepository();
+      const auditLog = new InMemoryAuditLog();
+      const uow = new InMemoryCapabilityUnitOfWork(capabilities, agentCapabilities, auditLog);
+
+      const result = await uow.changeStatusWithAudit({
+        id: created.data.id,
+        expectedStatus: "proposed",
+        targetStatus: "deprecated",
+        auditEntry: {
+          id: "audit-concurrent",
+          occurredAt: new Date().toISOString(),
+          eventType: "capability.status_changed",
+          actor: { kind: "human", id: "admin" },
+          details: { capabilityId: created.data.id, from: "proposed", to: "deprecated" },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("concurrent_modification");
       }
     });
   });

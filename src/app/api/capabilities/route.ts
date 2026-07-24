@@ -43,12 +43,13 @@ export async function POST(request: Request): Promise<Response> {
     if (!body.ok) return apiError("invalid_input", "corps JSON invalide");
 
     const parsed = createCapabilityBodySchema.safeParse(body.value);
-    if (!parsed.success) return apiError("invalid_input", "payload invalide", zodDetails(parsed.error));
+    if (!parsed.success)
+      return apiError("invalid_input", "payload invalide", zodDetails(parsed.error));
 
     const service = new CapabilityService(
       container.capabilities,
       container.agentCapabilities,
-      container.audit,
+      container.capabilityUow,
     );
 
     const result = await service.createCapability({

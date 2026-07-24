@@ -29,12 +29,13 @@ export async function PATCH(
     if (!body.ok) return apiError("invalid_input", "corps JSON invalide");
 
     const parsed = changeCapabilityStatusBodySchema.safeParse(body.value);
-    if (!parsed.success) return apiError("invalid_input", "payload invalide", zodDetails(parsed.error));
+    if (!parsed.success)
+      return apiError("invalid_input", "payload invalide", zodDetails(parsed.error));
 
     const service = new CapabilityService(
       container.capabilities,
       container.agentCapabilities,
-      container.audit,
+      container.capabilityUow,
     );
 
     const result = await service.changeCapabilityStatus({
@@ -45,7 +46,8 @@ export async function PATCH(
 
     if (!result.ok) {
       if (result.reason === "not_found") return apiError("not_found", result.message);
-      if (result.reason === "invalid_transition") return apiError("invalid_transition", result.message);
+      if (result.reason === "invalid_transition")
+        return apiError("invalid_transition", result.message);
       return apiError("internal_error", result.message);
     }
 

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import type { AuditEntry } from "@/core/contracts";
-import type { Capability, CapabilityStatus } from "@/core/contracts/capability";
+import type { AuditEntry, Capability, CapabilityStatus } from "@/core/contracts";
 import { isTransitionAllowed } from "@/core/capabilities/lifecycle";
-import type { CapabilityRepository, AgentCapabilityRepository } from "@/server/repositories/capability-ports";
-import type { AuditRepository } from "@/server/repositories/ports";
+import type {
+  CapabilityRepository,
+  AgentCapabilityRepository,
+} from "@/server/repositories/capability-ports";
+import type { CapabilityUnitOfWork } from "@/server/uow/ports";
 
 export interface CreateCapabilityInput {
   key: string;
@@ -35,17 +37,18 @@ export interface RevokeCapabilityInput {
 }
 
 export type CapabilityServiceResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; reason: string; message: string };
+  { ok: true; data: T } | { ok: false; reason: string; message: string };
 
 export class CapabilityService {
   constructor(
     private readonly capabilities: CapabilityRepository,
     private readonly agentCapabilities: AgentCapabilityRepository,
-    private readonly audit: AuditRepository,
+    private readonly uow: CapabilityUnitOfWork,
   ) {}
 
-  async createCapability(input: CreateCapabilityInput): Promise<CapabilityServiceResult<Capability>> {
+  async createCapability(
+    input: CreateCapabilityInput,
+  ): Promise<CapabilityServiceResult<Capability>> {
     const now = new Date().toISOString();
     const capability: Capability = {
       id: `cap-${randomUUID()}`,
@@ -68,23 +71,21 @@ export class CapabilityService {
       details: { key: input.key, name: input.name, category: input.category },
     };
 
-    try {
-      const created = await this.capabilities.create(capability);
-      await this.audit.append(auditEntry);
-      return { ok: true, data: created };
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "creation_failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    const uowResult = await this.uow.createCapabilityWithAudit({ capability, auditEntry });
+    if (!uowResult.ok) return uowResult;
+    return { ok: true, data: uowResult.data.capability };
   }
 
-  async changeCapabilityStatus(input: ChangeStatusInput): Promise<CapabilityServiceResult<Capability>> {
+  async changeCapabilityStatus(
+    input: ChangeStatusInput,
+  ): Promise<CapabilityServiceResult<Capability>> {
     const existing = await this.capabilities.getById(input.capabilityId);
     if (existing === null) {
-      return { ok: false, reason: "not_found", message: `Capability inconnue : ${input.capabilityId}` };
+      return {
+        ok: false,
+        reason: "not_found",
+        message: `Capability inconnue : ${input.capabilityId}`,
+      };
     }
 
     if (!isTransitionAllowed(existing.status, input.targetStatus)) {
@@ -96,11 +97,6 @@ export class CapabilityService {
     }
 
     const now = new Date().toISOString();
-    const updated = await this.capabilities.updateStatus(input.capabilityId, input.targetStatus);
-    if (updated === null) {
-      return { ok: false, reason: "not_found", message: `Capability inconnue : ${input.capabilityId}` };
-    }
-
     const auditEntry: AuditEntry = {
       id: `audit-${randomUUID()}`,
       occurredAt: now,
@@ -113,19 +109,19 @@ export class CapabilityService {
       },
     };
 
-    try {
-      await this.audit.append(auditEntry);
-      return { ok: true, data: updated };
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "audit_failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    const uowResult = await this.uow.changeStatusWithAudit({
+      id: input.capabilityId,
+      expectedStatus: existing.status,
+      targetStatus: input.targetStatus,
+      auditEntry,
+    });
+    if (!uowResult.ok) return uowResult;
+    return { ok: true, data: uowResult.data.capability };
   }
 
-  async grantCapability(input: GrantCapabilityInput): Promise<CapabilityServiceResult<{ id: string }>> {
+  async grantCapability(
+    input: GrantCapabilityInput,
+  ): Promise<CapabilityServiceResult<{ id: string }>> {
     const now = new Date().toISOString();
     const ac = {
       id: `ac-${randomUUID()}`,
@@ -147,28 +143,22 @@ export class CapabilityService {
       },
     };
 
-    try {
-      await this.agentCapabilities.grant(ac);
-      await this.audit.append(auditEntry);
-      return { ok: true, data: { id: ac.id } };
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "grant_failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return this.uow.grantCapabilityWithAudit({ agentCapability: ac, auditEntry });
   }
 
-  async revokeCapability(input: RevokeCapabilityInput): Promise<CapabilityServiceResult<{ revoked: boolean }>> {
+  async revokeCapability(
+    input: RevokeCapabilityInput,
+  ): Promise<CapabilityServiceResult<{ revoked: boolean }>> {
     const existing = await this.agentCapabilities.getById(input.agentCapabilityId);
     if (existing === null) {
-      return { ok: false, reason: "not_found", message: `AgentCapability inconnue : ${input.agentCapabilityId}` };
+      return {
+        ok: false,
+        reason: "not_found",
+        message: `AgentCapability inconnue : ${input.agentCapabilityId}`,
+      };
     }
 
     const now = new Date().toISOString();
-    const revoked = await this.agentCapabilities.revoke(input.agentCapabilityId);
-
     const auditEntry: AuditEntry = {
       id: `audit-${randomUUID()}`,
       occurredAt: now,
@@ -181,15 +171,6 @@ export class CapabilityService {
       },
     };
 
-    try {
-      await this.audit.append(auditEntry);
-      return { ok: true, data: { revoked } };
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "audit_failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return this.uow.revokeCapabilityWithAudit({ id: input.agentCapabilityId, auditEntry });
   }
 }

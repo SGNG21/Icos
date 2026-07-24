@@ -21,7 +21,10 @@ import { GET as getTasks, POST as postTask } from "./tasks/route";
 import { POST as postTransition } from "./tasks/[id]/transition/route";
 import { GET as getCapabilities, POST as postCapability } from "./capabilities/route";
 import { PATCH as patchCapabilityStatus } from "./capabilities/[id]/status/route";
-import { GET as getAgentCapabilities, POST as postAgentCapability } from "./agents/[id]/capabilities/route";
+import {
+  GET as getAgentCapabilities,
+  POST as postAgentCapability,
+} from "./agents/[id]/capabilities/route";
 import { DELETE as deleteAgentCapability } from "./agents/[id]/capabilities/[capabilityId]/route";
 
 const CONTAINER_KEY = "__icosContainerPromise__";
@@ -1435,10 +1438,9 @@ describe("GET /api/audit", () => {
 });
 
 describe("GET /api/capabilities", () => {
-  it("refuse viewer", async () => {
+  it("autorise viewer", async () => {
     installRole("viewer");
     const response = await getCapabilities(getRequest("/api/capabilities"));
-    // viewer has capabilities.read permission
     expect(response.status).toBe(200);
   });
 
@@ -1499,7 +1501,11 @@ describe("POST /api/capabilities", () => {
   it("refuse cross-origin", async () => {
     installRole("admin");
     const response = await postCapability(
-      jsonRequest("/api/capabilities", { key: "test.key", name: "Test", category: "code" }, { origin: "https://evil.test" }),
+      jsonRequest(
+        "/api/capabilities",
+        { key: "test.key", name: "Test", category: "code" },
+        { origin: "https://evil.test" },
+      ),
     );
     expect(response.status).toBe(403);
     expect(await errorCode(response)).toBe("forbidden");
@@ -1573,10 +1579,24 @@ describe("POST /api/agents/[id]/capabilities", () => {
     expect(response.status).toBe(403);
   });
 
+  it("refuse operator", async () => {
+    installRole("operator");
+    const response = await postAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities", { capabilityId: "cap-001" }),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
   it("refuse cross-origin", async () => {
     installRole("admin");
     const response = await postAgentCapability(
-      jsonRequest("/api/agents/agent-cto/capabilities", { capabilityId: "cap-001" }, { origin: "https://evil.test" }),
+      jsonRequest(
+        "/api/agents/agent-cto/capabilities",
+        { capabilityId: "cap-001" },
+        { origin: "https://evil.test" },
+      ),
       params("agent-cto"),
     );
     expect(response.status).toBe(403);
@@ -1591,6 +1611,16 @@ describe("DELETE /api/agents/[id]/capabilities/[capabilityId]", () => {
       { params: Promise.resolve({ id: "agent-cto", capabilityId: "ac-001" }) },
     );
     expect(response.status).toBe(403);
+  });
+
+  it("refuse operator", async () => {
+    installRole("operator");
+    const response = await deleteAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities/ac-001", {}),
+      { params: Promise.resolve({ id: "agent-cto", capabilityId: "ac-001" }) },
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
   });
 
   it("refuse cross-origin", async () => {

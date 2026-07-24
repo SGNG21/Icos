@@ -26,7 +26,7 @@ export async function DELETE(
     const service = new CapabilityService(
       container.capabilities,
       container.agentCapabilities,
-      container.audit,
+      container.capabilityUow,
     );
 
     const result = await service.revokeCapability({
