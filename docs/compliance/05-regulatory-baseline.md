@@ -36,6 +36,7 @@ Voir `03-register.md` pour le détail de chaque traitement.
 | Logs d'authentification | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, sécurisation |
 | Logs fonctionnels | 6.1.f (intérêt légitime) | Balancement, opposition possible |
 | Métriques comportementales | 6.1.a (consentement) | Consentement explicite, retrait possible |
+| Infra et sécurité (logs système) | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, accès restreint |
 
 ## 4. Documents associés
 

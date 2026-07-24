@@ -63,25 +63,68 @@ Une fonction de suppression est prévue :
 ## 3. Architecture logique
 
 ```text
-[Client/UI]
-    |
-    | TLS 1.3
-    v
-[Route Handler] ──auth──→ [Policy (caps)] ──→ [Use Case]
-                                                  |
-                                                  v
-                                          [Repository Port]
-                                                  |
-                                                  v
-                                          [PostgreSQL] ← chiffrement at-rest (COMPLIANCE-2)
+┌─────────────────────────────────────────────────────────────┐
+│                        TENANT BOUNDARY                       │
+│  ┌──────────┐    ┌──────────────┐    ┌───────────────────┐  │
+│  │ Client   │    │ Route        │    │ Policy (caps)     │  │
+│  │ / UI     │───→│ Handler      │───→│ + Policy Engine   │  │
+│  │          │TLS │              │auth │ (compliance rules)│  │
+│  └──────────┘ 1.3 └──────────────┘    └────────┬──────────┘  │
+│                                                 │            │
+│                                                 v            │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │                  Use Case Layer                        │   │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐   │   │
+│  │  │ Validation  │  │ Classification│  │ Audit trail │   │   │
+│  │  │ (purpose,   │  │ (C0–C3 check) │  │ (actor,     │   │   │
+│  │  │  retention) │  │               │  │  action, ts)│   │   │
+│  │  └──────┬──────┘  └──────┬───────┘  └──────┬──────┘   │   │
+│  └─────────┼───────────────┼─────────────────┼──────────┘   │
+│            │               │                 │              │
+│            v               v                 v              │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │                  Repository Port                       │   │
+│  │  ┌───────────────┐  ┌──────────────┐  ┌────────────┐  │   │
+│  │  │ C3 data store │  │ C0–C2 store  │  │ Event      │  │   │
+│  │  │ (encrypted    │  │ (standard)   │  │ Journal    │  │   │
+│  │  │  at-rest)     │  │              │  │ (append-   │  │   │
+│  │  └───────┬───────┘  └──────┬───────┘  │ only)      │  │   │
+│  └──────────┼────────────────┼───────────└──────┬──────┘   │
+│             │                │                   │          │
+└─────────────┼────────────────┼───────────────────┼──────────┘
+              │                │                   │
+              v                v                   v
+    ┌─────────────────┐  ┌──────────────┐  ┌─────────────────┐
+    │ PostgreSQL C3   │  │ PostgreSQL   │  │ Audit (append-  │
+    │ (AES-256 TDE)   │  │ (standard)   │  │ only, 5 ans)    │
+    └─────────────────┘  └──────────────┘  └─────────────────┘
+
+    ┌─────────────────────────────────────────────────────────┐
+    │                  BACKGROUND WORKERS                      │
+    │  ┌──────────────────────────────────────────┐            │
+    │  │  Retention Worker (cron)                  │            │
+    │  │  • Purge C3 données expirées             │            │
+    │  │  • Anonymisation programmée (k > 5)      │            │
+    │  │  • Audit entry `data.retention_purge`    │            │
+    │  └──────────────────────────────────────────┘            │
+    └─────────────────────────────────────────────────────────┘
 ```
 
-Tout accès à des données C3 traverse :
-1. Authentification (session)
-2. Autorisation (caps)
-3. Use case (validation, classification)
-4. Repository (persistance avec marquage)
-5. Audit (journal append-only)
+**Flux C3 :** toute donnée PERSONAL/C3 transite par la couche Use Case qui
+valide classification, rétention et purpose avant écriture en base chiffrée.
+Le Repository Port garantit le marquage `@classification` sur chaque colonne
+C3.
+
+**Flux non-C3 (C0–C2) :** chemin standard via Policy (caps), sans chiffrement
+at-rest obligatoire (C2 sauf AUTH_SECRET).
+
+**Tenant boundary :** tous les accès (lecture/écriture) sont filtrés par le
+tenant de l'utilisateur authentifié. Aucune donnée ne traverse cette frontière
+sans vérification explicite (invariant IDOR, scenario 001/011).
+
+**Audit :** toute opération sur donnée C3 est horodatée dans l'Event Journal
+append-only. L'audit lui-même ne contient jamais de données C3 (uniquement
+métadonnées : acteur, action, type, horodatage).
 
 ## 4. Architecture physique (prévisions)
 
@@ -92,6 +135,39 @@ Tout accès à des données C3 traverse :
 | Logs                   | Rotation, purge à 90 jours, pas de C3            | COMPLIANCE-1 |
 | Sauvegardes            | Chiffrement au repos, rétention 90 jours max     | COMPLIANCE-2 |
 | Cache (Redis)          | Pas de C3 en cache persistant                     | Règle immédiate |
+
+### 4.1 Architecture future — extension provider et mémoire
+
+L'architecture logique (§3) sera enrichie dans les lots ultérieurs :
+
+```text
+                      ┌──────────────┐
+                      │  Provider     │ (D3)
+                      │  Boundary     │
+                      │  • Compliance │
+                      │  • Region     │
+                      │  • Training   │
+                      └──────┬───────┘
+                             │
+           ┌─────────────────┼──────────────────┐
+           │   ProviderComplianceProfile        │
+           │   DataTransferPolicy               │
+           └─────────────────┬──────────────────┘
+                             │
+                    ┌────────v────────┐
+                    │   Memory Port   │ (E1)
+                    │  • Retention    │
+                    │  • Provenance   │
+                    │  • Invalidation │
+                    └─────────────────┘
+```
+
+- **Provider Boundary (D3)** : tout envoi de données C2+ vers un provider externe
+  traverse le ProviderComplianceProfile qui vérifie région, certifications et
+  `trainingAllowed` avant transmission.
+- **Memory Port (E1)** : la mémoire agent applique les politiques de rétention
+  (invariant 14) et les règles de provenance avant toute persistance en mémoire
+  à long terme.
 
 ## 5. Glossaire architectural — concepts de conformité
 

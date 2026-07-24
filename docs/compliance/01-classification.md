@@ -52,7 +52,7 @@ identifiant technique d'infrastructure est AUTH_SECRET C2.
 | `PERSONAL` | Donnée personnelle d'un utilisateur (RGPD art. 4) | E-mail, nom, identifiant interne, préférences | C3 |
 | `SENSITIVE_PERSONAL` | Catégorie spéciale (RGPD art. 9) | Santé, biométrie, opinions (hors périmètre ICOS) | C3 |
 | `CONFIDENTIAL_CLIENT` | Donnée d'un client ICOS | Nom, email, historique commercial, documents | C3 |
-| `AUTH_SECRET` | Secret d'authentification ou de session | Token, hash, clé API, session ID | C2–C4 |
+| `AUTH_SECRET` | Secret d'authentification ou de session | Token, hash, clé API, session ID | C2–C3 |
 | `FINANCIAL` | Donnée financière ou de paiement | Abonnement, crédits, facture | C2–C3 |
 | `LEGAL` | Document ou trace à valeur juridique | Contrat, audit, consentement, DPA | C2–C3 |
 | `HEALTH` | Donnée de santé (hors périmètre actuel) | Information médicale, dossier patient | C3 |
@@ -98,7 +98,7 @@ ou indirectement une personne physique :
 - logs comportementaux (trajectoire de navigation, temps de réponse) ;
 - préférences, paramètres de notification, langue.
 
-### 2.2 Données hautement sensibles (au-delà de C3)
+## 4. Données hautement sensibles (hors périmètre actuel)
 
 Toute donnée relevant des catégories spéciales de l'article 9 RGPD (données de
 santé, biométriques, opinions politiques, religieuses, syndicales, orientation
@@ -125,7 +125,7 @@ les champs `dataCategory` et `sensitivityLevel` sur chaque capacité publiée.
 
 ## 6. Règles de reclassification
 
-- Une donnée (PERSONAL, C3) agrégée et anonymisée (k > 5) passe en (PUBLIC, C1).
+- Une donnée (PERSONAL, C3) agrégée et anonymisée (k > 5) passe en (PUBLIC, C0).
 - Une donnée (INTERNAL, C1) enrichie d'un identifiant personnel passe en (PERSONAL, C3).
 - Toute reclassification est une action auditée, avec traçabilité de l'ancien et
   du nouveau couple `(DataCategory, SensitivityLevel)`.

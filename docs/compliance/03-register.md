@@ -32,7 +32,7 @@ en production.
 | Base légale              | Exécution du contrat d'utilisation (RGPD Art. 6.1.b).                      |
 | Catégories de données    | C3 : nom, prénom, adresse e-mail, identifiant interne, préférences.        |
 | Personnes concernées     | Utilisateurs d'ICOS (personnes physiques).                                  |
-| Durée de conservation    | Durée du compte + 3 ans (voir `02-retention.md` §2.1).                     |
+| Durée de conservation    | Durée du compte + 1 an après désactivation (voir `02-retention.md` §3.1).                     |
 | Destinataires            | Aucun transfert externe (hébergement OVH/Scaleway, France).                |
 | Transfert hors UE        | Aucun.                                                                      |
 | Mesures de sécurité      | Chiffrement au repos (AES-256), chiffrement en transit (TLS 1.3), accès restreint au porteur du compte et aux administrateurs ICOS désignés. |
