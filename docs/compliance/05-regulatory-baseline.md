@@ -14,7 +14,7 @@ et documenter les obligations qui en découlent pour chaque traitement.
 | Référentiel                         | Applicabilité                                                                 | Priorité |
 |-------------------------------------|-------------------------------------------------------------------------------|----------|
 | **RGPD (UE) 2016/679**              | Traitement de données personnelles de résidents UE — principal référentiel.   | Haute    |
-| **ePrivacy Directive 2002/58/CE**   | Cookies, communications électroniques, suivi — pertinent si canal web.        | Moyenne  |
+| **ePrivacy Directive 2002/58/CE**   | Cookies, communications électroniques, suivi — pertinent si canal web.        | Moyenne — LEGAL_REVIEW_REQUIRED |
 | **AI Act (UE) 2024/1689**           | Classification des systèmes d'IA — pertinent pour décisions automatisées.     | À évaluer |
 | **Loi informatique et libertés**    | Déclinaison nationale du RGPD (France).                                       | Haute    |
 | **NIS2 (UE) 2022/2555**             | Cybersécurité des infrastructures critiques — si ICOS devient critique.       | Veille   |
