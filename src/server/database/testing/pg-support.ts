@@ -49,6 +49,7 @@ export async function stopPostgres(ctx: PgContext | undefined): Promise<void> {
 export async function truncateAll(handle: DatabaseHandle): Promise<void> {
   await handle.db.execute(
     sql`TRUNCATE TABLE audit_entries, approvals, actions, tasks, agents,
+        agent_capabilities, capabilities, human_agent_links,
         user_roles, "session", account, verification, "user" RESTART IDENTITY CASCADE`,
   );
 }

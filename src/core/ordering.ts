@@ -1,4 +1,4 @@
-import type { Agent, AgentAction, Approval, AuditEntry, Task } from "./contracts";
+import type { Agent, AgentAction, Approval, AuditEntry, Capability, Task } from "./contracts";
 
 /**
  * Comparateurs d'ordre déterministe, partagés pour garantir la PARITÉ entre les
@@ -32,3 +32,6 @@ export const compareApprovals = (a: Approval, b: Approval): number =>
 
 export const compareAuditEntries = (a: AuditEntry, b: AuditEntry): number =>
   cmpNum(instant(a.occurredAt), instant(b.occurredAt)) || cmpStr(a.id, b.id);
+
+export const compareCapabilities = (a: Capability, b: Capability): number =>
+  cmpNum(instant(a.createdAt), instant(b.createdAt)) || cmpStr(a.id, b.id);

@@ -1,30 +1,46 @@
 import {
   agentActionSchema,
+  agentCapabilitySchema,
   agentSchema,
   approvalSchema,
   auditEntrySchema,
+  capabilitySchema,
   taskSchema,
   type Agent,
   type AgentAction,
+  type AgentCapability,
   type Approval,
   type AuditEntry,
+  type Capability,
   type Task,
 } from "@/core/contracts";
 
 import { RepositoryMappingError } from "./errors";
-import type { actions, agents, approvals, auditEntries, tasks } from "./schema";
+import type {
+  actions,
+  agents,
+  approvals,
+  auditEntries,
+  capabilities,
+  agentCapabilities,
+  tasks,
+} from "./schema";
 
 type AgentRow = typeof agents.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ActionRow = typeof actions.$inferSelect;
 type ApprovalRow = typeof approvals.$inferSelect;
 type AuditRow = typeof auditEntries.$inferSelect;
+type CapabilityRow = typeof capabilities.$inferSelect;
+type AgentCapabilityRow = typeof agentCapabilities.$inferSelect;
 
 type AgentInsert = typeof agents.$inferInsert;
 type TaskInsert = typeof tasks.$inferInsert;
 type ActionInsert = typeof actions.$inferInsert;
 type ApprovalInsert = typeof approvals.$inferInsert;
 type AuditInsert = typeof auditEntries.$inferInsert;
+type CapabilityInsert = typeof capabilities.$inferInsert;
+type AgentCapabilityInsert = typeof agentCapabilities.$inferInsert;
 
 const iso = (value: Date): string => value.toISOString();
 
@@ -172,5 +188,67 @@ export function auditToRow(entry: AuditEntry): AuditInsert {
     actionId: entry.actionId ?? null,
     details: entry.details,
     occurredAt: new Date(entry.occurredAt),
+  };
+}
+
+// --- Capabilities ---
+
+export function rowToCapability(row: CapabilityRow): Capability {
+  const parsed = capabilitySchema.safeParse({
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    description: row.description ?? undefined,
+    category: row.category,
+    status: row.status,
+    provenance: row.provenance ?? undefined,
+    riskHint: row.riskHint ?? undefined,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("capabilities", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function capabilityToRow(capability: Capability): CapabilityInsert {
+  return {
+    id: capability.id,
+    key: capability.key,
+    name: capability.name,
+    description: capability.description ?? null,
+    category: capability.category,
+    status: capability.status,
+    provenance: capability.provenance ?? null,
+    riskHint: capability.riskHint ?? null,
+    createdAt: new Date(capability.createdAt),
+    updatedAt: new Date(capability.updatedAt),
+  };
+}
+
+// --- AgentCapabilities ---
+
+export function rowToAgentCapability(row: AgentCapabilityRow): AgentCapability {
+  const parsed = agentCapabilitySchema.safeParse({
+    id: row.id,
+    agentId: row.agentId,
+    capabilityId: row.capabilityId,
+    assignedAt: iso(row.assignedAt),
+    assignedByUserId: row.assignedByUserId,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("agent_capabilities", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function agentCapabilityToRow(ac: AgentCapability): AgentCapabilityInsert {
+  return {
+    id: ac.id,
+    agentId: ac.agentId,
+    capabilityId: ac.capabilityId,
+    assignedAt: new Date(ac.assignedAt),
+    assignedByUserId: ac.assignedByUserId,
   };
 }

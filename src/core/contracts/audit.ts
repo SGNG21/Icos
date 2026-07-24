@@ -23,6 +23,12 @@ export const auditEventTypeSchema = z.enum([
   "human_agent_link.created",
   "human_agent_link.removed",
   "human_user.administration_denied",
+  // Capability registry (Lot C1).
+  "capability.created",
+  "capability.updated",
+  "capability.status_changed",
+  "agent_capability.granted",
+  "agent_capability.revoked",
 ]);
 
 export const auditActorSchema = z.object({

@@ -19,6 +19,13 @@ import { GET as getAgents } from "./agents/route";
 import { GET as getAudit } from "./audit/route";
 import { GET as getTasks, POST as postTask } from "./tasks/route";
 import { POST as postTransition } from "./tasks/[id]/transition/route";
+import { GET as getCapabilities, POST as postCapability } from "./capabilities/route";
+import { PATCH as patchCapabilityStatus } from "./capabilities/[id]/status/route";
+import {
+  GET as getAgentCapabilities,
+  POST as postAgentCapability,
+} from "./agents/[id]/capabilities/route";
+import { DELETE as deleteAgentCapability } from "./agents/[id]/capabilities/[capabilityId]/route";
 
 const CONTAINER_KEY = "__icosContainerPromise__";
 const APP_ORIGIN = "http://localhost";
@@ -1427,5 +1434,201 @@ describe("GET /api/audit", () => {
     expect(response.status).toBe(200);
     const data = (await response.json()) as { entries: unknown[] };
     expect(data.entries).toHaveLength(1);
+  });
+});
+
+describe("GET /api/capabilities", () => {
+  it("autorise viewer", async () => {
+    installRole("viewer");
+    const response = await getCapabilities(getRequest("/api/capabilities"));
+    expect(response.status).toBe(200);
+  });
+
+  it("retourne une liste pour admin", async () => {
+    installRole("admin");
+    const response = await getCapabilities(getRequest("/api/capabilities"));
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { capabilities: unknown[] };
+    expect(Array.isArray(data.capabilities)).toBe(true);
+  });
+
+  it("refuse sans session", async () => {
+    installRole("admin");
+    const response = await getCapabilities(getRequest("/api/capabilities", false));
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("POST /api/capabilities", () => {
+  it("refuse viewer", async () => {
+    installRole("viewer");
+    const response = await postCapability(
+      jsonRequest("/api/capabilities", {
+        key: "code.review",
+        name: "Code Review",
+        category: "code",
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("autorise admin à créer une capacité", async () => {
+    installRole("admin");
+    const response = await postCapability(
+      jsonRequest("/api/capabilities", {
+        key: "code.review",
+        name: "Code Review",
+        category: "code",
+      }),
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it("rejette un key invalide", async () => {
+    installRole("admin");
+    const response = await postCapability(
+      jsonRequest("/api/capabilities", {
+        key: "Invalid Key!",
+        name: "Invalid",
+        category: "test",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_input");
+  });
+
+  it("refuse cross-origin", async () => {
+    installRole("admin");
+    const response = await postCapability(
+      jsonRequest(
+        "/api/capabilities",
+        { key: "test.key", name: "Test", category: "code" },
+        { origin: "https://evil.test" },
+      ),
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+});
+
+describe("PATCH /api/capabilities/[id]/status", () => {
+  function statusRequest(id: string, body: unknown, origin?: string): Request {
+    return jsonRequest(`/api/capabilities/${id}/status`, body, origin ? { origin } : undefined);
+  }
+
+  function statusParams(id: string) {
+    return { params: Promise.resolve({ id }) };
+  }
+
+  it("refuse viewer", async () => {
+    installRole("viewer");
+    const response = await patchCapabilityStatus(
+      statusRequest("cap-001", { status: "active" }),
+      statusParams("cap-001"),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse un statut invalide", async () => {
+    installRole("admin");
+    const response = await patchCapabilityStatus(
+      statusRequest("cap-001", { status: "invalid" }),
+      statusParams("cap-001"),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("refuse cross-origin", async () => {
+    installRole("admin");
+    const response = await patchCapabilityStatus(
+      statusRequest("cap-001", { status: "active" }, "https://evil.test"),
+      statusParams("cap-001"),
+    );
+    expect(response.status).toBe(403);
+  });
+});
+
+describe("GET /api/agents/[id]/capabilities", () => {
+  it("autorise viewer", async () => {
+    installRole("viewer");
+    const response = await getAgentCapabilities(
+      getRequest("/api/agents/agent-cto/capabilities"),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("refuse sans session", async () => {
+    installRole("admin");
+    const response = await getAgentCapabilities(
+      getRequest("/api/agents/agent-cto/capabilities", false),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("POST /api/agents/[id]/capabilities", () => {
+  it("refuse viewer", async () => {
+    installRole("viewer");
+    const response = await postAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities", { capabilityId: "cap-001" }),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse operator", async () => {
+    installRole("operator");
+    const response = await postAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities", { capabilityId: "cap-001" }),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuse cross-origin", async () => {
+    installRole("admin");
+    const response = await postAgentCapability(
+      jsonRequest(
+        "/api/agents/agent-cto/capabilities",
+        { capabilityId: "cap-001" },
+        { origin: "https://evil.test" },
+      ),
+      params("agent-cto"),
+    );
+    expect(response.status).toBe(403);
+  });
+});
+
+describe("DELETE /api/agents/[id]/capabilities/[capabilityId]", () => {
+  it("refuse viewer", async () => {
+    installRole("viewer");
+    const response = await deleteAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities/ac-001", {}),
+      { params: Promise.resolve({ id: "agent-cto", capabilityId: "ac-001" }) },
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("refuse operator", async () => {
+    installRole("operator");
+    const response = await deleteAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities/ac-001", {}),
+      { params: Promise.resolve({ id: "agent-cto", capabilityId: "ac-001" }) },
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuse cross-origin", async () => {
+    installRole("admin");
+    const response = await deleteAgentCapability(
+      jsonRequest("/api/agents/agent-cto/capabilities/ac-001", {}, { origin: "https://evil.test" }),
+      { params: Promise.resolve({ id: "agent-cto", capabilityId: "ac-001" }) },
+    );
+    expect(response.status).toBe(403);
   });
 });

@@ -1,4 +1,5 @@
 import type { AgentAction, Approval, AuditEntry } from "@/core/contracts";
+import type { AgentCapability, Capability, CapabilityStatus } from "@/core/contracts/capability";
 import type { HumanAgentLink, HumanAgentRelation, Role, UserStatus } from "@/core/identity";
 import type { AdminHumanUser } from "@/server/repositories/ports";
 
@@ -88,4 +89,47 @@ export interface HumanAdministrationUnitOfWork {
     auditId: string;
     occurredAt: string;
   }): Promise<HumanAdministrationResult<HumanAgentLink>>;
+}
+
+// --- Capability Unit of Work ---
+
+export type CapabilityUowResult<T> =
+  { ok: true; data: T } | { ok: false; reason: string; message: string };
+
+/**
+ * Unité de travail transactionnelle pour les opérations du Capability Registry.
+ *
+ * Chaque méthode applique, comme une opération logique unique, une mutation
+ * métier et son entrée d'audit correspondante : soit l'ensemble réussit,
+ * soit rien n'est appliqué.
+ *
+ * L'implémentation PostgreSQL utilise une transaction DB avec verrouillage
+ * `FOR UPDATE` pour détecter les modifications concurrentes.
+ *
+ * L'implémentation mémoire garantit une section critique non interruptible
+ * au sein d'une instance JavaScript (aucun `await` interne entre mutation et
+ * audit). Elle NE garantit PAS la durabilité ni la cohérence multi-instances.
+ */
+export interface CapabilityUnitOfWork {
+  createCapabilityWithAudit(input: {
+    capability: Capability;
+    auditEntry: AuditEntry;
+  }): Promise<CapabilityUowResult<{ capability: Capability }>>;
+
+  changeStatusWithAudit(input: {
+    id: string;
+    expectedStatus: CapabilityStatus;
+    targetStatus: CapabilityStatus;
+    auditEntry: AuditEntry;
+  }): Promise<CapabilityUowResult<{ capability: Capability }>>;
+
+  grantCapabilityWithAudit(input: {
+    agentCapability: AgentCapability;
+    auditEntry: AuditEntry;
+  }): Promise<CapabilityUowResult<{ id: string }>>;
+
+  revokeCapabilityWithAudit(input: {
+    id: string;
+    auditEntry: AuditEntry;
+  }): Promise<CapabilityUowResult<{ revoked: boolean }>>;
 }
