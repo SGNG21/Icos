@@ -29,6 +29,14 @@ export const auditEventTypeSchema = z.enum([
   "capability.status_changed",
   "agent_capability.granted",
   "agent_capability.revoked",
+  // Skill registry (Lot C2).
+  "skill.created",
+  "skill.imported",
+  "skill.content_changed",
+  "skill.trust_changed",
+  "skill.activation_changed",
+  "skill.security_scan_recorded",
+  "skill.eval_recorded",
 ]);
 
 export const auditActorSchema = z.object({

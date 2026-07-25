@@ -5,6 +5,10 @@ import {
   approvalSchema,
   auditEntrySchema,
   capabilitySchema,
+  evaluationSchema,
+  securityFindingSchema,
+  securityScanSchema,
+  skillSchema,
   taskSchema,
   type Agent,
   type AgentAction,
@@ -12,6 +16,10 @@ import {
   type Approval,
   type AuditEntry,
   type Capability,
+  type Evaluation,
+  type SecurityFinding,
+  type SecurityScan,
+  type Skill,
   type Task,
 } from "@/core/contracts";
 
@@ -23,6 +31,10 @@ import type {
   auditEntries,
   capabilities,
   agentCapabilities,
+  skills,
+  skillSecurityScans,
+  skillSecurityFindings,
+  skillEvaluations,
   tasks,
 } from "./schema";
 
@@ -250,5 +262,190 @@ export function agentCapabilityToRow(ac: AgentCapability): AgentCapabilityInsert
     capabilityId: ac.capabilityId,
     assignedAt: new Date(ac.assignedAt),
     assignedByUserId: ac.assignedByUserId,
+  };
+}
+
+// ─────────────────────────────────────
+// Skills (Lot C2)
+// ─────────────────────────────────────
+
+type SkillRow = typeof skills.$inferSelect;
+type SkillInsert = typeof skills.$inferInsert;
+type SkillScanRow = typeof skillSecurityScans.$inferSelect;
+type SkillScanInsert = typeof skillSecurityScans.$inferInsert;
+type SkillFindingRow = typeof skillSecurityFindings.$inferSelect;
+type SkillFindingInsert = typeof skillSecurityFindings.$inferInsert;
+type SkillEvalRow = typeof skillEvaluations.$inferSelect;
+type SkillEvalInsert = typeof skillEvaluations.$inferInsert;
+
+export function rowToSkill(row: SkillRow): Skill {
+  const parsed = skillSchema.safeParse({
+    id: row.id,
+    tenantId: row.tenantId,
+    skillKey: row.skillKey,
+    version: row.version,
+    name: row.name,
+    description: row.description ?? undefined,
+    capabilityKeys: row.capabilityKeys as string[],
+    category: row.category,
+    trustState: row.trustState,
+    activationState: row.activationState,
+    scripts: row.scripts as Skill["scripts"],
+    resources: row.resources as Skill["resources"],
+    references: row.references as Skill["references"],
+    dependencyDeclarations: row.dependencyDeclarations as Skill["dependencyDeclarations"],
+    networkRequirements: row.networkRequirements as Skill["networkRequirements"],
+    credentialRequirements: row.credentialRequirements as Skill["credentialRequirements"],
+    executionIsolationRequirement: row.executionIsolationRequirement as Skill["executionIsolationRequirement"],
+    toolRequirements: row.toolRequirements as Skill["toolRequirements"],
+    inputSchema: row.inputSchema as Record<string, unknown> | undefined,
+    outputSchema: row.outputSchema as Record<string, unknown> | undefined,
+    dataCategory: row.dataCategory as Skill["dataCategory"],
+    sensitivityLevel: row.sensitivityLevel as Skill["sensitivityLevel"],
+    contentHash: row.contentHash,
+    provenance: row.provenance as Record<string, unknown>,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("skills", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function skillToRow(skill: Skill): SkillInsert {
+  return {
+    id: skill.id,
+    tenantId: skill.tenantId,
+    skillKey: skill.skillKey,
+    version: skill.version,
+    name: skill.name,
+    description: skill.description ?? null,
+    capabilityKeys: skill.capabilityKeys,
+    category: skill.category,
+    trustState: skill.trustState,
+    activationState: skill.activationState,
+    scripts: skill.scripts ?? null,
+    resources: skill.resources ?? null,
+    references: skill.references ?? null,
+    dependencyDeclarations: skill.dependencyDeclarations ?? null,
+    networkRequirements: skill.networkRequirements ?? null,
+    credentialRequirements: skill.credentialRequirements ?? null,
+    executionIsolationRequirement: skill.executionIsolationRequirement ?? null,
+    toolRequirements: skill.toolRequirements ?? null,
+    inputSchema: skill.inputSchema ?? null,
+    outputSchema: skill.outputSchema ?? null,
+    dataCategory: skill.dataCategory ?? null,
+    sensitivityLevel: skill.sensitivityLevel ?? null,
+    contentHash: skill.contentHash,
+    provenance: skill.provenance as Record<string, unknown>,
+    createdAt: new Date(skill.createdAt),
+    updatedAt: new Date(skill.updatedAt),
+  };
+}
+
+export function rowToSecurityScan(row: SkillScanRow): SecurityScan {
+  const parsed = securityScanSchema.safeParse({
+    id: row.id,
+    tenantId: row.tenantId,
+    skillId: row.skillId,
+    evaluatedContentHash: row.evaluatedContentHash,
+    scannerId: row.scannerId,
+    scannerVersion: row.scannerVersion ?? undefined,
+    status: row.status,
+    startedAt: iso(row.startedAt),
+    completedAt: row.completedAt ? iso(row.completedAt) : undefined,
+    metadata: row.metadata as Record<string, unknown> | undefined,
+    createdAt: iso(row.createdAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("skill_security_scans", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function securityScanToRow(scan: SecurityScan): SkillScanInsert {
+  return {
+    id: scan.id,
+    tenantId: scan.tenantId,
+    skillId: scan.skillId,
+    evaluatedContentHash: scan.evaluatedContentHash,
+    scannerId: scan.scannerId,
+    scannerVersion: scan.scannerVersion ?? null,
+    status: scan.status,
+    startedAt: new Date(scan.startedAt),
+    completedAt: scan.completedAt ? new Date(scan.completedAt) : null,
+    metadata: scan.metadata ?? null,
+    createdAt: new Date(scan.createdAt),
+  };
+}
+
+export function rowToSecurityFinding(row: SkillFindingRow): SecurityFinding {
+  const parsed = securityFindingSchema.safeParse({
+    id: row.id,
+    scanId: row.scanId,
+    severity: row.severity,
+    category: row.category,
+    code: row.code ?? undefined,
+    message: row.message,
+    location: row.location ?? undefined,
+    metadata: row.metadata as Record<string, unknown> | undefined,
+    createdAt: iso(row.createdAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("skill_security_findings", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function securityFindingToRow(finding: SecurityFinding): SkillFindingInsert {
+  return {
+    id: finding.id,
+    scanId: finding.scanId,
+    severity: finding.severity,
+    category: finding.category,
+    code: finding.code ?? null,
+    message: finding.message,
+    location: finding.location ?? null,
+    metadata: finding.metadata ?? null,
+    createdAt: new Date(finding.createdAt),
+  };
+}
+
+export function rowToSkillEval(row: SkillEvalRow): Evaluation {
+  const parsed = evaluationSchema.safeParse({
+    id: row.id,
+    tenantId: row.tenantId,
+    skillId: row.skillId,
+    evaluatedContentHash: row.evaluatedContentHash,
+    evaluatorType: row.evaluatorType,
+    evaluatorVersion: row.evaluatorVersion ?? undefined,
+    status: row.status,
+    score: row.score as Record<string, unknown> | undefined,
+    startedAt: iso(row.startedAt),
+    completedAt: row.completedAt ? iso(row.completedAt) : undefined,
+    metadata: row.metadata as Record<string, unknown> | undefined,
+    createdAt: iso(row.createdAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("skill_evaluations", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function skillEvalToRow(evalRecord: Evaluation): SkillEvalInsert {
+  return {
+    id: evalRecord.id,
+    tenantId: evalRecord.tenantId,
+    skillId: evalRecord.skillId,
+    evaluatedContentHash: evalRecord.evaluatedContentHash,
+    evaluatorType: evalRecord.evaluatorType,
+    evaluatorVersion: evalRecord.evaluatorVersion ?? null,
+    status: evalRecord.status,
+    score: evalRecord.score ?? null,
+    startedAt: new Date(evalRecord.startedAt),
+    completedAt: evalRecord.completedAt ? new Date(evalRecord.completedAt) : null,
+    metadata: evalRecord.metadata ?? null,
+    createdAt: new Date(evalRecord.createdAt),
   };
 }

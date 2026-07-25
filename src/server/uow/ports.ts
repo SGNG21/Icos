@@ -2,6 +2,7 @@ import type { AgentAction, Approval, AuditEntry } from "@/core/contracts";
 import type { AgentCapability, Capability, CapabilityStatus } from "@/core/contracts/capability";
 import type { HumanAgentLink, HumanAgentRelation, Role, UserStatus } from "@/core/identity";
 import type { AdminHumanUser } from "@/server/repositories/ports";
+import type { Skill } from "@/core/contracts/skill";
 
 /**
  * Unité de travail transactionnelle pour une décision humaine.
@@ -132,4 +133,36 @@ export interface CapabilityUnitOfWork {
     id: string;
     auditEntry: AuditEntry;
   }): Promise<CapabilityUowResult<{ revoked: boolean }>>;
+}
+
+// --- Skill Unit of Work (Lot C2) ---
+
+export type SkillUowResult<T> =
+  { ok: true; data: T } | { ok: false; reason: string; message: string };
+
+/**
+ * Unité de travail transactionnelle pour les mutations critiques du Skill Registry.
+ */
+export interface SkillUnitOfWork {
+  /**
+   * Active une skill version : désactive l'ancienne version active si elle existe,
+   * active la nouvelle, audite les deux transitions.
+   */
+  activateVersionWithAudit(input: {
+    skill: Skill;
+    tenantId: string;
+    skillKey: string;
+    actorLabel: string;
+    deactivationAudit: AuditEntry;
+    activationAudit: AuditEntry;
+  }): Promise<SkillUowResult<{ skill: Skill; deactivatedVersionId: string | null }>>;
+
+  /**
+   * Rejette atomiquement un skill : trustState=rejected, activationState=revoked.
+   */
+  rejectSkillWithAudit(input: {
+    id: string;
+    trustAudit: AuditEntry;
+    activationAudit: AuditEntry;
+  }): Promise<SkillUowResult<{ skill: Skill }>>;
 }
