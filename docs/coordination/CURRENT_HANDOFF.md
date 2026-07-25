@@ -1,41 +1,39 @@
 # ICOS — Current Handoff
 
-**Lot actif :** D1 — Policy / Authorization
-**Branch :** feat/d1-policy
-**Worktree :** /Users/coco/icos/.claude/worktrees/feat+d1-policy
-**HEAD :** e1010149dcf2e6d55979c08aed7a95bb79b63d5b (main)
+**Lot actif :** D2 — Durable Orchestration
+**Branch :** feat/d2-orchestration
+**Worktree :** /Users/coco/icos/.claude/worktrees/feat+d2-orchestration
+**HEAD :** c8cebbec35677446c24ece7a66a79d86392e2cd4 (main)
 **PR :** none yet
 
 ## État
 
-PHASE 1 — INSPECTION en cours. Infrastructure authorization existante analysée. Spec D1 à formaliser.
+PHASE 1 — INSPECTION à démarrer. Infrastructure existante à analyser.
 
 ## Ce qui existe déjà
 
-- `src/core/authorization/decide.ts` — politique centrale (ALLOW / AWAITING_APPROVAL / REFUSED) basée sur `AuthorizationLevel` + `RiskLevel`
-- `src/server/auth/authorization-service.ts` — vérification permissions + rôle depuis session
-- `src/server/auth/guards.ts` — `requireSession`, `requireRole`, `requirePermission`
-- `src/core/identity/permissions.ts` — matrice hiérarchique rôles→permissions
-- `src/server/auth/cockpit-access.ts` — accès cockpit par rôle
-- TenantContext résolu (COMPLIANCE-1)
-- Classification C0-C3 sur Capabilities
-- C3 retention gate (activation refusée sans retentionPolicyRef)
+- Container + repository pattern (memory + postgres)
+- UoW transactionnelle (InMemory + Postgres)
+- Skill lifecycle (hash, trust, activation, evaluation)
+- Capability lifecycle (proposed → active → deprecated → retired)
+- D1 Policy Engine (7 gates)
+- Audit entries sur toutes les mutations
+- TenantContext résolu
 
-## Ce que D1 doit ajouter
+## Ce que D2 doit ajouter
 
-(Contextual authority décidant ALLOW / DENY / REQUIRE_APPROVAL)
-
-- Actor + Tenant + Role + Permission + Capability + Classification + Risque + Action + Resource
-- Decision policy engine (port + implémentation)
-- Policy definition contract
-- Data classification gate (C2/C3 sensitive operations)
-- Tenant IDOR gate
-- Integration avec guards HTTP existants
-- Tests d'intégration
+- Mission lifecycle (définition + états)
+- Plan / Steps / Runs
+- State machine durable pour missions
+- Repository mission-scoped
+- Gestion des interruptions (restart, provider failure)
+- États mission : WAITING_FOR_APPROVAL, BLOCKED_BY_POLICY, PROVIDER_UNAVAILABLE, etc.
+- Persistence autoritaire (pas de contexte Claude comme source de vérité)
 
 ## Prochaine action
 
-Écrire la spec D1 formelle (PHASE 2), puis design review (PHASE 3).
+PHASE 1 — Inspection de l'existant (repositories, UoW, skill service).
+PHASE 2 — Formal spec D2.
 
 ## Bloqueurs
 
