@@ -24,6 +24,10 @@ vérifications documentaires suivantes, attestées par un relecteur :
 | CT-DOC-04 | Les durées de rétention des nouvelles données sont documentées et bornées. | `02-retention.md` |
 | CT-DOC-05 | Les colonnes/base de données nouvelles sont marquées de leur classification. | §3 de la classification |
 | CT-DOC-06 | Aucun secret ni token n'apparaît dans les logs, réponses API ou commentaires. | Invariant 3, §6 Master Plan |
+| CT-DOC-07 | Le mécanisme de consentement (Art. 7 RGPD) est documenté avant tout traitement basé sur le consentement. | `ICOS_COMPLIANCE_ROADMAP.md` §4.3 |
+| CT-DOC-08 | L'endpoint d'export de portabilité (Art. 20 RGPD) est documenté ou planifié dans le lot cible. | `06-privacy-architecture.md` §2.5 |
+| CT-DOC-09 | La procédure de notification de violation (Art. 33-34 RGPD) est documentée avant mise en production. | `ICOS_COMPLIANCE_ROADMAP.md` §4.4 |
+| CT-DOC-10 | La procédure d'exercice du droit à l'effacement (Art. 17 RGPD) est documentée. | `06-privacy-architecture.md` §2.6 |
 
 ## 3. Tests automatisés — à implémenter
 
@@ -71,7 +75,7 @@ La gate Compliance s'applique à tout lot qui :
 4. Ajoute ou modifie un connecteur externe (provider IA, webhook, intégration).
 
 Ces critères sont vérifiés par le relecteur de PR ; la gate est franchie
-lorsque tous les tests CT-DOC-01 à CT-DOC-06 sont verts.
+lorsque tous les tests CT-DOC-01 à CT-DOC-10 (COMPLIANCE-0) sont verts.
 
 ## 5. Compliance Scenario Traceability
 
@@ -85,6 +89,10 @@ assure la traçabilité entre chaque scénario et le lot cible qui l'implémente
 | 002 | sensitive provider denial | Un provider sans classification adéquate est refusé pour une donnée C3. | ProviderComplianceProfile requis avant envoi | D3 | — (tests D3 à définir) | DOCUMENTED_ONLY |
 | 003 | AUTH_SECRET never memory | Les données AUTH_SECRET ne sont jamais stockées en mémoire agent. | AUTH_SECRET exclue de MemoryPort | COMPLIANCE-1 | CT-DOC-06 | DOCUMENTED_ONLY |
 | 004 | expired data unavailable | Une donnée au-delà de sa durée de rétention n'est plus accessible. | RetentionPolicy respectée à la requête | COMPLIANCE-2 | CT-AUTO-04, CT-AUTO-05 | DOCUMENTED_ONLY |
+| 005 | consent recorded | Le consentement utilisateur est enregistré avec preuve (timestamp, finalité, version). | Consentement traçable et révocable | COMPLIANCE-2 | CT-DOC-07 | DOCUMENTED_ONLY |
+| 006 | data portable | Un utilisateur peut exporter ses données personnelles au format standard. | Export JSON complet et fonctionnel | COMPLIANCE-3 | CT-DOC-08 | DOCUMENTED_ONLY |
+| 007 | breach notified | Une violation de données C3 déclenche la notification CNIL sous 72h. | Notification workflow testé | COMPLIANCE-2 | CT-DOC-09 | DOCUMENTED_ONLY |
+| 008 | erasure executed | Une demande d'effacement est exécutée avec conservation minimale de l'audit. | Données supprimées, audit conservé | COMPLIANCE-2 | CT-DOC-10 | DOCUMENTED_ONLY |
 | 005 | significant decision human approval | Une décision significative (risk 4) nécessite approbation humaine. | PolicyEngine bloque risk 4 sans Approval | D1 | — (tests D1 à définir) | DOCUMENTED_ONLY |
 | 006 | allowedRegions enforcement | Le transfert de données est restreint aux régions autorisées par politique. | DataTransferPolicy respectée | D3 | — (tests D3 à définir) | DOCUMENTED_ONLY |
 | 007 | deletion propagation | La suppression d'un enregistrement source propage aux dépendances définies. | Cascade définie pour DataProvenance | COMPLIANCE-2 | CT-AUTO-04, CT-AUTO-05 | DOCUMENTED_ONLY |
