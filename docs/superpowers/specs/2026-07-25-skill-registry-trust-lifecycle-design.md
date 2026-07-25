@@ -657,7 +657,7 @@ Extension de `Container` dans `src/server/container.ts` :
 ```typescript
 interface Container {
   // ... existant (agents, tasks, actions, capabilities, ...)
-  
+
   // C2 — Skill Registry
   skills: SkillRepository;
   skillSecurityScans: SkillSecurityScanRepository;
