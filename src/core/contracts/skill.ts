@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { idSchema, isoDateTimeSchema } from "./common";
+import { dataCategorySchema, sensitivityLevelSchema } from "./tenant";
 
 // ─────────────────────────────────────
 // TrustState — confiance dans le contenu
@@ -28,36 +29,6 @@ export const activationStateSchema = z.enum([
 ]);
 
 export type ActivationState = z.infer<typeof activationStateSchema>;
-
-// ─────────────────────────────────────
-// DataCategory (COMPLIANCE-0)
-// ─────────────────────────────────────
-
-export const dataCategorySchema = z.enum([
-  "PUBLIC",
-  "INTERNAL",
-  "PERSONAL",
-  "SENSITIVE_PERSONAL",
-  "CONFIDENTIAL_CLIENT",
-  "AUTH_SECRET",
-  "FINANCIAL",
-  "LEGAL",
-  "HEALTH",
-  "HR",
-  "CHILD_DATA",
-  "BIOMETRIC",
-  "DERIVED_PROFILE",
-]);
-
-export type DataCategory = z.infer<typeof dataCategorySchema>;
-
-// ─────────────────────────────────────
-// SensitivityLevel (COMPLIANCE-0)
-// ─────────────────────────────────────
-
-export const sensitivityLevelSchema = z.enum(["C0", "C1", "C2", "C3"]);
-
-export type SensitivityLevel = z.infer<typeof sensitivityLevelSchema>;
 
 // ─────────────────────────────────────
 // SkillProvenance — traçabilité d'origine

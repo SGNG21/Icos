@@ -15,6 +15,10 @@ export interface CreateCapabilityInput {
   category: string;
   provenance?: Record<string, string>;
   riskHint?: string;
+  // COMPLIANCE-1 — Classification des données
+  sensitivityLevel?: string;
+  dataCategory?: string;
+  retentionPolicyRef?: { maxRetentionDays: number; legalBasis: string; purpose: string };
   actorLabel: string;
 }
 
@@ -59,6 +63,9 @@ export class CapabilityService {
       status: "proposed",
       provenance: input.provenance,
       riskHint: input.riskHint,
+      sensitivityLevel: input.sensitivityLevel as Capability["sensitivityLevel"],
+      dataCategory: input.dataCategory as Capability["dataCategory"],
+      retentionPolicyRef: input.retentionPolicyRef as Capability["retentionPolicyRef"],
       createdAt: now,
       updatedAt: now,
     };
@@ -93,6 +100,16 @@ export class CapabilityService {
         ok: false,
         reason: "invalid_transition",
         message: `Transition interdite : ${existing.status} → ${input.targetStatus}`,
+      };
+    }
+
+    // COMPLIANCE-1 : une Capability classifiée C3 ne peut pas être activée
+    // sans politique de rétention associée.
+    if (input.targetStatus === "active" && existing.sensitivityLevel === "C3" && !existing.retentionPolicyRef) {
+      return {
+        ok: false,
+        reason: "retention_policy_required",
+        message: "Cette Capability est classifiée C3 mais ne possède pas de politique de rétention. Ajoutez retentionPolicyRef avant activation.",
       };
     }
 

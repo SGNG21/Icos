@@ -21,8 +21,8 @@ export const user = pgTable(
   "user",
   {
     id: text("id").primaryKey(),
-    name: text("name").notNull(),
-    email: text("email").notNull().unique(),
+    name: text("name").notNull(), // @classification C3
+    email: text("email").notNull().unique(), // @classification C3
     emailVerified: boolean("email_verified").default(false).notNull(),
     image: text("image"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

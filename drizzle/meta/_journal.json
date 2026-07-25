@@ -50,6 +50,13 @@
       "when": 1785000000000,
       "tag": "0006_skill_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785200000000,
+      "tag": "0007_compliance_1_classification",
+      "breakpoints": true
     }
   ]
 }

@@ -215,6 +215,9 @@ export function rowToCapability(row: CapabilityRow): Capability {
     status: row.status,
     provenance: row.provenance ?? undefined,
     riskHint: row.riskHint ?? undefined,
+    sensitivityLevel: row.sensitivityLevel ?? undefined,
+    dataCategory: row.dataCategory ?? undefined,
+    retentionPolicyRef: row.retentionPolicyRef ?? undefined,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
   });
@@ -234,6 +237,9 @@ export function capabilityToRow(capability: Capability): CapabilityInsert {
     status: capability.status,
     provenance: capability.provenance ?? null,
     riskHint: capability.riskHint ?? null,
+    sensitivityLevel: capability.sensitivityLevel ?? null,
+    dataCategory: capability.dataCategory ?? null,
+    retentionPolicyRef: capability.retentionPolicyRef ?? null,
     createdAt: new Date(capability.createdAt),
     updatedAt: new Date(capability.updatedAt),
   };

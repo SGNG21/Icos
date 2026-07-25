@@ -29,11 +29,11 @@ export const agents = pgTable(
   "agents",
   {
     id: text("id").primaryKey(),
-    name: text("name").notNull(),
+    name: text("name").notNull(), // @classification C3
     role: text("role").notNull(),
     status: text("status").notNull(),
     authorizationLevel: smallint("authorization_level").notNull(),
-    description: text("description").notNull(),
+    description: text("description").notNull(), // @classification C3
   },
   (t) => [
     check("agents_status_check", sql`${t.status} in ('available','standby','offline')`),
@@ -73,8 +73,8 @@ export const tasks = pgTable(
   "tasks",
   {
     id: text("id").primaryKey(),
-    title: text("title").notNull(),
-    description: text("description"),
+    title: text("title").notNull(), // @classification C3
+    description: text("description"), // @classification C3
     status: text("status").notNull(),
     assignedAgentId: text("assigned_agent_id").references(() => agents.id, {
       onDelete: "restrict",
@@ -128,7 +128,7 @@ export const approvals = pgTable(
       .references(() => actions.id, { onDelete: "restrict" }),
     decision: text("decision").notNull(),
     decidedByLabel: text("decided_by_label").notNull(),
-    reason: text("reason"),
+    reason: text("reason"), // @classification C3
     decidedAt: timestamp("decided_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -147,7 +147,7 @@ export const auditEntries = pgTable(
     actorLabel: text("actor_label").notNull(),
     taskId: text("task_id").references(() => tasks.id, { onDelete: "restrict" }),
     actionId: text("action_id").references(() => actions.id, { onDelete: "restrict" }),
-    details: jsonb("details").notNull(),
+    details: jsonb("details").notNull(), // @classification C2
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -169,12 +169,17 @@ export const capabilities = pgTable(
   {
     id: text("id").primaryKey(),
     key: text("key").notNull(),
-    name: text("name").notNull(),
-    description: text("description"),
+    name: text("name").notNull(), // @classification C3
+    description: text("description"), // @classification C3
     category: text("category").notNull(),
     status: text("status").notNull(),
     provenance: jsonb("provenance"),
     riskHint: text("risk_hint"),
+    // COMPLIANCE-1 — Classification des données
+    sensitivityLevel: text("sensitivity_level"),
+    dataCategory: text("data_category"),
+    // COMPLIANCE-1 — Politique de rétention pour C3
+    retentionPolicyRef: jsonb("retention_policy_ref"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
@@ -184,7 +189,10 @@ export const capabilities = pgTable(
       "capabilities_status_check",
       sql`${t.status} in ('proposed','active','deprecated','retired')`,
     ),
+    check("capabilities_sensitivity_level_check", sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
+    check("capabilities_data_category_check", sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`),
     index("capabilities_status_idx").on(t.status),
+    index("capabilities_sensitivity_level_idx").on(t.sensitivityLevel),
   ],
 );
 
@@ -221,8 +229,8 @@ export const skills = pgTable(
     tenantId: text("tenant_id").notNull(),
     skillKey: text("skill_key").notNull(),
     version: text("version").notNull(),
-    name: text("name").notNull(),
-    description: text("description"),
+    name: text("name").notNull(), // @classification C3
+    description: text("description"), // @classification C3
     capabilityKeys: jsonb("capability_keys").notNull().default([]),
     category: text("category").notNull(),
     trustState: text("trust_state").notNull(),
@@ -239,7 +247,7 @@ export const skills = pgTable(
     outputSchema: jsonb("output_schema"),
     dataCategory: text("data_category"),
     sensitivityLevel: text("sensitivity_level"),
-    contentHash: text("content_hash").notNull(),
+    contentHash: text("content_hash").notNull(), // @classification C2
     provenance: jsonb("provenance").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
@@ -271,7 +279,7 @@ export const skillSecurityScans = pgTable(
     status: text("status").notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    metadata: jsonb("metadata"),
+    metadata: jsonb("metadata"), // @classification C2
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -290,9 +298,9 @@ export const skillSecurityFindings = pgTable(
     severity: text("severity").notNull(),
     category: text("category").notNull(),
     code: text("code"),
-    message: text("message").notNull(),
+    message: text("message").notNull(), // @classification C3
     location: text("location"),
-    metadata: jsonb("metadata"),
+    metadata: jsonb("metadata"), // @classification C2
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -313,10 +321,10 @@ export const skillEvaluations = pgTable(
     evaluatorType: text("evaluator_type").notNull(),
     evaluatorVersion: text("evaluator_version"),
     status: text("status").notNull(),
-    score: jsonb("score"),
+    score: jsonb("score"), // @classification C2
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    metadata: jsonb("metadata"),
+    metadata: jsonb("metadata"), // @classification C2
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
