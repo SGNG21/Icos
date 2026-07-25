@@ -27,6 +27,11 @@ const envSchema = z.object({
   N8N_API_KEY: optionalSecret,
   DOLIBARR_BASE_URL: optionalUrl,
   DOLIBARR_API_KEY: optionalSecret,
+  // OmniRoute AI Gateway
+  OMNIROUTE_BASE_URL: z.preprocess(emptyAsUndefined, z.string().url().default("http://127.0.0.1:20128")),
+  OMNIROUTE_API_KEY: optionalSecret,
+  OMNIROUTE_DEFAULT_TIMEOUT_MS: z.preprocess(emptyAsUndefined, z.coerce.number().int().positive().default(60_000)),
+  OMNIROUTE_MAX_TIMEOUT_MS: z.preprocess(emptyAsUndefined, z.coerce.number().int().positive().default(300_000)),
 });
 
 export type Env = z.infer<typeof envSchema>;
