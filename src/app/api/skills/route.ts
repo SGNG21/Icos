@@ -1,4 +1,3 @@
-import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
@@ -6,10 +5,6 @@ import { json } from "@/server/http/respond";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// Temporary single-tenant compatibility shim.
-// Replace with canonical TenantContext in COMPLIANCE-1.
-const TENANT_ID = CURRENT_SINGLE_TENANT_ID;
 
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -23,6 +18,15 @@ export async function GET(request: Request): Promise<Response> {
     if (!access.ok) {
       return access.response;
     }
+
+    // COMPLIANCE-1 : résolution du tenant depuis le contexte authentifié
+    const tenantResolution = await container.tenantResolver.resolve({
+      session: { userId: access.session.user.id },
+    });
+    if (!tenantResolution.ok) {
+      return json({ error: "no_tenant", message: "Tenant non résolu" }, { status: 403 });
+    }
+    const { tenantId } = tenantResolution.context;
 
     const url = new URL(request.url);
     const filters: Record<string, string> = {};
@@ -40,7 +44,7 @@ export async function GET(request: Request): Promise<Response> {
       filters.capabilityKey = url.searchParams.get("capabilityKey")!;
     }
 
-    const result = await container.skillService!.listSkills(TENANT_ID, filters);
+    const result = await container.skillService!.listSkills(tenantId, filters);
     if (!result.ok) {
       return json({ error: result.reason, message: result.message }, { status: 400 });
     }
@@ -65,12 +69,21 @@ export async function POST(request: Request): Promise<Response> {
       return access.response;
     }
 
+    // COMPLIANCE-1 : résolution du tenant depuis le contexte authentifié
+    const tenantResolution = await container.tenantResolver.resolve({
+      session: { userId: access.session.user.id },
+    });
+    if (!tenantResolution.ok) {
+      return json({ error: "no_tenant", message: "Tenant non résolu" }, { status: 403 });
+    }
+    const { tenantId } = tenantResolution.context;
+
     const body = await request.json();
     const now = new Date().toISOString();
 
     const result = await container.skillService!.createSkill({
       skill: {
-        tenantId: TENANT_ID,
+        tenantId,
         skillKey: body.skillKey,
         version: body.version,
         name: body.name,

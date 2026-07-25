@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { idSchema, isoDateTimeSchema } from "./common";
+import { dataCategorySchema, retentionPolicyRefSchema, sensitivityLevelSchema } from "./tenant";
 
 /**
  * Statut d'une capacité (lifecycle). `retired` est terminal :
@@ -30,6 +31,11 @@ export const capabilitySchema = z.object({
   status: capabilityStatusSchema,
   provenance: z.record(z.string(), z.string()).optional(),
   riskHint: z.string().optional(),
+  // COMPLIANCE-1 — Classification des données
+  sensitivityLevel: sensitivityLevelSchema.optional(),
+  dataCategory: dataCategorySchema.optional(),
+  // COMPLIANCE-1 — Politique de rétention pour C3
+  retentionPolicyRef: retentionPolicyRefSchema.optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });

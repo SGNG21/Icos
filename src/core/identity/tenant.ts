@@ -1,15 +1,13 @@
 /**
- * Shim transitoire d'identifiant tenant unique.
+ * COMPLIANCE-1 : CURRENT_SINGLE_TENANT_ID supprimé.
  *
- * ICOS est actuellement mono-tenant. Aucun TenantContext runtime n'existe
- * (ni sur la session, ni dans l'infrastructure d'auth).
+ * La résolution du tenant passe désormais par `TenantResolutionPort`
+ * (`src/server/tenant/ports.ts`), implémenté par `SingleTenantResolver`
+ * (`src/server/tenant/single-tenant-resolver.ts`).
  *
- * Les colonnes `tenant_id` sur les tables C2 (skills, scans, evals)
- * préparent l'isolation multi-tenant future. En attendant la résolution
- * canonique du tenant (COMPLIANCE-1), cette constante unique est utilisée
- * pour toutes les opérations.
+ * Le TenantId canonique "default" est encapsulé dans SingleTenantResolver
+ * et n'est plus exporté comme constante globale.
  *
- * Temporary single-tenant compatibility shim.
- * Replace with canonical TenantContext in COMPLIANCE-1.
+ * Utiliser `container.tenantResolver.resolve({ session })` pour obtenir
+ * le TenantContext authentifié.
  */
-export const CURRENT_SINGLE_TENANT_ID = "default";

@@ -20,7 +20,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
-    "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test"
+    "compliance:check": "tsx scripts/validate-classification-markers.ts",
+    "compliance:scan-secrets": "tsx scripts/scan-secrets.ts",
+    "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test && pnpm compliance:check && pnpm compliance:scan-secrets"
   },
   "dependencies": {
     "better-auth": "1.6.23",

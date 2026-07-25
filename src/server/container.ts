@@ -48,6 +48,8 @@ import type {
   SkillSecurityScanRepository,
   SkillEvaluationRepository,
 } from "@/server/repositories/skill-ports";
+import type { TenantResolutionPort } from "@/server/tenant/ports";
+import { SingleTenantResolver } from "@/server/tenant/single-tenant-resolver";
 import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
 import { PostgresHumanAdministrationUnitOfWork } from "@/server/uow/postgres-human-administration-uow";
 import type {
@@ -88,6 +90,8 @@ export interface Container {
   skillEvaluations?: SkillEvaluationRepository;
   skillService?: SkillService;
   skillUow?: SkillUnitOfWork;
+  // COMPLIANCE-1 — Résolution de tenant
+  tenantResolver: TenantResolutionPort;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -156,6 +160,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     audit: new InMemoryAuditRepository(auditLog),
     capabilities,
     agentCapabilities,
+    // COMPLIANCE-1 — Résolveur de tenant canonique
+    tenantResolver: new SingleTenantResolver(),
     // L'UoW mémoire dépend des collaborateurs SYNCHRONES internes (store +
     // journal), afin de préserver sa section critique non interruptible.
     capabilityUow: new InMemoryCapabilityUnitOfWork(capabilities, agentCapabilities, auditLog),
@@ -266,6 +272,8 @@ export async function buildPostgresContainer(
     audit,
     capabilities: new PostgresCapabilityRepository(handle.db),
     agentCapabilities: new PostgresAgentCapabilityRepository(handle.db),
+    // COMPLIANCE-1 — Résolveur de tenant canonique
+    tenantResolver: new SingleTenantResolver(),
     capabilityUow: new PostgresCapabilityUnitOfWork(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
     ...(() => {
@@ -318,6 +326,10 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
   return buildMemoryContainer(options.seeds);
 }
 
+const CONTAINER_KEY = "__icosContainerPromise__";
+
+type GlobalWithContainer = typeof globalThis & { [CONTAINER_KEY]?: Promise<Container> };
+
 /**
  * Singleton mémoïsé sur `globalThis` sous forme de `Promise<Container>`.
  *
@@ -337,10 +349,6 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
  * - pour le backend PostgreSQL, le pool est partagé via ce container ; une
  *   initialisation rejetée purge le cache.
  */
-const CONTAINER_KEY = "__icosContainerPromise__";
-
-type GlobalWithContainer = typeof globalThis & { [CONTAINER_KEY]?: Promise<Container> };
-
 export function getContainer(): Promise<Container> {
   const globalRef = globalThis as GlobalWithContainer;
   globalRef[CONTAINER_KEY] ??= createContainer().catch((error: unknown) => {

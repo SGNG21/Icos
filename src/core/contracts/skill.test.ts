@@ -8,11 +8,10 @@ import {
   skillDependencyDeclarationSchema,
   trustStateSchema,
   activationStateSchema,
-  dataCategorySchema,
-  sensitivityLevelSchema,
   securityScanSchema,
   evaluationSchema,
 } from "./skill";
+import { dataCategorySchema, sensitivityLevelSchema } from "./tenant";
 
 describe("dataCategorySchema — alignement COMPLIANCE-0", () => {
   const valid = [
