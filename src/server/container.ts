@@ -50,6 +50,8 @@ import type {
 } from "@/server/repositories/skill-ports";
 import type { TenantResolutionPort } from "@/server/tenant/ports";
 import { SingleTenantResolver } from "@/server/tenant/single-tenant-resolver";
+import type { D1PolicyPort } from "@/server/policy/ports";
+import { D1PolicyService } from "@/server/policy/d1-policy-service";
 import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
 import { PostgresHumanAdministrationUnitOfWork } from "@/server/uow/postgres-human-administration-uow";
 import type {
@@ -92,6 +94,8 @@ export interface Container {
   skillUow?: SkillUnitOfWork;
   // COMPLIANCE-1 — Résolution de tenant
   tenantResolver: TenantResolutionPort;
+  // D1 — Policy / Authorization
+  policy: D1PolicyPort;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -162,6 +166,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     agentCapabilities,
     // COMPLIANCE-1 — Résolveur de tenant canonique
     tenantResolver: new SingleTenantResolver(),
+    // D1 — Policy / Authorization
+    policy: new D1PolicyService(),
     // L'UoW mémoire dépend des collaborateurs SYNCHRONES internes (store +
     // journal), afin de préserver sa section critique non interruptible.
     capabilityUow: new InMemoryCapabilityUnitOfWork(capabilities, agentCapabilities, auditLog),
@@ -274,6 +280,8 @@ export async function buildPostgresContainer(
     agentCapabilities: new PostgresAgentCapabilityRepository(handle.db),
     // COMPLIANCE-1 — Résolveur de tenant canonique
     tenantResolver: new SingleTenantResolver(),
+    // D1 — Policy / Authorization
+    policy: new D1PolicyService(),
     capabilityUow: new PostgresCapabilityUnitOfWork(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
     ...(() => {
