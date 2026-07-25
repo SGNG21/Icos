@@ -37,6 +37,10 @@ export const auditEventTypeSchema = z.enum([
   "skill.activation_changed",
   "skill.security_scan_recorded",
   "skill.eval_recorded",
+  // D2 — Durable Orchestration.
+  "mission.created",
+  "mission.transitioned",
+  "mission.plan_set",
 ]);
 
 export const auditActorSchema = z.object({
