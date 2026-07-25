@@ -43,17 +43,28 @@ import type {
   CapabilityRepository,
   AgentCapabilityRepository,
 } from "@/server/repositories/capability-ports";
+import type {
+  SkillRepository,
+  SkillSecurityScanRepository,
+  SkillEvaluationRepository,
+} from "@/server/repositories/skill-ports";
 import { PostgresHumanAgentLinkRepository } from "@/server/repositories/postgres/human-agent-link-repository";
 import { PostgresHumanAdministrationUnitOfWork } from "@/server/uow/postgres-human-administration-uow";
 import type {
   HumanAdministrationUnitOfWork,
   ActionDecisionUnitOfWork,
   CapabilityUnitOfWork,
+  SkillUnitOfWork,
 } from "@/server/uow/ports";
 import { InMemoryActionDecisionUnitOfWork } from "@/server/uow/in-memory-action-decision-uow";
 import { PostgresActionDecisionUnitOfWork } from "@/server/uow/postgres-action-decision-uow";
 import { InMemoryCapabilityUnitOfWork } from "@/server/uow/in-memory-capability-uow";
 import { PostgresCapabilityUnitOfWork } from "@/server/uow/postgres-capability-uow";
+import { SkillService } from "@/server/services/skill-service";
+import { InMemorySkillRepository, InMemorySkillSecurityScanRepository, InMemorySkillEvaluationRepository } from "@/server/services/in-memory/skill-repository";
+import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
+import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
+import { PostgresSkillUnitOfWork } from "@/server/uow/postgres-skill-uow";
 import { PersistenceConfigError, resolvePersistence } from "@/server/persistence";
 import { demoActions } from "@/features/actions/data";
 import { demoAgents } from "@/features/agents/data";
@@ -71,6 +82,12 @@ export interface Container {
   agentCapabilities: AgentCapabilityRepository;
   capabilityUow: CapabilityUnitOfWork;
   decisionUow: ActionDecisionUnitOfWork;
+  // C2 — Skill Registry
+  skills?: SkillRepository;
+  skillSecurityScans?: SkillSecurityScanRepository;
+  skillEvaluations?: SkillEvaluationRepository;
+  skillService?: SkillService;
+  skillUow?: SkillUnitOfWork;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -124,6 +141,13 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const capabilities = new InMemoryCapabilityRepository();
   const agentCapabilities = new InMemoryAgentCapabilityRepository();
 
+  // C2 — Skill Registry
+  const skills = new InMemorySkillRepository();
+  const skillSecurityScans = new InMemorySkillSecurityScanRepository();
+  const skillEvaluations = new InMemorySkillEvaluationRepository();
+  const skillUow = new InMemorySkillUnitOfWork(skills, auditLog);
+  const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, new InMemoryAuditRepository(auditLog), skillUow);
+
   return {
     agents: new InMemoryAgentRepository(agents),
     tasks: new InMemoryTaskRepository(auditLog, tasks),
@@ -136,6 +160,11 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     // journal), afin de préserver sa section critique non interruptible.
     capabilityUow: new InMemoryCapabilityUnitOfWork(capabilities, agentCapabilities, auditLog),
     decisionUow: new InMemoryActionDecisionUnitOfWork(store, auditLog),
+    skills,
+    skillSecurityScans,
+    skillEvaluations,
+    skillService,
+    skillUow,
     close: async () => {},
   };
 }
@@ -239,6 +268,14 @@ export async function buildPostgresContainer(
     agentCapabilities: new PostgresAgentCapabilityRepository(handle.db),
     capabilityUow: new PostgresCapabilityUnitOfWork(handle.db),
     decisionUow: new PostgresActionDecisionUnitOfWork(handle.db),
+    ...(() => {
+      const skills = new PostgresSkillRepository(handle.db);
+      const skillSecurityScans = new PostgresSkillSecurityScanRepository(handle.db);
+      const skillEvaluations = new PostgresSkillEvaluationRepository(handle.db);
+      const skillUow = new PostgresSkillUnitOfWork(handle.db);
+      const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, audit, skillUow);
+      return { skills, skillSecurityScans, skillEvaluations, skillUow, skillService };
+    })(),
     auth: authentication?.auth,
     authHttp: authentication?.authHttp,
     roles,
