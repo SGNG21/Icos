@@ -43,6 +43,13 @@
       "when": 1784900000000,
       "tag": "0005_capability_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785000000000,
+      "tag": "0006_skill_registry",
+      "breakpoints": true
     }
   ]
 }

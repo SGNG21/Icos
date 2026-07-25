@@ -153,7 +153,7 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked')`,
+      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
@@ -207,5 +207,120 @@ export const agentCapabilities = pgTable(
     unique("agent_capabilities_agent_capability_unique").on(t.agentId, t.capabilityId),
     index("agent_capabilities_agent_idx").on(t.agentId),
     index("agent_capabilities_capability_idx").on(t.capabilityId),
+  ],
+);
+
+// ─────────────────────────────────────
+// C2 — Skill Registry & Trust Lifecycle
+// ─────────────────────────────────────
+
+export const skills = pgTable(
+  "skills",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    skillKey: text("skill_key").notNull(),
+    version: text("version").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    capabilityKeys: jsonb("capability_keys").notNull().default([]),
+    category: text("category").notNull(),
+    trustState: text("trust_state").notNull(),
+    activationState: text("activation_state").notNull(),
+    scripts: jsonb("scripts"),
+    resources: jsonb("resources"),
+    references: jsonb("references"),
+    dependencyDeclarations: jsonb("dependency_declarations"),
+    networkRequirements: jsonb("network_requirements"),
+    credentialRequirements: jsonb("credential_requirements"),
+    executionIsolationRequirement: jsonb("execution_isolation_requirement"),
+    toolRequirements: jsonb("tool_requirements"),
+    inputSchema: jsonb("input_schema"),
+    outputSchema: jsonb("output_schema"),
+    dataCategory: text("data_category"),
+    sensitivityLevel: text("sensitivity_level"),
+    contentHash: text("content_hash").notNull(),
+    provenance: jsonb("provenance").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("skills_tenant_key_version_unique").on(t.tenantId, t.skillKey, t.version),
+    check("skills_trust_state_check", sql`${t.trustState} in ('untrusted','quarantined','reviewed','approved','rejected')`),
+    check("skills_activation_state_check", sql`${t.activationState} in ('inactive','active','suspended','revoked')`),
+    check("skills_data_category_check", sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`),
+    check("skills_sensitivity_level_check", sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
+    index("skills_trust_state_idx").on(t.trustState),
+    index("skills_activation_state_idx").on(t.activationState),
+    index("skills_skill_key_idx").on(t.skillKey),
+    index("skills_content_hash_idx").on(t.contentHash),
+  ],
+);
+
+export const skillSecurityScans = pgTable(
+  "skill_security_scans",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "restrict" }),
+    evaluatedContentHash: text("evaluated_content_hash").notNull(),
+    scannerId: text("scanner_id").notNull(),
+    scannerVersion: text("scanner_version"),
+    status: text("status").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check("skill_security_scans_status_check", sql`${t.status} in ('running','passed','failed','error')`),
+    index("skill_security_scans_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
+  ],
+);
+
+export const skillSecurityFindings = pgTable(
+  "skill_security_findings",
+  {
+    id: text("id").primaryKey(),
+    scanId: text("scan_id")
+      .notNull()
+      .references(() => skillSecurityScans.id, { onDelete: "restrict" }),
+    severity: text("severity").notNull(),
+    category: text("category").notNull(),
+    code: text("code"),
+    message: text("message").notNull(),
+    location: text("location"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check("skill_security_findings_severity_check", sql`${t.severity} in ('low','medium','high','critical')`),
+    index("skill_security_findings_scan_idx").on(t.scanId),
+  ],
+);
+
+export const skillEvaluations = pgTable(
+  "skill_evaluations",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "restrict" }),
+    evaluatedContentHash: text("evaluated_content_hash").notNull(),
+    evaluatorType: text("evaluator_type").notNull(),
+    evaluatorVersion: text("evaluator_version"),
+    status: text("status").notNull(),
+    score: jsonb("score"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check("skill_evaluations_status_check", sql`${t.status} in ('running','passed','failed','error')`),
+    index("skill_evaluations_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
   ],
 );
