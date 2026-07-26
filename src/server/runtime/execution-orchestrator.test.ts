@@ -9,11 +9,46 @@ import { FakeAiGateway } from "@/server/ai/fake-ai-gateway";
 import { D1PolicyService } from "@/server/policy/d1-policy-service";
 import type { PolicyDecision } from "@/core/policy/contract";
 
+import type { RuntimeAdapterInput, RuntimeAdapterResult } from "@/core/runtime";
+
+import type { AgentRuntimeAdapter } from "./adapters/runtime-adapter";
 import { ArtifactCollector } from "./artifact-collector";
 import { ExecutionOrchestrator } from "./execution-orchestrator";
 import { FakeCredentialBroker, FakeNetworkPolicy } from "./fakes";
 import { WorkspaceManager } from "./workspace-manager";
 import type { D1PolicyPort } from "@/server/policy/ports";
+
+/**
+ * Adaptateur de test qui reste "en cours" jusqu'à ce que son AbortSignal
+ * se déclenche, puis retourne un échec — comme le ferait un vrai
+ * subprocess tué par SIGTERM/SIGKILL (il ne throw jamais).
+ * Permet de tester le routage CANCELLED/TIMED_OUT de l'orchestrateur
+ * indépendamment du mécanisme de kill réel (déjà couvert par de vrais
+ * subprocess dans local-runtime-adapter.test.ts).
+ */
+class HangingAdapter implements AgentRuntimeAdapter {
+  readonly name = "local";
+
+  async execute(
+    _input: RuntimeAdapterInput,
+    abortSignal?: AbortSignal,
+  ): Promise<RuntimeAdapterResult> {
+    await new Promise<void>((resolve) => {
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+
+    return {
+      ok: false,
+      errorCode: "PROCESS_ERROR",
+      message: "Processus terminé par le signal SIGTERM",
+      retryable: false,
+    };
+  }
+}
 
 // ─────────────────────────────────────
 // Helpers
@@ -424,6 +459,102 @@ describe("D4-27/28: usage metadata", () => {
 
     expect(result.ok).toBe(true);
     // Les métadonnées d'usage sont optionnelles dans le résultat
+
+    await rm(testRoot, { recursive: true, force: true }).catch(() => {});
+  });
+});
+
+// ─────────────────────────────────────
+// D4.1: Real cancellation routing (SEC-D4-05 / SEC-D4-06 routing)
+// ─────────────────────────────────────
+
+describe("D4.1: CANCELLED vs TIMED_OUT routing", () => {
+  it("un signal externe déclenché avant complétion route vers CANCELLED (pas TIMED_OUT)", async () => {
+    const policy = new ConfigurablePolicyService();
+    const aiGateway = new FakeAiGateway();
+    const testRoot = await mkdtemp("/tmp/d4-cancel-routing-test-");
+    const wm = new WorkspaceManager(testRoot);
+    const ac = new ArtifactCollector(wm);
+    const cb = new FakeCredentialBroker();
+    const np = new FakeNetworkPolicy();
+
+    const adapters = new Map<string, AgentRuntimeAdapter>([
+      ["local", new HangingAdapter()],
+    ]);
+    const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
+
+    const externalController = new AbortController();
+    const resultPromise = orchestrator.execute(
+      createDefaultInput({ timeoutMs: 60_000 }),
+      externalController.signal,
+    );
+
+    // Laisser la boucle micro-task s'installer avant d'annuler.
+    await new Promise((r) => setTimeout(r, 10));
+    externalController.abort();
+
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.state).toBe("CANCELLED");
+      expect(result.error.code).toBe("CANCELLED");
+    }
+
+    await rm(testRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("le timeout interne route vers TIMED_OUT même sans signal externe", async () => {
+    const policy = new ConfigurablePolicyService();
+    const aiGateway = new FakeAiGateway();
+    const testRoot = await mkdtemp("/tmp/d4-timeout-routing-test-");
+    const wm = new WorkspaceManager(testRoot);
+    const ac = new ArtifactCollector(wm);
+    const cb = new FakeCredentialBroker();
+    const np = new FakeNetworkPolicy();
+
+    const adapters = new Map<string, AgentRuntimeAdapter>([
+      ["local", new HangingAdapter()],
+    ]);
+    const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
+
+    const result = await orchestrator.execute(createDefaultInput({ timeoutMs: 50 }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.state).toBe("TIMED_OUT");
+      expect(result.error.code).toBe("TIMEOUT");
+    }
+
+    await rm(testRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("un signal externe déjà déclenché avant execute() route immédiatement vers CANCELLED", async () => {
+    const policy = new ConfigurablePolicyService();
+    const aiGateway = new FakeAiGateway();
+    const testRoot = await mkdtemp("/tmp/d4-precancel-routing-test-");
+    const wm = new WorkspaceManager(testRoot);
+    const ac = new ArtifactCollector(wm);
+    const cb = new FakeCredentialBroker();
+    const np = new FakeNetworkPolicy();
+
+    const adapters = new Map<string, AgentRuntimeAdapter>([
+      ["local", new HangingAdapter()],
+    ]);
+    const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
+
+    const externalController = new AbortController();
+    externalController.abort();
+
+    const result = await orchestrator.execute(
+      createDefaultInput({ timeoutMs: 60_000 }),
+      externalController.signal,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.state).toBe("CANCELLED");
+    }
 
     await rm(testRoot, { recursive: true, force: true }).catch(() => {});
   });

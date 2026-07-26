@@ -244,6 +244,21 @@ export const runtimeAdapterInputSchema = z.object({
   workspacePath: z.string().min(1),
   /** Timeout en ms. */
   timeoutMs: z.number().int().positive(),
+  /**
+   * Commande à exécuter (optionnel).
+   * Si absent, l'adaptateur V1 retourne un succès sans spawn
+   * pour la compatibilité avec les tests orchestrateur existants.
+   * Doit être un exécutable, pas une chaîne shell.
+   */
+  command: z.string().min(1).optional(),
+  /** Arguments séparés de la commande. Jamais concaténés dans une chaîne shell. */
+  args: z.array(z.string()).optional(),
+  /**
+   * Variables d'environnement supplémentaires à injecter
+   * (ex: credentials résolus par CredentialBrokerPort).
+   * Surcharge les variables de l'allowlist.
+   */
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 export type RuntimeAdapterInput = z.infer<typeof runtimeAdapterInputSchema>;
