@@ -130,7 +130,7 @@ export const riskLabelMap: Record<RiskLevel, string> = {
  * Extensible record — add entries when the backend adds new risk levels.
  */
 export const riskStyleMap: Record<string, RiskConfigItem> = {
-  read_only: { label: "Lecture seule", cssClass: "risk-read-only" },
+  read_only: { label: "Lecture seule", cssClass: "risk-read_only" },
   reversible: { label: "Réversible", cssClass: "risk-reversible" },
   sensitive: { label: "Sensible", cssClass: "risk-sensitive" },
 };
