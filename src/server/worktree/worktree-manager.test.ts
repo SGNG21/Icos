@@ -80,6 +80,17 @@ describe("InMemoryWorktreeManager (fake)", () => {
 // Integration tests (real git operations)
 // ─────────────────────────────────────
 
+// Typed accessor for WorktreeManager private internals used in tests.
+// Uses a structural type to avoid the `never` intersection caused by
+// conflicting private `resolvedRoot` declarations.
+interface MockableWorktreeManager {
+  resolvedRoot: string | null;
+}
+
+function mockWorktreeManager(mgr: object): MockableWorktreeManager {
+  return mgr as unknown as MockableWorktreeManager;
+}
+
 describe("WorktreeManager (git integration)", () => {
   let tmpDir: string;
 
@@ -121,7 +132,7 @@ describe("WorktreeManager (git integration)", () => {
     const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
 
     // Remplacer le repo root
-    (mgr as any).resolvedRoot = tmpDir;
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
     const spec = await mgr.createWorktree("integ-test-task", baseSha);
@@ -141,7 +152,7 @@ describe("WorktreeManager (git integration)", () => {
   it("isolates worktrees from each other", async () => {
     const { WorktreeManager } = await import("./worktree-manager");
     const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
-    (mgr as any).resolvedRoot = tmpDir;
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
 
@@ -170,7 +181,7 @@ describe("WorktreeManager (git integration)", () => {
   it("safely refuses to clean the repo root", async () => {
     const { WorktreeManager } = await import("./worktree-manager");
     const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
-    (mgr as any).resolvedRoot = tmpDir;
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     await expect(mgr.cleanupWorktree(tmpDir)).rejects.toThrow(/racine|root/i);
   });
@@ -178,7 +189,7 @@ describe("WorktreeManager (git integration)", () => {
   it("captures commit history", async () => {
     const { WorktreeManager } = await import("./worktree-manager");
     const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
-    (mgr as any).resolvedRoot = tmpDir;
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
     const spec = await mgr.createWorktree("commit-test", baseSha);
@@ -203,7 +214,7 @@ describe("WorktreeManager (git integration)", () => {
   it("detects dirty state", async () => {
     const { WorktreeManager } = await import("./worktree-manager");
     const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
-    (mgr as any).resolvedRoot = tmpDir;
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
     const spec = await mgr.createWorktree("dirty-test", baseSha);

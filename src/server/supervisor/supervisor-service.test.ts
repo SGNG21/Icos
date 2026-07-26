@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { TaskDag, TaskNode } from "@/core/supervisor";
-import type { WorkerResult, CreateWorkerInput } from "@/core/worker";
+import type { Worker, WorkerResult, CreateWorkerInput } from "@/core/worker";
 import type { ReviewSpec, ReviewResult, CorrectionSpec, CorrectionResult } from "@/core/review";
 import type { IntegrationSpec, IntegrationResult, GateResult } from "@/core/integration";
 import type { PreviewResult } from "@/core/preview";
-import type { WorktreeSpec, WorktreeResult } from "@/core/worktree";
+import type { WorktreeSpec, WorktreeResult, WorktreeEntry } from "@/core/worktree";
 import type { SupervisorRepository } from "./ports";
 import { InMemorySupervisorRepository } from "./in-memory/supervisor-repository";
 import { SupervisorService } from "./supervisor-service";
@@ -38,7 +38,7 @@ class FakeWorkerManager implements WorkerManagerPort {
     }
     return id;
   }
-  async getStatus(workerId: string): Promise<any> {
+  async getStatus(workerId: string): Promise<{ status: Worker["status"]; worker: Worker | null }> {
     return { status: "SUCCEEDED", worker: null };
   }
   async collectResult(workerId: string): Promise<WorkerResult | null> {
@@ -61,7 +61,7 @@ class FakeWorktreeManager implements WorktreeManagerPort {
   }
   async detectChanges(_path: string): Promise<string[]> { return []; }
   async cleanupWorktree(_path: string): Promise<void> {}
-  async listActive(): Promise<any[]> { return []; }
+  async listActive(): Promise<WorktreeEntry[]> { return []; }
 }
 
 class FakeReviewer implements ReviewerManagerPort {

@@ -45,6 +45,24 @@ class FakeGatesLintFails implements GlobalGatesPort {
 }
 
 // ─────────────────────────────────────
+// Typed mock accessor — replace `as any` with proper types for spying
+// on private/protected IntegrationOrchestrator internals during tests.
+// ─────────────────────────────────────
+
+interface MockableOrchestrator {
+  getRepoRoot(): Promise<string>;
+  createIntegrationBranch(branchName: string, baseSha: string): Promise<void>;
+  applyCommit(commitSha: string, targetBranch: string): Promise<void>;
+  git(args: string[]): Promise<string>;
+}
+
+function mockOrchestrator(
+  orchestrator: IntegrationOrchestrator,
+): MockableOrchestrator {
+  return orchestrator as unknown as MockableOrchestrator;
+}
+
+// ─────────────────────────────────────
 // Tests
 // ─────────────────────────────────────
 
@@ -64,10 +82,10 @@ describe("IntegrationOrchestrator", () => {
     it("returns SUCCEEDED when all gates pass", async () => {
       const orchestrator = new IntegrationOrchestrator(new FakeGatesAllPass());
       // Mock internal git ops to avoid real execution
-      vi.spyOn(orchestrator as any, "getRepoRoot").mockResolvedValue("/tmp");
-      vi.spyOn(orchestrator as any, "createIntegrationBranch").mockResolvedValue(undefined);
-      vi.spyOn(orchestrator as any, "applyCommit").mockResolvedValue(undefined);
-      vi.spyOn(orchestrator as any, "git").mockResolvedValue("ffffffffffffffffffffffffffffffffffffffff");
+      vi.spyOn(mockOrchestrator(orchestrator), "getRepoRoot").mockResolvedValue("/tmp");
+      vi.spyOn(mockOrchestrator(orchestrator), "createIntegrationBranch").mockResolvedValue(undefined);
+      vi.spyOn(mockOrchestrator(orchestrator), "applyCommit").mockResolvedValue(undefined);
+      vi.spyOn(mockOrchestrator(orchestrator), "git").mockResolvedValue("ffffffffffffffffffffffffffffffffffffffff");
 
       const result = await orchestrator.integrate(defaultSpec);
 
@@ -78,9 +96,9 @@ describe("IntegrationOrchestrator", () => {
 
     it("returns CONFLICT when commit application fails", async () => {
       const orchestrator = new IntegrationOrchestrator(new FakeGatesAllPass());
-      vi.spyOn(orchestrator as any, "getRepoRoot").mockResolvedValue("/tmp");
-      vi.spyOn(orchestrator as any, "createIntegrationBranch").mockResolvedValue(undefined);
-      vi.spyOn(orchestrator as any, "applyCommit")
+      vi.spyOn(mockOrchestrator(orchestrator), "getRepoRoot").mockResolvedValue("/tmp");
+      vi.spyOn(mockOrchestrator(orchestrator), "createIntegrationBranch").mockResolvedValue(undefined);
+      vi.spyOn(mockOrchestrator(orchestrator), "applyCommit")
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error("CONFLICT in src/file.ts"));
 
@@ -93,9 +111,9 @@ describe("IntegrationOrchestrator", () => {
 
     it("returns GATES_FAILED when gates fail", async () => {
       const orchestrator = new IntegrationOrchestrator(new FakeGatesLintFails());
-      vi.spyOn(orchestrator as any, "getRepoRoot").mockResolvedValue("/tmp");
-      vi.spyOn(orchestrator as any, "createIntegrationBranch").mockResolvedValue(undefined);
-      vi.spyOn(orchestrator as any, "applyCommit").mockResolvedValue(undefined);
+      vi.spyOn(mockOrchestrator(orchestrator), "getRepoRoot").mockResolvedValue("/tmp");
+      vi.spyOn(mockOrchestrator(orchestrator), "createIntegrationBranch").mockResolvedValue(undefined);
+      vi.spyOn(mockOrchestrator(orchestrator), "applyCommit").mockResolvedValue(undefined);
 
       const result = await orchestrator.integrate(defaultSpec);
 
