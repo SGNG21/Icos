@@ -122,7 +122,7 @@ describe("D3-01: successful generation", () => {
     expect(body.temperature).toBe(0.7);
     expect(body.allowed_providers).toEqual(["anthropic"]);
     expect(body.allow_fallback).toBe(false);
-    expect(body.routing_intent).toBe("BEST_CODING");
+    expect(body.routing_intent).toBeUndefined();
     expect(body.max_cost_usd).toBe(0.10);
   });
 });
@@ -413,11 +413,11 @@ describe("D3-12: no provider-specific types leak into core", () => {
 });
 
 // ─────────────────────────────────────
-// D3-13: routing intent survives adapter mapping
+// D3-13: routing intent in request body
 // ─────────────────────────────────────
 
-describe("D3-13: routing intent survives adapter mapping", () => {
-  it("passes intent as routing_intent in request body", async () => {
+describe("D3-13: routing intent in request body", () => {
+  it("does not send routing_intent (OpenAI-compatible proxy rejects unknown params)", async () => {
     let body: Record<string, unknown> = {};
     const trackingFetch: MockFetch = (_url, init) => {
       body = JSON.parse(init?.body as string);
@@ -425,10 +425,10 @@ describe("D3-13: routing intent survives adapter mapping", () => {
     };
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
     await adapter.generate(makeRequest({ intent: "CHEAP" }));
-    expect(body.routing_intent).toBe("CHEAP");
+    expect(body.routing_intent).toBeUndefined();
   });
 
-  it("defaults intent to BEST_REASONING when not specified", async () => {
+  it("does not send routing_intent even with default intent", async () => {
     let body: Record<string, unknown> = {};
     const trackingFetch: MockFetch = (_url, init) => {
       body = JSON.parse(init?.body as string);
@@ -436,7 +436,19 @@ describe("D3-13: routing intent survives adapter mapping", () => {
     };
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
     await adapter.generate(makeRequest());
-    expect(body.routing_intent).toBe("BEST_REASONING");
+    expect(body.routing_intent).toBeUndefined();
+  });
+
+  it("still passes intent in request — available for future OmniRoute support", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest({ intent: "CHEAP" }));
+    // intent is still part of AiRoutingRequest; just not serialized as routing_intent
+    expect(body.routing_intent).toBeUndefined();
   });
 });
 
@@ -445,7 +457,18 @@ describe("D3-13: routing intent survives adapter mapping", () => {
 // ─────────────────────────────────────
 
 describe("D3-14: fallbackAllowed semantics tested/documented", () => {
-  it("passes allow_fallback as false when fallbackAllowed is false", async () => {
+  it("omits allow_fallback when fallbackAllowed is true (default — proxy rejects unknown params)", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest({ fallbackAllowed: true }));
+    expect(body.allow_fallback).toBeUndefined();
+  });
+
+  it("sends allow_fallback as false when fallbackAllowed is false", async () => {
     let body: Record<string, unknown> = {};
     const trackingFetch: MockFetch = (_url, init) => {
       body = JSON.parse(init?.body as string);
@@ -454,17 +477,6 @@ describe("D3-14: fallbackAllowed semantics tested/documented", () => {
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
     await adapter.generate(makeRequest({ fallbackAllowed: false }));
     expect(body.allow_fallback).toBe(false);
-  });
-
-  it("passes allow_fallback as true when fallbackAllowed is true", async () => {
-    let body: Record<string, unknown> = {};
-    const trackingFetch: MockFetch = (_url, init) => {
-      body = JSON.parse(init?.body as string);
-      return Promise.resolve(okResponse());
-    };
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
-    await adapter.generate(makeRequest({ fallbackAllowed: true }));
-    expect(body.allow_fallback).toBe(true);
   });
 
   it("reports fallbackUsed in result when OmniRoute indicates fallback", async () => {
@@ -522,6 +534,146 @@ describe("D3-15: D2 durable state is unaffected by provider failure", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe("PROVIDER_UNAVAILABLE");
+    }
+  });
+});
+
+// ─────────────────────────────────────
+// D3-16: model override sent in request body
+// ─────────────────────────────────────
+
+describe("D3-16: model override sent in request body", () => {
+  it("sends model in the HTTP body when provided", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest({ model: "openai/gpt-5.4-mini" }));
+    expect(body.model).toBe("openai/gpt-5.4-mini");
+  });
+
+  it("omits model from the body when not provided", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest({ model: undefined }));
+    expect(body.model).toBeUndefined();
+  });
+
+  it("preserves model through Zod parse round-trip", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate({ ...makeRequest(), model: "openai/gpt-5.4-mini" });
+    expect(body.model).toBe("openai/gpt-5.4-mini");
+  });
+
+  it("does not interfere with existing intent routing", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(
+      makeRequest({
+        model: "openai/gpt-4o",
+        intent: "CHEAP",
+        fallbackAllowed: false,
+        allowedProviderIds: ["openai"],
+      }),
+    );
+    expect(body.model).toBe("openai/gpt-4o");
+    expect(body.routing_intent).toBeUndefined();
+    expect(body.allow_fallback).toBe(false);
+    expect(body.allowed_providers).toEqual(["openai"]);
+  });
+
+  it("sends stream: false for non-streaming JSON response", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest());
+    expect(body.stream).toBe(false);
+  });
+
+  it("stream: false is always set regardless of model presence", async () => {
+    let body1: Record<string, unknown> = {};
+    let body2: Record<string, unknown> = {};
+    let callCount = 0;
+    const trackingFetch: MockFetch = (_url, init) => {
+      if (callCount === 0) body1 = JSON.parse(init?.body as string);
+      else body2 = JSON.parse(init?.body as string);
+      callCount++;
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    await adapter.generate(makeRequest({ model: "openai/gpt-5.4-mini" }));
+    await adapter.generate(makeRequest());
+    expect(body1.stream).toBe(false);
+    expect(body2.stream).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────
+// Regression: real OpenAI response shape
+// ─────────────────────────────────────
+
+describe("regression: OpenAI-compatible response shape (no OmniRoute metadata)", () => {
+  it("handles real OpenAI JSON response without provider, cost, or routing fields", async () => {
+    const realOpenAiBody = JSON.stringify({
+      id: "chatcmpl-xxx",
+      object: "chat.completion",
+      created: 1_785_076_736,
+      model: "gpt-5.4-mini",
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "Bonjour !",
+          },
+        },
+      ],
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+      },
+    });
+
+    const adapter = new OmniRouteAdapter(
+      defaultConfig,
+      undefined,
+      async () => new Response(realOpenAiBody, { status: 200 }),
+    );
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content).toBe("Bonjour !");
+      // provider defaults to "unknown" when OmniRoute doesn't supply it
+      expect(result.provider.id).toBe("unknown");
+      expect(result.provider.model).toBe("gpt-5.4-mini");
+      expect(result.usage.inputTokens).toBe(10);
+      expect(result.usage.outputTokens).toBe(5);
+      expect(result.usage.totalTokens).toBe(15);
+      // cost is absent in OpenAI response — stays undefined
+      expect(result.usage.costUsd).toBeUndefined();
+      // no routing metadata in basic responses
+      expect(result.fallbackUsed).toBe(false);
     }
   });
 });

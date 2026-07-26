@@ -1064,3 +1064,47 @@ kbd {
     padding: 28px 22px;
   }
 }
+
+/* Voice V0 — transport vocal du cockpit, sans autorité métier. */
+.conversation-composer-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.voice-answer {
+  padding: 14px 16px;
+  background: #f5f8f5;
+  border: 1px solid #d8ded9;
+  border-radius: 12px;
+}
+
+.voice-answer-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--forest);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-answer p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.composer .voice-button,
+.composer .voice-stop-button {
+  min-width: 44px;
+  padding-inline: 12px;
+}
+
+.composer .voice-button.active {
+  outline: 3px solid rgb(106 148 125 / 18%);
+}
+
+.composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

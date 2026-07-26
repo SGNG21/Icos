@@ -16,12 +16,14 @@ interface OmniRouteChatRequest {
   allowed_providers?: string[];
   /** OmniRoute : fournisseurs interdits. */
   disallowed_providers?: string[];
-  /** OmniRoute : fallback autorisé. */
-  allow_fallback: boolean;
+  /** OmniRoute : fallback autorisé (optionnel — omis par défaut pour compatibilité avec proxys simples). */
+  allow_fallback?: boolean;
   /** OmniRoute : intention de routage. */
   routing_intent?: string;
   /** OmniRoute : coût max estimé. */
   max_cost_usd?: number;
+  /** Désactive le streaming — réponse JSON unique. */
+  stream?: boolean;
 }
 
 interface OmniRouteChatChoice {
@@ -287,16 +289,31 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
     messages.push({ role: "user", content: request.prompt });
 
-    return {
+    const body: OmniRouteChatRequest = {
       messages,
+      model: request.model,
       max_tokens: request.maxTokens,
       temperature: request.temperature,
-      allowed_providers: request.allowedProviderIds,
-      disallowed_providers: request.disallowedProviderIds,
-      allow_fallback: request.fallbackAllowed,
-      routing_intent: request.intent,
-      max_cost_usd: request.budgetMaxCostUsd,
+      stream: false,
     };
+
+    // Only include OmniRoute-specific fields when they carry non-default,
+    // actionable values. A simple OpenAI-compatible proxy rejects unknown
+    // parameters, so we avoid sending fields the proxy doesn't support.
+    if (request.fallbackAllowed === false) {
+      body.allow_fallback = false;
+    }
+    if (request.allowedProviderIds?.length) {
+      body.allowed_providers = request.allowedProviderIds;
+    }
+    if (request.disallowedProviderIds?.length) {
+      body.disallowed_providers = request.disallowedProviderIds;
+    }
+    if (request.budgetMaxCostUsd !== undefined) {
+      body.max_cost_usd = request.budgetMaxCostUsd;
+    }
+
+    return body;
   }
 
   private buildHeaders(request: AiRoutingRequest): Record<string, string> {

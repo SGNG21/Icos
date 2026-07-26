@@ -192,4 +192,34 @@ describe("AiRoutingRequestSchema", () => {
       })
     ).toThrow();
   });
+
+  it("accepts explicit model override", () => {
+    const result = aiRoutingRequestSchema.parse({
+      prompt: "Hello",
+      tenantId: "tenant-001",
+      correlationId: "corr-001",
+      model: "openai/gpt-5.4-mini",
+    });
+    expect(result.model).toBe("openai/gpt-5.4-mini");
+  });
+
+  it("model is optional — omitted model is undefined", () => {
+    const result = aiRoutingRequestSchema.parse({
+      prompt: "Hello",
+      tenantId: "tenant-001",
+      correlationId: "corr-001",
+    });
+    expect(result.model).toBeUndefined();
+  });
+
+  it("rejects empty model string", () => {
+    expect(() =>
+      aiRoutingRequestSchema.parse({
+        prompt: "Hello",
+        tenantId: "tenant-001",
+        correlationId: "corr-001",
+        model: "",
+      })
+    ).toThrow();
+  });
 });

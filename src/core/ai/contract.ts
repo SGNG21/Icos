@@ -138,6 +138,8 @@ export const aiRoutingRequestSchema = z.object({
 
   // Intention métier
   intent: aiRoutingIntentSchema.default("BEST_REASONING"),
+  /** Explicit model override — bypass routing intent and use this model directly. */
+  model: z.string().min(1).optional(),
 
   // Contexte ICOS
   tenantId: z.string().min(1),
