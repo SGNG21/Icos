@@ -476,12 +476,8 @@ export class G1Service {
         };
       }
 
-      // Commit UoW : snapshot libéré, mutations définitives
-      if (uow) {
-        await uow.commit();
-      }
-
-      // Audit (hors UoW : append-only, pas de rollback nécessaire)
+      // Audit INSIDE UoW — avant commit pour que le rollback
+      // puisse annuler la transition et le record en cas d'échec
       const eventType =
         targetState === "COMPLETED"
           ? "tool.invocation_completed"
@@ -497,6 +493,11 @@ export class G1Service {
           isSuccess: input.isSuccess,
         }),
       );
+
+      // Commit UoW : snapshot libéré, mutations définitives
+      if (uow) {
+        await uow.commit();
+      }
 
       return { ok: true, entry: updated, recordId };
     } catch (err) {

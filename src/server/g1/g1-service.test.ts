@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuditEntry } from "@/core/contracts/audit";
 import { computeRequestHash, executionGrantSchema } from "@/core/g1";
+import { InMemoryG1UnitOfWork } from "@/server/g1/in-memory/g1-unit-of-work";
 import { InMemoryGrantRepository } from "@/server/g1/in-memory/in-memory-grant-repository";
 import { InMemoryIdempotencyStore } from "@/server/g1/in-memory/in-memory-idempotency-store";
 import { InMemoryExecutionRecordStore } from "@/server/g1/in-memory/in-memory-execution-record-store";
@@ -1263,6 +1264,103 @@ describe("G1 — G1Service", () => {
       expect(grant?.consumedAt).toBeNull();
     });
   });
+
+      // ─────────────────────────────────────
+      // Failure injection A — UoW rollback après échec de transition
+      // ─────────────────────────────────────
+
+      it("A: ExecutionRecord write + transition fails → UoW rollback supprime le record", async () => {
+        const uow = new InMemoryG1UnitOfWork();
+        const testAudit = new TestAuditRepository();
+        // Le service utilise les stores DU UoW — mêmes instances internes
+        const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
+
+        const r = await testService.reserve(makeReserveInput({ runId: "uow-rollback-A" }));
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        const ik = r.entry.idempotencyKey;
+
+        const start = await testService.start(ik);
+        expect(start.ok).toBe(true);
+
+        // Espionner transition pour retourner null (échec atomique)
+        // après que le record a été append par complete()
+        vi.spyOn(uow.idempotency, "transition").mockResolvedValueOnce(null);
+
+        const complete = await testService.complete({
+          idempotencyKey: ik,
+          grantId: r.grant.id,
+          outputHash: "uow-rollback-hash-A",
+          durationMs: 50,
+          isSuccess: true,
+        }, uow);
+
+        expect(complete.ok).toBe(false);
+        if (!complete.ok) {
+          expect(complete.code).toBe("TRANSACTION_FAILED");
+        }
+
+        // Vérifier que le record a été rollbacké (aucun record avec cette clé)
+        const records = await uow.records.findByIdempotencyKey(ik);
+        expect(records).toHaveLength(0);
+
+        // L'état d'idempotence n'a pas changé
+        const entry = await uow.idempotency.findByKey(ik);
+        expect(entry?.state).toBe("EXECUTING");
+
+        // Le mock a été consommé
+        expect(vi.mocked(uow.idempotency.transition)).toHaveBeenCalledTimes(1);
+      });
+
+      // ─────────────────────────────────────
+      // Failure injection B — Audit failure recovery
+      // ─────────────────────────────────────
+
+      it("B: audit.append échoue → rollback restaure l'état EXECUTING", async () => {
+        const uow = new InMemoryG1UnitOfWork();
+        const testAudit = new TestAuditRepository();
+        const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
+
+        const r = await testService.reserve(makeReserveInput({ runId: "uow-audit-fail-B" }));
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        const ik = r.entry.idempotencyKey;
+
+        const start = await testService.start(ik);
+        expect(start.ok).toBe(true);
+
+        // Audit append va jeter une erreur simulée — après la transition
+        // d'idempotence (dans le try), avant le commit UoW
+        vi.spyOn(testAudit, "append").mockRejectedValueOnce(
+          new Error("Injected: audit crash"),
+        );
+
+        const complete = await testService.complete({
+          idempotencyKey: ik,
+          grantId: r.grant.id,
+          outputHash: "audit-fail-hash",
+          durationMs: 50,
+          isSuccess: true,
+        }, uow);
+
+        // Le service retourne TRANSACTION_FAILED (audit en échec)
+        expect(complete.ok).toBe(false);
+        if (!complete.ok) {
+          expect(complete.code).toBe("TRANSACTION_FAILED");
+        }
+
+        // L'état d'idempotence a été rollbacké → EXECUTING
+        const entry = await uow.idempotency.findByKey(ik);
+        expect(entry?.state).toBe("EXECUTING");
+
+        // Le record a été rollbacké (via InMemoryG1UnitOfWork._restore)
+        const records = await uow.records.findByIdempotencyKey(ik);
+        expect(records).toHaveLength(0);
+
+        // Note : la consommation du grant a lieu AVANT uow.begin(),
+        // donc hors du périmètre atomique du UoW.
+        // En PostgreSQL, la transaction englobe tout (grant + record + audit).
+      });
 
   // ─────────────────────────────────────
   // Security invariants
