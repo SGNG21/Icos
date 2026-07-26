@@ -1077,6 +1077,24 @@ kbd {
   grid-template-columns: 260px minmax(0, 1fr);
 }
 
+/* Sidebar column wrapper (grid child 1) */
+.ck-shell-sidebar {
+  min-width: 0;
+}
+
+/* Main column wrapper (grid child 2): topbar + content + footer */
+.ck-shell-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+/* Conversation content region — fills the space between topbar and footer */
+.ck-shell-content {
+  min-height: 0;
+  flex: 1;
+}
+
 /* Top bar */
 .ck-topbar {
   display: flex;
@@ -1084,6 +1102,21 @@ kbd {
   justify-content: space-between;
   padding: 12px 24px;
   border-bottom: 1px solid var(--line);
+}
+
+/* Wordmark shown in the top bar */
+.ck-brand {
+  font-family: Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Top-bar right slot — user identity / settings trigger */
+.ck-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* Sidebar */
@@ -1255,6 +1288,27 @@ kbd {
   opacity: 0.65;
 }
 
+.ck-message-error-icon {
+  margin-right: 6px;
+}
+
+.ck-message-action {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 5px 12px;
+  color: #8a2f2f;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid #e2b6b6;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ck-message-action:hover {
+  background: #f6dede;
+}
+
 /* Composer */
 .ck-composer {
   display: flex;
@@ -1333,6 +1387,14 @@ kbd {
 
 .ck-inflow-card-body {
   padding: 14px 16px;
+}
+
+/* Placeholder body for in-flow cards whose full content lands in a later lot */
+.ck-inflow-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
 /* Variant accent borders */
