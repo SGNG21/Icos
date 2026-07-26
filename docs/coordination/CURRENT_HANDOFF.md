@@ -1,41 +1,49 @@
 # ICOS — Current Handoff
 
-**Lot actif :** D1 — Policy / Authorization
-**Branch :** feat/d1-policy
-**Worktree :** /Users/coco/icos/.claude/worktrees/feat+d1-policy
-**HEAD :** e1010149dcf2e6d55979c08aed7a95bb79b63d5b (main)
-**PR :** none yet
+**Lot actif :** Supervisor / Worker Build (SUP-0 → SUP-7)
+**Branch :** feat/supervisor-worker
+**Worktree :** /Users/coco/icos-supervisor
+**HEAD :** `7c2109c` (SUP-2)
 
 ## État
 
-PHASE 1 — INSPECTION en cours. Infrastructure authorization existante analysée. Spec D1 à formaliser.
+Supervisor en cours de construction. Phases SUP-0 (design), SUP-1 (Task DAG + Scheduler), et SUP-2 (Worker Manager) terminées et commitées. Transition vers SUP-3 (Worktree Manager).
 
-## Ce qui existe déjà
+## Phases réalisées
 
-- `src/core/authorization/decide.ts` — politique centrale (ALLOW / AWAITING_APPROVAL / REFUSED) basée sur `AuthorizationLevel` + `RiskLevel`
-- `src/server/auth/authorization-service.ts` — vérification permissions + rôle depuis session
-- `src/server/auth/guards.ts` — `requireSession`, `requireRole`, `requirePermission`
-- `src/core/identity/permissions.ts` — matrice hiérarchique rôles→permissions
-- `src/server/auth/cockpit-access.ts` — accès cockpit par rôle
-- TenantContext résolu (COMPLIANCE-1)
-- Classification C0-C3 sur Capabilities
-- C3 retention gate (activation refusée sans retentionPolicyRef)
+| Phase | Statut | Commit | Description |
+|-------|--------|--------|-------------|
+| SUP-0 | ✅ DONE | 392e7c5 | Architecture design, EXISTS/EXTEND/CREATE/DEFER/DISCARD matrix |
+| SUP-1 | ✅ DONE | 4eee1aa | Task DAG + Scheduler (cycle detection, ready-node, topo sort) |
+| SUP-2 | ✅ DONE | 7c2109c | Local Worker Manager (WorkerSpec, concurrency, D4 integration) |
+| SUP-3 | ▶ IN PROGRESS | — | Worktree / Git Manager |
+| SUP-4 | ⏳ NEXT | — | Review / Correction Loop |
+| SUP-5 | ⏳ | — | Integration + Global Gates |
+| SUP-6 | ⏳ | — | Preview Delivery |
+| SUP-7 | ⏳ | — | Self-development milestone |
 
-## Ce que D1 doit ajouter
+## Infrastructure intégrée
 
-(Contextual authority décidant ALLOW / DENY / REQUIRE_APPROVAL)
+- **D1** — Policy / Authorization (src/core/policy/ + src/server/policy/)
+- **D2** — Mission Engine (src/core/mission/ + src/server/mission/)
+- **D3** — AI Gateway / OmniRoute (src/server/ai/)
+- **D4** — Runtime Execution (src/server/runtime/)
+- **G1** — Tool Gateway (src/core/g1/ + src/server/g1/)
 
-- Actor + Tenant + Role + Permission + Capability + Classification + Risque + Action + Resource
-- Decision policy engine (port + implémentation)
-- Policy definition contract
-- Data classification gate (C2/C3 sensitive operations)
-- Tenant IDOR gate
-- Integration avec guards HTTP existants
-- Tests d'intégration
+## Nouveaux modules créés par le Supervisor
+
+- **src/core/supervisor/** — Task DAG, TaskNode, lifecycle, Scheduler
+- **src/server/supervisor/** — SupervisorRepository, ports, InMemory impl.
+- **src/core/worker/** — WorkerSpec, WorkerResult, lifecycle
+- **src/server/worker/** — WorkerManager, PromiseSemaphore, D4 integration
+
+## Tests
+
+1044 tests pass (66 test files).
 
 ## Prochaine action
 
-Écrire la spec D1 formelle (PHASE 2), puis design review (PHASE 3).
+Implémenter SUP-3 — Worktree / Git Manager pour l'isolation des workspaces Git.
 
 ## Bloqueurs
 
