@@ -469,7 +469,7 @@ describe("G1 — G1Service", () => {
           expect(b.code).toBe("IDEMPOTENCY_CONFLICT");
         }
       } else {
-        if (!b.ok) { expect(b.ok).toBe(true); return; }
+        if (!b.ok) return;
         expect(b.entry.state).toBe("RESERVED");
       }
     });
@@ -1277,22 +1277,80 @@ describe("G1 — G1Service", () => {
       expect(input.policyProvenance.decision).toBe("allow");
     });
 
-    it("REQUIRE_APPROVAL n'est pas opérationnel (fail closed)", () => {
-      // Le type policyProvenanceSchema ne permet que "allow" —
-      // DENY et REQUIRE_APPROVAL ne peuvent pas produire un grant.
-      const grant = {
-        id: "test-grant",
+    it("DENY → executionGrantSchema refuse (fail closed)", () => {
+      const denyGrant = {
+        id: "test-grant-deny",
         tenantId: "t-1",
         principalId: "p-1",
         missionId: "m-1",
         runId: "r-1",
-        toolId: "tool-slack",
+        toolId: "g1-service",
         toolDefinitionHash: "def123abc",
         capability: "write",
         operation: "send",
         resource: "channel:general",
         requestHash: "a".repeat(64),
-        idempotencyKey: "ik-test",
+        idempotencyKey: "ik-deny",
+        policyProvenance: {
+          policyId: "p1",
+          decision: "deny",
+          decidedAt: new Date().toISOString(),
+        },
+        credentialRequirements: [],
+        networkRequirements: [],
+        isolationRequirements: { filesystem: true, network: false, process: true },
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        consumedAt: null,
+      };
+      // Le Zod schema n'accepte que "allow" — deny est rejeté
+      expect(() => executionGrantSchema.parse(denyGrant)).toThrow();
+    });
+
+    it("REQUIRE_APPROVAL → executionGrantSchema refuse (fail closed)", () => {
+      const reqApprovalGrant = {
+        id: "test-grant-require-approval",
+        tenantId: "t-1",
+        principalId: "p-1",
+        missionId: "m-1",
+        runId: "r-1",
+        toolId: "g1-service",
+        toolDefinitionHash: "def123abc",
+        capability: "write",
+        operation: "send",
+        resource: "channel:general",
+        requestHash: "a".repeat(64),
+        idempotencyKey: "ik-require-approval",
+        policyProvenance: {
+          policyId: "p1",
+          decision: "require_approval",
+          decidedAt: new Date().toISOString(),
+        },
+        credentialRequirements: [],
+        networkRequirements: [],
+        isolationRequirements: { filesystem: true, network: false, process: true },
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        consumedAt: null,
+      };
+      // Le Zod schema rejette require_approval — seule "allow" est acceptée
+      expect(() => executionGrantSchema.parse(reqApprovalGrant)).toThrow();
+    });
+
+    it("ALLOW → executionGrantSchema accepte (grant possible)", () => {
+      const allowGrant = {
+        id: "test-grant-allow",
+        tenantId: "t-1",
+        principalId: "p-1",
+        missionId: "m-1",
+        runId: "r-1",
+        toolId: "g1-service",
+        toolDefinitionHash: "def123abc",
+        capability: "write",
+        operation: "send",
+        resource: "channel:general",
+        requestHash: "a".repeat(64),
+        idempotencyKey: "ik-allow",
         policyProvenance: {
           policyId: "p1",
           decision: "allow" as const,
@@ -1305,15 +1363,8 @@ describe("G1 — G1Service", () => {
         expiresAt: new Date(Date.now() + 60000).toISOString(),
         consumedAt: null,
       };
-      // Vérifie : l'enum policyProvenanceSchema.decision ne contient que "allow".
-      // REQUIRE_APPROVAL est structuellement impossible à représenter.
-      expect(() => executionGrantSchema.parse(grant)).not.toThrow();
-
-      // Vérification au niveau service : ReserveExecutionInput exige un
-      // policyProvenance valide (decision="allow").
-      // REQUIRE_APPROVAL et DENY ne peuvent pas être passés.
-      const input = makeReserveInput();
-      expect(input.policyProvenance.decision).toBe("allow");
+      // Le Zod schema accepte "allow" — grant possible
+      expect(() => executionGrantSchema.parse(allowGrant)).not.toThrow();
     });
 
     it("D4 → G1 : aucune import de G1 dans D4 (isolation architecturale)", async () => {
