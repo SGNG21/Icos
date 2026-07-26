@@ -153,6 +153,7 @@ describe("canRetryNode", () => {
     id: "task-001",
     label: "Test",
     description: "A test node",
+    acceptanceCriteria: [],
     status: "FAILED",
     dependsOn: [],
     blockedBy: [],
@@ -238,7 +239,7 @@ describe("detectCycle", () => {
 // ─────────────────────────────────────
 
 describe("computeReadyNodes", () => {
-  function makeDag(nodes: TaskNode[]): TaskDag {
+  function makeDag(nodes: Omit<TaskNode, "createdAt" | "updatedAt">[]): TaskDag {
     const now = "2026-07-26T10:00:00Z";
     const nodeMap: Record<string, TaskNode> = {};
     for (const n of nodes) {
@@ -260,11 +261,13 @@ describe("computeReadyNodes", () => {
     const dag = makeDag([
       {
         id: "a", label: "A", description: "", status: "PENDING",
+        acceptanceCriteria: [],
         dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
       {
         id: "b", label: "B", description: "", status: "PENDING",
+        acceptanceCriteria: [],
         dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
@@ -278,11 +281,13 @@ describe("computeReadyNodes", () => {
     const dag = makeDag([
       {
         id: "a", label: "A", description: "", status: "SUCCEEDED",
+        acceptanceCriteria: [],
         dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
       {
         id: "b", label: "B", description: "", status: "PENDING",
+        acceptanceCriteria: [],
         dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
@@ -296,11 +301,13 @@ describe("computeReadyNodes", () => {
     const dag = makeDag([
       {
         id: "a", label: "A", description: "", status: "FAILED",
+        acceptanceCriteria: [],
         dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
       {
         id: "b", label: "B", description: "", status: "PENDING",
+        acceptanceCriteria: [],
         dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
@@ -314,11 +321,13 @@ describe("computeReadyNodes", () => {
     const dag = makeDag([
       {
         id: "a", label: "A", description: "", status: "RUNNING",
+        acceptanceCriteria: [],
         dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
       {
         id: "b", label: "B", description: "", status: "PENDING",
+        acceptanceCriteria: [],
         dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
         correctionCount: 0, retryCount: 0, maxRetries: 2,
       },
@@ -480,6 +489,7 @@ function createNode(id: string, deps: string[]): TaskNode {
     id,
     label: `Task ${id}`,
     description: `Task ${id} description`,
+    acceptanceCriteria: [],
     status: "PENDING",
     dependsOn: deps,
     blockedBy: [],

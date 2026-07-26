@@ -103,7 +103,7 @@ export class CorrectionLoop {
         originalTaskId: reviewSpec.taskId,
         missionId: reviewSpec.missionId,
         reviewId: `review-${reviewSpec.taskId}-${attempts}`,
-        reviewVerdict: currentReview.verdict === "PASS" ? "CHANGES_REQUIRED" : "CHANGES_REQUIRED",
+        reviewVerdict: currentReview.verdict === "FAILED" ? "FAILED" : "CHANGES_REQUIRED",
         reviewComments: currentReview.summary + (currentReview.comments ? `\n${currentReview.comments}` : ""),
         failedChecks: currentReview.checks.filter((c) => !c.passed),
         attemptNumber: attempts,

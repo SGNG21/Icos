@@ -69,6 +69,7 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
 
           return {
             status: "CONFLICT",
+            gateResults: [],
             conflict,
             commitsIntegrated,
             summary: `Conflit détecté sur la tâche ${commit.taskId}`,
@@ -106,6 +107,8 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
       const message = error instanceof Error ? error.message : "Erreur inconnue";
       return {
         status: "FAILED",
+        gateResults: [],
+        commitsIntegrated: 0,
         summary: `Échec de l'intégration: ${message}`,
         durationMs: Date.now() - start,
       };

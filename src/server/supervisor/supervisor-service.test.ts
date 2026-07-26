@@ -31,6 +31,7 @@ class FakeWorkerManager implements WorkerManagerPort {
     if (!this.results.has(id)) {
       this.results.set(id, {
         outcome: "SUCCESS",
+        artifacts: [],
         summary: `Worker ${input.taskId} completed`,
         durationMs: 10,
       });
@@ -45,7 +46,7 @@ class FakeWorkerManager implements WorkerManagerPort {
   }
   async cancel(_workerId: string): Promise<void> {}
   async waitForCompletion(workerId: string, _timeoutMs?: number): Promise<WorkerResult> {
-    return this.results.get(workerId) ?? { outcome: "FAILED", summary: "Not found", durationMs: 0 };
+    return this.results.get(workerId) ?? { outcome: "FAILED", artifacts: [], summary: "Not found", durationMs: 0 };
   }
   async markLost(_workerId: string): Promise<void> {}
 }
@@ -65,7 +66,7 @@ class FakeWorktreeManager implements WorktreeManagerPort {
 
 class FakeReviewer implements ReviewerManagerPort {
   async conductReview(_spec: ReviewSpec): Promise<ReviewResult> {
-    return { verdict: "PASS", checks: [{ category: "acceptance_criteria", description: "OK", passed: true }], summary: "PASS", completedAt: new Date().toISOString() };
+    return { verdict: "PASS", checks: [{ category: "acceptance_criteria", description: "OK", passed: true }], summary: "PASS", confidence: 4, durationMs: 100, completedAt: new Date().toISOString() };
   }
   async ensureIndependentReview(_taskId: string, _reviewerWorkerId: string): Promise<boolean> { return true; }
 }
@@ -211,6 +212,7 @@ function makeNode(id: string, deps: string[]): TaskNode {
     id,
     label: `Task ${id}`,
     description: `Description ${id}`,
+    acceptanceCriteria: [],
     status: "PENDING",
     dependsOn: deps,
     blockedBy: [],

@@ -201,6 +201,7 @@ describe("WorkerManager", () => {
         ok: false,
         state: "FAILED",
         error: { code: "PROCESS_ERROR", message: "Erreur simulée", retryable: false },
+        artifacts: [],
         latencyMs: 5,
       });
 

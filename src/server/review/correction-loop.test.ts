@@ -18,6 +18,8 @@ class FakeReviewerPass implements ReviewerManagerPort {
         { category: "security_boundaries", description: "Sécurité OK", passed: true },
       ],
       summary: "Review PASS",
+      confidence: 4,
+      durationMs: 100,
       completedAt: new Date().toISOString(),
     };
   }
@@ -40,6 +42,8 @@ class FakeReviewerFail implements ReviewerManagerPort {
         ],
         summary: "Review CHANGES_REQUIRED",
         comments: "Ajoutez des tests et corrigez l'AC",
+        confidence: 2,
+        durationMs: 150,
         completedAt: new Date().toISOString(),
       };
     }
@@ -50,6 +54,8 @@ class FakeReviewerFail implements ReviewerManagerPort {
         { category: "acceptance_criteria", description: "AC respectée", passed: true },
       ],
       summary: "Review PASS après correction",
+      confidence: 5,
+      durationMs: 80,
       completedAt: new Date().toISOString(),
     };
   }
@@ -66,6 +72,8 @@ class FakeReviewerAlwaysFails implements ReviewerManagerPort {
         { category: "tests", description: "Toujours échoué", passed: false },
       ],
       summary: "Toujours CHANGES_REQUIRED",
+      confidence: 1,
+      durationMs: 50,
       completedAt: new Date().toISOString(),
     };
   }
@@ -207,6 +215,7 @@ function makeReviewSpec(taskId: string): ReviewSpec {
     tenantId: "tenant-001",
     objective: "Implémenter la fonctionnalité X",
     acceptanceCriteria: ["Les tests passent", "Le code est documenté"],
+    requiredChecks: ["acceptance_criteria", "tests", "security_boundaries"],
     worktreePath: "/tmp/worktree",
   };
 }

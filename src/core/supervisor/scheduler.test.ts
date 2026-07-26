@@ -143,7 +143,9 @@ describe("Scheduler", () => {
 
       const scheduler = new Scheduler(dag);
       const events: string[] = [];
-      scheduler.onEvent((e) => events.push(e.type));
+      scheduler.onEvent((e) => {
+        events.push(e.type);
+      });
 
       const result = await scheduler.onNodeFailed("b");
 
@@ -159,7 +161,9 @@ describe("Scheduler", () => {
 
       const scheduler = new Scheduler(dag);
       const events: string[] = [];
-      scheduler.onEvent((e) => events.push(e.type));
+      scheduler.onEvent((e) => {
+        events.push(e.type);
+      });
 
       const result = await scheduler.onNodeFailed("b");
 
@@ -271,6 +275,7 @@ function makeNode(
     id,
     label: `Task ${id}`,
     description: `Description ${id}`,
+    acceptanceCriteria: [],
     status,
     dependsOn: deps,
     blockedBy: [],

@@ -172,6 +172,7 @@ export class WorkerManager implements WorkerManagerPort {
   private createFallbackResult(message: string): WorkerResult {
     return {
       outcome: "FAILED",
+      artifacts: [],
       summary: message,
       errorCode: "INTERNAL_ERROR",
       errorMessage: message,
@@ -241,6 +242,7 @@ export class WorkerManager implements WorkerManagerPort {
       const message = error instanceof Error ? error.message : "Erreur inconnue";
       entry.worker.result = {
         outcome: "FAILED",
+        artifacts: [],
         summary: message,
         errorCode: "INTERNAL_ERROR",
         errorMessage: message,
@@ -278,6 +280,7 @@ export class WorkerManager implements WorkerManagerPort {
     if (!entry) {
       return {
         outcome: "FAILED",
+        artifacts: [],
         summary: "Worker introuvable",
         errorCode: "WORKER_LOST",
         durationMs: 0,
@@ -299,6 +302,7 @@ export class WorkerManager implements WorkerManagerPort {
 
     return {
       outcome: "FAILED",
+      artifacts: [],
       summary: "Worker sans promesse d'exécution",
       errorCode: "INTERNAL_ERROR",
       durationMs: 0,
@@ -319,6 +323,7 @@ export class WorkerManager implements WorkerManagerPort {
 
     entry.worker.result = {
       outcome: "FAILED",
+      artifacts: [],
       summary: "Worker perdu (processus disparu)",
       errorCode: "WORKER_LOST",
       durationMs: entry.worker.result?.durationMs ?? 0,
@@ -377,6 +382,7 @@ export class WorkerManager implements WorkerManagerPort {
       case "TIMED_OUT":
         return {
           outcome: "FAILED",
+          artifacts: [],
           summary: `Worker timeout (${worker.spec.timeoutMs}ms)`,
           errorCode: "TIMEOUT",
           errorMessage: execResult.error?.message,
@@ -385,6 +391,7 @@ export class WorkerManager implements WorkerManagerPort {
       case "CANCELLED":
         return {
           outcome: "FAILED",
+          artifacts: [],
           summary: "Worker annulé",
           errorCode: "CANCELLED",
           errorMessage: execResult.error?.message,
@@ -393,6 +400,7 @@ export class WorkerManager implements WorkerManagerPort {
       default:
         return {
           outcome: "FAILED",
+          artifacts: [],
           summary: execResult.error?.message ?? "Échec d'exécution",
           errorCode: execResult.error?.code ?? "INTERNAL_ERROR",
           errorMessage: execResult.error?.message,

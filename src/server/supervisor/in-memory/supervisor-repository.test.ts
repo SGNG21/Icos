@@ -13,6 +13,7 @@ describe("InMemorySupervisorRepository", () => {
       id,
       label: `Task ${id}`,
       description: `Description ${id}`,
+      acceptanceCriteria: [],
       status: "PENDING",
       dependsOn: deps,
       blockedBy: [],

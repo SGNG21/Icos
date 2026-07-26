@@ -19,7 +19,7 @@ const NODE_TRANSITIONS: Record<TaskNodeStatus, readonly TaskNodeStatus[]> = {
   PENDING: ["READY", "BLOCKED", "CANCELLED"],
   READY: ["ASSIGNED", "BLOCKED", "CANCELLED"],
   ASSIGNED: ["RUNNING", "WAITING_FOR_HUMAN", "FAILED", "CANCELLED", "READY"],
-  RUNNING: ["REVIEWING", "FAILED", "CANCELLED", "TIMED_OUT_READY"],
+  RUNNING: ["REVIEWING", "FAILED", "CANCELLED"],
   REVIEWING: ["SUCCEEDED", "CHANGES_REQUIRED", "FAILED_REVIEW", "FAILED"],
   CHANGES_REQUIRED: ["READY", "FAILED"],
   FAILED_REVIEW: ["READY", "FAILED"],
@@ -29,9 +29,6 @@ const NODE_TRANSITIONS: Record<TaskNodeStatus, readonly TaskNodeStatus[]> = {
   BLOCKED: ["PENDING", "CANCELLED"],
   WAITING_FOR_HUMAN: ["READY", "CANCELLED"],
 };
-
-/** TIMED_OUT_READY est un état de transition interne READY ← RUNNING. */
-export const TEMPORARY_TIMED_OUT_READY = "TIMED_OUT_READY" as const;
 
 /**
  * Vérifie si une transition de nœud est autorisée.

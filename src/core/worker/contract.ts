@@ -92,7 +92,7 @@ export const workerSpecSchema = z.object({
       requiresReview: z.boolean().default(true),
       reviewerCount: z.number().int().nonnegative().default(1),
     })
-    .default({}),
+    .default({ requiresReview: true, reviewerCount: 1 }),
 });
 
 export type WorkerSpec = z.infer<typeof workerSpecSchema>;
