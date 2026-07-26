@@ -332,3 +332,94 @@ export const skillEvaluations = pgTable(
     index("skill_evaluations_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
   ],
 );
+
+// ─────────────────────────────────────
+// G1 — Tool Gateway Foundation
+// ─────────────────────────────────────
+
+export const executionGrants = pgTable(
+  "execution_grants",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    principalId: text("principal_id").notNull(),
+    missionId: text("mission_id").notNull(),
+    runId: text("run_id").notNull(),
+    toolId: text("tool_id").notNull(),
+    toolDefinitionHash: text("tool_definition_hash").notNull(),
+    toolVersion: text("tool_version"),
+    capability: text("capability").notNull(),
+    operation: text("operation").notNull(),
+    resource: text("resource").notNull(),
+    requestHash: text("request_hash").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    policyProvenance: jsonb("policy_provenance").notNull(),
+    credentialRequirements: jsonb("credential_requirements").notNull().default([]),
+    networkRequirements: jsonb("network_requirements").notNull().default([]),
+    isolationRequirements: jsonb("isolation_requirements").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("execution_grants_tenant_idx").on(t.tenantId),
+    index("execution_grants_principal_idx").on(t.principalId),
+    index("execution_grants_request_hash_idx").on(t.requestHash),
+    index("execution_grants_consumed_at_idx").on(t.consumedAt),
+  ],
+);
+
+export const idempotencyEntries = pgTable(
+  "idempotency_entries",
+  {
+    idempotencyKey: text("idempotency_key").primaryKey(),
+    state: text("state").notNull(),
+    requestHash: text("request_hash").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    principalId: text("principal_id").notNull(),
+    missionId: text("mission_id").notNull(),
+    runId: text("run_id").notNull(),
+    grantId: text("grant_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    replayResult: jsonb("replay_result"),
+  },
+  (t) => [
+    check("idempotency_state_check", sql`${t.state} in ('RESERVED','EXECUTING','COMPLETED','FAILED_SAFE','UNKNOWN')`),
+    index("idempotency_entries_tenant_idx").on(t.tenantId),
+    index("idempotency_entries_principal_idx").on(t.principalId),
+    index("idempotency_entries_state_idx").on(t.state),
+  ],
+);
+
+export const executionRecords = pgTable(
+  "execution_records",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    missionId: text("mission_id").notNull(),
+    runId: text("run_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    grantId: text("grant_id"),
+    principalId: text("principal_id").notNull(),
+    sensitivityLevel: text("sensitivity_level").notNull(),
+    events: jsonb("events").notNull(),
+    outputHash: text("output_hash"),
+    artifactRefs: jsonb("artifact_refs").notNull().default([]),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    durationMs: smallint("duration_ms").notNull().default(0),
+    usage: jsonb("usage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check("execution_records_sensitivity_check", sql`${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
+    index("execution_records_tenant_idx").on(t.tenantId),
+    index("execution_records_principal_idx").on(t.principalId),
+    index("execution_records_idempotency_key_idx").on(t.idempotencyKey),
+    index("execution_records_request_hash_idx").on(t.requestHash),
+  ],
+);

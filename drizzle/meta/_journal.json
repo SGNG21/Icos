@@ -57,6 +57,13 @@
       "when": 1785200000000,
       "tag": "0007_compliance_1_classification",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786000000000,
+      "tag": "0008_g1_tool_gateway",
+      "breakpoints": true
     }
   ]
 }

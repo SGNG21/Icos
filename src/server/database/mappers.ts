@@ -22,6 +22,14 @@ import {
   type Skill,
   type Task,
 } from "@/core/contracts";
+import {
+  executionGrantSchema,
+  executionRecordSchema,
+  idempotencyEntrySchema,
+  type ExecutionGrant,
+  type ExecutionRecord,
+  type IdempotencyEntry,
+} from "@/core/g1";
 
 import { RepositoryMappingError } from "./errors";
 import type {
@@ -31,6 +39,9 @@ import type {
   auditEntries,
   capabilities,
   agentCapabilities,
+  executionGrants,
+  executionRecords,
+  idempotencyEntries,
   skills,
   skillSecurityScans,
   skillSecurityFindings,
@@ -453,5 +464,158 @@ export function skillEvalToRow(evalRecord: Evaluation): SkillEvalInsert {
     completedAt: evalRecord.completedAt ? new Date(evalRecord.completedAt) : null,
     metadata: evalRecord.metadata ?? null,
     createdAt: new Date(evalRecord.createdAt),
+  };
+}
+
+// ─────────────────────────────────────
+// G1 — Tool Gateway Foundation
+// ─────────────────────────────────────
+
+type ExecutionGrantRow = typeof executionGrants.$inferSelect;
+type ExecutionGrantInsert = typeof executionGrants.$inferInsert;
+type IdempotencyEntryRow = typeof idempotencyEntries.$inferSelect;
+type IdempotencyEntryInsert = typeof idempotencyEntries.$inferInsert;
+type ExecutionRecordRow = typeof executionRecords.$inferSelect;
+type ExecutionRecordInsert = typeof executionRecords.$inferInsert;
+
+export function rowToExecutionGrant(row: ExecutionGrantRow): ExecutionGrant {
+  const parsed = executionGrantSchema.safeParse({
+    id: row.id,
+    tenantId: row.tenantId,
+    principalId: row.principalId,
+    missionId: row.missionId,
+    runId: row.runId,
+    toolId: row.toolId,
+    toolDefinitionHash: row.toolDefinitionHash,
+    toolVersion: row.toolVersion ?? undefined,
+    capability: row.capability,
+    operation: row.operation,
+    resource: row.resource,
+    requestHash: row.requestHash,
+    idempotencyKey: row.idempotencyKey,
+    policyProvenance: row.policyProvenance as ExecutionGrant["policyProvenance"],
+    credentialRequirements: row.credentialRequirements as ExecutionGrant["credentialRequirements"],
+    networkRequirements: row.networkRequirements as ExecutionGrant["networkRequirements"],
+    isolationRequirements: row.isolationRequirements as ExecutionGrant["isolationRequirements"],
+    issuedAt: iso(row.issuedAt),
+    expiresAt: iso(row.expiresAt),
+    consumedAt: row.consumedAt ? iso(row.consumedAt) : null,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("execution_grants", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function executionGrantToRow(grant: ExecutionGrant): ExecutionGrantInsert {
+  return {
+    id: grant.id,
+    tenantId: grant.tenantId,
+    principalId: grant.principalId,
+    missionId: grant.missionId,
+    runId: grant.runId,
+    toolId: grant.toolId,
+    toolDefinitionHash: grant.toolDefinitionHash,
+    toolVersion: grant.toolVersion ?? null,
+    capability: grant.capability,
+    operation: grant.operation,
+    resource: grant.resource,
+    requestHash: grant.requestHash,
+    idempotencyKey: grant.idempotencyKey,
+    policyProvenance: grant.policyProvenance,
+    credentialRequirements: grant.credentialRequirements,
+    networkRequirements: grant.networkRequirements,
+    isolationRequirements: grant.isolationRequirements,
+    issuedAt: new Date(grant.issuedAt),
+    expiresAt: new Date(grant.expiresAt),
+    consumedAt: grant.consumedAt ? new Date(grant.consumedAt) : null,
+  };
+}
+
+export function rowToIdempotencyEntry(row: IdempotencyEntryRow): IdempotencyEntry {
+  const parsed = idempotencyEntrySchema.safeParse({
+    idempotencyKey: row.idempotencyKey,
+    state: row.state,
+    requestHash: row.requestHash,
+    tenantId: row.tenantId,
+    principalId: row.principalId,
+    missionId: row.missionId,
+    runId: row.runId,
+    grantId: row.grantId ?? undefined,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+    completedAt: row.completedAt ? iso(row.completedAt) : undefined,
+    replayResult: row.replayResult as Record<string, unknown> | undefined,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("idempotency_entries", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function idempotencyEntryToRow(entry: IdempotencyEntry): IdempotencyEntryInsert {
+  return {
+    idempotencyKey: entry.idempotencyKey,
+    state: entry.state,
+    requestHash: entry.requestHash,
+    tenantId: entry.tenantId,
+    principalId: entry.principalId,
+    missionId: entry.missionId,
+    runId: entry.runId,
+    grantId: entry.grantId ?? null,
+    createdAt: new Date(entry.createdAt),
+    updatedAt: new Date(entry.updatedAt),
+    completedAt: entry.completedAt ? new Date(entry.completedAt) : null,
+    replayResult: entry.replayResult ?? null,
+  };
+}
+
+export function rowToExecutionRecord(row: ExecutionRecordRow): ExecutionRecord {
+  const parsed = executionRecordSchema.safeParse({
+    id: row.id,
+    tenantId: row.tenantId,
+    missionId: row.missionId,
+    runId: row.runId,
+    idempotencyKey: row.idempotencyKey,
+    requestHash: row.requestHash,
+    grantId: row.grantId ?? undefined,
+    principalId: row.principalId,
+    sensitivityLevel: row.sensitivityLevel,
+    events: row.events,
+    outputHash: row.outputHash ?? undefined,
+    artifactRefs: row.artifactRefs as string[],
+    errorCode: row.errorCode ?? undefined,
+    errorMessage: row.errorMessage ?? undefined,
+    durationMs: row.durationMs,
+    usage: row.usage as ExecutionRecord["usage"],
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("execution_records", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function executionRecordToRow(record: ExecutionRecord): ExecutionRecordInsert {
+  return {
+    id: record.id,
+    tenantId: record.tenantId,
+    missionId: record.missionId,
+    runId: record.runId,
+    idempotencyKey: record.idempotencyKey,
+    requestHash: record.requestHash,
+    grantId: record.grantId ?? null,
+    principalId: record.principalId,
+    sensitivityLevel: record.sensitivityLevel,
+    events: record.events,
+    outputHash: record.outputHash ?? null,
+    artifactRefs: record.artifactRefs,
+    errorCode: record.errorCode ?? null,
+    errorMessage: record.errorMessage ?? null,
+    durationMs: record.durationMs,
+    usage: record.usage ?? null,
+    createdAt: new Date(record.createdAt),
+    updatedAt: new Date(record.updatedAt),
   };
 }

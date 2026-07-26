@@ -41,6 +41,12 @@ export const auditEventTypeSchema = z.enum([
   "mission.created",
   "mission.transitioned",
   "mission.plan_set",
+  // G1 — Tool Gateway.
+  "tool.invocation_reserved",
+  "tool.invocation_started",
+  "tool.invocation_completed",
+  "tool.invocation_failed",
+  "tool.invocation_unknown",
 ]);
 
 export const auditActorSchema = z.object({
