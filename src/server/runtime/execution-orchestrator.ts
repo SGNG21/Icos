@@ -94,10 +94,10 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
   /**
    * Point d'entrée D4 — exécute une étape de plan.
    */
-  async execute(input: ExecuteStepInput): Promise<ExecutionResult> {
+  async execute(input: ExecuteStepInput, signal?: AbortSignal): Promise<ExecutionResult> {
     this.startedAt = Date.now();
 
-    const outcome = await this.runExecution(input);
+    const outcome = await this.runExecution(input, signal);
 
     // S'assurer que le workspace est nettoyé dans tous les cas
     await this.tryCleanupWorkspace();
@@ -108,7 +108,10 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
   /**
    * Boucle principale d'exécution.
    */
-  private async runExecution(input: ExecuteStepInput): Promise<ExecutionOutcome> {
+  private async runExecution(
+    input: ExecuteStepInput,
+    externalSignal?: AbortSignal,
+  ): Promise<ExecutionOutcome> {
     // ── Phase 1 : D1 re-check (SEC-D4-07) ──
     const policyDecision = await this.recheckPolicy(input);
 
@@ -181,17 +184,33 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
     }
 
     // ── Phase 8 : Exécution ──
-    // Créer un AbortController pour le timeout
+    // AbortController interne : combine le timeout et un signal externe
+    // (ex: annulation demandée par D2) en une seule source de vérité,
+    // avec un `reason` distinguant les deux cas (SEC routage CANCELLED/TIMED_OUT).
     const abortController = new AbortController();
-    const userSignal = new AbortController().signal; // Placeholder pour signal utilisateur
 
-    // Combiner timeout et signal utilisateur
     const timeoutId = setTimeout(() => {
       abortController.abort("timeout");
     }, input.timeoutMs);
 
-    // Si un signal externe est fourni, le relayer
-    // (pour V1, l'AbortSignal vient du contexte d'appel de D2)
+    let externalAbortHandler: (() => void) | null = null;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        abortController.abort("cancelled");
+      } else {
+        externalAbortHandler = () => abortController.abort("cancelled");
+        externalSignal.addEventListener("abort", externalAbortHandler, {
+          once: true,
+        });
+      }
+    }
+
+    const cleanupAbort = () => {
+      clearTimeout(timeoutId);
+      if (externalAbortHandler && externalSignal) {
+        externalSignal.removeEventListener("abort", externalAbortHandler);
+      }
+    };
 
     try {
       const adapterResult = await adapter.execute(
@@ -210,14 +229,24 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
         abortController.signal,
       );
 
-      clearTimeout(timeoutId);
+      cleanupAbort();
 
       // Gérer le résultat de l'adaptateur
       if (adapterResult.ok) {
         return await this.handleAdapterSuccess(adapterResult.output, input);
       }
 
-      // Échec adaptateur
+      // L'adaptateur retourne ok:false même quand le process a été tué
+      // suite à un abort (timeout ou annulation) — router en conséquence
+      // plutôt que de traiter ça comme un échec normal (SEC-D4-05/06).
+      if (abortController.signal.aborted) {
+        if (abortController.signal.reason === "timeout") {
+          return await this.handleTimeout(input);
+        }
+        return await this.handleCancellation(input);
+      }
+
+      // Échec adaptateur (non lié à un abort)
       return await this.handleAdapterError(
         adapterResult.errorCode,
         adapterResult.message,
@@ -225,7 +254,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
         input,
       );
     } catch (error) {
-      clearTimeout(timeoutId);
+      cleanupAbort();
 
       const message = error instanceof Error ? error.message : String(error);
       if (abortController.signal.aborted) {

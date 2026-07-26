@@ -17,7 +17,12 @@ import type { ExecuteStepInput, ExecutionResult } from "@/core/runtime";
  * - L'annulation ne laisse pas de processus zombie
  */
 export interface RuntimeExecutionPort {
-  execute(input: ExecuteStepInput): Promise<ExecutionResult>;
+  /**
+   * @param signal Signal d'annulation externe (optionnel).
+   * Si fourni et déclenché, l'exécution est annulée (état CANCELLED),
+   * distinct du timeout interne (état TIMED_OUT).
+   */
+  execute(input: ExecuteStepInput, signal?: AbortSignal): Promise<ExecutionResult>;
 }
 
 // ─────────────────────────────────────
