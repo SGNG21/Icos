@@ -324,7 +324,7 @@ describe("D1PolicyEngine — SYSTEM AGENT AUTHORIZATION", () => {
     expect(result.outcome).toBe("deny");
   });
 
-  it("AUTH-05: SystemAgent without authorizationLevel for reversible → require_approval (RiskGate)", () => {
+  it("AUTH-05: SystemAgent without authorizationLevel for reversible → deny (RiskGate defaults to 0)", () => {
     const engine = new D1PolicyEngine();
     const result = engine.decide({
       actor: {
@@ -332,7 +332,7 @@ describe("D1PolicyEngine — SYSTEM AGENT AUTHORIZATION", () => {
         id: "supervisor",
         tenantId: "icos-single-tenant",
         roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
-        // authorizationLevel missing — RiskGate requires ≥2 for reversible
+        // authorizationLevel missing → RiskGate defaults to 0
       },
       tenant: { tenantId: "icos-single-tenant" },
       action: "supervisor.worker.execute",
@@ -343,7 +343,11 @@ describe("D1PolicyEngine — SYSTEM AGENT AUTHORIZATION", () => {
       },
       risk: "reversible",
     });
-    expect(result.outcome).toBe("require_approval");
+    // RiskGate: actorLevel (0) < 2 ⇒ deny with insufficient_authorization
+    expect(result.outcome).toBe("deny");
+    if (result.outcome === "deny") {
+      expect(result.code).toBe("insufficient_authorization");
+    }
   });
 
   it("AUTH-06: kind:system is distinct from kind:agent", () => {
