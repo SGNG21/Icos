@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { idSchema, isoDateTimeSchema } from "@/core/contracts/common";
 import { aiRoutingIntentSchema } from "@/core/ai";
+import type { SystemAgent } from "@/core/policy";
 
 // ─────────────────────────────────────
 // Worker status
@@ -181,10 +182,26 @@ export interface CreateWorkerInput {
     resource: string;
     capabilityKey?: string;
   };
+  /**
+   * Identité système porteuse de permissions pour l'appel D1.
+   * Créée au bootstrap (composition root), jamais auto-attribuée.
+   * Non définie = le PermissionGate refuse par défaut (default-deny).
+   * Propagée dans PolicyRequest.actor avec kind: "system".
+   *
+   * @see SystemAgent
+   */
+  agentIdentity?: SystemAgent;
   timeoutMs?: number;
   budget?: {
     maxTokens?: number;
     maxCostUsd?: number;
   };
   requiresReview?: boolean;
+  /**
+   * Chemin du worktree Git isolé où le worker doit opérer.
+   * Présent quand le Supervisor a créé un worktree pour cette tâche.
+   * Le worker écrit ses changements dans ce répertoire pour que
+   * WorktreeManager.captureResult() puisse les capturer.
+   */
+  worktreePath?: string;
 }

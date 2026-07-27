@@ -14,6 +14,7 @@ import { CorrectionLoop } from "@/server/review/correction-loop";
 import type { GlobalGatesPort } from "@/server/integration/ports";
 import type { IntegrationOrchestratorPort } from "@/server/integration/ports";
 import type { PreviewDeliveryPort } from "@/server/preview/ports";
+import type { SystemAgent } from "@/core/policy";
 
 /**
  * Résultat d'une exécution complète du Supervisor.
@@ -36,6 +37,15 @@ export interface SupervisorConfig {
   maxCorrectionRetries: number;
   /** Timeout par défaut des workers (ms). */
   defaultWorkerTimeoutMs: number;
+  /**
+   * Identité système du Supervisor pour les appels D1.
+   * Créée au bootstrap (composition root), jamais auto-attribuée.
+   * Propagée via CreateWorkerInput.agentIdentity → WorkerManager → D1 PolicyRequest.
+   * Non définie = PermissionGate refuse par défaut (default-deny).
+   *
+   * @see SystemAgent
+   */
+  agentIdentity?: SystemAgent;
 }
 
 const DEFAULT_CONFIG: SupervisorConfig = {
@@ -154,7 +164,7 @@ export class SupervisorService {
     // Marquer les nœuds racines comme READY
     const readyNodes = computeReadyNodes(savedDag);
     for (const nodeId of readyNodes) {
-      await this.repository.updateNodeStatus(dag.id, nodeId, "READY");
+      const result = await this.repository.updateNodeStatus(dag.id, nodeId, "READY");
     }
 
     // Exécuter les nœuds dans l'ordre de priorité
@@ -178,7 +188,12 @@ export class SupervisorService {
         if (currentNode.status !== "READY") continue;
 
         // b. Créer le worktree
-        const worktree = await this.worktrees.createWorktree(nodeId);
+        let worktree;
+        try {
+          worktree = await this.worktrees.createWorktree(nodeId);
+        } catch (wtErr) {
+          throw wtErr;
+        }
 
         // c. Passer en ASSIGNED
         await this.repository.updateNodeStatus(dag.id, nodeId, "ASSIGNED", {
@@ -207,7 +222,11 @@ export class SupervisorService {
             action: "supervisor.worker.execute",
             resource: nodeId,
           },
+          // Propagate Supervisor's system agent identity to D1 via WorkerManager.
+          // Created at the composition root — never derived from context (Context ≠ Permission).
+          agentIdentity: this.config.agentIdentity,
           timeoutMs: this.config.defaultWorkerTimeoutMs,
+          worktreePath: worktree.path,
         });
 
         // e. Attendre le résultat
@@ -215,7 +234,6 @@ export class SupervisorService {
           workerId,
           this.config.defaultWorkerTimeoutMs + 10_000,
         );
-
         if (workerResult.outcome === "SUCCESS") {
           // Capturer le résultat du worktree
           const wtResult = await this.worktrees.captureResult(worktree.path);

@@ -114,7 +114,16 @@ export class WorkerManager implements WorkerManagerPort {
 
     // Vérification D1 avant création
     const policyDecision = await this.policy.decide({
-      actor: { kind: "agent", id: "supervisor", tenantId: input.tenantId },
+      actor: {
+        kind: "system",
+        id: input.agentIdentity?.id ?? "supervisor",
+        tenantId: input.agentIdentity?.tenantId ?? input.tenantId,
+        // Rôles du SystemAgent propagés depuis le Supervisor (composition root).
+        // Sans roles, le PermissionGate refuse (default-deny).
+        // Sans authorizationLevel, le RiskGate refuse (default-deny).
+        roles: input.agentIdentity?.roles,
+        authorizationLevel: input.agentIdentity?.authorizationLevel,
+      },
       tenant: { tenantId: input.tenantId },
       action: input.permissionEnvelope.action,
       resource: {

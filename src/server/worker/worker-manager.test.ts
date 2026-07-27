@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ExecuteStepInput, ExecutionResult } from "@/core/runtime";
-import type { PolicyRequest, PolicyDecision } from "@/core/policy/contract";
+import type { PolicyRequest, PolicyDecision, SystemAgent } from "@/core/policy";
+import { PERMISSION_SUPERVISOR_WORKER_EXECUTE } from "@/core/policy";
 import type { D1PolicyPort } from "@/server/policy/ports";
 import type { RuntimeExecutionPort } from "@/server/runtime/ports";
 import { WorkerManager, PromiseSemaphore } from "./worker-manager";
@@ -17,6 +18,15 @@ class FakePolicyPort implements D1PolicyPort {
 
   async decide(_request: PolicyRequest): Promise<PolicyDecision> {
     return this.response;
+  }
+}
+
+class CapturingFakePolicyPort implements D1PolicyPort {
+  lastRequest: PolicyRequest | null = null;
+
+  async decide(request: PolicyRequest): Promise<PolicyDecision> {
+    this.lastRequest = request;
+    return { outcome: "allow", reason: "test", attestedAt: new Date().toISOString() };
   }
 }
 
@@ -125,6 +135,55 @@ describe("WorkerManager", () => {
           permissionEnvelope: { action: "worker.execute", resource: "task-001" },
         }),
       ).rejects.toThrow(/D1/);
+    });
+
+    it("propagates agentIdentity to D1 PolicyRequest", async () => {
+      const policy = new CapturingFakePolicyPort();
+      const runtime = new FakeRuntimePort();
+      const manager = new WorkerManager(runtime, policy);
+
+      const agentIdentity: SystemAgent = {
+        id: "supervisor",
+        tenantId: "tenant-001",
+        roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
+        authorizationLevel: 2,
+        justification: "Test: Supervisor worker execution authority",
+      };
+
+      await manager.spawn({
+        taskId: "task-001",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Tâche avec agentIdentity",
+        permissionEnvelope: { action: "supervisor.worker.execute", resource: "task-001" },
+        agentIdentity,
+      });
+
+      expect(policy.lastRequest).not.toBeNull();
+      expect(policy.lastRequest!.actor.roles).toEqual([PERMISSION_SUPERVISOR_WORKER_EXECUTE]);
+      expect(policy.lastRequest!.actor.authorizationLevel).toBe(2);
+      expect(policy.lastRequest!.actor.kind).toBe("system");
+      expect(policy.lastRequest!.actor.id).toBe("supervisor");
+      expect(policy.lastRequest!.actor.tenantId).toBe("tenant-001");
+    });
+
+    it("propagates agentIdentity as undefined when not provided", async () => {
+      const policy = new CapturingFakePolicyPort();
+      const runtime = new FakeRuntimePort();
+      const manager = new WorkerManager(runtime, policy);
+
+      await manager.spawn({
+        taskId: "task-001",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Tâche sans agentIdentity",
+        permissionEnvelope: { action: "worker.execute", resource: "task-001" },
+      });
+
+      expect(policy.lastRequest).not.toBeNull();
+      expect(policy.lastRequest!.actor.roles).toBeUndefined();
+      expect(policy.lastRequest!.actor.authorizationLevel).toBeUndefined();
+      expect(policy.lastRequest!.actor.kind).toBe("system");
     });
 
     it("returns immediately without waiting for completion", async () => {
