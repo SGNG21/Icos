@@ -3,8 +3,10 @@ import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -421,5 +423,46 @@ export const executionRecords = pgTable(
     index("execution_records_principal_idx").on(t.principalId),
     index("execution_records_idempotency_key_idx").on(t.idempotencyKey),
     index("execution_records_request_hash_idx").on(t.requestHash),
+  ],
+);
+
+// ─────────────────────────────────────
+// CTX-SUP-1B — MissionContext Persistence + Versioning
+// ─────────────────────────────────────
+
+/**
+ * Snapshots versionnés IMMUABLES du MissionContext (append-only).
+ *
+ * FRONTIÈRES (voir spec CTX-SUP-1 §6.1) :
+ *   Persistance ≠ Authorization ; Stored Context ≠ Approval / ExecutionGrant.
+ * Le `payload` est un MissionContext `.strict()` : il ne peut porter aucun
+ * champ d'autorité (grant, token, approbation, credential).
+ *
+ * La clé primaire composite `(tenant_id, mission_id, version)` EST le verrou
+ * optimiste : deux writers en course sur la même version → une seule réussit,
+ * l'autre reçoit `23505 unique_violation` (concurrence fail-closed, jamais de
+ * last-write-wins). Le « latest » est DÉRIVÉ de `MAX(version)`.
+ */
+export const missionContexts = pgTable(
+  "mission_contexts",
+  {
+    tenantId: text("tenant_id").notNull(),
+    missionId: text("mission_id").notNull(),
+    version: integer("version").notNull(),
+    payload: jsonb("payload").notNull(), // @classification C2
+    builtAt: timestamp("built_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: "mission_contexts_pkey",
+      columns: [t.tenantId, t.missionId, t.version],
+    }),
+    check("mission_contexts_version_check", sql`${t.version} >= 0`),
+    index("mission_contexts_latest_idx").on(
+      t.tenantId,
+      t.missionId,
+      t.version.desc(),
+    ),
   ],
 );
