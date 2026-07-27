@@ -228,4 +228,84 @@ describe("WorktreeManager (git integration)", () => {
 
     await mgr.cleanupWorktree(spec.path).catch(() => {});
   });
+
+  // ─────────────────────────────────────
+  // Stale worktree collision (regression: FIRST-AUTO-1B)
+  // A prior interrupted run can leave a dirty worktree at the task-scoped path.
+  // createWorktree must handle this canonically — never throw, always yield a
+  // clean worktree — so the node is dispatched instead of stalling in READY.
+  // ─────────────────────────────────────
+
+  it("recreates cleanly when a stale dirty worktree occupies the target path", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+
+    const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+
+    // 1er run : crée le worktree et le laisse dirty (simule un run interrompu)
+    const spec1 = await mgr.createWorktree("collision-test", baseSha);
+    await writeFile(path.join(spec1.path, "README.md"), "OVERWRITTEN uncommitted change\n");
+    await writeFile(path.join(spec1.path, "leftover.txt"), "prior-run debris\n");
+
+    // 2e run : même taskId — l'ancien `git checkout` levait ici
+    // « local changes would be overwritten ». Doit désormais réussir.
+    const spec2 = await mgr.createWorktree("collision-test", baseSha);
+    expect(spec2.path).toBe(spec1.path);
+    expect(spec2.branch).toBe("worktree-collision-test");
+
+    // Le nouveau worktree est propre et au bon SHA
+    const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec2.path })).stdout.trim();
+    expect(head).toBe(baseSha);
+    const status = (await exec("git", ["status", "--porcelain"], { cwd: spec2.path })).stdout.trim();
+    expect(status).toBe("");
+
+    await mgr.cleanupWorktree(spec2.path).catch(() => {});
+  });
+
+  it("resets a stale task branch to the requested base SHA on collision", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+
+    const oldSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+
+    // Créer un worktree sur l'ancien SHA, puis avancer main d'un commit
+    await mgr.createWorktree("sha-reset-test", oldSha);
+    await writeFile(path.join(tmpDir, "advance.txt"), "advance main\n");
+    await exec("git", ["add", "."], { cwd: tmpDir });
+    await exec("git", ["commit", "-m", "advance"], { cwd: tmpDir });
+    const newSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+    expect(newSha).not.toBe(oldSha);
+
+    // Recréer avec le nouveau SHA : la branche résiduelle doit être réalignée
+    const spec = await mgr.createWorktree("sha-reset-test", newSha);
+    const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec.path })).stdout.trim();
+    expect(head).toBe(newSha);
+
+    await mgr.cleanupWorktree(spec.path).catch(() => {});
+  });
+
+  it("recovers when the worktree dir was pruned but the branch remains", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+
+    const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+
+    // 1er run puis retrait canonique du worktree — la branche worktree-* survit
+    const spec1 = await mgr.createWorktree("orphan-branch-test", baseSha);
+    await exec("git", ["worktree", "remove", "--force", spec1.path], { cwd: tmpDir });
+    const branchStillThere = (
+      await exec("git", ["branch", "--list", "worktree-orphan-branch-test"], { cwd: tmpDir })
+    ).stdout.trim();
+    expect(branchStillThere).not.toBe("");
+
+    // Recréer : `-B` doit réutiliser/réinitialiser la branche sans lever
+    const spec2 = await mgr.createWorktree("orphan-branch-test", baseSha);
+    const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec2.path })).stdout.trim();
+    expect(head).toBe(baseSha);
+
+    await mgr.cleanupWorktree(spec2.path).catch(() => {});
+  });
 });

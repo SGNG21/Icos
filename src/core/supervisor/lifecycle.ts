@@ -17,7 +17,10 @@ import {
  */
 const NODE_TRANSITIONS: Record<TaskNodeStatus, readonly TaskNodeStatus[]> = {
   PENDING: ["READY", "BLOCKED", "CANCELLED"],
-  READY: ["ASSIGNED", "BLOCKED", "CANCELLED"],
+  // FAILED autorisé : le provisioning (worktree, spawn) peut échouer entre
+  // READY et ASSIGNED. Sans cette transition, un échec de provisioning laisse
+  // le nœud bloqué en READY (zombie) au lieu d'atteindre un état terminal.
+  READY: ["ASSIGNED", "BLOCKED", "CANCELLED", "FAILED"],
   ASSIGNED: ["RUNNING", "WAITING_FOR_HUMAN", "FAILED", "CANCELLED", "READY"],
   RUNNING: ["REVIEWING", "FAILED", "CANCELLED"],
   REVIEWING: ["SUCCEEDED", "CHANGES_REQUIRED", "FAILED_REVIEW", "FAILED"],

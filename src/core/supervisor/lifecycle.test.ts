@@ -27,6 +27,9 @@ describe("isNodeTransitionAllowed", () => {
     ["READY", "ASSIGNED"],
     ["READY", "BLOCKED"],
     ["READY", "CANCELLED"],
+    // Provisioning (worktree/spawn) peut échouer entre READY et ASSIGNED :
+    // le nœud doit pouvoir atteindre un état terminal plutôt que rester zombie.
+    ["READY", "FAILED"],
     ["ASSIGNED", "RUNNING"],
     ["ASSIGNED", "WAITING_FOR_HUMAN"],
     ["ASSIGNED", "FAILED"],

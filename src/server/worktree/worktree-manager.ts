@@ -78,19 +78,26 @@ export class WorktreeManager implements WorktreeManagerPort {
     // Créer le répertoire parent si nécessaire
     await mkdir(worktreeDir, { recursive: true });
 
-    // Vérifier si le worktree existe déjà
+    // Collision de worktree résiduel : un run précédent interrompu peut avoir
+    // laissé un worktree au chemin task-scoped (potentiellement dirty ou sur un
+    // SHA obsolète). Le manager est propriétaire exclusif de ce chemin
+    // déterministe, donc un résidu est par définition périmé : on le retire
+    // canoniquement avant de recréer un workspace frais.
+    //
+    // On NE FAIT JAMAIS `git checkout <baseSha>` sur un worktree existant : si
+    // l'arbre est dirty, git lève « local changes would be overwritten by
+    // checkout » et la tâche reste bloquée (jamais dispatchée à un worker).
     const existing = await this.safeGit(["worktree", "list", "--porcelain"]);
     if (existing.includes(worktreePath)) {
-      // Le worktree existe déjà — checkout du SHA approprié
-      await this.git(["checkout", effectiveBaseSha], worktreePath);
-    } else {
-      // Vérifier si la branche existe
-      const branchExists = await this.safeGit(["branch", "--list", branchName]);
-      if (!branchExists) {
-        await this.git(["branch", branchName, effectiveBaseSha]);
-      }
-      await this.git(["worktree", "add", worktreePath, branchName]);
+      await this.safeGit(["worktree", "remove", "--force", worktreePath]);
+      await this.safeGit(["worktree", "prune"]);
     }
+
+    // Crée le worktree frais de façon atomique et déterministe. `-B` crée la
+    // branche task-scoped OU la réinitialise sur `effectiveBaseSha` si elle
+    // existe déjà (résidu d'un run précédent pointant sur un ancien SHA),
+    // garantissant que le worker part toujours d'un arbre propre au bon SHA.
+    await this.git(["worktree", "add", "-B", branchName, worktreePath, effectiveBaseSha]);
 
     const now = new Date().toISOString();
     const spec: WorktreeSpec = {
