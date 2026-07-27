@@ -243,7 +243,10 @@ class FirstAutoWorker implements WorkerManagerPort {
       console.log(`  [WORKER] format non-bloquant: ${e}`);
     }
 
-    // Exécuter les tests
+    // Exécuter les tests ciblés — le verdict repose sur le code de sortie.
+    // exit code === 0 → PASS
+    // exit code !== 0 → FAIL
+    // Ne JAMAIS parser le texte pour le verdict ; exit code seul est autoritaire.
     try {
       console.log(`  [WORKER] running focused tests...`);
       const { stdout: testOutput } = await exec(
@@ -258,20 +261,11 @@ class FirstAutoWorker implements WorkerManagerPort {
 
       console.log(`  [WORKER] test output (first 500 chars): ${testOutput.slice(0, 500)}`);
 
-      // Vérifier que les tests passent
-      if (!testOutput.includes("Tests") || testOutput.includes("FAIL")) {
-        return {
-          outcome: "FAILED",
-          artifacts: [],
-          summary: "Les tests du cycle de vie de la mission ont échoué",
-          errorMessage: testOutput.slice(0, 2000),
-          durationMs: Date.now() - start,
-        };
-      }
-      console.log(`  [WORKER] focused tests PASS`);
+      // exit code 0 = success — pas de parsing textuel
+      console.log(`  [WORKER] focused tests PASS (exit code 0)`);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
-      console.error(`  [WORKER] test execution FAILED: ${errMsg}`);
+      console.error(`  [WORKER] focused test execution FAILED (non-zero exit): ${errMsg}`);
       return {
         outcome: "FAILED",
         artifacts: [],
@@ -281,59 +275,44 @@ class FirstAutoWorker implements WorkerManagerPort {
       };
     }
 
-    // Vérifier que tous les tests existants passent toujours
-    // Note : certains tests (local-runtime-adapter) sont non-déterministes
-    // et peuvent échouer dans différents environnements.
-    // On vérifie que NOTRE test (mission lifecycle) passe correctement.
+    // Vérifier que tous les tests existants passent toujours.
+    // Le verdict repose exclusivement sur le code de sortie :
+    //   exit code === 0 → PASS
+    //   exit code !== 0 → FAIL
+    // Le parsing textuel est limité au REPORTING (diagnostic uniquement).  Il
+    // ne peut jamais transformer un exit code 0 en échec, ni un exit code
+    // non-nul en succès.
     try {
       console.log(`  [WORKER] running all tests (may take a moment)...`);
-      const { stdout: allTestOutput, stderr: allTestStderr } = await exec(
-        "pnpm",
-        ["test", "--reporter=verbose"],
-        {
-          cwd: repoRoot,
-          timeout: 300_000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
+      // Le verdict repose uniquement sur le code de sortie : on n'a plus besoin
+      // de capturer stdout ici (aucun parsing textuel de succès).
+      await exec("pnpm", ["test", "--reporter=verbose"], {
+        cwd: repoRoot,
+        timeout: 300_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
 
-      // Vérifie spécifiquement que notre nouveau test n'a pas échoué
-      // (le test local-runtime-adapter est non-déterministe et préexistant)
-      const ourTestFailed = allTestOutput.includes("src/core/mission/lifecycle.test.ts") &&
-        (allTestOutput.includes("FAIL") || allTestOutput.includes("failed"));
-      if (ourTestFailed) {
-        return {
-          outcome: "FAILED",
-          artifacts: [],
-          summary: "Le nouveau test mission/lifecycle échoue",
-          errorMessage: allTestOutput.slice(0, 2000),
-          durationMs: Date.now() - start,
-        };
-      }
-      console.log(`  [WORKER] all tests PASS (ignoring known flaky test)`);
+      // exit code 0 = tout a réussi
+      console.log(`  [WORKER] all tests PASS (exit code 0)`);
     } catch (error) {
+      // exit code ≠ 0 — un ou plusieurs tests ont échoué
       const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
-      // Même dans le catch (process exit code ≠ 0), vérifier si notre test a réussi
-      const stderrContent = error instanceof Error && "stderr" in error
-        ? (error as any).stderr ?? ""
-        : "";
-      const stdoutContent = error instanceof Error && "stdout" in error
-        ? (error as any).stdout ?? ""
-        : "";
+      console.error(`  [WORKER] full test suite FAILED (non-zero exit): ${errMsg}`);
+
+      // Capture le contenu pour diagnostic — les erreurs de child_process
+      // exposent stdout/stderr sur l'objet Error quand la commande échoue.
+      const execError = error as Error & { stderr?: string; stdout?: string };
+      const stderrContent = execError.stderr ?? "";
+      const stdoutContent = execError.stdout ?? "";
       const combinedOutput = stdoutContent || stderrContent;
 
-      if (combinedOutput.includes("src/core/mission/lifecycle.test.ts") &&
-          (combinedOutput.includes("FAIL") || combinedOutput.includes("failed"))) {
-        return {
-          outcome: "FAILED",
-          artifacts: [],
-          summary: "Le nouveau test mission/lifecycle échoue dans la suite complète",
-          errorMessage: combinedOutput.slice(0, 2000),
-          durationMs: Date.now() - start,
-        };
-      }
-      // Notre test a réussi, mais d'autres tests instables ont échoué — acceptable
-      console.log(`  [WORKER] known flaky test failed, but our test passed`);
+      return {
+        outcome: "FAILED",
+        artifacts: [],
+        summary: "La suite de tests complète a échoué",
+        errorMessage: combinedOutput.slice(0, 2000),
+        durationMs: Date.now() - start,
+      };
     }
 
     // Git add et commit dans le worktree
