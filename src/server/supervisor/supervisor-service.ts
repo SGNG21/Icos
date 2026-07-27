@@ -5,6 +5,7 @@ import type { WorkerSpec, CreateWorkerInput } from "@/core/worker";
 import type { ReviewSpec } from "@/core/review";
 import type { IntegrationSpec } from "@/core/integration";
 import type { PreviewResult } from "@/core/preview";
+import type { SupervisorEnrichedContext } from "@/core/context";
 import type { SupervisorRepository } from "./ports";
 import type { WorkerManagerPort } from "@/server/worker/ports";
 import type { WorktreeManagerPort } from "@/server/worktree/ports";
@@ -89,7 +90,36 @@ export class SupervisorService {
    * 6. Livre la preview
    * 7. Passe en COMPLETED
    */
-  async execute(dag: TaskDag): Promise<SupervisorExecutionResult> {
+  async execute(
+    dag: TaskDag,
+    context?: SupervisorEnrichedContext,
+  ): Promise<SupervisorExecutionResult> {
+    // ── Valider le contexte si fourni ──
+    if (context) {
+      // Le contexte doit appartenir à la même mission et au même tenant.
+      if (context.sourceRef.missionId !== dag.missionId) {
+        return {
+          dag,
+          status: "FAILED",
+          summary: `Conflit de contexte : la mission du contexte (${context.sourceRef.missionId}) ne correspond pas au DAG (${dag.missionId})`,
+        };
+      }
+      if (context.sourceRef.tenantId !== dag.tenantId) {
+        return {
+          dag,
+          status: "FAILED",
+          summary: `Conflit de contexte : le tenant du contexte (${context.sourceRef.tenantId}) ne correspond pas au DAG (${dag.tenantId})`,
+        };
+      }
+      // Le contexte est informatif, jamais autoritaire.
+      // Les champs suivants NE SONT JAMAIS utilisés comme permission/approbation/grant :
+      //   input.confirmedObjective — objectif canonique, l'autorité reste D1/G1
+      //   input.confirmedConstraints — contraintes contextuelles, pas de décision allow
+      //   input.openQuestions — questions ouvertes, pas d'approbation
+      //   input.boundedSummary — résumé informatif
+      //   input.memoryReferences — références mémoire, preuve seule
+    }
+
     // 1. Valider le DAG
     const nodes = Object.values(dag.nodes);
     const validationErrors = validateDag(nodes);
@@ -156,11 +186,22 @@ export class SupervisorService {
         });
 
         // d. Spawn le worker
+        // Le contexte enrichi (SupervisorEnrichedContext) est informatif et
+        // NON autoritaire. Il peut supplémenter l'objective locale avec le
+        // résumé borné, mais NE JAMAIS remplacer le DAG comme source de
+        // vérité pour l'exécution, ni autoriser une action:
+        //   - permissionEnvelope est inchangé, passe par D1
+        //   - objective locale reste le descriptif du nœud
+        //   - contexte ajouté comme info complémentaire uniquement
+        const workerObjective = context
+          ? `${currentNode.description}\n\n[Contexte Mission]\nObjectif : ${context.input.confirmedObjective}\nRésumé : ${context.input.boundedSummary}${context.input.confirmedConstraints.length > 0 ? `\nContraintes : ${context.input.confirmedConstraints.map((c) => c.statement).join("; ")}` : ""}`
+          : currentNode.description;
+
         const workerId = await this.workers.spawn({
           taskId: nodeId,
           missionId: dag.missionId,
           tenantId: dag.tenantId,
-          objective: currentNode.description,
+          objective: workerObjective,
           acceptanceCriteria: currentNode.acceptanceCriteria,
           permissionEnvelope: {
             action: "supervisor.worker.execute",
@@ -170,7 +211,10 @@ export class SupervisorService {
         });
 
         // e. Attendre le résultat
-        const workerResult = await this.workers.waitForCompletion(workerId, this.config.defaultWorkerTimeoutMs + 10_000);
+        const workerResult = await this.workers.waitForCompletion(
+          workerId,
+          this.config.defaultWorkerTimeoutMs + 10_000,
+        );
 
         if (workerResult.outcome === "SUCCESS") {
           // Capturer le résultat du worktree
@@ -183,11 +227,13 @@ export class SupervisorService {
           });
 
           await this.repository.updateNodeStatus(dag.id, nodeId, "SUCCEEDED", {
-            workerAssignments: [{
-              workerId,
-              startedAt: new Date().toISOString(),
-              workerResult,
-            }],
+            workerAssignments: [
+              {
+                workerId,
+                startedAt: new Date().toISOString(),
+                workerResult,
+              },
+            ],
           });
           integratedTaskCount++;
         } else {
@@ -205,7 +251,7 @@ export class SupervisorService {
     if (completedShas.length === 0) {
       await this.repository.updateDagStatus(dag.id, "FAILED", "Aucune tâche réussie");
       return {
-        dag: await this.repository.findDagById(dag.id) ?? dag,
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
         status: "FAILED",
         summary: "Aucune tâche n'a réussi — échec de l'exécution du DAG",
       };
@@ -240,12 +286,15 @@ export class SupervisorService {
     const status = integrationResult.status === "SUCCEEDED" ? "SUCCEEDED" : "PARTIAL";
     await this.repository.updateDagStatus(dag.id, status === "SUCCEEDED" ? "COMPLETED" : "FAILED");
 
+    // Ajouter un indicateur de contexte utilisé (informatif, jamais autoritaire)
+    const contextNote = context ? ` | contexte v${context.sourceRef.version} appliqué` : "";
+
     return {
-      dag: await this.repository.findDagById(dag.id) ?? dag,
+      dag: (await this.repository.findDagById(dag.id)) ?? dag,
       status,
       integrationResult,
       previewResult,
-      summary: `${integratedTaskCount}/${orderedNodes.length} tâches intégrées. Intégration: ${integrationResult.status}`,
+      summary: `${integratedTaskCount}/${orderedNodes.length} tâches intégrées. Intégration: ${integrationResult.status}${contextNote}`,
     };
   }
 }
