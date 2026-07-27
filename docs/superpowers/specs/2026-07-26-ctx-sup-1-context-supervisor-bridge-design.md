@@ -298,7 +298,7 @@ Supervisor (interdit ici).
   `MissionContext` **n'est pas** le journal d'audit (`Memory ≠ Audit Log`).
   Aucun nouveau type d'événement d'audit n'est introduit dans ce lot.
 
-Ports (design) :
+Ports (design 1A — remplacé par le contrat 1B ci-dessous) :
 
 ```typescript
 interface MissionContextRepository {
@@ -307,6 +307,83 @@ interface MissionContextRepository {
   findVersion(tenantId: string, missionId: string, version: number): Promise<MissionContext | null>;
 }
 ```
+
+### 6.1 Décisions canoniques CTX-SUP-1B (validées, implémentées)
+
+Le sketch 1A ci-dessus prédatait le choix du modèle de concurrence. Le contrat
+**canonique** pour ce lot est le suivant (validé par le porteur du produit) :
+
+- **Snapshots versionnés immuables** : chaque émission est une ligne
+  append-only ; jamais de mutation en place, jamais de seconde table « latest ».
+- **Latest dérivé** de l'ordre des versions (`MAX(version)` / `ORDER BY version
+  DESC LIMIT 1`).
+- **Frontière d'identité ET de concurrence** : `(tenantId, missionId, version)`.
+  En PostgreSQL c'est la **clé primaire composite** ; elle *est* le verrou
+  optimiste (une course sur la même version → une seule gagne, l'autre reçoit
+  `23505 unique_violation`).
+- **Concurrence optimiste fail-closed** via `expectedVersion` : aucun
+  last-write-wins silencieux, aucun trou de version, aucune régression.
+  `expectedVersion = null` signifie « aucun contexte préexistant attendu » → le
+  premier write doit porter `version = 0`.
+- **Persistance non autoritative** : `MissionContext ≠ Permission / Approval /
+  Authority / ExecutionGrant`. Le repository n'expose et n'accepte aucun champ
+  d'autorité (garanti structurellement par le schéma `.strict()` 1A).
+- **Pas de conflation avec l'audit** : cette couche n'écrit **aucune**
+  `audit_entries` et ne duplique **aucun** `MissionContext` complet dans
+  l'audit. Elle fournit un helper pur `missionContextRef(ctx)` →
+  `{ tenantId, missionId, version, builtAt }` (référence bornée) que l'appelant
+  *pourra* émettre plus tard. `Memory ≠ Audit Log` préservé.
+
+Port canonique :
+
+```typescript
+type SaveConflictReason =
+  | "stale_version"     // expectedVersion ≠ latest actuel (writer périmé/régressif)
+  | "version_conflict"  // unique_violation à l'INSERT (course concurrente perdue)
+  | "version_mismatch"  // context.version ≠ (expectedVersion ?? -1) + 1
+  | "invalid_context";  // schéma strict / bornes / champ d'autorité / non sérialisable
+
+type SaveContextResult =
+  | { ok: true; context: MissionContext }
+  | { ok: false; reason: SaveConflictReason };
+
+interface MissionContextRepository {
+  save(input: {
+    context: MissionContext;
+    expectedVersion: number | null;
+  }): Promise<SaveContextResult>;
+  findLatest(tenantId: string, missionId: string): Promise<MissionContext | null>;
+  findVersion(
+    tenantId: string,
+    missionId: string,
+    version: number,
+  ): Promise<MissionContext | null>;
+}
+```
+
+Table `mission_contexts` (migration additive `0009`) :
+
+| Colonne | Type | Rôle |
+|---|---|---|
+| `tenant_id` | `text` | isolation tenant (filtre obligatoire en lecture) |
+| `mission_id` | `text` | portée mission |
+| `version` | `integer` | version monotone mission-scopée |
+| `payload` | `jsonb` | `MissionContext` canonique complet (`@classification C2`) |
+| `built_at` | `timestamptz` | `context.builtAt` (fraîcheur) |
+| `created_at` | `timestamptz` | instant de persistance (`now()` DB) |
+
+`PRIMARY KEY (tenant_id, mission_id, version)` (= verrou optimiste) ;
+`INDEX (tenant_id, mission_id, version DESC)` (findLatest / findVersion).
+Au mapping en lecture, les champs `tenantId/missionId/version` du payload sont
+recroisés avec les colonnes ; toute divergence → `RepositoryMappingError`
+(fail-closed, jamais de retour silencieux).
+
+**Limite explicitement acceptée (secrets en texte libre)** : la persistance est
+structurellement fail-closed (schéma `.strict()`, bornes, rejet des champs
+d'autorité, `jsonValueSchema`), mais **ne fait pas** de détection sémantique
+d'un secret glissé dans un champ texte légitime (ex. `confirmedObjective`).
+Cette responsabilité appartient au builder/à la classification en amont ; la
+couche de persistance ne prétend pas la couvrir.
 
 ---
 

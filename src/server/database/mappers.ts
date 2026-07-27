@@ -30,6 +30,10 @@ import {
   type ExecutionRecord,
   type IdempotencyEntry,
 } from "@/core/g1";
+import {
+  missionContextSchema,
+  type MissionContext,
+} from "@/core/context/contract";
 
 import { RepositoryMappingError } from "./errors";
 import type {
@@ -42,6 +46,7 @@ import type {
   executionGrants,
   executionRecords,
   idempotencyEntries,
+  missionContexts,
   skills,
   skillSecurityScans,
   skillSecurityFindings,
@@ -617,5 +622,58 @@ export function executionRecordToRow(record: ExecutionRecord): ExecutionRecordIn
     usage: record.usage ?? null,
     createdAt: new Date(record.createdAt),
     updatedAt: new Date(record.updatedAt),
+  };
+}
+
+// ─────────────────────────────────────
+// CTX-SUP-1B — MissionContext
+// ─────────────────────────────────────
+
+type MissionContextRow = typeof missionContexts.$inferSelect;
+type MissionContextInsert = typeof missionContexts.$inferInsert;
+
+/**
+ * Ligne SQL → MissionContext (validé par Zod `.strict()`, fail-closed).
+ *
+ * Le payload jsonb est la source du contrat, mais les colonnes indexées
+ * `(tenant_id, mission_id, version)` sont recroisées avec le payload : toute
+ * divergence signale une corruption/altération et lève `RepositoryMappingError`
+ * plutôt que de retourner un contexte incohérent (jamais de retour silencieux).
+ */
+export function rowToMissionContext(row: MissionContextRow): MissionContext {
+  const parsed = missionContextSchema.safeParse(row.payload);
+  if (!parsed.success) {
+    throw new RepositoryMappingError("mission_contexts", parsed.error.message);
+  }
+  const context = parsed.data;
+  if (
+    context.tenantId !== row.tenantId ||
+    context.missionId !== row.missionId ||
+    context.version !== row.version
+  ) {
+    throw new RepositoryMappingError(
+      "mission_contexts",
+      "clé de ligne incohérente avec le payload",
+    );
+  }
+  return context;
+}
+
+/**
+ * MissionContext → ligne SQL. Les colonnes de clé/fraîcheur sont dérivées du
+ * contexte lui-même ; `createdAt` est l'instant de persistance (fourni par
+ * l'appelant pour rester déterministe et testable).
+ */
+export function missionContextToRow(
+  context: MissionContext,
+  createdAt: Date,
+): MissionContextInsert {
+  return {
+    tenantId: context.tenantId,
+    missionId: context.missionId,
+    version: context.version,
+    payload: context,
+    builtAt: new Date(context.builtAt),
+    createdAt,
   };
 }
