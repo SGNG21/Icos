@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "verificationKind": "SELF_IMPROVE_FOUNDATION_INTEGRATED_BASELINE",
+  "integrationBranch": "integration/self-improve-foundation-1",
+  "integrationHead": "dc22ab7d3aab77c1bc8097c3bd12bea1400b9031",
+  "verifiedAt": "2026-07-28T11:33:35Z",
+  "foundationCommits": {
+    "globalGates": "260af18902f1441245b9c96b11853f1395111062",
+    "dagFinalization": "c5167d477821cf4c7fe9753f6a4899af7a027f47",
+    "capabilityIntrospection": "b27e1f72b80950af05561274eed31539161c3e08",
+    "selfState": "05776f39d436a9bcbc544b14e3a21cfd8527491f",
+    "userMissionEntry": "327939bc33a2be58c8511e4d182779aac236eada",
+    "cockpit": "dc22ab7d3aab77c1bc8097c3bd12bea1400b9031"
+  },
+  "unitTests": {
+    "passed": 1445,
+    "failed": 0
+  },
+  "integrationTests": {
+    "passed": 91,
+    "skipped": 0
+  },
+  "typecheckResult": "PASS",
+  "lintResult": {
+    "result": "PASS",
+    "errors": 0,
+    "warnings": 154
+  },
+  "buildResult": "PASS",
+  "complianceResult": "PASS",
+  "secretScanResult": "PASS",
+  "globalGates": {
+    "result": "PASS",
+    "order": ["git-diff-check", "lint", "typecheck", "test", "build"],
+    "maximumHeavyGateConcurrency": 1
+  },
+  "realFirstAuto": {
+    "result": "PASS",
+    "missionCreated": "PASS",
+    "contextBuilt": "PASS",
+    "supervisorInvoked": "PASS",
+    "taskDagCreated": "PASS",
+    "worktreeManagerUsed": "PASS",
+    "workerManagerUsed": "PASS",
+    "d1Evaluated": "PASS",
+    "workerExecuted": "PASS",
+    "workerVerdict": "PASS",
+    "independentReview": "PASS",
+    "integrationResult": "PASS"
+  },
+  "persistedDag": {
+    "state": "COMPLETED",
+    "requiredNodes": [
+      {
+        "id": "add-mission-lifecycle-tests",
+        "state": "SUCCEEDED"
+      }
+    ]
+  },
+  "lifecycle": {
+    "ASSIGNED_TO_RUNNING": "PASS",
+    "RUNNING_TO_REVIEWING": "PASS",
+    "REVIEWING_TO_SUCCEEDED": "PASS"
+  },
+  "canonicalVerifierResult": "PASS",
+  "canonicalStateConsistent": true,
+  "localOnlyInvariants": {
+    "localDevelopmentOnly": true,
+    "clientSystemsTouched": false,
+    "productionTouched": false,
+    "externalIrreversibleActionsPerformed": false,
+    "otherWorktreesTouched": false
+  },
+  "provenance": {
+    "repositoryState": "COMMITTED_INTEGRATED_HEAD",
+    "canonicalSources": [
+      "docs/coordination/self-state.v1.json",
+      "scripts/first-auto-mission.ts",
+      "scripts/first-auto-verifier.ts",
+      "src/core/supervisor/lifecycle.ts",
+      "src/server/integration/global-gates.ts",
+      "src/server/supervisor/in-memory/supervisor-repository.ts"
+    ],
+    "sourceCommitReferences": [
+      "260af18902f1441245b9c96b11853f1395111062",
+      "c5167d477821cf4c7fe9753f6a4899af7a027f47",
+      "b27e1f72b80950af05561274eed31539161c3e08",
+      "05776f39d436a9bcbc544b14e3a21cfd8527491f",
+      "327939bc33a2be58c8511e4d182779aac236eada",
+      "dc22ab7d3aab77c1bc8097c3bd12bea1400b9031"
+    ]
+  }
+}
