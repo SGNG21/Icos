@@ -1,7 +1,6 @@
-import type { TaskDag, TaskNode } from "@/core/supervisor";
-import { computeReadyNodes, validateDag, Scheduler } from "@/core/supervisor";
+import type { TaskDag, TaskNode, TaskNodeStatus } from "@/core/supervisor";
+import { areAllDagNodesSuccessful, computeReadyNodes, validateDag } from "@/core/supervisor";
 import { topologicalSort } from "@/core/supervisor";
-import type { WorkerSpec, CreateWorkerInput } from "@/core/worker";
 import type { ReviewSpec } from "@/core/review";
 import type { IntegrationSpec } from "@/core/integration";
 import type { PreviewResult } from "@/core/preview";
@@ -149,14 +148,22 @@ export class SupervisorService {
       nodes,
     });
 
-    await this.repository.updateDagStatus(dag.id, "SCHEDULING");
+    const schedulingDag = await this.repository.updateDagStatus(dag.id, "SCHEDULING");
+    if (!schedulingDag) {
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        summary: "Transition du DAG vers SCHEDULING refusée",
+      };
+    }
 
-    // 3. Initialiser le scheduler
-    const scheduler = new Scheduler(savedDag);
-
-    // 4. Boucle d'exécution
+    // 3. Boucle d'exécution
     let allSucceeded = true;
     let integratedTaskCount = 0;
+    const failureMessages: string[] = [];
+    const correctionLoop = new CorrectionLoop(this.reviewer, this.corrector, {
+      maxAttempts: this.config.maxCorrectionRetries,
+    });
 
     // Calculer l'ordre topologique pour l'intégration
     const topoOrder = topologicalSort(savedDag);
@@ -165,13 +172,37 @@ export class SupervisorService {
     const readyNodes = computeReadyNodes(savedDag);
     for (const nodeId of readyNodes) {
       const result = await this.repository.updateNodeStatus(dag.id, nodeId, "READY");
+      if (!result) {
+        await this.repository.updateDagStatus(
+          dag.id,
+          "FAILED",
+          `Transition du nœud ${nodeId} vers READY refusée`,
+        );
+        return {
+          dag: (await this.repository.findDagById(dag.id)) ?? dag,
+          status: "FAILED",
+          summary: `Transition du nœud ${nodeId} vers READY refusée`,
+        };
+      }
     }
 
     // Exécuter les nœuds dans l'ordre de priorité
     const completedShas: Array<{ taskId: string; sha: string; branch: string; path: string }> = [];
     const orderedNodes = topoOrder ?? Object.keys(savedDag.nodes);
 
-    await this.repository.updateDagStatus(dag.id, "EXECUTING");
+    const executingDag = await this.repository.updateDagStatus(dag.id, "EXECUTING");
+    if (!executingDag) {
+      await this.repository.updateDagStatus(
+        dag.id,
+        "FAILED",
+        "Transition du DAG vers EXECUTING refusée",
+      );
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        summary: "Transition du DAG vers EXECUTING refusée",
+      };
+    }
 
     for (const nodeId of orderedNodes) {
       try {
@@ -182,7 +213,9 @@ export class SupervisorService {
         // a. Passer en READY si PENDING
         if (currentNode.status === "PENDING") {
           const updated = await this.repository.updateNodeStatus(dag.id, nodeId, "READY");
-          if (!updated) continue;
+          if (!updated) {
+            throw new Error(`Transition du nœud ${nodeId} vers READY refusée`);
+          }
           currentNode = updated;
         }
         if (currentNode.status !== "READY") continue;
@@ -196,7 +229,7 @@ export class SupervisorService {
         }
 
         // c. Passer en ASSIGNED
-        await this.repository.updateNodeStatus(dag.id, nodeId, "ASSIGNED", {
+        currentNode = await this.transitionNodeOrThrow(dag.id, nodeId, "ASSIGNED", {
           currentWorkerId: `worker-${nodeId}`,
         });
 
@@ -229,6 +262,17 @@ export class SupervisorService {
           worktreePath: worktree.path,
         });
 
+        // Le worker a été créé : le nœud entre canoniquement en exécution.
+        currentNode = await this.transitionNodeOrThrow(dag.id, nodeId, "RUNNING", {
+          currentWorkerId: workerId,
+          workerAssignments: [
+            {
+              workerId,
+              startedAt: new Date().toISOString(),
+            },
+          ],
+        });
+
         // e. Attendre le résultat
         const workerResult = await this.workers.waitForCompletion(
           workerId,
@@ -237,41 +281,113 @@ export class SupervisorService {
         if (workerResult.outcome === "SUCCESS") {
           // Capturer le résultat du worktree
           const wtResult = await this.worktrees.captureResult(worktree.path);
-          completedShas.push({
-            taskId: nodeId,
-            sha: wtResult.headSha,
-            branch: worktree.branch,
-            path: worktree.path,
-          });
 
-          await this.repository.updateNodeStatus(dag.id, nodeId, "SUCCEEDED", {
+          // Un succès worker doit passer par la revue canonique avant de
+          // devenir un succès de nœud.
+          currentNode = await this.transitionNodeOrThrow(dag.id, nodeId, "REVIEWING");
+
+          const reviewSpec: ReviewSpec = {
+            taskId: nodeId,
+            missionId: dag.missionId,
+            tenantId: dag.tenantId,
+            objective: currentNode.description,
+            acceptanceCriteria: currentNode.acceptanceCriteria,
+            requiredChecks: [
+              "acceptance_criteria",
+              "tests",
+              "scope",
+              "security_boundaries",
+              "architecture_boundaries",
+            ],
+            worktreePath: worktree.path,
+            commitSha: wtResult.headSha,
+          };
+          const reviewResult = await correctionLoop.execute(reviewSpec, worktree.path);
+
+          if (reviewResult.finalVerdict !== "PASS") {
+            await this.transitionNodeOrThrow(dag.id, nodeId, "FAILED", {
+              reviewResult: reviewResult.finalVerdict.toLowerCase(),
+            });
+            allSucceeded = false;
+            failureMessages.push(`Revue du nœud ${nodeId}: ${reviewResult.finalVerdict}`);
+            continue;
+          }
+
+          for (const review of reviewResult.reviews) {
+            const reviewerWorkerId = review.reviewerWorkerId;
+            const isIndependent =
+              reviewerWorkerId !== undefined &&
+              (await this.reviewer.ensureIndependentReview(workerId, reviewerWorkerId));
+            if (!isIndependent) {
+              throw new Error(
+                `Revue indépendante du nœud ${nodeId} non établie` +
+                  ` (implémentateur: ${workerId}, reviewer: ${reviewerWorkerId ?? "inconnu"})`,
+              );
+            }
+          }
+
+          // Une correction peut modifier et recommitter le worktree. Recapturer
+          // après la dernière revue garantit que l'intégration utilise le
+          // commit effectivement revu, jamais le SHA antérieur à la correction.
+          const reviewedWtResult = await this.worktrees.captureResult(worktree.path);
+          if (reviewedWtResult.isDirty) {
+            throw new Error(
+              `Worktree du nœud ${nodeId} modifié après revue sans commit intégrable`,
+            );
+          }
+
+          await this.transitionNodeOrThrow(dag.id, nodeId, "SUCCEEDED", {
+            reviewResult: "pass",
             workerAssignments: [
               {
                 workerId,
                 startedAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
                 workerResult,
               },
             ],
           });
+
+          // Le commit ne devient intégrable qu'après persistance du succès
+          // canonique du nœud.
+          completedShas.push({
+            taskId: nodeId,
+            sha: reviewedWtResult.headSha,
+            branch: worktree.branch,
+            path: worktree.path,
+          });
           integratedTaskCount++;
         } else {
-          await this.repository.updateNodeStatus(dag.id, nodeId, "FAILED");
+          await this.transitionNodeOrThrow(dag.id, nodeId, "FAILED");
           allSucceeded = false;
+          failureMessages.push(`Worker du nœud ${nodeId}: ${workerResult.outcome}`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Erreur inconnue";
-        await this.repository.updateNodeStatus(dag.id, nodeId, "FAILED");
         allSucceeded = false;
+        failureMessages.push(message);
+
+        // Meilleur effort fail-closed : persister FAILED lorsque la transition
+        // courante le permet, sans jamais masquer le rejet initial.
+        const failedNode = await this.repository.updateNodeStatus(dag.id, nodeId, "FAILED");
+        if (!failedNode) {
+          failureMessages.push(`Impossible de persister FAILED pour le nœud ${nodeId}`);
+        }
       }
     }
 
-    // Pas de résultats à intégrer
-    if (completedShas.length === 0) {
-      await this.repository.updateDagStatus(dag.id, "FAILED", "Aucune tâche réussie");
+    // Aucun résultat partiel ne doit contourner l'état canonique des nœuds.
+    const dagBeforeIntegration = await this.repository.findDagById(dag.id);
+    const everyNodeSucceeded =
+      dagBeforeIntegration !== null && areAllDagNodesSuccessful(dagBeforeIntegration);
+
+    if (!allSucceeded || !everyNodeSucceeded || completedShas.length !== orderedNodes.length) {
+      const reason = failureMessages.join("; ") || "Tous les nœuds requis ne sont pas SUCCEEDED";
+      await this.repository.updateDagStatus(dag.id, "FAILED", reason);
       return {
         dag: (await this.repository.findDagById(dag.id)) ?? dag,
         status: "FAILED",
-        summary: "Aucune tâche n'a réussi — échec de l'exécution du DAG",
+        summary: `Échec de l'exécution du DAG: ${reason}`,
       };
     }
 
@@ -291,6 +407,20 @@ export class SupervisorService {
 
     const integrationResult = await this.integrator.integrate(integrationSpec);
 
+    if (integrationResult.status !== "SUCCEEDED") {
+      await this.repository.updateDagStatus(
+        dag.id,
+        "FAILED",
+        `Intégration: ${integrationResult.status}`,
+      );
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        integrationResult,
+        summary: `Intégration échouée: ${integrationResult.status}`,
+      };
+    }
+
     // 6. Preview
     let previewResult: PreviewResult | undefined;
     if (integrationResult.finalSha) {
@@ -301,18 +431,48 @@ export class SupervisorService {
     }
 
     // 7. Statut final
-    const status = integrationResult.status === "SUCCEEDED" ? "SUCCEEDED" : "PARTIAL";
-    await this.repository.updateDagStatus(dag.id, status === "SUCCEEDED" ? "COMPLETED" : "FAILED");
+    const completedDag = await this.repository.updateDagStatus(dag.id, "COMPLETED");
+    if (!completedDag) {
+      await this.repository.updateDagStatus(
+        dag.id,
+        "FAILED",
+        "Finalisation COMPLETED refusée par le repository",
+      );
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        integrationResult,
+        previewResult,
+        summary: "Finalisation du DAG refusée : état des nœuds incohérent",
+      };
+    }
 
     // Ajouter un indicateur de contexte utilisé (informatif, jamais autoritaire)
     const contextNote = context ? ` | contexte v${context.sourceRef.version} appliqué` : "";
 
     return {
-      dag: (await this.repository.findDagById(dag.id)) ?? dag,
-      status,
+      dag: completedDag,
+      status: "SUCCEEDED",
       integrationResult,
       previewResult,
       summary: `${integratedTaskCount}/${orderedNodes.length} tâches intégrées. Intégration: ${integrationResult.status}${contextNote}`,
     };
+  }
+
+  private async transitionNodeOrThrow(
+    dagId: string,
+    nodeId: string,
+    targetStatus: TaskNodeStatus,
+    updates?: Partial<TaskNode>,
+  ): Promise<TaskNode> {
+    const updated = await this.repository.updateNodeStatus(dagId, nodeId, targetStatus, updates);
+    if (!updated) {
+      const current = await this.repository.findNodeById(dagId, nodeId);
+      throw new Error(
+        `Transition du nœud ${nodeId} vers ${targetStatus} refusée` +
+          ` (état courant: ${current?.status ?? "introuvable"})`,
+      );
+    }
+    return updated;
   }
 }

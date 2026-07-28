@@ -1,5 +1,15 @@
-import type { TaskDag, TaskNode, TaskNodeStatus, DagStatus, CreateDagInput } from "@/core/supervisor";
-import { computeReadyNodes, isNodeTransitionAllowed } from "@/core/supervisor";
+import type {
+  TaskDag,
+  TaskNode,
+  TaskNodeStatus,
+  DagStatus,
+  CreateDagInput,
+} from "@/core/supervisor";
+import {
+  areAllDagNodesSuccessful,
+  computeReadyNodes,
+  isNodeTransitionAllowed,
+} from "@/core/supervisor";
 import type { SupervisorRepository } from "../ports";
 
 /**
@@ -42,9 +52,7 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
   }
 
   async findDagsByMissionId(missionId: string): Promise<TaskDag[]> {
-    return Array.from(this.dags.values()).filter(
-      (d) => d.missionId === missionId,
-    );
+    return Array.from(this.dags.values()).filter((d) => d.missionId === missionId);
   }
 
   async findActiveDags(): Promise<TaskDag[]> {
@@ -53,13 +61,18 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
     );
   }
 
-  async updateDagStatus(
-    dagId: string,
-    status: DagStatus,
-    error?: string,
-  ): Promise<TaskDag | null> {
+  async updateDagStatus(dagId: string, status: DagStatus, error?: string): Promise<TaskDag | null> {
     const dag = this.dags.get(dagId);
     if (!dag) return null;
+
+    // Garde fail-closed au point de mutation canonique. Un DAG terminal n'est
+    // un succès que si CHAQUE nœud requis est lui-même SUCCEEDED.
+    if (status === "COMPLETED" && !areAllDagNodesSuccessful(dag)) {
+      return null;
+    }
+
+    // Idempotence : répéter un statut déjà persisté ne crée aucune mutation.
+    if (dag.status === status) return dag;
 
     const now = new Date().toISOString();
     const updated: TaskDag = {
@@ -123,9 +136,7 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
       status,
       updatedAt: now,
       startedAt:
-        status === "ASSIGNED" || status === "RUNNING"
-          ? node.startedAt ?? now
-          : node.startedAt,
+        status === "ASSIGNED" || status === "RUNNING" ? (node.startedAt ?? now) : node.startedAt,
       completedAt:
         status === "SUCCEEDED" || status === "FAILED" || status === "CANCELLED"
           ? now

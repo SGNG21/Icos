@@ -29,6 +29,8 @@ export {
   isNodeTerminal,
   isNodeSuspended,
   isDagTerminal,
+  areAllDagNodesSuccessful,
+  isDagSuccessfullyCompleted,
   canRetryNode,
   allowedNodeTransitionsFrom,
   // Dependency graph

@@ -1,9 +1,5 @@
 import type { TaskNodeStatus, TaskNode, TaskDag, DagStatus } from "./contract";
-import {
-  TERMINAL_NODE_STATUSES,
-  TERMINAL_DAG_STATUSES,
-  SUSPENDED_NODE_STATUSES,
-} from "./contract";
+import { TERMINAL_NODE_STATUSES, TERMINAL_DAG_STATUSES, SUSPENDED_NODE_STATUSES } from "./contract";
 
 // ─────────────────────────────────────
 // Node-level transitions
@@ -38,10 +34,7 @@ const NODE_TRANSITIONS: Record<TaskNodeStatus, readonly TaskNodeStatus[]> = {
  *
  * @returns true si la transition est valide, false sinon.
  */
-export function isNodeTransitionAllowed(
-  from: TaskNodeStatus,
-  to: TaskNodeStatus,
-): boolean {
+export function isNodeTransitionAllowed(from: TaskNodeStatus, to: TaskNodeStatus): boolean {
   const allowed = NODE_TRANSITIONS[from];
   if (!allowed) return false;
   return allowed.includes(to);
@@ -50,9 +43,7 @@ export function isNodeTransitionAllowed(
 /**
  * Retourne les transitions autorisées depuis un état donné.
  */
-export function allowedNodeTransitionsFrom(
-  status: TaskNodeStatus,
-): readonly TaskNodeStatus[] {
+export function allowedNodeTransitionsFrom(status: TaskNodeStatus): readonly TaskNodeStatus[] {
   return NODE_TRANSITIONS[status] ?? [];
 }
 
@@ -99,10 +90,7 @@ const DAG_TRANSITIONS: Record<DagStatus, readonly DagStatus[]> = {
 /**
  * Vérifie si une transition du DAG est autorisée.
  */
-export function isDagTransitionAllowed(
-  from: DagStatus,
-  to: DagStatus,
-): boolean {
+export function isDagTransitionAllowed(from: DagStatus, to: DagStatus): boolean {
   const allowed = DAG_TRANSITIONS[from];
   if (!allowed) return false;
   return allowed.includes(to);
@@ -113,6 +101,25 @@ export function isDagTransitionAllowed(
  */
 export function isDagTerminal(status: DagStatus): boolean {
   return (TERMINAL_DAG_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Vrai si le DAG contient au moins un nœud et que tous ses nœuds requis ont
+ * atteint l'unique état terminal de succès.
+ *
+ * Terminalité ≠ succès : FAILED, CANCELLED et BLOCKED ne satisfont jamais ce
+ * prédicat, même s'ils sont terminaux dans la machine d'état.
+ */
+export function areAllDagNodesSuccessful(dag: TaskDag): boolean {
+  const nodes = Object.values(dag.nodes);
+  return nodes.length > 0 && nodes.every((node) => node.status === "SUCCEEDED");
+}
+
+/**
+ * Vrai uniquement lorsque l'agrégat et tous ses nœuds concordent sur un succès.
+ */
+export function isDagSuccessfullyCompleted(dag: TaskDag): boolean {
+  return dag.status === "COMPLETED" && areAllDagNodesSuccessful(dag);
 }
 
 // ─────────────────────────────────────

@@ -115,6 +115,7 @@ class FakeReviewerEU implements ReviewerManagerPort {
       summary: "PASS",
       confidence: 4,
       durationMs: 100,
+      reviewerWorkerId: "reviewer-independent-e2e",
       completedAt: NOW,
     };
   }

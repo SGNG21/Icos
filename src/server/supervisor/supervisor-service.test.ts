@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { TaskDag, TaskNode } from "@/core/supervisor";
+import type { TaskDag, TaskNode, TaskNodeStatus } from "@/core/supervisor";
 import type { Worker, WorkerResult, CreateWorkerInput } from "@/core/worker";
 import type { ReviewSpec, ReviewResult, CorrectionSpec, CorrectionResult } from "@/core/review";
 import type { IntegrationSpec, IntegrationResult, GateResult } from "@/core/integration";
@@ -101,6 +101,7 @@ class FakeReviewer implements ReviewerManagerPort {
       summary: "PASS",
       confidence: 4,
       durationMs: 100,
+      reviewerWorkerId: "reviewer-independent",
       completedAt: new Date().toISOString(),
     };
   }
@@ -141,6 +142,96 @@ class FakeIntegrator implements IntegrationOrchestratorPort {
       durationMs: 10,
       finalSha: "c".repeat(40),
     };
+  }
+}
+
+class CountingIntegrator extends FakeIntegrator {
+  calls = 0;
+
+  override async integrate(spec: IntegrationSpec): Promise<IntegrationResult> {
+    this.calls += 1;
+    return super.integrate(spec);
+  }
+}
+
+class CapturingIntegrator extends FakeIntegrator {
+  lastSpec: IntegrationSpec | null = null;
+
+  override async integrate(spec: IntegrationSpec): Promise<IntegrationResult> {
+    this.lastSpec = spec;
+    return super.integrate(spec);
+  }
+}
+
+class NonIndependentReviewer extends FakeReviewer {
+  override async ensureIndependentReview(): Promise<boolean> {
+    return false;
+  }
+}
+
+class PostReviewWorktreeManager extends FakeWorktreeManager {
+  captureCalls = 0;
+
+  override async captureResult(path: string): Promise<WorktreeResult> {
+    this.captureCalls += 1;
+    const result = await super.captureResult(path);
+    return {
+      ...result,
+      headSha: (this.captureCalls === 1 ? "b" : "c").repeat(40),
+    };
+  }
+}
+
+class RecordingSupervisorRepository extends InMemorySupervisorRepository {
+  readonly transitions: Array<{ nodeId: string; status: TaskNodeStatus }> = [];
+
+  override async updateNodeStatus(
+    dagId: string,
+    nodeId: string,
+    status: TaskNodeStatus,
+    updates?: Partial<TaskNode>,
+  ): Promise<TaskNode | null> {
+    const result = await super.updateNodeStatus(dagId, nodeId, status, updates);
+    if (result) this.transitions.push({ nodeId, status });
+    return result;
+  }
+}
+
+class RejectingTransitionRepository extends InMemorySupervisorRepository {
+  constructor(private readonly rejectedStatus: TaskNodeStatus) {
+    super();
+  }
+
+  override async updateNodeStatus(
+    dagId: string,
+    nodeId: string,
+    status: TaskNodeStatus,
+    updates?: Partial<TaskNode>,
+  ): Promise<TaskNode | null> {
+    if (status === this.rejectedStatus) return null;
+    return super.updateNodeStatus(dagId, nodeId, status, updates);
+  }
+}
+
+class FailingTaskWorkerManager extends FakeWorkerManager {
+  private readonly taskByWorker = new Map<string, string>();
+
+  override async spawn(input: CreateWorkerInput): Promise<string> {
+    const workerId = await super.spawn(input);
+    this.taskByWorker.set(workerId, input.taskId);
+    return workerId;
+  }
+
+  override async waitForCompletion(workerId: string, timeoutMs?: number): Promise<WorkerResult> {
+    if (this.taskByWorker.get(workerId) === "task-b") {
+      return {
+        outcome: "FAILED",
+        artifacts: [],
+        summary: "task-b failed",
+        durationMs: 1,
+      };
+    }
+    return super.waitForCompletion(workerId, timeoutMs);
   }
 }
 
@@ -257,6 +348,132 @@ describe("SupervisorService", () => {
       const final = await repo.findDagById("dag-persist-test");
       expect(final).not.toBeNull();
       expect(final!.status).toBe("COMPLETED");
+    });
+
+    it("persists the legal node success progression through review", async () => {
+      const repo = new RecordingSupervisorRepository();
+      const service = createService(repo);
+      const dag = makeDag("dag-legal-node-progression");
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("SUCCEEDED");
+      expect(
+        repo.transitions.filter(({ nodeId }) => nodeId === "task-a").map(({ status }) => status),
+      ).toEqual(["READY", "ASSIGNED", "RUNNING", "REVIEWING", "SUCCEEDED"]);
+      const persisted = await repo.findDagById("dag-legal-node-progression");
+      expect(persisted?.status).toBe("COMPLETED");
+      expect(
+        Object.values(persisted?.nodes ?? {}).every((node) => node.status === "SUCCEEDED"),
+      ).toBe(true);
+    });
+
+    it.each(["RUNNING", "REVIEWING", "SUCCEEDED"] as const)(
+      "fails closed when the %s transition is rejected",
+      async (rejectedStatus) => {
+        const repo = new RejectingTransitionRepository(rejectedStatus);
+        const integrator = new CountingIntegrator();
+        const service = new SupervisorService(
+          repo,
+          new FakeWorkerManager(),
+          new FakeWorktreeManager(),
+          new FakeReviewer(),
+          new FakeCorrector(),
+          new FakeGates(),
+          integrator,
+          new FakePreview(),
+          { maxConcurrentWorkers: 2 },
+        );
+        const dag = makeDag(`dag-reject-${rejectedStatus}`);
+        dag.nodes = { "task-a": makeNode("task-a", []) };
+
+        const result = await service.execute(dag);
+
+        expect(result.status).toBe("FAILED");
+        expect(result.summary).toContain(rejectedStatus);
+        expect(integrator.calls).toBe(0);
+        const persisted = await repo.findDagById(`dag-reject-${rejectedStatus}`);
+        expect(persisted?.status).toBe("FAILED");
+        expect(persisted?.nodes["task-a"].status).not.toBe("SUCCEEDED");
+      },
+    );
+
+    it("enforces allSucceeded before integration and DAG completion", async () => {
+      const repo = new InMemorySupervisorRepository();
+      const integrator = new CountingIntegrator();
+      const service = new SupervisorService(
+        repo,
+        new FailingTaskWorkerManager(),
+        new FakeWorktreeManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        integrator,
+        new FakePreview(),
+        { maxConcurrentWorkers: 2 },
+      );
+      const dag = makeDag("dag-worker-partial-failure");
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("FAILED");
+      expect(integrator.calls).toBe(0);
+      const persisted = await repo.findDagById("dag-worker-partial-failure");
+      expect(persisted?.status).toBe("FAILED");
+      expect(persisted?.nodes["task-a"].status).toBe("SUCCEEDED");
+      expect(persisted?.nodes["task-b"].status).toBe("FAILED");
+    });
+
+    it("fails closed when reviewer independence is not established", async () => {
+      const repo = new InMemorySupervisorRepository();
+      const integrator = new CountingIntegrator();
+      const service = new SupervisorService(
+        repo,
+        new FakeWorkerManager(),
+        new FakeWorktreeManager(),
+        new NonIndependentReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        integrator,
+        new FakePreview(),
+        { maxConcurrentWorkers: 1 },
+      );
+      const dag = makeDag("dag-non-independent-review");
+      dag.nodes = { "task-a": makeNode("task-a", []) };
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("Revue indépendante");
+      expect(integrator.calls).toBe(0);
+      const persisted = await repo.findDagById("dag-non-independent-review");
+      expect(persisted?.status).toBe("FAILED");
+      expect(persisted?.nodes["task-a"].status).toBe("FAILED");
+    });
+
+    it("integrates the post-review worktree SHA", async () => {
+      const repo = new InMemorySupervisorRepository();
+      const worktrees = new PostReviewWorktreeManager();
+      const integrator = new CapturingIntegrator();
+      const service = new SupervisorService(
+        repo,
+        new FakeWorkerManager(),
+        worktrees,
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        integrator,
+        new FakePreview(),
+        { maxConcurrentWorkers: 1 },
+      );
+      const dag = makeDag("dag-post-review-sha");
+      dag.nodes = { "task-a": makeNode("task-a", []) };
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("SUCCEEDED");
+      expect(worktrees.captureCalls).toBe(2);
+      expect(integrator.lastSpec?.commits[0]?.commitSha).toBe("c".repeat(40));
     });
   });
 });

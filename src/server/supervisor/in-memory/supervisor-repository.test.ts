@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemorySupervisorRepository } from "./supervisor-repository";
-import type { TaskNode } from "@/core/supervisor";
+import type { TaskNode, TaskNodeStatus } from "@/core/supervisor";
 
 describe("InMemorySupervisorRepository", () => {
   function makeRepo() {
@@ -25,6 +25,33 @@ describe("InMemorySupervisorRepository", () => {
       createdAt: "2026-07-26T10:00:00Z",
       updatedAt: "2026-07-26T10:00:00Z",
     };
+  }
+
+  async function transitionNodeTo(
+    repo: InMemorySupervisorRepository,
+    dagId: string,
+    nodeId: string,
+    target: TaskNodeStatus,
+  ): Promise<void> {
+    const paths: Record<TaskNodeStatus, TaskNodeStatus[]> = {
+      PENDING: [],
+      READY: ["READY"],
+      ASSIGNED: ["READY", "ASSIGNED"],
+      RUNNING: ["READY", "ASSIGNED", "RUNNING"],
+      REVIEWING: ["READY", "ASSIGNED", "RUNNING", "REVIEWING"],
+      CHANGES_REQUIRED: ["READY", "ASSIGNED", "RUNNING", "REVIEWING", "CHANGES_REQUIRED"],
+      FAILED_REVIEW: ["READY", "ASSIGNED", "RUNNING", "REVIEWING", "FAILED_REVIEW"],
+      SUCCEEDED: ["READY", "ASSIGNED", "RUNNING", "REVIEWING", "SUCCEEDED"],
+      FAILED: ["READY", "FAILED"],
+      CANCELLED: ["CANCELLED"],
+      BLOCKED: ["BLOCKED"],
+      WAITING_FOR_HUMAN: ["READY", "ASSIGNED", "WAITING_FOR_HUMAN"],
+    };
+
+    for (const status of paths[target]) {
+      const updated = await repo.updateNodeStatus(dagId, nodeId, status);
+      expect(updated, `${nodeId} should transition to ${status}`).not.toBeNull();
+    }
   }
 
   // ─────────────────────────────────
@@ -146,12 +173,95 @@ describe("InMemorySupervisorRepository", () => {
         id: "dag-001",
         missionId: "mission-001",
         tenantId: "tenant-001",
-        nodes: [],
+        nodes: [makeNode("task-a")],
       });
+      await transitionNodeTo(repo, "dag-001", "task-a", "SUCCEEDED");
 
-      await repo.updateDagStatus("dag-001", "COMPLETED");
+      const completed = await repo.updateDagStatus("dag-001", "COMPLETED");
+      expect(completed).not.toBeNull();
       const dag = await repo.findDagById("dag-001");
       expect(dag!.completedAt).toBeDefined();
+    });
+
+    const rejectedForCompletion: TaskNodeStatus[] = [
+      "PENDING",
+      "READY",
+      "ASSIGNED",
+      "RUNNING",
+      "REVIEWING",
+      "CHANGES_REQUIRED",
+      "FAILED_REVIEW",
+      "FAILED",
+      "CANCELLED",
+      "BLOCKED",
+      "WAITING_FOR_HUMAN",
+    ];
+
+    it.each(rejectedForCompletion)(
+      "rejects COMPLETED while a required node is %s",
+      async (nodeStatus) => {
+        const repo = makeRepo();
+        await repo.createDag({
+          id: `dag-${nodeStatus}`,
+          missionId: "mission-001",
+          tenantId: "tenant-001",
+          nodes: [makeNode("task-a")],
+        });
+        await transitionNodeTo(repo, `dag-${nodeStatus}`, "task-a", nodeStatus);
+
+        const completed = await repo.updateDagStatus(`dag-${nodeStatus}`, "COMPLETED");
+
+        expect(completed).toBeNull();
+        expect((await repo.findDagById(`dag-${nodeStatus}`))!.status).toBe("CREATED");
+      },
+    );
+
+    it("allows COMPLETED only when every required node is SUCCEEDED", async () => {
+      const repo = makeRepo();
+      await repo.createDag({
+        id: "dag-all-succeeded",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        nodes: [makeNode("task-a"), makeNode("task-b")],
+      });
+      await transitionNodeTo(repo, "dag-all-succeeded", "task-a", "SUCCEEDED");
+      await transitionNodeTo(repo, "dag-all-succeeded", "task-b", "ASSIGNED");
+
+      expect(await repo.updateDagStatus("dag-all-succeeded", "COMPLETED")).toBeNull();
+
+      expect(await repo.updateNodeStatus("dag-all-succeeded", "task-b", "RUNNING")).not.toBeNull();
+      expect(
+        await repo.updateNodeStatus("dag-all-succeeded", "task-b", "REVIEWING"),
+      ).not.toBeNull();
+      expect(
+        await repo.updateNodeStatus("dag-all-succeeded", "task-b", "SUCCEEDED"),
+      ).not.toBeNull();
+      const completed = await repo.updateDagStatus("dag-all-succeeded", "COMPLETED");
+
+      expect(completed?.status).toBe("COMPLETED");
+      expect(
+        Object.values((await repo.findDagById("dag-all-succeeded"))!.nodes).every(
+          (node) => node.status === "SUCCEEDED",
+        ),
+      ).toBe(true);
+    });
+
+    it("handles duplicate successful completion deterministically", async () => {
+      const repo = makeRepo();
+      await repo.createDag({
+        id: "dag-idempotent",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        nodes: [makeNode("task-a")],
+      });
+      await transitionNodeTo(repo, "dag-idempotent", "task-a", "SUCCEEDED");
+
+      const first = await repo.updateDagStatus("dag-idempotent", "COMPLETED");
+      const duplicate = await repo.updateDagStatus("dag-idempotent", "COMPLETED");
+
+      expect(duplicate).toBe(first);
+      expect(duplicate?.status).toBe("COMPLETED");
+      expect(duplicate?.nodes["task-a"].status).toBe("SUCCEEDED");
     });
   });
 
@@ -193,6 +303,13 @@ describe("InMemorySupervisorRepository", () => {
       node = await repo.updateNodeStatus("dag-001", "a", "SUCCEEDED");
       expect(node).not.toBeNull();
       expect(node!.status).toBe("SUCCEEDED");
+
+      const persisted = await repo.findNodeById("dag-001", "a");
+      expect(persisted?.status).toBe("SUCCEEDED");
+
+      // Duplicate terminal success is rejected without corrupting persistence.
+      expect(await repo.updateNodeStatus("dag-001", "a", "SUCCEEDED")).toBeNull();
+      expect((await repo.findNodeById("dag-001", "a"))?.status).toBe("SUCCEEDED");
     });
 
     it("refuses invalid transitions", async () => {
@@ -249,9 +366,10 @@ describe("InMemorySupervisorRepository", () => {
         id: "dag-done",
         missionId: "mission-001",
         tenantId: "tenant-001",
-        nodes: [],
+        nodes: [makeNode("done")],
       });
 
+      await transitionNodeTo(repo, "dag-done", "done", "SUCCEEDED");
       await repo.updateDagStatus("dag-done", "COMPLETED");
 
       const active = await repo.findActiveDags();

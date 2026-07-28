@@ -12,6 +12,8 @@ import {
   topologicalSort,
   validateDag,
   allowedNodeTransitionsFrom,
+  areAllDagNodesSuccessful,
+  isDagSuccessfullyCompleted,
 } from "./lifecycle";
 import type { TaskDag, TaskNode, TaskNodeStatus } from "./contract";
 
@@ -147,6 +149,55 @@ describe("isDagTerminal", () => {
   });
 });
 
+describe("successful DAG aggregation", () => {
+  const now = "2026-07-28T00:00:00.000Z";
+
+  function makeDag(statuses: TaskNodeStatus[], dagStatus: TaskDag["status"]): TaskDag {
+    return {
+      id: "dag-success-aggregate",
+      missionId: "mission-success-aggregate",
+      tenantId: "tenant-success-aggregate",
+      status: dagStatus,
+      nodes: Object.fromEntries(
+        statuses.map((status, index) => [
+          `node-${index}`,
+          {
+            id: `node-${index}`,
+            label: `Node ${index}`,
+            description: `Node ${index}`,
+            acceptanceCriteria: [],
+            status,
+            dependsOn: [],
+            blockedBy: [],
+            workerAssignments: [],
+            correctionIds: [],
+            correctionCount: 0,
+            retryCount: 0,
+            maxRetries: 2,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+      ),
+      nodeOrder: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  it("requires at least one node and every node SUCCEEDED", () => {
+    expect(areAllDagNodesSuccessful(makeDag([], "EXECUTING"))).toBe(false);
+    expect(areAllDagNodesSuccessful(makeDag(["SUCCEEDED", "SUCCEEDED"], "EXECUTING"))).toBe(true);
+    expect(areAllDagNodesSuccessful(makeDag(["SUCCEEDED", "FAILED"], "EXECUTING"))).toBe(false);
+  });
+
+  it("requires both COMPLETED aggregate state and successful nodes", () => {
+    expect(isDagSuccessfullyCompleted(makeDag(["SUCCEEDED"], "EXECUTING"))).toBe(false);
+    expect(isDagSuccessfullyCompleted(makeDag(["SUCCEEDED"], "COMPLETED"))).toBe(true);
+    expect(isDagSuccessfullyCompleted(makeDag(["ASSIGNED"], "COMPLETED"))).toBe(false);
+  });
+});
+
 // ─────────────────────────────────────
 // Retry logic
 // ─────────────────────────────────────
@@ -229,9 +280,7 @@ describe("detectCycle", () => {
   });
 
   it("detects a self-loop", () => {
-    const nodes = new Map([
-      ["a", { id: "a", dependsOn: ["a"] }],
-    ]);
+    const nodes = new Map([["a", { id: "a", dependsOn: ["a"] }]]);
 
     expect(detectCycle(nodes)).not.toBeNull();
   });
@@ -263,16 +312,32 @@ describe("computeReadyNodes", () => {
   it("returns root nodes as ready", () => {
     const dag = makeDag([
       {
-        id: "a", label: "A", description: "", status: "PENDING",
+        id: "a",
+        label: "A",
+        description: "",
+        status: "PENDING",
         acceptanceCriteria: [],
-        dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: [],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
       {
-        id: "b", label: "B", description: "", status: "PENDING",
+        id: "b",
+        label: "B",
+        description: "",
+        status: "PENDING",
         acceptanceCriteria: [],
-        dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: ["a"],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
     ]);
 
@@ -283,16 +348,32 @@ describe("computeReadyNodes", () => {
   it("returns dependent nodes when dependencies succeed", () => {
     const dag = makeDag([
       {
-        id: "a", label: "A", description: "", status: "SUCCEEDED",
+        id: "a",
+        label: "A",
+        description: "",
+        status: "SUCCEEDED",
         acceptanceCriteria: [],
-        dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: [],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
       {
-        id: "b", label: "B", description: "", status: "PENDING",
+        id: "b",
+        label: "B",
+        description: "",
+        status: "PENDING",
         acceptanceCriteria: [],
-        dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: ["a"],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
     ]);
 
@@ -303,16 +384,32 @@ describe("computeReadyNodes", () => {
   it("does not return nodes with failed dependencies", () => {
     const dag = makeDag([
       {
-        id: "a", label: "A", description: "", status: "FAILED",
+        id: "a",
+        label: "A",
+        description: "",
+        status: "FAILED",
         acceptanceCriteria: [],
-        dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: [],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
       {
-        id: "b", label: "B", description: "", status: "PENDING",
+        id: "b",
+        label: "B",
+        description: "",
+        status: "PENDING",
         acceptanceCriteria: [],
-        dependsOn: ["a"], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: ["a"],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
     ]);
 
@@ -323,16 +420,32 @@ describe("computeReadyNodes", () => {
   it("skips non-PENDING nodes", () => {
     const dag = makeDag([
       {
-        id: "a", label: "A", description: "", status: "RUNNING",
+        id: "a",
+        label: "A",
+        description: "",
+        status: "RUNNING",
         acceptanceCriteria: [],
-        dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: [],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
       {
-        id: "b", label: "B", description: "", status: "PENDING",
+        id: "b",
+        label: "B",
+        description: "",
+        status: "PENDING",
         acceptanceCriteria: [],
-        dependsOn: [], blockedBy: [], workerAssignments: [], correctionIds: [],
-        correctionCount: 0, retryCount: 0, maxRetries: 2,
+        dependsOn: [],
+        blockedBy: [],
+        workerAssignments: [],
+        correctionIds: [],
+        correctionCount: 0,
+        retryCount: 0,
+        maxRetries: 2,
       },
     ]);
 
@@ -413,51 +526,35 @@ describe("topologicalSort", () => {
 
 describe("validateDag", () => {
   it("validates a correct DAG", () => {
-    const errors = validateDag([
-      createNode("a", []),
-      createNode("b", ["a"]),
-    ]);
+    const errors = validateDag([createNode("a", []), createNode("b", ["a"])]);
     expect(errors).toEqual([]);
   });
 
   it("detects missing dependencies", () => {
-    const errors = validateDag([
-      createNode("a", ["nonexistent"]),
-    ]);
+    const errors = validateDag([createNode("a", ["nonexistent"])]);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors[0]).toContain("nonexistent");
   });
 
   it("detects cycles", () => {
-    const errors = validateDag([
-      createNode("a", ["b"]),
-      createNode("b", ["a"]),
-    ]);
+    const errors = validateDag([createNode("a", ["b"]), createNode("b", ["a"])]);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.includes("Cycle"))).toBe(true);
   });
 
   it("detects missing root node (all nodes have dependencies)", () => {
-    const errors = validateDag([
-      createNode("a", ["b"]),
-      createNode("b", ["a"]),
-    ]);
+    const errors = validateDag([createNode("a", ["b"]), createNode("b", ["a"])]);
     expect(errors.some((e) => e.includes("nœud racine"))).toBe(true);
   });
 
   it("allows valid DAG with root", () => {
     // Deux nœuds, a est root, b dépend de a → pas de cycle
-    const errors = validateDag([
-      createNode("a", []),
-      createNode("b", ["a"]),
-    ]);
+    const errors = validateDag([createNode("a", []), createNode("b", ["a"])]);
     expect(errors).toEqual([]);
   });
 
   it("detects duplicate IDs", () => {
-    const errors = validateDag([
-      createNode("a", []),
-    ]);
+    const errors = validateDag([createNode("a", [])]);
     // Pas de vraie duplication dans le tableau unique, ça passe
     expect(errors).toEqual([]);
   });
@@ -467,9 +564,7 @@ describe("validateDag", () => {
 // Helpers
 // ─────────────────────────────────────
 
-function createTestDag(
-  spec: Array<{ id: string; deps: string[] }>,
-): TaskDag {
+function createTestDag(spec: Array<{ id: string; deps: string[] }>): TaskDag {
   const now = "2026-07-26T10:00:00Z";
   const nodes: Record<string, TaskNode> = {};
   for (const s of spec) {
