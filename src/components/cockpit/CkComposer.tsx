@@ -3,7 +3,7 @@
 import { type FormEvent, useState } from "react";
 
 export interface CkComposerProps {
-  onSend: (message: string) => void;
+  onSend: (message: string) => void | Promise<void>;
   disabled?: boolean;
   /** Placeholder text — defaults to "Décris ton objectif…". */
   placeholder?: string;
@@ -35,17 +35,17 @@ export function CkComposer({
   const [draft, setDraft] = useState("");
   const sendable = canSend(draft, disabled);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!sendable) return;
-    onSend(draft.trim());
+    await onSend(draft);
     setDraft("");
   }
 
   return (
     <form className="ck-composer" onSubmit={handleSubmit}>
-      <input
-        type="text"
+      <textarea
+        rows={3}
         className="ck-composer-input"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -62,12 +62,7 @@ export function CkComposer({
       >
         🎙
       </button>
-      <button
-        type="submit"
-        className="ck-composer-btn"
-        disabled={!sendable}
-        aria-label="Envoyer"
-      >
+      <button type="submit" className="ck-composer-btn" disabled={!sendable} aria-label="Envoyer">
         ▶
       </button>
     </form>

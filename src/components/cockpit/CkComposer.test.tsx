@@ -23,6 +23,7 @@ describe("canSend", () => {
 describe("CkComposer", () => {
   it("renders the input, send button and mic placeholder", () => {
     const html = renderToStaticMarkup(<CkComposer onSend={() => {}} />);
+    expect(html).toContain("<textarea");
     expect(html).toContain("ck-composer-input");
     expect(html).toContain("ck-composer-btn");
     expect(html).toContain("ck-composer-mic");
