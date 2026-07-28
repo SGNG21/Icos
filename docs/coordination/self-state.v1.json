@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "currentMilestone": {
+    "id": "m1",
+    "label": "Premier ICOS semi-autonome",
+    "status": "IN_PROGRESS"
+  },
+  "completedMilestones": [],
+  "incompleteMilestones": [
+    {
+      "id": "m1",
+      "label": "Premier ICOS semi-autonome"
+    }
+  ],
+  "knownBlockers": [],
+  "capabilityReference": {
+    "status": "UNKNOWN"
+  },
+  "protectedAreas": [
+    "D1_POLICY_DECISIONS",
+    "G1_AUTHORITY_SEMANTICS",
+    "SYSTEM_AGENT_AUTHORITY",
+    "SUPERVISOR_EXECUTION_SEMANTICS",
+    "WORKER_MANAGER",
+    "WORKTREE_MANAGER",
+    "D4_EXECUTION_SEMANTICS",
+    "FIRST_AUTO_HARNESS",
+    "scripts/first-auto-mission.ts",
+    "APPROVAL_SEMANTICS",
+    "EXECUTION_GRANT_SEMANTICS"
+  ],
+  "operatingMode": {
+    "LOCAL_DEV_ONLY": true,
+    "CLIENT_SYSTEM_ACCESS": false,
+    "PRODUCTION_ACCESS": false,
+    "CLIENT_CREDENTIALS": "forbidden",
+    "EXTERNAL_IRREVERSIBLE_ACTIONS": "forbidden"
+  },
+  "priorities": [
+    {
+      "prefer": "FINISH",
+      "over": "NEW FEATURES"
+    },
+    {
+      "prefer": "INTEGRATION",
+      "over": "EXPLORATION"
+    },
+    {
+      "prefer": "E2E",
+      "over": "OPTIONAL ARCHITECTURE"
+    },
+    {
+      "prefer": "TESTABLE PRODUCT",
+      "over": "PERFECT FUTURE PRODUCT"
+    }
+  ],
+  "gateSummary": {
+    "status": "UNKNOWN"
+  },
+  "candidateImprovementAreas": [],
+  "provenance": {
+    "sources": [
+      {
+        "id": "canonical-self-state",
+        "kind": "VERSIONED_STATE",
+        "path": "docs/coordination/self-state.v1.json",
+        "schemaVersion": 1
+      },
+      {
+        "id": "m1-definition",
+        "kind": "REPOSITORY_DOCUMENT",
+        "path": "docs/architecture/future/11-first-autonomous-icos.md"
+      },
+      {
+        "id": "preview-port",
+        "kind": "REPOSITORY_CODE",
+        "path": "src/server/preview/ports.ts"
+      },
+      {
+        "id": "preview-delivery",
+        "kind": "REPOSITORY_CODE",
+        "path": "src/server/preview/preview-delivery.ts"
+      },
+      {
+        "id": "global-gates",
+        "kind": "REPOSITORY_CODE",
+        "path": "src/server/integration/global-gates.ts"
+      }
+    ],
+    "fields": {
+      "schemaVersion": ["canonical-self-state"],
+      "currentMilestone": ["canonical-self-state", "m1-definition"],
+      "completedMilestones": ["canonical-self-state"],
+      "incompleteMilestones": ["canonical-self-state", "m1-definition"],
+      "knownBlockers": ["canonical-self-state"],
+      "capabilityReference": ["canonical-self-state"],
+      "protectedAreas": ["canonical-self-state"],
+      "operatingMode": ["canonical-self-state", "preview-port", "preview-delivery"],
+      "priorities": ["canonical-self-state"],
+      "gateSummary": ["canonical-self-state", "global-gates"],
+      "candidateImprovementAreas": ["canonical-self-state"],
+      "provenance": ["canonical-self-state"]
+    }
+  }
+}
