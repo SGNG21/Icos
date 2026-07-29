@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { TaskDag, TaskNode, TaskNodeStatus } from "@/core/supervisor";
 import type { Worker, WorkerResult, CreateWorkerInput } from "@/core/worker";
@@ -19,6 +19,7 @@ import { buildMissionContext, type MissionContext, type ConversationContext } fr
 import type { Mission } from "@/core/mission";
 import { resolveSupervisorContext } from "@/core/context/context-supervisor-bridge";
 import { InMemoryMissionContextRepository } from "@/server/context/in-memory/mission-context-repository";
+import { PERMISSION_SUPERVISOR_WORKER_EXECUTE } from "@/core/policy";
 
 // ─────────────────────────────────────
 // Fakes
@@ -64,13 +65,19 @@ class FakeWorkerManager implements WorkerManagerPort {
 }
 
 class FakeWorktreeManager implements WorktreeManagerPort {
+  readonly createdPaths: string[] = [];
+  readonly cleanupCalls: string[] = [];
+  cleanupError: Error | null = null;
+
   async createWorktree(_taskId: string): Promise<WorktreeSpec> {
-    return {
+    const spec = {
       path: `/tmp/wt-${_taskId}`,
       branch: `wt-${_taskId}`,
       baseSha: "a".repeat(40),
       taskId: _taskId,
     };
+    this.createdPaths.push(spec.path);
+    return spec;
   }
   async assignToTask(_path: string, _taskId: string): Promise<void> {}
   async captureResult(_path: string): Promise<WorktreeResult> {
@@ -87,7 +94,10 @@ class FakeWorktreeManager implements WorktreeManagerPort {
   async detectChanges(_path: string): Promise<string[]> {
     return [];
   }
-  async cleanupWorktree(_path: string): Promise<void> {}
+  async cleanupWorktree(_path: string): Promise<void> {
+    this.cleanupCalls.push(_path);
+    if (this.cleanupError) throw this.cleanupError;
+  }
   async listActive(): Promise<WorktreeEntry[]> {
     return [];
   }
@@ -142,6 +152,24 @@ class FakeIntegrator implements IntegrationOrchestratorPort {
       durationMs: 10,
       finalSha: "c".repeat(40),
     };
+  }
+}
+
+class FailingIntegrator implements IntegrationOrchestratorPort {
+  async integrate(): Promise<IntegrationResult> {
+    return {
+      status: "FAILED",
+      gateResults: [],
+      commitsIntegrated: 0,
+      summary: "deterministic integration failure",
+      durationMs: 1,
+    };
+  }
+}
+
+class ThrowingIntegrator implements IntegrationOrchestratorPort {
+  async integrate(): Promise<IntegrationResult> {
+    throw new Error("unexpected integration exception");
   }
 }
 
@@ -235,6 +263,81 @@ class FailingTaskWorkerManager extends FakeWorkerManager {
   }
 }
 
+class AlwaysFailingWorkerManager extends FakeWorkerManager {
+  override async waitForCompletion(): Promise<WorkerResult> {
+    return {
+      outcome: "FAILED",
+      artifacts: [],
+      summary: "original worker failure",
+      errorCode: "PROCESS_ERROR",
+      durationMs: 1,
+    };
+  }
+}
+
+class CancelledWorkerManager extends FakeWorkerManager {
+  override async waitForCompletion(): Promise<WorkerResult> {
+    return {
+      outcome: "FAILED",
+      artifacts: [],
+      summary: "worker cancelled",
+      errorCode: "CANCELLED",
+      durationMs: 1,
+    };
+  }
+}
+
+class FailingReviewer extends FakeReviewer {
+  override async conductReview(): Promise<ReviewResult> {
+    return {
+      verdict: "FAILED",
+      checks: [
+        {
+          category: "tests",
+          description: "review failure",
+          passed: false,
+        },
+      ],
+      summary: "review failed",
+      confidence: 5,
+      durationMs: 1,
+      reviewerWorkerId: "reviewer-independent",
+      completedAt: new Date().toISOString(),
+    };
+  }
+}
+
+class ChangesRequiredReviewer extends FakeReviewer {
+  override async conductReview(): Promise<ReviewResult> {
+    return {
+      verdict: "CHANGES_REQUIRED",
+      checks: [
+        {
+          category: "tests",
+          description: "correction required",
+          passed: false,
+        },
+      ],
+      summary: "correction required",
+      confidence: 5,
+      durationMs: 1,
+      reviewerWorkerId: "reviewer-independent",
+      completedAt: new Date().toISOString(),
+    };
+  }
+}
+
+class FailingCorrector extends FakeCorrector {
+  override async executeCorrection(): Promise<CorrectionResult> {
+    return {
+      outcome: "FAILED",
+      summary: "correction failed",
+      errorMessage: "deterministic correction failure",
+      durationMs: 1,
+    };
+  }
+}
+
 class FakePreview implements PreviewDeliveryPort {
   async deliver(_sha: string, _branch: string): Promise<PreviewResult> {
     return {
@@ -283,6 +386,40 @@ describe("SupervisorService", () => {
   }
 
   describe("execute", () => {
+    it("exposes a defensive read-only copy of its composition-owned executor", () => {
+      const service = new SupervisorService(
+        new InMemorySupervisorRepository(),
+        new FakeWorkerManager(),
+        new FakeWorktreeManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        new FakeIntegrator(),
+        new FakePreview(),
+        {
+          agentIdentity: {
+            id: "supervisor-composed",
+            tenantId: "tenant-test",
+            roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
+            authorizationLevel: 2,
+            justification: "Composition-owned bounded test executor",
+          },
+        },
+      );
+
+      const first = service.getExecutionIdentity();
+      expect(first).toEqual({
+        id: "supervisor-composed",
+        tenantId: "tenant-test",
+        roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
+        authorizationLevel: 2,
+        justification: "Composition-owned bounded test executor",
+      });
+      (first as { authorizationLevel: number }).authorizationLevel = 99;
+
+      expect(service.getExecutionIdentity()?.authorizationLevel).toBe(2);
+    });
+
     it("validates and executes a DAG successfully", async () => {
       const repo = new InMemorySupervisorRepository();
       const service = createService(repo);
@@ -474,6 +611,147 @@ describe("SupervisorService", () => {
       expect(result.status).toBe("SUCCEEDED");
       expect(worktrees.captureCalls).toBe(2);
       expect(integrator.lastSpec?.commits[0]?.commitSha).toBe("c".repeat(40));
+    });
+
+    it("cleans every task worktree after successful integration", async () => {
+      const worktrees = new FakeWorktreeManager();
+      const service = new SupervisorService(
+        new InMemorySupervisorRepository(),
+        new FakeWorkerManager(),
+        worktrees,
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        new FakeIntegrator(),
+        new FakePreview(),
+      );
+
+      const result = await service.execute(makeDag("dag-cleanup-success"));
+
+      expect(result.status).toBe("SUCCEEDED");
+      expect(worktrees.cleanupCalls.sort()).toEqual([...worktrees.createdPaths].sort());
+      expect(result.cleanupEvidence?.every((item) => item.cleaned)).toBe(true);
+    });
+
+    it.each([
+      [
+        "worker failure",
+        new AlwaysFailingWorkerManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeIntegrator(),
+      ],
+      [
+        "review failure",
+        new FakeWorkerManager(),
+        new FailingReviewer(),
+        new FakeCorrector(),
+        new FakeIntegrator(),
+      ],
+      [
+        "correction failure",
+        new FakeWorkerManager(),
+        new ChangesRequiredReviewer(),
+        new FailingCorrector(),
+        new FakeIntegrator(),
+      ],
+      [
+        "integration failure",
+        new FakeWorkerManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FailingIntegrator(),
+      ],
+      [
+        "cancellation",
+        new CancelledWorkerManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeIntegrator(),
+      ],
+      [
+        "unexpected exception",
+        new FakeWorkerManager(),
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new ThrowingIntegrator(),
+      ],
+    ] as const)(
+      "cleans the task worktree on %s",
+      async (_label, workers, reviewer, corrector, integrator) => {
+        const worktrees = new FakeWorktreeManager();
+        const service = new SupervisorService(
+          new InMemorySupervisorRepository(),
+          workers,
+          worktrees,
+          reviewer,
+          corrector,
+          new FakeGates(),
+          integrator,
+          new FakePreview(),
+        );
+        const dag = makeDag(`dag-cleanup-${_label.replaceAll(" ", "-")}`);
+        dag.nodes = { "task-a": makeNode("task-a", []) };
+
+        const result = await service.execute(dag);
+
+        expect(result.status).toBe("FAILED");
+        expect(worktrees.cleanupCalls).toEqual(["/tmp/wt-task-a"]);
+      },
+    );
+
+    it("cleanup failure converts would-be success to canonical failure", async () => {
+      const repository = new InMemorySupervisorRepository();
+      const worktrees = new FakeWorktreeManager();
+      worktrees.cleanupError = new Error("bounded cleanup failure");
+      const service = new SupervisorService(
+        repository,
+        new FakeWorkerManager(),
+        worktrees,
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        new FakeIntegrator(),
+        new FakePreview(),
+      );
+      const dag = makeDag("dag-cleanup-fails-closed");
+      dag.nodes = { "task-a": makeNode("task-a", []) };
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("bounded cleanup failure");
+      expect(worktrees.cleanupCalls).toEqual(["/tmp/wt-task-a", "/tmp/wt-task-a"]);
+      expect(result.cleanupEvidence).toHaveLength(2);
+      expect(result.cleanupEvidence?.every((item) => !item.cleaned)).toBe(true);
+      expect((await repository.findDagById(dag.id))?.status).toBe("FAILED");
+      expect(result.previewResult).toBeUndefined();
+    });
+
+    it("cleanup failure retains the original terminal failure", async () => {
+      const worktrees = new FakeWorktreeManager();
+      worktrees.cleanupError = new Error("secondary cleanup failure");
+      const service = new SupervisorService(
+        new InMemorySupervisorRepository(),
+        new AlwaysFailingWorkerManager(),
+        worktrees,
+        new FakeReviewer(),
+        new FakeCorrector(),
+        new FakeGates(),
+        new FakeIntegrator(),
+        new FakePreview(),
+      );
+      const dag = makeDag("dag-original-and-cleanup-failure");
+      dag.nodes = { "task-a": makeNode("task-a", []) };
+
+      const result = await service.execute(dag);
+
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("original worker failure");
+      expect(result.summary).toContain("secondary cleanup failure");
+      expect(worktrees.cleanupCalls).toEqual(["/tmp/wt-task-a"]);
+      expect(result.cleanupEvidence).toHaveLength(1);
+      expect(result.cleanupEvidence?.every((item) => !item.cleaned)).toBe(true);
     });
   });
 });

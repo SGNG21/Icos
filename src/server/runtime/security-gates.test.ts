@@ -3,9 +3,11 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ExecuteStepInput } from "@/core/runtime";
+import type { ExecuteStepInput, RuntimeAdapterInput } from "@/core/runtime";
 import { FakeAiGateway } from "@/server/ai/fake-ai-gateway";
 
+import { LocalRuntimeAdapter } from "./adapters/local-runtime-adapter";
+import type { AgentRuntimeAdapter } from "./adapters/runtime-adapter";
 import { ArtifactCollector } from "./artifact-collector";
 import { createExecutionError } from "./errors";
 import { ExecutionOrchestrator } from "./execution-orchestrator";
@@ -40,7 +42,10 @@ function defaultInput(overrides: Partial<ExecuteStepInput> = {}): ExecuteStepInp
   };
 }
 
-async function createOrchestrator(testRoot: string) {
+async function createOrchestrator(
+  testRoot: string,
+  runtimeCommand?: Pick<RuntimeAdapterInput, "command" | "args">,
+) {
   const policy = new AllowPolicy();
   const aiGateway = new FakeAiGateway();
   const wm = new WorkspaceManager(testRoot);
@@ -49,7 +54,17 @@ async function createOrchestrator(testRoot: string) {
   const np = new FakeNetworkPolicy();
   np.allowAll(); // Permettre le réseau pour les tests sécurité
 
-  const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np);
+  const adapters = new Map<string, AgentRuntimeAdapter>();
+  if (runtimeCommand) {
+    const localRuntime = new LocalRuntimeAdapter({ workspaceManager: wm });
+    adapters.set("local", {
+      name: "local",
+      execute: (input, abortSignal) =>
+        localRuntime.execute({ ...input, ...runtimeCommand }, abortSignal),
+    });
+  }
+
+  const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
   return { orchestrator, workspaceManager: wm, credentialBroker: cb, networkPolicy: np, aiGateway };
 }
 
@@ -445,7 +460,10 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
 describe("D4-17: process tree cleanup", () => {
   it("le timeout de l'adaptateur ne bloque pas l'orchestrateur", async () => {
     const testRoot = await mkdtemp("/tmp/d4-sec-clean-");
-    const { orchestrator: orch } = await createOrchestrator(testRoot);
+    const { orchestrator: orch } = await createOrchestrator(testRoot, {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+    });
 
     const result = await orch.execute(defaultInput());
     expect(result.ok).toBe(true);

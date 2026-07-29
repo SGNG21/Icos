@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { InMemoryWorktreeManager } from "./worktree-manager-fake";
 
@@ -66,6 +66,16 @@ describe("InMemoryWorktreeManager (fake)", () => {
     expect(active).toHaveLength(0);
   });
 
+  it("cleanup is idempotent for a manager-owned worktree", async () => {
+    const mgr = new InMemoryWorktreeManager();
+    const spec = await mgr.createWorktree("task-idempotent", "a".repeat(40));
+
+    await mgr.cleanupWorktree(spec.path);
+    await mgr.cleanupWorktree(spec.path);
+
+    expect(await mgr.listActive()).toEqual([]);
+  });
+
   it("assigns worktree to task", async () => {
     const mgr = new InMemoryWorktreeManager();
     await mgr.assignToTask("/tmp/wt", "task-001");
@@ -85,6 +95,7 @@ describe("InMemoryWorktreeManager (fake)", () => {
 // conflicting private `resolvedRoot` declarations.
 interface MockableWorktreeManager {
   resolvedRoot: string | null;
+  git(args: string[], cwd?: string): Promise<string>;
 }
 
 function mockWorktreeManager(mgr: object): MockableWorktreeManager {
@@ -117,7 +128,9 @@ describe("WorktreeManager (git integration)", () => {
         if (line.startsWith("worktree ")) {
           const wtPath = line.slice(9).trim();
           if (wtPath && wtPath !== tmpDir) {
-            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(() => {});
+            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(
+              () => {},
+            );
           }
         }
       }
@@ -184,6 +197,62 @@ describe("WorktreeManager (git integration)", () => {
     mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     await expect(mgr.cleanupWorktree(tmpDir)).rejects.toThrow(/racine|root/i);
+  });
+
+  it("refuses to register an arbitrary path as a manager-owned task worktree", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+
+    await expect(mgr.assignToTask(tmpDir, "arbitrary-registration")).rejects.toThrow(
+      /non canonique/i,
+    );
+    expect(await mgr.listActive()).toEqual([]);
+  });
+
+  it("real cleanup is idempotent for a manager-owned worktree", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+    const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+    const spec = await mgr.createWorktree("cleanup-idempotent", baseSha);
+
+    await mgr.cleanupWorktree(spec.path);
+    await mgr.cleanupWorktree(spec.path);
+
+    expect(await mgr.listActive()).toEqual([]);
+  });
+
+  it("keeps integration cleanup retryable when branch deletion fails", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    const mockable = mockWorktreeManager(mgr);
+    mockable.resolvedRoot = tmpDir;
+    const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+    const spec = await mgr.createIntegrationWorktree({
+      integrationId: "cleanup-branch-retry",
+      branch: "integration/cleanup-branch-retry",
+      baseSha,
+    });
+    const originalGit = mockable.git.bind(mgr);
+    let deletionFailures = 1;
+    vi.spyOn(mockable, "git").mockImplementation(async (args, cwd) => {
+      if (args[0] === "branch" && args[1] === "-D" && deletionFailures-- > 0) {
+        throw new Error("visible integration branch deletion failure");
+      }
+      return originalGit(args, cwd);
+    });
+
+    await expect(
+      mgr.cleanupIntegrationWorktree(spec.path, { preserveBranch: false }),
+    ).rejects.toThrow("visible integration branch deletion failure");
+    expect(await mgr.listActive()).toHaveLength(1);
+
+    await mgr.cleanupIntegrationWorktree(spec.path, { preserveBranch: false });
+    expect(await mgr.listActive()).toEqual([]);
+    expect(
+      (await exec("git", ["branch", "--list", spec.branch], { cwd: tmpDir })).stdout.trim(),
+    ).toBe("");
   });
 
   it("captures commit history", async () => {
@@ -257,7 +326,9 @@ describe("WorktreeManager (git integration)", () => {
     // Le nouveau worktree est propre et au bon SHA
     const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec2.path })).stdout.trim();
     expect(head).toBe(baseSha);
-    const status = (await exec("git", ["status", "--porcelain"], { cwd: spec2.path })).stdout.trim();
+    const status = (
+      await exec("git", ["status", "--porcelain"], { cwd: spec2.path })
+    ).stdout.trim();
     expect(status).toBe("");
 
     await mgr.cleanupWorktree(spec2.path).catch(() => {});

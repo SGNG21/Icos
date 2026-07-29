@@ -9,11 +9,24 @@ import type { SupervisorRepository } from "./ports";
 import type { WorkerManagerPort } from "@/server/worker/ports";
 import type { WorktreeManagerPort } from "@/server/worktree/ports";
 import type { ReviewerManagerPort, CorrectionLoopManagerPort } from "@/server/review/ports";
-import { CorrectionLoop } from "@/server/review/correction-loop";
+import { CorrectionLoop, type CorrectionLoopResult } from "@/server/review/correction-loop";
 import type { GlobalGatesPort } from "@/server/integration/ports";
 import type { IntegrationOrchestratorPort } from "@/server/integration/ports";
 import type { PreviewDeliveryPort } from "@/server/preview/ports";
 import type { SystemAgent } from "@/core/policy";
+import type { WorktreeResult } from "@/core/worktree";
+
+export interface WorktreeCleanupEvidence {
+  path: string;
+  cleaned: boolean;
+  error?: string;
+}
+
+export interface SupervisorTaskEvidence {
+  workerResult?: import("@/core/worker").WorkerResult;
+  worktreeResult?: WorktreeResult;
+  reviewResult?: CorrectionLoopResult;
+}
 
 /**
  * Résultat d'une exécution complète du Supervisor.
@@ -23,6 +36,8 @@ export interface SupervisorExecutionResult {
   status: "SUCCEEDED" | "FAILED" | "PARTIAL" | "WAITING_FOR_HUMAN";
   integrationResult?: import("@/core/integration").IntegrationResult;
   previewResult?: PreviewResult;
+  taskEvidence?: Record<string, SupervisorTaskEvidence>;
+  cleanupEvidence?: WorktreeCleanupEvidence[];
   summary: string;
 }
 
@@ -83,6 +98,14 @@ export class SupervisorService {
   }
 
   /**
+   * Read-only view of the exact executor owned by this Supervisor composition.
+   * Mission and browser inputs never participate in its construction.
+   */
+  getExecutionIdentity(): SystemAgent | null {
+    return this.config.agentIdentity ? structuredClone(this.config.agentIdentity) : null;
+  }
+
+  /**
    * Exécute un DAG complet.
    *
    * Processus :
@@ -102,6 +125,52 @@ export class SupervisorService {
   async execute(
     dag: TaskDag,
     context?: SupervisorEnrichedContext,
+  ): Promise<SupervisorExecutionResult> {
+    const ownedWorktrees = new Set<string>();
+    const taskEvidence: Record<string, SupervisorTaskEvidence> = {};
+
+    try {
+      const result = await this.executeInternal(dag, context, ownedWorktrees, taskEvidence);
+      if (ownedWorktrees.size === 0) {
+        return { ...result, taskEvidence };
+      }
+
+      const cleanupEvidence = await this.cleanupOwnedWorktrees(ownedWorktrees);
+      const cleanupFailures = cleanupEvidence.filter((item) => !item.cleaned);
+      return {
+        ...result,
+        taskEvidence,
+        cleanupEvidence: [...(result.cleanupEvidence ?? []), ...cleanupEvidence],
+        summary:
+          cleanupFailures.length === 0
+            ? result.summary
+            : `${result.summary}; cleanup failures: ${cleanupFailures.map((item) => item.error).join("; ")}`,
+      };
+    } catch (error) {
+      const originalMessage =
+        error instanceof Error ? error.message : "Unexpected Supervisor error";
+      const cleanupEvidence = await this.cleanupOwnedWorktrees(ownedWorktrees);
+      const cleanupFailures = cleanupEvidence.filter((item) => !item.cleaned);
+      const reason =
+        cleanupFailures.length === 0
+          ? originalMessage
+          : `${originalMessage}; cleanup failures: ${cleanupFailures.map((item) => item.error).join("; ")}`;
+      await this.repository.updateDagStatus(dag.id, "FAILED", reason).catch(() => null);
+      return {
+        dag: (await this.repository.findDagById(dag.id).catch(() => null)) ?? dag,
+        status: "FAILED",
+        taskEvidence,
+        cleanupEvidence,
+        summary: `Échec inattendu du Supervisor: ${reason}`,
+      };
+    }
+  }
+
+  private async executeInternal(
+    dag: TaskDag,
+    context: SupervisorEnrichedContext | undefined,
+    ownedWorktrees: Set<string>,
+    taskEvidence: Record<string, SupervisorTaskEvidence>,
   ): Promise<SupervisorExecutionResult> {
     // ── Valider le contexte si fourni ──
     if (context) {
@@ -187,7 +256,13 @@ export class SupervisorService {
     }
 
     // Exécuter les nœuds dans l'ordre de priorité
-    const completedShas: Array<{ taskId: string; sha: string; branch: string; path: string }> = [];
+    const completedShas: Array<{
+      taskId: string;
+      sha: string;
+      baseSha: string;
+      branch: string;
+      path: string;
+    }> = [];
     const orderedNodes = topoOrder ?? Object.keys(savedDag.nodes);
 
     const executingDag = await this.repository.updateDagStatus(dag.id, "EXECUTING");
@@ -224,6 +299,7 @@ export class SupervisorService {
         let worktree;
         try {
           worktree = await this.worktrees.createWorktree(nodeId);
+          ownedWorktrees.add(worktree.path);
         } catch (wtErr) {
           throw wtErr;
         }
@@ -278,9 +354,17 @@ export class SupervisorService {
           workerId,
           this.config.defaultWorkerTimeoutMs + 10_000,
         );
+        taskEvidence[nodeId] = {
+          ...taskEvidence[nodeId],
+          workerResult,
+        };
         if (workerResult.outcome === "SUCCESS") {
           // Capturer le résultat du worktree
           const wtResult = await this.worktrees.captureResult(worktree.path);
+          taskEvidence[nodeId] = {
+            ...taskEvidence[nodeId],
+            worktreeResult: wtResult,
+          };
 
           // Un succès worker doit passer par la revue canonique avant de
           // devenir un succès de nœud.
@@ -303,6 +387,10 @@ export class SupervisorService {
             commitSha: wtResult.headSha,
           };
           const reviewResult = await correctionLoop.execute(reviewSpec, worktree.path);
+          taskEvidence[nodeId] = {
+            ...taskEvidence[nodeId],
+            reviewResult,
+          };
 
           if (reviewResult.finalVerdict !== "PASS") {
             await this.transitionNodeOrThrow(dag.id, nodeId, "FAILED", {
@@ -330,6 +418,10 @@ export class SupervisorService {
           // après la dernière revue garantit que l'intégration utilise le
           // commit effectivement revu, jamais le SHA antérieur à la correction.
           const reviewedWtResult = await this.worktrees.captureResult(worktree.path);
+          taskEvidence[nodeId] = {
+            ...taskEvidence[nodeId],
+            worktreeResult: reviewedWtResult,
+          };
           if (reviewedWtResult.isDirty) {
             throw new Error(
               `Worktree du nœud ${nodeId} modifié après revue sans commit intégrable`,
@@ -353,6 +445,7 @@ export class SupervisorService {
           completedShas.push({
             taskId: nodeId,
             sha: reviewedWtResult.headSha,
+            baseSha: reviewedWtResult.baseSha,
             branch: worktree.branch,
             path: worktree.path,
           });
@@ -360,7 +453,9 @@ export class SupervisorService {
         } else {
           await this.transitionNodeOrThrow(dag.id, nodeId, "FAILED");
           allSucceeded = false;
-          failureMessages.push(`Worker du nœud ${nodeId}: ${workerResult.outcome}`);
+          failureMessages.push(
+            `Worker du nœud ${nodeId}: ${workerResult.outcome} — ${workerResult.summary}`,
+          );
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Erreur inconnue";
@@ -392,6 +487,17 @@ export class SupervisorService {
     }
 
     // 5. Intégrer les résultats
+    const commonBaseShas = new Set(completedShas.map((commit) => commit.baseSha));
+    if (commonBaseShas.size !== 1) {
+      const reason = "Les worktrees de tâches ne partagent pas une base Git commune";
+      await this.repository.updateDagStatus(dag.id, "FAILED", reason);
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        summary: `Intégration refusée: ${reason}`,
+      };
+    }
+    const [commonBaseSha] = commonBaseShas;
     const integrationSpec: IntegrationSpec = {
       id: `integration-${dag.id}`,
       missionId: dag.missionId,
@@ -403,6 +509,7 @@ export class SupervisorService {
         worktreePath: c.path,
       })),
       integrationBranch: `integration/${dag.id}`,
+      baseSha: commonBaseSha,
     };
 
     const integrationResult = await this.integrator.integrate(integrationSpec);
@@ -418,6 +525,30 @@ export class SupervisorService {
         status: "FAILED",
         integrationResult,
         summary: `Intégration échouée: ${integrationResult.status}`,
+      };
+    }
+
+    // Task worktrees are no longer needed once reviewed commits have been
+    // integrated and their gate evidence is retained. Cleanup happens before
+    // the DAG can become COMPLETED so a cleanup failure cannot fabricate a
+    // canonical success.
+    const cleanupEvidence = await this.cleanupOwnedWorktrees(ownedWorktrees);
+    const cleanupFailures = cleanupEvidence.filter((item) => !item.cleaned);
+    if (cleanupFailures.length > 0) {
+      const cleanupReason = cleanupFailures
+        .map((item) => item.error ?? `Cleanup failed for ${item.path}`)
+        .join("; ");
+      await this.repository.updateDagStatus(
+        dag.id,
+        "FAILED",
+        `Nettoyage des worktrees: ${cleanupReason}`,
+      );
+      return {
+        dag: (await this.repository.findDagById(dag.id)) ?? dag,
+        status: "FAILED",
+        integrationResult,
+        cleanupEvidence,
+        summary: `Intégration réussie mais nettoyage obligatoire échoué: ${cleanupReason}`,
       };
     }
 
@@ -455,8 +586,36 @@ export class SupervisorService {
       status: "SUCCEEDED",
       integrationResult,
       previewResult,
+      cleanupEvidence,
       summary: `${integratedTaskCount}/${orderedNodes.length} tâches intégrées. Intégration: ${integrationResult.status}${contextNote}`,
     };
+  }
+
+  private async cleanupOwnedWorktrees(
+    ownedWorktrees: Set<string>,
+  ): Promise<WorktreeCleanupEvidence[]> {
+    const evidence: WorktreeCleanupEvidence[] = [];
+    for (const worktreePath of [...ownedWorktrees].reverse()) {
+      try {
+        await this.worktrees.cleanupWorktree(worktreePath);
+        evidence.push({ path: worktreePath, cleaned: true });
+      } catch (error) {
+        evidence.push({
+          path: worktreePath,
+          cleaned: false,
+          error: this.boundedError(error),
+        });
+      }
+      if (evidence.at(-1)?.cleaned) {
+        ownedWorktrees.delete(worktreePath);
+      }
+    }
+    return evidence;
+  }
+
+  private boundedError(error: unknown): string {
+    const message = error instanceof Error ? error.message : "Unknown cleanup error";
+    return message.slice(0, 512);
   }
 
   private async transitionNodeOrThrow(

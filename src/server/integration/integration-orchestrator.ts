@@ -1,17 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import * as path from "node:path";
 import { promisify } from "node:util";
 
-import type {
-  IntegrationSpec,
-  IntegrationResult,
-  GateResult,
-  ConflictInfo,
-} from "@/core/integration";
+import type { IntegrationSpec, IntegrationResult, ConflictInfo } from "@/core/integration";
 import type { IntegrationOrchestratorPort } from "./ports";
 import type { GlobalGatesPort } from "./ports";
-import { topologicalSort } from "@/core/supervisor";
+import type { IntegrationWorktreePort } from "./ports";
+import { WorktreeManager } from "@/server/worktree/worktree-manager";
+import type { WorktreeSpec } from "@/core/worktree";
 
 const exec = promisify(execFile);
 
@@ -28,72 +23,100 @@ const exec = promisify(execFile);
  * 7. Produit le résultat
  */
 export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
-  private readonly integrationBase: string;
-
   constructor(
     private readonly gates: GlobalGatesPort,
-    integrationBase?: string,
-  ) {
-    this.integrationBase = integrationBase ?? ".claude/integration";
-  }
+    private readonly worktrees: IntegrationWorktreePort = new WorktreeManager(),
+  ) {}
 
   async integrate(spec: IntegrationSpec): Promise<IntegrationResult> {
     const start = Date.now();
-    const branchName = spec.integrationBranch;
+    let integrationWorktree: WorktreeSpec | undefined;
+    let commitsIntegrated = 0;
 
     try {
-      // 0. Résoudre le root du repo
       const repoRoot = await this.getRepoRoot();
-      const integrationDir = path.join(repoRoot, this.integrationBase, spec.id);
+      const baseSha = spec.baseSha ?? (await this.git(["rev-parse", "HEAD"], repoRoot));
+      integrationWorktree = await this.worktrees.createIntegrationWorktree({
+        integrationId: spec.id,
+        branch: spec.integrationBranch,
+        baseSha,
+      });
 
-      // 1. Créer le répertoire d'intégration
-      await mkdir(integrationDir, { recursive: true });
+      // Every task commit must descend from the explicit common task base.
+      for (const commit of spec.commits) {
+        await this.git(
+          ["merge-base", "--is-ancestor", baseSha, commit.commitSha],
+          integrationWorktree.path,
+        );
+      }
 
-      // 2. Créer la branche d'intégration
-      const baseSha = spec.baseSha ?? await this.git(["rev-parse", "HEAD"]);
-      await this.createIntegrationBranch(branchName, baseSha);
-
-      // 3. Appliquer les commits dans l'ordre
-      let commitsIntegrated = 0;
       for (const commit of spec.commits) {
         try {
-          await this.applyCommit(commit.commitSha, branchName);
+          await this.applyCommit(commit.commitSha, integrationWorktree.path);
           commitsIntegrated++;
         } catch (error) {
           const message = error instanceof Error ? error.message : "Erreur inconnue";
+          const files = await this.parseConflictFiles(integrationWorktree.path);
+          if (files.length === 0) {
+            throw error;
+          }
+
+          let abortFailure: string | undefined;
+          try {
+            await this.git(["cherry-pick", "--abort"], integrationWorktree.path);
+          } catch (abortError) {
+            abortFailure = abortError instanceof Error ? abortError.message : "Erreur inconnue";
+          }
           const conflict: ConflictInfo = {
-            files: message.includes("CONFLICT") ? this.parseConflictFiles() : [],
+            files,
             resolvable: false,
-            description: `Conflit lors de l'application du commit ${commit.commitSha} (tâche ${commit.taskId}): ${message}`,
+            description:
+              `Conflit lors de l'application du commit ${commit.commitSha} (tâche ${commit.taskId}): ${message}` +
+              (abortFailure ? `; abandon du cherry-pick échoué: ${abortFailure}` : ""),
           };
+          const cleanupError = await this.cleanup(integrationWorktree, false);
 
           return {
             status: "CONFLICT",
             gateResults: [],
             conflict,
             commitsIntegrated,
-            summary: `Conflit détecté sur la tâche ${commit.taskId}`,
+            summary: cleanupError
+              ? `Conflit détecté sur la tâche ${commit.taskId}; nettoyage échoué: ${cleanupError}`
+              : `Conflit détecté sur la tâche ${commit.taskId}`,
             durationMs: Date.now() - start,
           };
         }
       }
 
-      // 4. Exécuter les gates globales
-      const gateResults = await this.gates.executeAll(repoRoot);
+      const gateResults = await this.gates.executeAll(integrationWorktree.path);
       const allGatesPassed = gateResults.every((g) => g.passed);
 
       if (!allGatesPassed) {
+        const cleanupError = await this.cleanup(integrationWorktree, false);
         return {
           status: "GATES_FAILED",
           gateResults,
           commitsIntegrated,
-          summary: `${gateResults.filter((g) => !g.passed).length} gate(s) globales échouée(s)`,
+          summary:
+            `${gateResults.filter((g) => !g.passed).length} gate(s) globales échouée(s)` +
+            (cleanupError ? `; nettoyage échoué: ${cleanupError}` : ""),
           durationMs: Date.now() - start,
         };
       }
 
-      // SHA final
-      const finalSha = await this.git(["rev-parse", branchName]);
+      const finalSha = await this.git(["rev-parse", "HEAD"], integrationWorktree.path);
+      const cleanupError = await this.cleanup(integrationWorktree, true);
+      if (cleanupError) {
+        return {
+          status: "FAILED",
+          gateResults,
+          finalSha,
+          commitsIntegrated,
+          summary: `Intégration produite mais nettoyage obligatoire échoué: ${cleanupError}`,
+          durationMs: Date.now() - start,
+        };
+      }
 
       return {
         status: "SUCCEEDED",
@@ -105,11 +128,16 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erreur inconnue";
+      const cleanupError = integrationWorktree
+        ? await this.cleanup(integrationWorktree, false)
+        : null;
       return {
         status: "FAILED",
         gateResults: [],
-        commitsIntegrated: 0,
-        summary: `Échec de l'intégration: ${message}`,
+        commitsIntegrated,
+        summary:
+          `Échec de l'intégration: ${message}` +
+          (cleanupError ? `; nettoyage échoué: ${cleanupError}` : ""),
         durationMs: Date.now() - start,
       };
     }
@@ -119,52 +147,59 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
   // Private helpers
   // ─────────────────────────────────────
 
-  private async createIntegrationBranch(branchName: string, baseSha: string): Promise<void> {
-    // Vérifier si la branche existe déjà
-    const exists = await this.safeGit(["branch", "--list", branchName]);
-
-    if (exists) {
-      // Réinitialiser à la base
-      await this.git(["checkout", branchName]);
-      await this.git(["reset", "--soft", baseSha]);
-    } else {
-      await this.git(["branch", branchName, baseSha]);
-      await this.git(["checkout", branchName]);
-    }
+  private async applyCommit(commitSha: string, integrationPath: string): Promise<void> {
+    await this.git(["cherry-pick", "--no-commit", commitSha], integrationPath);
+    await this.git(
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        `integration: apply ${commitSha.slice(0, 8)}`,
+      ],
+      integrationPath,
+    );
   }
 
-  private async applyCommit(commitSha: string, targetBranch: string): Promise<void> {
-    // S'assurer qu'on est sur la bonne branche
-    await this.git(["checkout", targetBranch]);
-
-    // Appliquer le commit avec cherry-pick
-    await this.git(["cherry-pick", "--no-commit", commitSha]);
-    await this.git(["commit", "--allow-empty", "-m", `integration: merge ${commitSha.slice(0, 8)}`]);
-  }
-
-  private parseConflictFiles(): string[] {
-    // V1 : retourne une liste vide
-    // V2+ : parser output de git status pour extraire les fichiers en conflit
-    return [];
+  private async parseConflictFiles(integrationPath: string): Promise<string[]> {
+    const output = await this.safeGit(["diff", "--name-only", "--diff-filter=U"], integrationPath);
+    return output ? output.split("\n").filter(Boolean).sort() : [];
   }
 
   protected async getRepoRoot(): Promise<string> {
-    const { stdout } = await exec("git", ["rev-parse", "--show-toplevel"]);
+    const { stdout } = await exec("git", ["rev-parse", "--show-toplevel"], {
+      cwd: process.cwd(),
+    });
     return stdout.trim();
   }
 
-  private async git(args: string[]): Promise<string> {
+  private async git(args: string[], cwd: string): Promise<string> {
     const { stdout } = await exec("git", args, {
+      cwd,
       maxBuffer: 10 * 1024 * 1024,
     });
     return stdout.trim();
   }
 
-  private async safeGit(args: string[]): Promise<string> {
+  private async safeGit(args: string[], cwd: string): Promise<string> {
     try {
-      return await this.git(args);
+      return await this.git(args, cwd);
     } catch {
       return "";
+    }
+  }
+
+  private async cleanup(worktree: WorktreeSpec, preserveBranch: boolean): Promise<string | null> {
+    try {
+      await this.worktrees.cleanupIntegrationWorktree(worktree.path, {
+        preserveBranch,
+      });
+      return null;
+    } catch (error) {
+      return (error instanceof Error ? error.message : "Unknown cleanup error").slice(0, 512);
     }
   }
 }

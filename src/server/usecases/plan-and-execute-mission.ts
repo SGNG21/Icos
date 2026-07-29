@@ -59,7 +59,7 @@ export interface PlanAndExecuteMissionDeps {
   missionService: MissionServiceBoundary;
   missionContexts: Pick<MissionContextRepository, "findLatest">;
   capabilitySnapshotDeps: GetCapabilitySnapshotDeps;
-  supervisor: Pick<SupervisorService, "execute">;
+  supervisor: Pick<SupervisorService, "execute" | "getExecutionIdentity">;
   supervisorRepository: Pick<SupervisorRepository, "findDagById">;
   clock: () => Date;
   getSelfState?: () => SelfStateSnapshot;
@@ -366,6 +366,14 @@ export async function planAndExecuteMission(
   }
   const supervisorContext: SupervisorEnrichedContext = bridged.envelope;
 
+  const executorIdentity = deps.supervisor.getExecutionIdentity();
+  if (!executorIdentity || executorIdentity.tenantId !== tenantId) {
+    return failure(
+      "capability_preflight_failed",
+      "L'identité d'exécution système du Supervisor n'est pas disponible pour ce tenant.",
+    );
+  }
+
   let capabilitySnapshot: CapabilitySnapshotItem[];
   try {
     capabilitySnapshot = await (deps.getCapabilities ?? getCapabilitySnapshot)(
@@ -373,9 +381,11 @@ export async function planAndExecuteMission(
       {
         policyRequest: {
           actor: {
-            kind: "human",
-            id: actorId,
-            tenantId,
+            kind: "system",
+            id: executorIdentity.id,
+            tenantId: executorIdentity.tenantId,
+            roles: [...executorIdentity.roles],
+            authorizationLevel: executorIdentity.authorizationLevel,
           },
           tenant: { tenantId },
           action: SYSTEM_ACTIONS.SUPERVISOR_WORKER_EXECUTE,

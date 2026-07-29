@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildMissionContext, resolveSupervisorContext } from "@/core/context";
 import type { Capability } from "@/core/contracts";
-import { SYSTEM_ACTIONS, type PolicyDecision } from "@/core/policy";
+import {
+  PERMISSION_SUPERVISOR_WORKER_EXECUTE,
+  SYSTEM_ACTIONS,
+  type PolicyDecision,
+  type SystemAgent,
+} from "@/core/policy";
 import { getSelfStateSnapshot } from "@/server/self-state/get-self-state-snapshot";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { InMemoryMissionContextRepository } from "@/server/context/in-memory/mission-context-repository";
@@ -31,6 +36,13 @@ const NOW = "2026-07-28T08:00:00.000Z";
 const TRUSTED = { tenantId: "tenant-1", actorId: "human-1" };
 const OBJECTIVE = "Implement repository change $(do-not-run) && preserve exactly";
 const REQUIRED_CAPABILITY_KEY = SYSTEM_ACTIONS.SUPERVISOR_WORKER_EXECUTE;
+const EXECUTOR: SystemAgent = {
+  id: "supervisor-tenant-1",
+  tenantId: TRUSTED.tenantId,
+  roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
+  authorizationLevel: 2,
+  justification: "Composition-owned bounded repository execution",
+};
 
 function capability(): Capability {
   return {
@@ -149,6 +161,7 @@ async function harness(options?: {
   };
   const supervisorRepository = new InMemorySupervisorRepository();
   const supervisor = {
+    getExecutionIdentity: vi.fn((): SystemAgent | null => structuredClone(EXECUTOR)),
     execute: vi.fn(
       async (
         dag: Parameters<PlanAndExecuteMissionDeps["supervisor"]["execute"]>[0],
@@ -283,15 +296,48 @@ describe("planAndExecuteMission — strict boundaries", () => {
     expect(h.transitionStatus).toHaveBeenCalledWith(
       expect.objectContaining({ actorLabel: TRUSTED.actorId }),
     );
-    expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor).toMatchObject({
-      kind: "human",
-      id: TRUSTED.actorId,
-      tenantId: TRUSTED.tenantId,
+    expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor).toEqual({
+      kind: "system",
+      id: EXECUTOR.id,
+      tenantId: EXECUTOR.tenantId,
+      roles: [...EXECUTOR.roles],
+      authorizationLevel: 2,
     });
-    expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor.roles).toBeUndefined();
-    expect(
-      h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor.authorizationLevel,
-    ).toBeUndefined();
+  });
+
+  it("keeps authenticated requester claims unable to mutate executor authority", async () => {
+    const h = await harness();
+    const result = await execute(h, undefined, {
+      tenantId: TRUSTED.tenantId,
+      actorId: "different-authenticated-human",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(h.transitionStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ actorLabel: "different-authenticated-human" }),
+    );
+    expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor).toEqual({
+      kind: "system",
+      id: EXECUTOR.id,
+      tenantId: EXECUTOR.tenantId,
+      roles: [...EXECUTOR.roles],
+      authorizationLevel: 2,
+    });
+  });
+
+  it("fails closed before capability evaluation when Supervisor has no executor", async () => {
+    const h = await harness();
+    h.supervisor.getExecutionIdentity.mockReturnValue(null);
+
+    const result = await execute(h);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "capability_preflight_failed",
+      message: "L'identité d'exécution système du Supervisor n'est pas disponible pour ce tenant.",
+    });
+    expect(h.getCapabilities).not.toHaveBeenCalled();
+    expect(h.supervisor.execute).not.toHaveBeenCalled();
   });
 });
 
