@@ -1,10 +1,15 @@
 import { z } from "zod";
 
+import type { Capability } from "@/core/contracts";
 import {
   PERMISSION_SUPERVISOR_WORKER_EXECUTE,
+  SYSTEM_ACTIONS,
   type SystemAgent,
 } from "@/core/policy";
-import type { RuntimeExecutionPort } from "@/server/runtime/ports";
+import { loadEnv } from "@/config/env";
+import { OmniRouteAdapter } from "@/server/ai/omniroute-adapter";
+import { resolveOmniRouteConfig } from "@/server/ai/omniroute-config";
+import type { AiHealthPort } from "@/server/ai/ports";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { InMemoryMissionContextRepository } from "@/server/context/in-memory/mission-context-repository";
 import { GlobalGates } from "@/server/integration/global-gates";
@@ -14,6 +19,14 @@ import { InMemoryMissionRepository } from "@/server/mission/in-memory/mission-re
 import { InMemoryMissionUnitOfWork } from "@/server/mission/in-memory/mission-uow";
 import { PreviewDelivery } from "@/server/preview/preview-delivery";
 import { CorrectionWorker, ReviewerWorker } from "@/server/review/reviewer-worker";
+import { ArtifactCollector } from "@/server/runtime/artifact-collector";
+import { ExecutionOrchestrator } from "@/server/runtime/execution-orchestrator";
+import type {
+  CredentialBrokerPort,
+  NetworkPolicyPort,
+  RuntimeExecutionPort,
+} from "@/server/runtime/ports";
+import { WorkspaceManager } from "@/server/runtime/workspace-manager";
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
 import { InMemorySupervisorRepository } from "@/server/supervisor/in-memory/supervisor-repository";
@@ -27,6 +40,7 @@ import {
   type PlanAndExecuteMissionDeps,
   type PlanAndExecuteMissionResult,
 } from "@/server/usecases/plan-and-execute-mission";
+import type { CapabilityAvailabilityProbe } from "@/server/usecases/get-capability-snapshot";
 import { DeterministicPatchWorker, type DeterministicPatchCatalog } from "@/server/worker/deterministic-patch-worker";
 import { WorkerManager } from "@/server/worker/worker-manager";
 import { WorktreeManager } from "@/server/worktree/worktree-manager";
@@ -45,6 +59,8 @@ import { projectCockpitJob } from "./projection";
 
 const LOCAL_TENANT_ID = "default";
 const RUNTIME_KEY = "__icosCockpitRuntime__";
+const WORKER_EXECUTION_CAPABILITY_ID = "capability-supervisor-worker-execute";
+const OMNIROUTE_EVIDENCE_KEY = "omniroute";
 
 const createInputSchema = z
   .object({
@@ -89,6 +105,8 @@ export interface CockpitRuntimeComponents {
   deterministicWorkerCatalog: DeterministicPatchCatalog;
   worktreeManager: WorktreeManager;
   integrationOrchestrator: IntegrationOrchestrator;
+  runtimeExecution: RuntimeExecutionPort;
+  omniRouteAdapter?: OmniRouteAdapter;
   jobRegistry: CockpitJobRegistry;
   planAndExecuteMissionDependencies: PlanAndExecuteMissionDeps;
 }
@@ -246,7 +264,89 @@ function defaultResultMapper(result: PlanAndExecuteMissionResult): CockpitExecut
   };
 }
 
-function createDefaultComposition(): {
+interface DefaultCompositionInput {
+  environment?: Record<string, string | undefined>;
+  fetchFn?: typeof globalThis.fetch;
+}
+
+function canonicalWorkerExecutionCapability(now: string): Capability {
+  return {
+    id: WORKER_EXECUTION_CAPABILITY_ID,
+    key: SYSTEM_ACTIONS.SUPERVISOR_WORKER_EXECUTE,
+    name: "Supervisor worker execution",
+    description: "Execute reviewed, bounded worker tasks through the canonical Supervisor.",
+    category: "code",
+    status: "active",
+    sensitivityLevel: "C1",
+    dataCategory: "INTERNAL",
+    retentionPolicyRef: {
+      maxRetentionDays: 30,
+      legalBasis: "contract",
+      purpose: "bounded local Cockpit runtime composition",
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function omniRouteAvailability(health: AiHealthPort | undefined): CapabilityAvailabilityProbe {
+  return {
+    async check({ capability }) {
+      if (capability.key !== SYSTEM_ACTIONS.SUPERVISOR_WORKER_EXECUTE) {
+        return {
+          state: "UNKNOWN",
+          evidence: [
+            {
+              component: "PROVIDER",
+              key: OMNIROUTE_EVIDENCE_KEY,
+              state: "UNKNOWN",
+              source: "AI_HEALTH_PORT",
+              reason: "No provider evidence is defined for this capability.",
+            },
+          ],
+        };
+      }
+
+      if (!health) {
+        return {
+          state: "UNAVAILABLE",
+          evidence: [
+            {
+              component: "PROVIDER",
+              key: OMNIROUTE_EVIDENCE_KEY,
+              state: "UNAVAILABLE",
+              source: "AI_HEALTH_PORT",
+              reason: "OmniRoute configuration is unavailable.",
+            },
+          ],
+        };
+      }
+
+      let healthy = false;
+      try {
+        healthy = (await health.check()) === true;
+      } catch {
+        healthy = false;
+      }
+      return {
+        state: healthy ? "AVAILABLE" : "UNAVAILABLE",
+        evidence: [
+          {
+            component: "PROVIDER",
+            key: OMNIROUTE_EVIDENCE_KEY,
+            state: healthy ? "AVAILABLE" : "UNAVAILABLE",
+            source: "AI_HEALTH_PORT",
+            reason: healthy
+              ? "OmniRoute health is available."
+              : "OmniRoute health is unavailable or malformed.",
+          },
+        ],
+      };
+    },
+  };
+}
+
+function createDefaultComposition(input: DefaultCompositionInput = {}): {
   options: CockpitRuntimeOptions;
   components: CockpitRuntimeComponents;
 } {
@@ -271,22 +371,56 @@ function createDefaultComposition(): {
     deterministicWorkerCatalog,
     { taskWorktreeRoot: process.cwd() },
   );
-  const unavailableGeneralRuntime: RuntimeExecutionPort = {
-    async execute() {
+
+  let omniRouteAdapter: OmniRouteAdapter | undefined;
+  try {
+    const serverEnvironment = loadEnv(input.environment ?? process.env);
+    omniRouteAdapter = new OmniRouteAdapter(
+      resolveOmniRouteConfig(serverEnvironment),
+      undefined,
+      input.fetchFn,
+    );
+  } catch {
+    omniRouteAdapter = undefined;
+  }
+  const failClosedGateway = {
+    async generate() {
       return {
-        ok: false,
-        state: "FAILED",
+        success: false as const,
         error: {
-          code: "INTERNAL_ERROR",
-          message: "No composition-owned general executable behavior is configured.",
+          code: "PROVIDER_UNAVAILABLE" as const,
+          message: "OmniRoute configuration is unavailable.",
           retryable: false,
+          fallbackPossible: false,
         },
         latencyMs: 0,
-        artifacts: [],
+        fallbackUsed: false,
       };
     },
   };
-  const workerManager = new WorkerManager(unavailableGeneralRuntime, policy);
+  const runtimeWorkspaceManager = new WorkspaceManager();
+  const credentialBroker: CredentialBrokerPort = {
+    async resolve() {
+      return { available: true, references: [], environment: {} };
+    },
+  };
+  const networkPolicy: NetworkPolicyPort = {
+    async check() {
+      return {
+        outcome: "deny",
+        reason: "Cockpit runtime network access is denied by default.",
+      };
+    },
+  };
+  const runtimeExecution = new ExecutionOrchestrator(
+    policy,
+    omniRouteAdapter ?? failClosedGateway,
+    runtimeWorkspaceManager,
+    new ArtifactCollector(runtimeWorkspaceManager),
+    credentialBroker,
+    networkPolicy,
+  );
+  const workerManager = new WorkerManager(runtimeExecution, policy);
   const executorIdentity: SystemAgent = Object.freeze({
     id: "cockpit-supervisor",
     tenantId: LOCAL_TENANT_ID,
@@ -305,13 +439,17 @@ function createDefaultComposition(): {
     new PreviewDelivery({ allowExternalPreview: false }),
     { agentIdentity: executorIdentity },
   );
-  const capabilities = new InMemoryCapabilityRepository();
+  const now = new Date().toISOString();
+  const capabilities = new InMemoryCapabilityRepository([
+    canonicalWorkerExecutionCapability(now),
+  ]);
   const planDependencies: PlanAndExecuteMissionDeps = {
     missionService,
     missionContexts,
     capabilitySnapshotDeps: {
       capabilities,
       policy,
+      availability: omniRouteAvailability(omniRouteAdapter),
     },
     supervisor: supervisorService,
     supervisorRepository,
@@ -327,6 +465,8 @@ function createDefaultComposition(): {
     deterministicWorkerCatalog,
     worktreeManager,
     integrationOrchestrator,
+    runtimeExecution,
+    ...(omniRouteAdapter ? { omniRouteAdapter } : {}),
     jobRegistry,
     planAndExecuteMissionDependencies: planDependencies,
   };
@@ -369,6 +509,13 @@ function createDefaultComposition(): {
       components,
     },
   };
+}
+
+export function createDefaultCockpitRuntimeForTests(
+  input: DefaultCompositionInput = {},
+): CockpitRuntime {
+  const composition = createDefaultComposition(input);
+  return new ProcessLocalCockpitRuntime(composition.options);
 }
 
 export function createCockpitRuntimeForTests(input: {
