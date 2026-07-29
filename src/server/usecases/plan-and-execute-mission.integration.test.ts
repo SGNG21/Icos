@@ -512,6 +512,13 @@ describe("planAndExecuteMission — real bridge integration", () => {
     expect(h.getSelfState).toHaveBeenCalledOnce();
     expect(h.getCapabilities).toHaveBeenCalledOnce();
     expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.action).toBe(REQUIRED_CAPABILITY);
+    expect(h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor).toEqual({
+      kind: "system",
+      id: "supervisor-bridge",
+      tenantId: TENANT_ID,
+      roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
+      authorizationLevel: 2,
+    });
     expect(h.resolveContext).toHaveBeenCalledOnce();
     expect(h.validateTaskDag).toHaveBeenCalledOnce();
     expect(h.transitionStatus.mock.calls.map(([input]) => input.targetStatus)).toEqual([
@@ -528,9 +535,13 @@ describe("planAndExecuteMission — real bridge integration", () => {
     expect(h.supervisorExecute).toHaveBeenCalledOnce();
 
     expect(h.d1Decide).toHaveBeenCalledOnce();
+    expect(h.d1Decide.mock.calls[0]?.[0].actor).toEqual(
+      h.getCapabilities.mock.calls[0]?.[1].policyRequest.actor,
+    );
     expect(h.runtime.execute).toHaveBeenCalledOnce();
     expect(h.worktrees.createWorktree).toHaveBeenCalledOnce();
     expect(h.worktrees.captureResult).toHaveBeenCalledTimes(2);
+    expect(h.worktrees.cleanupWorktree).toHaveBeenCalledOnce();
     expect(h.reviewer.conductReview).toHaveBeenCalledTimes(2);
     expect(h.reviewer.ensureIndependentReview).toHaveBeenCalledTimes(2);
     expect(h.corrector.executeCorrection).toHaveBeenCalledOnce();
@@ -549,6 +560,9 @@ describe("planAndExecuteMission — real bridge integration", () => {
     const persistedMission = await h.missionRepository.findById(h.missionId);
     expect(persistedMission?.plan).toEqual(result.plan);
     expect(persistedMission?.status).toBe("COMPLETED");
+    expect((await h.missionContexts.findLatest(TENANT_ID, h.missionId))?.builtByLabel).toBe(
+      ACTOR_ID,
+    );
     expectNoIrreversibleAction(h.irreversible);
   });
 

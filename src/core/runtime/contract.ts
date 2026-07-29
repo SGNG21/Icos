@@ -246,8 +246,8 @@ export const runtimeAdapterInputSchema = z.object({
   timeoutMs: z.number().int().positive(),
   /**
    * Commande à exécuter (optionnel).
-   * Si absent, l'adaptateur V1 retourne un succès sans spawn
-   * pour la compatibilité avec les tests orchestrateur existants.
+   * L'adaptateur local exécute uniquement de vrais processus et échoue fermé
+   * avec INTERNAL_ERROR lorsque cette commande est absente.
    * Doit être un exécutable, pas une chaîne shell.
    */
   command: z.string().min(1).optional(),
