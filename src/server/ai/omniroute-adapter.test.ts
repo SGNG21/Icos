@@ -531,9 +531,9 @@ describe("D3-15: D2 durable state is unaffected by provider failure", () => {
 // ─────────────────────────────────────
 
 describe("AiHealthPort.check", () => {
-  it("returns true when OmniRoute /health responds ok", async () => {
+  it("calls OmniRoute /status and returns true for HTTP 200", async () => {
     const healthFetch: MockFetch = (url) => {
-      expect(url).toContain("/health");
+      expect(url).toBe("http://omniroute.test/status");
       return Promise.resolve(new Response("OK", { status: 200 }));
     };
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, healthFetch);
@@ -541,18 +541,38 @@ describe("AiHealthPort.check", () => {
     expect(result).toBe(true);
   });
 
-  it("returns false when OmniRoute is unreachable", async () => {
+  it("returns false for HTTP 404", async () => {
+    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 404 }));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+    const result = await adapter.check();
+    expect(result).toBe(false);
+  });
+
+  it("returns false for HTTP 500", async () => {
+    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 500 }));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+    const result = await adapter.check();
+    expect(result).toBe(false);
+  });
+
+  it("returns false for a network failure", async () => {
     const failingFetch: MockFetch = () => Promise.reject(new TypeError("fetch failed"));
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, failingFetch);
     const result = await adapter.check();
     expect(result).toBe(false);
   });
 
-  it("returns false when OmniRoute returns error status", async () => {
-    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 503 }));
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+  it("does not expose credentials when the health request fails", async () => {
+    const apiKey = "sk-health-secret-12345";
+    const failingFetch: MockFetch = () => Promise.reject(new Error(apiKey));
+    const adapter = new OmniRouteAdapter(
+      { ...defaultConfig, apiKey },
+      undefined,
+      failingFetch,
+    );
     const result = await adapter.check();
     expect(result).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 });
 

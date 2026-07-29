@@ -264,7 +264,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
   async check(): Promise<boolean> {
     try {
-      const response = await this.fetchFn(`${this.baseUrl}/health`, {
+      const response = await this.fetchFn(`${this.baseUrl}/status`, {
         method: "GET",
         signal: AbortSignal.timeout(5_000),
       });
