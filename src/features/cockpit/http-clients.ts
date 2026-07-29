@@ -8,13 +8,7 @@ const MAX_OBJECTIVE_LENGTH = 2_000;
 const MAX_TEXT_LENGTH = 512;
 const MAX_ITEMS = 100;
 
-const cockpitJobStatusSchema = z.enum([
-  "QUEUED",
-  "RUNNING",
-  "SUCCEEDED",
-  "FAILED",
-  "BLOCKED",
-]);
+const cockpitJobStatusSchema = z.enum(["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "BLOCKED"]);
 
 const cockpitJobSchema = z
   .object({
@@ -25,6 +19,7 @@ const cockpitJobSchema = z
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
     completedAt: z.iso.datetime().optional(),
+    requestKind: z.enum(["CONVERSATION", "MISSION"]).optional(),
     missionState: z.string().max(64).optional(),
     planLabel: z.string().max(MAX_TEXT_LENGTH).optional(),
     tasks: z
@@ -68,9 +63,7 @@ async function readJobResponse(
   expectedStatus: 200 | 202,
 ): Promise<CockpitJobProjection> {
   if (!response.ok || response.status !== expectedStatus) {
-    throw new CockpitHttpError(
-      `La requête Cockpit a échoué (HTTP ${response.status}).`,
-    );
+    throw new CockpitHttpError(`La requête Cockpit a échoué (HTTP ${response.status}).`);
   }
 
   let value: unknown;

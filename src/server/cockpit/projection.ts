@@ -24,9 +24,8 @@ export function projectCockpitJob(record: CockpitJobRecord): CockpitJobProjectio
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
-    ...(record.missionState
-      ? { missionState: sanitizeCockpitText(record.missionState) }
-      : {}),
+    ...(record.requestKind ? { requestKind: record.requestKind } : {}),
+    ...(record.missionState ? { missionState: sanitizeCockpitText(record.missionState) } : {}),
     ...(record.planLabel ? { planLabel: sanitizeCockpitText(record.planLabel) } : {}),
     tasks: record.tasks.map((task) => ({
       ...task,
@@ -44,9 +43,7 @@ export function projectCockpitJob(record: CockpitJobRecord): CockpitJobProjectio
           },
         }
       : {}),
-    ...(record.finalResult
-      ? { finalResult: sanitizeCockpitText(record.finalResult) }
-      : {}),
+    ...(record.finalResult ? { finalResult: sanitizeCockpitText(record.finalResult) } : {}),
     // No canonical repository-evidence contract exists in PHASE 3.
     mergePerformed: false,
     productionDeploymentPerformed: false,

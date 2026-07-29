@@ -7,6 +7,7 @@ export const COCKPIT_MAX_OBJECTIVE_LENGTH = 2_000;
 export const COCKPIT_MAX_ITEMS = 100;
 
 export type CockpitJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "BLOCKED";
+export type CockpitRequestKind = "CONVERSATION" | "MISSION";
 
 export interface CockpitTaskProjection {
   taskId: string;
@@ -27,6 +28,7 @@ export interface CockpitJobProjection {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  requestKind?: CockpitRequestKind;
   missionState?: string;
   planLabel?: string;
   tasks: CockpitTaskProjection[];
@@ -64,6 +66,7 @@ export interface CockpitJobRecord {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  requestKind?: CockpitRequestKind;
   missionId?: string;
   missionState?: string;
   planLabel?: string;
@@ -80,6 +83,7 @@ export type CockpitJobUpdate = Partial<
   Pick<
     CockpitJobRecord,
     | "missionId"
+    | "requestKind"
     | "missionState"
     | "planLabel"
     | "tasks"
@@ -261,9 +265,8 @@ export class CockpitJobRegistry {
 
   private sanitizeUpdate(update: CockpitJobUpdate): CockpitJobUpdate {
     return {
-      ...(update.missionId === undefined
-        ? {}
-        : { missionId: boundedText(update.missionId, 128) }),
+      ...(update.missionId === undefined ? {} : { missionId: boundedText(update.missionId, 128) }),
+      ...(update.requestKind === undefined ? {} : { requestKind: update.requestKind }),
       ...(update.missionState === undefined
         ? {}
         : { missionState: boundedText(update.missionState, 64) }),
@@ -272,9 +275,7 @@ export class CockpitJobRegistry {
       ...(update.workers === undefined ? {} : { workers: boundedItems(update.workers) }),
       ...(update.blockers === undefined ? {} : { blockers: boundedItems(update.blockers) }),
       ...(update.evidence === undefined ? {} : { evidence: boundedItems(update.evidence) }),
-      ...(update.finalResult === undefined
-        ? {}
-        : { finalResult: boundedText(update.finalResult) }),
+      ...(update.finalResult === undefined ? {} : { finalResult: boundedText(update.finalResult) }),
       ...(update.sanitizedError === undefined
         ? {}
         : {

@@ -91,6 +91,20 @@ describe("CkSupervisorSurface real projection", () => {
     expect(html).toContain('role="alert"');
   });
 
+  it("renders a conversational answer distinctly without Mission task or worker state", () => {
+    const html = renderSurface("SUCCEEDED", "succeeded", {
+      requestKind: "CONVERSATION",
+      finalResult: "Réponse conversationnelle sûre",
+    });
+
+    expect(html).toContain("État de la conversation");
+    expect(html).toContain("Réponse conversationnelle reçue");
+    expect(html).toContain("Réponse conversationnelle sûre");
+    expect(html).not.toContain(">Tâches<");
+    expect(html).not.toContain(">Workers<");
+    expect(html).not.toContain("État Mission");
+  });
+
   it("reports merge and deployment flags honestly", () => {
     const neither = renderSurface("SUCCEEDED", "succeeded");
     const both = renderSurface("SUCCEEDED", "succeeded", {
@@ -132,12 +146,7 @@ describe("CkSupervisorSurface real projection", () => {
   });
 
   it("announces status and network errors without adding execution controls", () => {
-    const html = renderSurface(
-      "RUNNING",
-      "network-error",
-      {},
-      "Lecture réseau impossible",
-    );
+    const html = renderSurface("RUNNING", "network-error", {}, "Lecture réseau impossible");
 
     expect(html).toContain('role="status"');
     expect(html).toContain('aria-live="polite"');

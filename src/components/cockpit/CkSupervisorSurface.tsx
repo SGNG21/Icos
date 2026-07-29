@@ -43,6 +43,7 @@ export function CkSupervisorSurface({
     snapshot?.status === "SUCCEEDED" ||
     snapshot?.status === "FAILED" ||
     snapshot?.status === "BLOCKED";
+  const conversation = snapshot?.requestKind === "CONVERSATION";
 
   const supervision = (
     <div className="ck-supervision">
@@ -60,7 +61,7 @@ export function CkSupervisorSurface({
 
       <p className="ck-local-label" role="status" aria-live="polite" aria-atomic="true">
         {snapshot
-          ? `${uiStateLabels[uiState]} — statut ${statusLabels[snapshot.status]}`
+          ? `${conversation && snapshot.status === "SUCCEEDED" ? "Réponse conversationnelle reçue" : uiStateLabels[uiState]} — statut ${statusLabels[snapshot.status]}`
           : uiStateLabels[uiState]}
       </p>
 
@@ -77,63 +78,79 @@ export function CkSupervisorSurface({
 
       {snapshot ? (
         <>
-          <CkInFlowCard title="État de la mission" icon="◇" variant="mission">
+          <CkInFlowCard
+            title={conversation ? "État de la conversation" : "État de la mission"}
+            icon="◇"
+            variant="mission"
+          >
             <dl className="ck-authority-outcomes">
               <div>
                 <dt>Statut du job</dt>
                 <dd>{statusLabels[snapshot.status]}</dd>
               </div>
-              {snapshot.missionState ? (
+              {!conversation && snapshot.missionState ? (
                 <div>
                   <dt>État Mission</dt>
                   <dd>{snapshot.missionState}</dd>
                 </div>
               ) : null}
             </dl>
-            {snapshot.planLabel ? <p className="ck-card-intro">{snapshot.planLabel}</p> : null}
+            {!conversation && snapshot.planLabel ? (
+              <p className="ck-card-intro">{snapshot.planLabel}</p>
+            ) : null}
           </CkInFlowCard>
 
-          <div className="ck-supervision-grid">
-            <CkInFlowCard title="Tâches" icon="◇" variant="mission">
-              {snapshot.tasks.length > 0 ? (
-                <ol className="ck-supervision-list">
-                  {snapshot.tasks.map((task) => (
-                    <li key={task.taskId}>
-                      <strong>{task.label}</strong>
-                      <span className="ck-item-status">{statusLabels[task.status]}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="ck-empty-copy">Aucune tâche déclarée.</p>
-              )}
-            </CkInFlowCard>
+          {!conversation ? (
+            <div className="ck-supervision-grid">
+              <CkInFlowCard title="Tâches" icon="◇" variant="mission">
+                {snapshot.tasks.length > 0 ? (
+                  <ol className="ck-supervision-list">
+                    {snapshot.tasks.map((task) => (
+                      <li key={task.taskId}>
+                        <strong>{task.label}</strong>
+                        <span className="ck-item-status">{statusLabels[task.status]}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="ck-empty-copy">Aucune tâche déclarée.</p>
+                )}
+              </CkInFlowCard>
 
-            <CkInFlowCard title="Workers" icon="◉" variant="activity">
-              {snapshot.workers.length > 0 ? (
-                <ul className="ck-supervision-list">
-                  {snapshot.workers.map((worker, index) => (
-                    <li key={`${index}-${worker}`}>{worker}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="ck-empty-copy">Aucun worker déclaré.</p>
-              )}
-            </CkInFlowCard>
-          </div>
+              <CkInFlowCard title="Workers" icon="◉" variant="activity">
+                {snapshot.workers.length > 0 ? (
+                  <ul className="ck-supervision-list">
+                    {snapshot.workers.map((worker, index) => (
+                      <li key={`${index}-${worker}`}>{worker}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="ck-empty-copy">Aucun worker déclaré.</p>
+                )}
+              </CkInFlowCard>
+            </div>
+          ) : null}
 
           <div className="ck-supervision-grid">
-            <CkInFlowCard title="Blocages et erreur" icon="!" variant="activity">
-              <h2>Blocages</h2>
-              {snapshot.blockers.length > 0 ? (
-                <ul>
-                  {snapshot.blockers.map((blocker, index) => (
-                    <li key={`${index}-${blocker}`}>{blocker}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p>Aucun blocage déclaré.</p>
-              )}
+            <CkInFlowCard
+              title={conversation ? "Erreur conversationnelle" : "Blocages et erreur"}
+              icon="!"
+              variant="activity"
+            >
+              {!conversation ? (
+                <>
+                  <h2>Blocages</h2>
+                  {snapshot.blockers.length > 0 ? (
+                    <ul>
+                      {snapshot.blockers.map((blocker, index) => (
+                        <li key={`${index}-${blocker}`}>{blocker}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>Aucun blocage déclaré.</p>
+                  )}
+                </>
+              ) : null}
               <h2>Erreur assainie</h2>
               {snapshot.sanitizedError ? (
                 <p role="alert">
@@ -148,7 +165,9 @@ export function CkSupervisorSurface({
               <p>
                 {terminal
                   ? (snapshot.finalResult ?? "Aucun résultat final déclaré.")
-                  : "La mission n’est pas terminée."}
+                  : conversation
+                    ? "La réponse n’est pas terminée."
+                    : "La mission n’est pas terminée."}
               </p>
               <dl className="ck-authority-outcomes">
                 <div>
@@ -169,15 +188,15 @@ export function CkSupervisorSurface({
         </>
       ) : (
         <section aria-labelledby="empty-cockpit-title">
-          <h2 id="empty-cockpit-title">Aucune mission</h2>
-          <p>Saisissez un objectif pour démarrer une mission locale.</p>
+          <h2 id="empty-cockpit-title">Aucune requête</h2>
+          <p>Saisissez une question ou un objectif local.</p>
         </section>
       )}
 
       <section className="ck-mission-entry" aria-labelledby="mission-entry-title">
         <div>
-          <h2 id="mission-entry-title">Nouvelle mission locale</h2>
-          <p>L’objectif est transmis exactement comme saisi.</p>
+          <h2 id="mission-entry-title">Nouvelle requête Cockpit</h2>
+          <p>Le texte est transmis comme donnée descriptive sans autorité implicite.</p>
         </div>
         <CkComposer onSend={onSubmitObjective} disabled={busy} />
         <p className="ck-validation-message" aria-live="polite">

@@ -67,9 +67,7 @@ describe("createCockpitHttpClient", () => {
 
   it("GETs a relative same-origin URL and parses every known status", async () => {
     for (const status of ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "BLOCKED"]) {
-      const fetchMock = vi.fn<typeof fetch>(async () =>
-        jsonResponse({ job: job({ status }) }),
-      );
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ job: job({ status }) }));
       const result = await createCockpitHttpClient(fetchMock).getJob(JOB_ID);
 
       expect(result.status).toBe(status);
@@ -79,6 +77,25 @@ describe("createCockpitHttpClient", () => {
         signal: undefined,
       });
     }
+  });
+
+  it("parses a bounded conversational terminal projection", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        job: job({
+          status: "SUCCEEDED",
+          requestKind: "CONVERSATION",
+          finalResult: "Réponse sûre",
+        }),
+      }),
+    );
+
+    const result = await createCockpitHttpClient(fetchMock).getJob(JOB_ID);
+
+    expect(result.requestKind).toBe("CONVERSATION");
+    expect(result.finalResult).toBe("Réponse sûre");
+    expect(result.tasks).toEqual([]);
+    expect(result.workers).toEqual([]);
   });
 
   it("rejects malformed JSON and unknown statuses instead of inferring success", async () => {
@@ -115,6 +132,16 @@ describe("createCockpitHttpClient", () => {
     }
   });
 
+  it("rejects an unknown request kind instead of inferring authority", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ job: job({ requestKind: "EXECUTE" }) }),
+    );
+
+    await expect(createCockpitHttpClient(fetchMock).getJob(JOB_ID)).rejects.toThrow(
+      "réponse Cockpit reçue est invalide",
+    );
+  });
+
   it("rejects unbounded projections and impossible authority outcomes", async () => {
     for (const override of [
       { objective: "x".repeat(2_001) },
@@ -123,9 +150,7 @@ describe("createCockpitHttpClient", () => {
       { mergePerformed: true },
       { productionDeploymentPerformed: true },
     ]) {
-      const fetchMock = vi.fn<typeof fetch>(async () =>
-        jsonResponse({ job: job(override) }),
-      );
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ job: job(override) }));
 
       await expect(createCockpitHttpClient(fetchMock).getJob(JOB_ID)).rejects.toThrow(
         "réponse Cockpit reçue est invalide",

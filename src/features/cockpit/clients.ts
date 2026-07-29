@@ -9,6 +9,7 @@ export const COCKPIT_JOB_STATUSES = [
 ] as const;
 
 export type CockpitJobStatus = (typeof COCKPIT_JOB_STATUSES)[number];
+export type CockpitRequestKind = "CONVERSATION" | "MISSION";
 
 export interface CockpitJobTask {
   taskId: string;
@@ -29,6 +30,7 @@ export interface CockpitJobProjection {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  requestKind?: CockpitRequestKind;
   missionState?: string;
   planLabel?: string;
   tasks: readonly CockpitJobTask[];

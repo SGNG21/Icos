@@ -9,7 +9,7 @@ import {
 import { loadEnv } from "@/config/env";
 import { OmniRouteAdapter } from "@/server/ai/omniroute-adapter";
 import { resolveOmniRouteConfig } from "@/server/ai/omniroute-config";
-import type { AiHealthPort } from "@/server/ai/ports";
+import type { AiGatewayPort, AiHealthPort } from "@/server/ai/ports";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { InMemoryMissionContextRepository } from "@/server/context/in-memory/mission-context-repository";
 import { GlobalGates } from "@/server/integration/global-gates";
@@ -41,7 +41,10 @@ import {
   type PlanAndExecuteMissionResult,
 } from "@/server/usecases/plan-and-execute-mission";
 import type { CapabilityAvailabilityProbe } from "@/server/usecases/get-capability-snapshot";
-import { DeterministicPatchWorker, type DeterministicPatchCatalog } from "@/server/worker/deterministic-patch-worker";
+import {
+  DeterministicPatchWorker,
+  type DeterministicPatchCatalog,
+} from "@/server/worker/deterministic-patch-worker";
 import { WorkerManager } from "@/server/worker/worker-manager";
 import { WorktreeManager } from "@/server/worktree/worktree-manager";
 import { D1PolicyService } from "@/server/policy/d1-policy-service";
@@ -56,6 +59,7 @@ import {
   type CreateCockpitJobInput,
 } from "./job-registry";
 import { projectCockpitJob } from "./projection";
+import { createCockpitRequestRouter } from "./request-router";
 
 const LOCAL_TENANT_ID = "default";
 const RUNTIME_KEY = "__icosCockpitRuntime__";
@@ -139,14 +143,10 @@ class ProcessLocalCockpitRuntime implements CockpitRuntime {
       queueMicrotask(() => {
         void this.executeAcceptedJob(parsed.data, created.record.jobId).catch(() => {
           try {
-            registry.markFailed(
-              parsed.data.tenantId,
-              created.record.jobId,
-              {
-                code: "execution_rejected",
-                message: "Cockpit execution failed safely.",
-              },
-            );
+            registry.markFailed(parsed.data.tenantId, created.record.jobId, {
+              code: "execution_rejected",
+              message: "Cockpit execution failed safely.",
+            });
           } catch {
             // The promise is intentionally contained; terminal registry state wins.
           }
@@ -164,10 +164,7 @@ class ProcessLocalCockpitRuntime implements CockpitRuntime {
     return record ? projectCockpitJob(record) : null;
   }
 
-  private async executeAcceptedJob(
-    input: CreateCockpitJobInput,
-    jobId: string,
-  ): Promise<void> {
+  private async executeAcceptedJob(input: CreateCockpitJobInput, jobId: string): Promise<void> {
     const registry = this.options.registry ?? this.options.components?.jobRegistry;
     if (!registry) return;
     registry.markRunning(input.tenantId, jobId);
@@ -192,19 +189,16 @@ class ProcessLocalCockpitRuntime implements CockpitRuntime {
 function withoutExecutionDiscriminator(result: CockpitExecutionResult): CockpitJobUpdate {
   return {
     ...(result.missionId === undefined ? {} : { missionId: result.missionId }),
+    ...(result.requestKind === undefined ? {} : { requestKind: result.requestKind }),
     ...(result.missionState === undefined ? {} : { missionState: result.missionState }),
     ...(result.planLabel === undefined ? {} : { planLabel: result.planLabel }),
     ...(result.tasks === undefined ? {} : { tasks: result.tasks }),
     ...(result.workers === undefined ? {} : { workers: result.workers }),
     ...(result.blockers === undefined ? {} : { blockers: result.blockers }),
     ...(result.evidence === undefined ? {} : { evidence: result.evidence }),
-    ...(result.sanitizedError === undefined
-      ? {}
-      : { sanitizedError: result.sanitizedError }),
+    ...(result.sanitizedError === undefined ? {} : { sanitizedError: result.sanitizedError }),
     ...(result.finalResult === undefined ? {} : { finalResult: result.finalResult }),
-    ...(result.mergePerformed === undefined
-      ? {}
-      : { mergePerformed: result.mergePerformed }),
+    ...(result.mergePerformed === undefined ? {} : { mergePerformed: result.mergePerformed }),
   };
 }
 
@@ -230,9 +224,7 @@ function safeTasks(result: PlanAndExecuteMissionResult): CockpitTaskProjection[]
 function defaultResultMapper(result: PlanAndExecuteMissionResult): CockpitExecutionResult {
   const common: CockpitJobUpdate = {
     ...("missionId" in result && result.missionId ? { missionId: result.missionId } : {}),
-    ...("mission" in result && result.mission
-      ? { missionState: result.mission.status }
-      : {}),
+    ...("mission" in result && result.mission ? { missionState: result.mission.status } : {}),
     planLabel: "Bounded local mission plan",
     tasks: safeTasks(result),
     mergePerformed: false,
@@ -366,11 +358,9 @@ function createDefaultComposition(input: DefaultCompositionInput = {}): {
   const worktreeManager = new WorktreeManager();
   const gates = new GlobalGates();
   const integrationOrchestrator = new IntegrationOrchestrator(gates, worktreeManager);
-  const deterministicWorker = new DeterministicPatchWorker(
-    policy,
-    deterministicWorkerCatalog,
-    { taskWorktreeRoot: process.cwd() },
-  );
+  const deterministicWorker = new DeterministicPatchWorker(policy, deterministicWorkerCatalog, {
+    taskWorktreeRoot: process.cwd(),
+  });
 
   let omniRouteAdapter: OmniRouteAdapter | undefined;
   try {
@@ -440,9 +430,7 @@ function createDefaultComposition(input: DefaultCompositionInput = {}): {
     { agentIdentity: executorIdentity },
   );
   const now = new Date().toISOString();
-  const capabilities = new InMemoryCapabilityRepository([
-    canonicalWorkerExecutionCapability(now),
-  ]);
+  const capabilities = new InMemoryCapabilityRepository([canonicalWorkerExecutionCapability(now)]);
   const planDependencies: PlanAndExecuteMissionDeps = {
     missionService,
     missionContexts,
@@ -474,7 +462,7 @@ function createDefaultComposition(input: DefaultCompositionInput = {}): {
     missionService,
     missionContexts,
   };
-  const execute: ExecuteCockpitJob = async (input) => {
+  const executeMission: ExecuteCockpitJob = async (input) => {
     const trusted = {
       tenantId: input.tenantId,
       actorId: input.requester.id,
@@ -500,6 +488,10 @@ function createDefaultComposition(input: DefaultCompositionInput = {}): {
     );
     return defaultResultMapper(result);
   };
+  const execute = createCockpitRequestRouter(
+    omniRouteAdapter ?? failClosedGateway,
+    executeMission,
+  ) as ExecuteCockpitJob;
   return {
     components,
     options: {
@@ -522,7 +514,11 @@ export function createCockpitRuntimeForTests(input: {
   registry?: CockpitJobRegistry;
   executorIdentity?: SystemAgent;
   execute: ExecuteCockpitJob;
+  aiGateway?: AiGatewayPort;
 }): CockpitRuntime {
+  const execute = input.aiGateway
+    ? (createCockpitRequestRouter(input.aiGateway, input.execute) as ExecuteCockpitJob)
+    : input.execute;
   return new ProcessLocalCockpitRuntime({
     registry: input.registry ?? new CockpitJobRegistry(),
     executorIdentity:
@@ -534,7 +530,7 @@ export function createCockpitRuntimeForTests(input: {
         authorizationLevel: 0,
         justification: "Explicit test-only composition identity.",
       } satisfies SystemAgent),
-    execute: input.execute,
+    execute,
   });
 }
 

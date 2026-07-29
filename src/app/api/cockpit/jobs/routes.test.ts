@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AiGenerationResult } from "@/core/ai";
 import type { AuthenticatedSession, Role } from "@/core/identity";
 import type { SystemAgent } from "@/core/policy";
+import type { AiGatewayPort } from "@/server/ai/ports";
 import type { AuthGateway } from "@/server/auth/ports";
 import {
   COCKPIT_MAX_OBJECTIVE_LENGTH,
@@ -80,11 +82,13 @@ function installRuntime(value: CockpitRuntime): void {
 function realRuntime(
   execute: (input: CockpitExecutionInput) => Promise<CockpitExecutionResult>,
   registry = new CockpitJobRegistry(),
+  aiGateway?: AiGatewayPort,
 ): CockpitRuntime {
   return createCockpitRuntimeForTests({
     registry,
     executorIdentity: executor,
     execute,
+    ...(aiGateway ? { aiGateway } : {}),
   });
 }
 
@@ -159,9 +163,7 @@ afterEach(() => {
 describe("Cockpit route files", () => {
   it("finds and executes both route modules explicitly", async () => {
     expect(existsSync(resolve(process.cwd(), "src/app/api/cockpit/jobs/route.ts"))).toBe(true);
-    expect(existsSync(resolve(process.cwd(), "src/app/api/cockpit/jobs/[id]/route.ts"))).toBe(
-      true,
-    );
+    expect(existsSync(resolve(process.cwd(), "src/app/api/cockpit/jobs/[id]/route.ts"))).toBe(true);
 
     const runtime: CockpitRuntime = {
       submitJob: vi.fn(async () => projection()),
@@ -169,9 +171,7 @@ describe("Cockpit route files", () => {
     };
     installRuntime(runtime);
 
-    expect((await postCockpitJob(postRequest({ objective: "Execute POST" }))).status).toBe(
-      202,
-    );
+    expect((await postCockpitJob(postRequest({ objective: "Execute POST" }))).status).toBe(202);
     expect((await getCockpitJob(getRequest(JOB_ID), params(JOB_ID))).status).toBe(200);
   });
 
@@ -235,11 +235,54 @@ describe("Cockpit route files", () => {
       objective: "Foreign work",
       requester: { kind: "human", id: "foreign-human" },
     });
-    const foreignResponse = await getCockpitJob(
-      getRequest(FOREIGN_JOB_ID),
-      params(FOREIGN_JOB_ID),
-    );
+    const foreignResponse = await getCockpitJob(getRequest(FOREIGN_JOB_ID), params(FOREIGN_JOB_ID));
     expect(foreignResponse.status).toBe(404);
+  });
+
+  it("projects a conversational POST through terminal GET without Mission execution state", async () => {
+    const execute = vi.fn(async (): Promise<CockpitExecutionResult> => ({
+      status: "SUCCEEDED",
+      missionState: "COMPLETED",
+    }));
+    const aiGateway: AiGatewayPort = {
+      generate: vi.fn(async (): Promise<AiGenerationResult> => ({
+        success: true,
+        content: "Je peux répondre aux questions sur le Cockpit.",
+        finishReason: "stop",
+        provider: { id: "private-provider", model: "private-model" },
+        usage: { inputTokens: 4, outputTokens: 9, totalTokens: 13 },
+        latencyMs: 1,
+        fallbackUsed: false,
+      })),
+    };
+    const runtime = realRuntime(execute, new CockpitJobRegistry(), aiGateway);
+    installRuntime(runtime);
+
+    const accepted = await postCockpitJob(postRequest({ objective: "que peux tu faire ?" }));
+    const acceptedBody = (await accepted.json()) as { job: CockpitJobProjection };
+    await vi.waitFor(() =>
+      expect(runtime.getJob("default", acceptedBody.job.jobId)?.status).toBe("SUCCEEDED"),
+    );
+    const response = await getCockpitJob(
+      getRequest(acceptedBody.job.jobId),
+      params(acceptedBody.job.jobId),
+    );
+    const body = (await response.json()) as { job: CockpitJobProjection };
+
+    expect(body.job).toMatchObject({
+      requestKind: "CONVERSATION",
+      status: "SUCCEEDED",
+      finalResult: "Je peux répondre aux questions sur le Cockpit.",
+      tasks: [],
+      workers: [],
+      mergePerformed: false,
+      productionDeploymentPerformed: false,
+    });
+    expect(body.job.missionId).toBeUndefined();
+    expect(body.job.missionState).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+    expect(aiGateway.generate).toHaveBeenCalledOnce();
+    expect(JSON.stringify(body)).not.toMatch(/private-provider|private-model/);
   });
 });
 
@@ -271,9 +314,7 @@ describe("POST /api/cockpit/jobs", () => {
   });
 
   it("rejects malformed JSON", async () => {
-    const response = await postCockpitJob(
-      postRequest(null, { rawBody: "{not-json" }),
-    );
+    const response = await postCockpitJob(postRequest(null, { rawBody: "{not-json" }));
     expect(response.status).toBe(400);
     expect(await errorCode(response)).toBe("invalid_input");
   });
@@ -289,10 +330,7 @@ describe("POST /api/cockpit/jobs", () => {
     ["unknown body field", { objective: "Valid", extra: true }],
     ["missing objective", {}],
     ["blank objective", { objective: "   " }],
-    [
-      "oversized objective",
-      { objective: "x".repeat(COCKPIT_MAX_OBJECTIVE_LENGTH + 1) },
-    ],
+    ["oversized objective", { objective: "x".repeat(COCKPIT_MAX_OBJECTIVE_LENGTH + 1) }],
   ])("rejects %s", async (_label, body) => {
     const response = await postCockpitJob(postRequest(body));
     expect(response.status).toBe(400);
@@ -432,9 +470,7 @@ describe("GET /api/cockpit/jobs/[id]", () => {
   });
 
   it("returns a known same-tenant job with no-store", async () => {
-    const getJob = vi.fn((tenantId: string) =>
-      tenantId === "default" ? projection() : null,
-    );
+    const getJob = vi.fn((tenantId: string) => (tenantId === "default" ? projection() : null));
     installRuntime({ submitJob: vi.fn(), getJob });
     const response = await getCockpitJob(getRequest(JOB_ID), params(JOB_ID));
     expect(response.status).toBe(200);
@@ -451,7 +487,7 @@ describe("GET /api/cockpit/jobs/[id]", () => {
   it("returns 404 for a foreign-tenant job without disclosing ownership", async () => {
     const foreignJobs = new Map([["foreign", projection()]]);
     const getJob = vi.fn((tenantId: string, id: string) =>
-      tenantId === "foreign" ? foreignJobs.get(id) ?? null : null,
+      tenantId === "foreign" ? (foreignJobs.get(id) ?? null) : null,
     );
     installRuntime({ submitJob: vi.fn(), getJob });
     const response = await getCockpitJob(getRequest(JOB_ID), params(JOB_ID));
