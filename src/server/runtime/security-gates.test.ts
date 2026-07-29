@@ -76,7 +76,7 @@ describe("SEC-D4-01: worker cannot obtain raw stored credentials", () => {
   it("les credentials retournent des références, pas de valeurs brutes", async () => {
     const broker = new FakeCredentialBroker();
     broker.predefinedCredentials = {
-      DB_PASSWORD: "super-secret-123",
+      DB_PASSWORD: "stub",
       API_KEY: "sk-test-abc",
     };
 
@@ -97,7 +97,7 @@ describe("SEC-D4-01: worker cannot obtain raw stored credentials", () => {
       }
       // Les valeurs sont dans environment, mais c'est le runtime
       // qui les injecte — pas le worker qui y accède directement
-      expect(resolution.environment.DB_PASSWORD).toBe("super-secret-123");
+      expect(resolution.environment.DB_PASSWORD).toBe("stub");
     }
   });
 });
