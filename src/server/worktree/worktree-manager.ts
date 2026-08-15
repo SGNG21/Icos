@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, realpath, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 
 import type { WorktreeSpec, WorktreeResult, WorktreeEntry } from "@/core/worktree";
 import type { WorktreeManagerPort } from "./ports";
+import type { IntegrationWorktreePort } from "@/server/integration/ports";
 
 const execGit = promisify(execFile);
 
@@ -20,25 +21,30 @@ const execGit = promisify(execFile);
  * - Pas de push/merge main
  * - Nettoyage garanti
  */
-export class WorktreeManager implements WorktreeManagerPort {
+export class WorktreeManager implements WorktreeManagerPort, IntegrationWorktreePort {
   private readonly entries = new Map<string, WorktreeEntry>();
-  private resolvedRoot: string | null = null;
+  private resolvedRoot: string | null;
 
   constructor(
     private readonly worktreeBase: string = ".claude/worktrees",
-  ) {}
+    repoRoot?: string,
+  ) {
+    this.resolvedRoot = repoRoot ? path.resolve(repoRoot) : null;
+  }
 
   private async getRepoRoot(): Promise<string> {
-    if (!this.resolvedRoot) {
+    if (this.resolvedRoot) {
+      this.resolvedRoot = await realpath(this.resolvedRoot);
+    } else {
       const { stdout } = await execGit("git", ["rev-parse", "--show-toplevel"]);
-      this.resolvedRoot = stdout.trim();
+      this.resolvedRoot = await realpath(stdout.trim());
     }
     return this.resolvedRoot;
   }
 
   private async git(args: string[], cwd?: string): Promise<string> {
     const { stdout } = await execGit("git", args, {
-      cwd: cwd ?? await this.getRepoRoot(),
+      cwd: cwd ?? (await this.getRepoRoot()),
       maxBuffer: 10 * 1024 * 1024,
     });
     return stdout.trim();
@@ -117,6 +123,46 @@ export class WorktreeManager implements WorktreeManagerPort {
     return spec;
   }
 
+  async createIntegrationWorktree(input: {
+    integrationId: string;
+    branch: string;
+    baseSha: string;
+  }): Promise<WorktreeSpec> {
+    const repoRoot = await this.getRepoRoot();
+    const sanitizedId = input.integrationId.replace(/[^a-zA-Z0-9_-]/g, "-");
+    const worktreePath = path.join(repoRoot, ".claude", "integration", sanitizedId);
+    await this.git(["check-ref-format", "--branch", input.branch], repoRoot);
+    if (!input.branch.startsWith("integration/")) {
+      throw new Error("Integration branch must use the integration/ namespace");
+    }
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+
+    const existing = await this.safeGit(["worktree", "list", "--porcelain"], repoRoot);
+    if (existing.includes(`worktree ${worktreePath}`)) {
+      await this.git(["worktree", "remove", "--force", worktreePath], repoRoot);
+      await this.safeGit(["worktree", "prune"], repoRoot);
+    }
+    // A crash may leave an unregistered directory after Git metadata was
+    // pruned. This path is deterministic and manager-owned.
+    await rm(worktreePath, { recursive: true, force: true });
+
+    await this.git(["worktree", "add", "-B", input.branch, worktreePath, input.baseSha], repoRoot);
+    const now = new Date().toISOString();
+    const spec: WorktreeSpec = {
+      path: worktreePath,
+      branch: input.branch,
+      baseSha: input.baseSha,
+      taskId: input.integrationId,
+    };
+    this.entries.set(`integration:${input.integrationId}`, {
+      spec,
+      status: "ACTIVE",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return spec;
+  }
+
   // ─────────────────────────────────────
   // Assign to task
   // ─────────────────────────────────────
@@ -141,18 +187,22 @@ export class WorktreeManager implements WorktreeManagerPort {
 
     // Récupérer le baseSha stocké (le SHA au moment de la création du worktree)
     const storedBase = this.findEntryByPath(worktreePath)?.spec.baseSha;
-    const effectiveBase = storedBase && storedBase.length === 40
-      ? storedBase
-      : headSha;
+    const effectiveBase = storedBase && storedBase.length === 40 ? storedBase : headSha;
 
-    const changedOut = await this.git(["diff", "--name-only", `${effectiveBase}..HEAD`], worktreePath).catch(() => "");
+    const changedOut = await this.git(
+      ["diff", "--name-only", `${effectiveBase}..HEAD`],
+      worktreePath,
+    ).catch(() => "");
     const changedList = changedOut ? changedOut.split("\n").filter(Boolean) : [];
 
     // État dirty
     const statusOut = await this.git(["status", "--porcelain"], worktreePath);
     const isDirty = statusOut.length > 0;
     const uncommittedFiles = statusOut
-      ? statusOut.split("\n").filter(Boolean).map((line) => line.slice(3).trim())
+      ? statusOut
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => line.slice(3).trim())
       : [];
 
     // Commits depuis la base
@@ -194,7 +244,10 @@ export class WorktreeManager implements WorktreeManagerPort {
   async detectChanges(worktreePath: string): Promise<string[]> {
     const status = await this.git(["status", "--porcelain"], worktreePath);
     if (!status) return [];
-    return status.split("\n").filter(Boolean).map((line) => line.slice(3).trim());
+    return status
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3).trim());
   }
 
   // ─────────────────────────────────────
@@ -203,14 +256,27 @@ export class WorktreeManager implements WorktreeManagerPort {
 
   async cleanupWorktree(worktreePath: string): Promise<void> {
     const repoRoot = await this.getRepoRoot();
-    const resolvedWt = path.resolve(worktreePath);
+    const resolvedWt = await realpath(worktreePath).catch(() => path.resolve(worktreePath));
     const resolvedRoot = path.resolve(repoRoot);
+    const ownedEntry = this.findEntryByPath(resolvedWt);
 
     if (resolvedWt === resolvedRoot) {
       throw new Error("Refus de supprimer le répertoire racine du repo");
     }
+    if (!ownedEntry) {
+      throw new Error(`Refus de nettoyer un worktree non géré: ${resolvedWt}`);
+    }
+    if (ownedEntry.status === "CLEANED") return;
 
-    const branchName = await this.safeGit(["rev-parse", "--abbrev-ref", "HEAD"], resolvedWt);
+    const registered = await this.safeGit(["worktree", "list", "--porcelain"]);
+    if (!registered.includes(`worktree ${resolvedWt}`)) {
+      await rm(resolvedWt, { recursive: true, force: true });
+      ownedEntry.status = "CLEANED";
+      ownedEntry.updatedAt = new Date().toISOString();
+      return;
+    }
+
+    const branchName = ownedEntry.spec.branch;
 
     // Supprimer le worktree
     await this.git(["worktree", "remove", "--force", resolvedWt]);
@@ -220,12 +286,32 @@ export class WorktreeManager implements WorktreeManagerPort {
       await this.safeGit(["branch", "-D", branchName]);
     }
 
-    for (const [taskId, entry] of this.entries) {
-      if (entry.spec.path === resolvedWt) {
-        entry.status = "CLEANED";
-        entry.updatedAt = new Date().toISOString();
-      }
+    ownedEntry.status = "CLEANED";
+    ownedEntry.updatedAt = new Date().toISOString();
+  }
+
+  async cleanupIntegrationWorktree(
+    worktreePath: string,
+    options: { preserveBranch: boolean },
+  ): Promise<void> {
+    const repoRoot = await this.getRepoRoot();
+    const resolvedWt = await realpath(worktreePath).catch(() => path.resolve(worktreePath));
+    const ownedEntry = this.findEntryByPath(resolvedWt);
+    if (!ownedEntry || !ownedEntry.spec.branch.startsWith("integration/")) {
+      throw new Error(`Refus de nettoyer un worktree d'intégration non géré: ${resolvedWt}`);
     }
+    if (ownedEntry.status === "CLEANED") return;
+
+    const registered = await this.safeGit(["worktree", "list", "--porcelain"], repoRoot);
+    if (registered.includes(`worktree ${resolvedWt}`)) {
+      await this.git(["worktree", "remove", "--force", resolvedWt], repoRoot);
+    }
+    await rm(resolvedWt, { recursive: true, force: true });
+    if (!options.preserveBranch) {
+      await this.safeGit(["branch", "-D", ownedEntry.spec.branch], repoRoot);
+    }
+    ownedEntry.status = "CLEANED";
+    ownedEntry.updatedAt = new Date().toISOString();
   }
 
   // ─────────────────────────────────────

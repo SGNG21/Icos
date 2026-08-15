@@ -1,4 +1,21 @@
 import type { IntegrationSpec, IntegrationResult, GateResult } from "@/core/integration";
+import type { WorktreeSpec } from "@/core/worktree";
+
+/**
+ * Infrastructure owner for dedicated integration worktrees.
+ * It never checks out or resets the active source worktree.
+ */
+export interface IntegrationWorktreePort {
+  createIntegrationWorktree(input: {
+    integrationId: string;
+    branch: string;
+    baseSha: string;
+  }): Promise<WorktreeSpec>;
+  cleanupIntegrationWorktree(
+    worktreePath: string,
+    options: { preserveBranch: boolean },
+  ): Promise<void>;
+}
 
 /**
  * Port des gates globales.

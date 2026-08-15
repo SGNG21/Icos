@@ -76,9 +76,14 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
       };
     }
 
-    // ── Backward compat: no command → simulation ──
+    // ── Fail closed: a local runtime must execute a real process ──
     if (!input.command) {
-      return this.simulateSuccess(input);
+      return {
+        ok: false,
+        errorCode: "INTERNAL_ERROR",
+        message: "Executable command is required for local runtime execution",
+        retryable: false,
+      };
     }
 
     // ── Validate workspace path ──
@@ -346,9 +351,7 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
    *
    * @returns Le chemin canonique validé, ou null si invalide.
    */
-  private async validateWorkspace(
-    input: RuntimeAdapterInput,
-  ): Promise<string | null> {
+  private async validateWorkspace(input: RuntimeAdapterInput): Promise<string | null> {
     if (this.workspaceManager) {
       try {
         const expectedWorkspace = path.join(
@@ -380,9 +383,7 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
    * variables autorisées depuis process.env, surchargées par les
    * variables explicites (ex: credentials résolus).
    */
-  private buildChildEnv(
-    extraEnv?: Record<string, string>,
-  ): Record<string, string> {
+  private buildChildEnv(extraEnv?: Record<string, string>): Record<string, string> {
     const env: Record<string, string> = {};
     for (const key of this.allowedEnvVars) {
       if (process.env[key] !== undefined) {
@@ -393,68 +394,5 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
       Object.assign(env, extraEnv);
     }
     return env;
-  }
-
-  // ─────────────────────────────────────
-  // Private: Simulation (backward compat)
-  // ─────────────────────────────────────
-
-  /**
-   * Comportement de simulation pour rétrocompatibilité.
-   * Utilisé quand input.command n'est pas fourni.
-   */
-  private async simulateSuccess(
-    input: RuntimeAdapterInput,
-  ): Promise<RuntimeAdapterResult> {
-    const outputDir = path.join(input.workspacePath, "output");
-    await mkdir(outputDir, { recursive: true });
-
-    await writeFile(
-      path.join(outputDir, "execution.json"),
-      JSON.stringify(
-        {
-          runId: input.runId,
-          missionId: input.missionId,
-          tenantId: input.tenantId,
-          correlationId: input.correlationId,
-          stepDescription: input.stepDescription,
-          skillKey: input.skillKey,
-          toolRef: input.toolRef,
-          agentId: input.agentId,
-          startedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      ),
-    );
-
-    await sleep(5);
-
-    await writeFile(
-      path.join(outputDir, "result.json"),
-      JSON.stringify(
-        {
-          status: "completed",
-          description: input.stepDescription,
-          output: `Étape "${input.stepDescription}" exécutée avec succès`,
-          completedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      ),
-    );
-
-    await writeFile(
-      path.join(outputDir, "stdout.log"),
-      `[D4] Démarrage de l'exécution: ${input.stepDescription}\n[D4] Workspace: ${input.workspacePath}\n[D4] Exécution terminée avec succès\n`,
-    );
-
-    return {
-      ok: true,
-      output: {
-        description: input.stepDescription,
-        result: `Étape "${input.stepDescription}" exécutée avec succès`,
-      },
-    };
   }
 }

@@ -66,6 +66,16 @@ describe("InMemoryWorktreeManager (fake)", () => {
     expect(active).toHaveLength(0);
   });
 
+  it("cleanup is idempotent for a manager-owned worktree", async () => {
+    const mgr = new InMemoryWorktreeManager();
+    const spec = await mgr.createWorktree("task-idempotent", "a".repeat(40));
+
+    await mgr.cleanupWorktree(spec.path);
+    await mgr.cleanupWorktree(spec.path);
+
+    expect(await mgr.listActive()).toEqual([]);
+  });
+
   it("assigns worktree to task", async () => {
     const mgr = new InMemoryWorktreeManager();
     await mgr.assignToTask("/tmp/wt", "task-001");
@@ -117,7 +127,9 @@ describe("WorktreeManager (git integration)", () => {
         if (line.startsWith("worktree ")) {
           const wtPath = line.slice(9).trim();
           if (wtPath && wtPath !== tmpDir) {
-            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(() => {});
+            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(
+              () => {},
+            );
           }
         }
       }
@@ -184,6 +196,19 @@ describe("WorktreeManager (git integration)", () => {
     mockWorktreeManager(mgr).resolvedRoot = tmpDir;
 
     await expect(mgr.cleanupWorktree(tmpDir)).rejects.toThrow(/racine|root/i);
+  });
+
+  it("real cleanup is idempotent for a manager-owned worktree", async () => {
+    const { WorktreeManager } = await import("./worktree-manager");
+    const mgr = new WorktreeManager(path.join(".claude", "worktrees"));
+    mockWorktreeManager(mgr).resolvedRoot = tmpDir;
+    const baseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: tmpDir })).stdout.trim();
+    const spec = await mgr.createWorktree("cleanup-idempotent", baseSha);
+
+    await mgr.cleanupWorktree(spec.path);
+    await mgr.cleanupWorktree(spec.path);
+
+    expect(await mgr.listActive()).toEqual([]);
   });
 
   it("captures commit history", async () => {
@@ -257,7 +282,9 @@ describe("WorktreeManager (git integration)", () => {
     // Le nouveau worktree est propre et au bon SHA
     const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec2.path })).stdout.trim();
     expect(head).toBe(baseSha);
-    const status = (await exec("git", ["status", "--porcelain"], { cwd: spec2.path })).stdout.trim();
+    const status = (
+      await exec("git", ["status", "--porcelain"], { cwd: spec2.path })
+    ).stdout.trim();
     expect(status).toBe("");
 
     await mgr.cleanupWorktree(spec2.path).catch(() => {});
