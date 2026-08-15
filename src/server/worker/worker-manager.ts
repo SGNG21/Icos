@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  ExecutionResult,
-  ExecuteStepInput,
-  RuntimeAdapterInput,
-} from "@/core/runtime";
+import type { ExecutionResult, ExecuteStepInput, RuntimeAdapterInput } from "@/core/runtime";
 import type { Worker, WorkerResult, WorkerStatus, CreateWorkerInput } from "@/core/worker";
 import { isWorkerTransitionAllowed, isWorkerTerminal } from "@/core/worker";
 import type { RuntimeExecutionPort } from "@/server/runtime/ports";
@@ -135,8 +131,20 @@ export class WorkerManager implements WorkerManagerPort {
       risk: "reversible",
     });
 
-    if (policyDecision.outcome === "deny") {
-      throw new Error(`Worker refusé par D1 : ${policyDecision.reason}`);
+    // Fail-closed : seul un ALLOW explicite autorise l'exécution.
+    // REQUIRE_APPROVAL est un état bloquant (approbation humaine non encore
+    // obtenue), jamais un état passant. Tout outcome inconnu est traité
+    // comme un refus (invariant D1 : incohérence => DENY).
+    if (policyDecision.outcome !== "allow") {
+      if (policyDecision.outcome === "require_approval") {
+        throw new Error(
+          `Worker bloqué par D1 : approbation humaine requise — ${policyDecision.reason}`,
+        );
+      }
+      if (policyDecision.outcome === "deny") {
+        throw new Error(`Worker refusé par D1 : ${policyDecision.reason}`);
+      }
+      throw new Error(`Worker refusé par D1 : décision de politique inconnue (fail-closed)`);
     }
 
     const worker: Worker = {
@@ -363,12 +371,18 @@ export class WorkerManager implements WorkerManagerPort {
 
   private mapStatus(outcome: string): WorkerStatus {
     switch (outcome) {
-      case "SUCCESS": return "SUCCEEDED";
-      case "FAILED": return "FAILED";
-      case "BLOCKED": return "FAILED";
-      case "NEEDS_REVIEW": return "SUCCEEDED";
-      case "NEEDS_HUMAN": return "FAILED";
-      default: return "FAILED";
+      case "SUCCESS":
+        return "SUCCEEDED";
+      case "FAILED":
+        return "FAILED";
+      case "BLOCKED":
+        return "FAILED";
+      case "NEEDS_REVIEW":
+        return "SUCCEEDED";
+      case "NEEDS_HUMAN":
+        return "FAILED";
+      default:
+        return "FAILED";
     }
   }
 

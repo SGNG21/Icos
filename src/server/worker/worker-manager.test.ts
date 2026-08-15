@@ -12,9 +12,15 @@ import { WorkerManager, PromiseSemaphore } from "./worker-manager";
 // ─────────────────────────────────────
 
 class FakePolicyPort implements D1PolicyPort {
-  private response: PolicyDecision = { outcome: "allow", reason: "test", attestedAt: new Date().toISOString() };
+  private response: PolicyDecision = {
+    outcome: "allow",
+    reason: "test",
+    attestedAt: new Date().toISOString(),
+  };
 
-  setResponse(r: PolicyDecision) { this.response = r; }
+  setResponse(r: PolicyDecision) {
+    this.response = r;
+  }
 
   async decide(_request: PolicyRequest): Promise<PolicyDecision> {
     return this.response;
@@ -40,8 +46,12 @@ class FakeRuntimePort implements RuntimeExecutionPort {
     latencyMs: 10,
   };
 
-  setDelay(ms: number) { this.delayMs = ms; }
-  setResult(r: ExecutionResult) { this.result = r; }
+  setDelay(ms: number) {
+    this.delayMs = ms;
+  }
+  setResult(r: ExecutionResult) {
+    this.result = r;
+  }
 
   async execute(_input: ExecuteStepInput, _signal?: AbortSignal): Promise<ExecutionResult> {
     await new Promise((r) => setTimeout(r, this.delayMs));
@@ -135,6 +145,110 @@ describe("WorkerManager", () => {
           permissionEnvelope: { action: "worker.execute", resource: "task-001" },
         }),
       ).rejects.toThrow(/D1/);
+    });
+
+    // ───────────────────────────────
+    // F3 (Phase 2 hardening) : seul un ALLOW explicite exécute.
+    // require_approval est BLOQUANT ; erreur de politique = fail-closed.
+    // ───────────────────────────────
+
+    it("REGRESSION F3 — ALLOW: spawns and executes the worker", async () => {
+      const { manager, runtime } = createManager();
+      const executed = vi.spyOn(runtime, "execute");
+
+      const workerId = await manager.spawn({
+        taskId: "task-allow",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Tâche autorisée",
+        permissionEnvelope: { action: "worker.execute", resource: "task-allow" },
+      });
+
+      const result = await manager.waitForCompletion(workerId, 5000);
+      expect(result.outcome).toBe("SUCCESS");
+      expect(executed).toHaveBeenCalled();
+    });
+
+    it("REGRESSION F3 — REQUIRE_APPROVAL: blocks (never executes)", async () => {
+      const { manager, policy, runtime } = createManager();
+      const executed = vi.spyOn(runtime, "execute");
+      policy.setResponse({
+        outcome: "require_approval",
+        reason: "Approbation humaine requise",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+
+      await expect(
+        manager.spawn({
+          taskId: "task-approval",
+          missionId: "mission-001",
+          tenantId: "tenant-001",
+          objective: "Tâche nécessitant approbation",
+          permissionEnvelope: { action: "worker.execute", resource: "task-approval" },
+        }),
+      ).rejects.toThrow(/approbation humaine requise/i);
+      expect(executed).not.toHaveBeenCalled();
+    });
+
+    it("REGRESSION F3 — DENY: blocks (never executes)", async () => {
+      const { manager, policy, runtime } = createManager();
+      const executed = vi.spyOn(runtime, "execute");
+      policy.setResponse({
+        outcome: "deny",
+        reason: "Interdit",
+        code: "forbidden",
+      });
+
+      await expect(
+        manager.spawn({
+          taskId: "task-deny",
+          missionId: "mission-001",
+          tenantId: "tenant-001",
+          objective: "Tâche refusée",
+          permissionEnvelope: { action: "worker.execute", resource: "task-deny" },
+        }),
+      ).rejects.toThrow(/refusé par D1/);
+      expect(executed).not.toHaveBeenCalled();
+    });
+
+    it("REGRESSION F3 — UNAVAILABLE: policy port failure fails closed (never executes)", async () => {
+      const runtime = new FakeRuntimePort();
+      const executed = vi.spyOn(runtime, "execute");
+      const failingPolicy: D1PolicyPort = {
+        async decide(): Promise<PolicyDecision> {
+          throw new Error("Policy engine unavailable");
+        },
+      };
+      const manager = new WorkerManager(runtime, failingPolicy);
+
+      await expect(
+        manager.spawn({
+          taskId: "task-unavailable",
+          missionId: "mission-001",
+          tenantId: "tenant-001",
+          objective: "Tâche avec politique indisponible",
+          permissionEnvelope: { action: "worker.execute", resource: "task-unavailable" },
+        }),
+      ).rejects.toThrow(/unavailable/i);
+      expect(executed).not.toHaveBeenCalled();
+    });
+
+    it("REGRESSION F3 — unknown outcome: fails closed (never executes)", async () => {
+      const { manager, policy, runtime } = createManager();
+      const executed = vi.spyOn(runtime, "execute");
+      // Outcome malformé (hors contrat) — l'invariant D1 exige DENY.
+      policy.setResponse({ outcome: "maybe" } as unknown as PolicyDecision);
+
+      await expect(
+        manager.spawn({
+          taskId: "task-unknown",
+          missionId: "mission-001",
+          tenantId: "tenant-001",
+          objective: "Tâche avec décision inconnue",
+          permissionEnvelope: { action: "worker.execute", resource: "task-unknown" },
+        }),
+      ).rejects.toThrow(/fail-closed/);
+      expect(executed).not.toHaveBeenCalled();
     });
 
     it("propagates agentIdentity to D1 PolicyRequest", async () => {
@@ -330,9 +444,7 @@ describe("WorkerManager", () => {
       );
 
       // Attendre que tous se terminent
-      const results = await Promise.all(
-        ids.map((id) => manager.waitForCompletion(id, 10000)),
-      );
+      const results = await Promise.all(ids.map((id) => manager.waitForCompletion(id, 10000)));
 
       expect(results).toHaveLength(4);
       // Tous doivent réussir
