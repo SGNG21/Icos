@@ -26,6 +26,8 @@
 
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 
@@ -64,10 +66,8 @@ import type { GlobalGatesPort, IntegrationOrchestratorPort } from "@/server/inte
 import type { PreviewDeliveryPort } from "@/server/preview/ports";
 import type { SystemAgent } from "@/core/policy";
 import { PERMISSION_SUPERVISOR_WORKER_EXECUTE } from "@/core/policy";
-import {
-  EXTERNAL_EFFECT_SCOPE_PUSH_PR,
-  loadExternalEffectApproval,
-} from "@/server/security/external-effect-approval";
+import { EXTERNAL_EFFECT_SCOPE_PUSH_PR } from "@/server/security/external-effect-approval";
+import { ApprovalAuthority, defaultAuthorityDir } from "@/server/security/approval-authority";
 import { resolveAuthorizedWorkspace } from "@/server/security/workspace-boundary";
 import { safeWriteFileInsideWorkspace } from "@/server/security/safe-workspace-writer";
 import { isFirstAutoFinalStateSuccessful } from "./first-auto-verifier";
@@ -1034,18 +1034,31 @@ async function main(): Promise<void> {
     allGatesPassed,
   });
 
-  // ── Phase 9 : PR — effet externe gardé par approbation humaine ──
-  // F5.2 (Phase 2 hardening) : `git push` et `gh pr create` sont des effets
-  // externes. Ils n'exécutent JAMAIS sans un artefact d'approbation humaine
-  // explicite, valide et non expiré. Absent / refusé / malformé / expiré /
-  // illisible → BLOCAGE (fail-closed). L'authentification gh ambiante n'est
-  // PAS une approbation.
+  // ── Phase 9 : PR — effet externe gardé par approbation humaine SIGNÉE ──
+  // NF-1 (Phase 2B hardening) : `git push` et `gh pr create` sont des effets
+  // externes. Ils n'exécutent JAMAIS sans un artefact d'approbation SIGNÉ
+  // Ed25519 par l'autorité propriétaire (~/.icos/approval-authority, clé
+  // privée HORS workspace — un worker/sous-processus ne peut pas forger).
+  // Liaisons vérifiées : périmètre exact, mission, dépôt canonique, branche
+  // EXACTE (NF-6 : aucun joker), fenêtre bornée (TTL max), nonce anti-rejeu
+  // à usage unique. Absent / forgé / altéré / rejoué / périmé / non
+  // concordant / invérifiable → BLOCAGE (fail-closed).
+  // NF-4 : le chemin de l'artefact est FIXE — l'override d'environnement
+  // ICOS_EXTERNAL_EFFECT_APPROVAL_FILE est supprimé (le chemin n'est plus
+  // une donnée de confiance : seule la signature l'est, mais un chemin
+  // contrôlé par l'environnement élargissait inutilement la surface).
   console.log("[PHASE 9] Préparation de la PR...");
-  const approvalArtifactPath =
-    process.env.ICOS_EXTERNAL_EFFECT_APPROVAL_FILE ??
-    path.join(repoRoot, ".icos", "approvals", "first-auto-external-effect.json");
-  const approvalDecision = await loadExternalEffectApproval(approvalArtifactPath, {
+  const approvalArtifactPath = path.join(
+    repoRoot,
+    ".icos",
+    "approvals",
+    "first-auto-external-effect.signed.json",
+  );
+  const approvalAuthority = new ApprovalAuthority(defaultAuthorityDir(os.homedir()));
+  const approvalDecision = await approvalAuthority.loadVerifyAndConsume(approvalArtifactPath, {
     scope: EXTERNAL_EFFECT_SCOPE_PUSH_PR,
+    missionId: mission.id,
+    repository: await realpath(repoRoot),
     branch: `integration/${dag.id}`,
   });
   try {
@@ -1058,11 +1071,17 @@ async function main(): Promise<void> {
       console.log(
         `  PR_CREATION_BLOCKED_BY_MISSING_APPROVAL (${approvalDecision.code}): ${approvalDecision.reason}`,
       );
-      console.log("  Aucun push/PR autonome sans approbation humaine explicite (fail-closed).");
+      console.log(
+        "  Aucun push/PR autonome sans approbation humaine SIGNÉE vérifiable (fail-closed).",
+      );
       console.log(`  Artefact attendu : ${approvalArtifactPath}`);
+      console.log(
+        "  Pour approuver (propriétaire uniquement) : pnpm tsx scripts/approve-external-effect.ts " +
+          `--mission ${mission.id} --branch integration/${dag.id}`,
+      );
     } else if (hasGhAuth) {
       console.log(
-        `  Approbation humaine vérifiée (par ${approvalDecision.approval.approvedBy}) + GitHub CLI authentifié — push et PR...`,
+        `  Approbation signée vérifiée (par ${approvalDecision.payload.approvedBy}, nonce consommé) + GitHub CLI authentifié — push et PR...`,
       );
       try {
         // Push la branche d'intégration
