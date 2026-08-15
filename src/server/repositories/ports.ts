@@ -102,3 +102,83 @@ export interface AuditRepository {
   list(): Promise<AuditEntry[]>;
   query(filter: AuditQuery): Promise<AuditEntry[]>;
 }
+
+// ─────────────────────────────────────
+// G1 — Tool Gateway (Lot G1.0)
+// ─────────────────────────────────────
+
+import type {
+  ExecutionGrant,
+  ExecutionRecord,
+  IdempotencyKey,
+  IdempotencyState,
+  IdempotencyStateStatus,
+} from "@/core/contracts/g1";
+
+/**
+ * Repository pour les ExecutionGrant.
+ *
+ * Un grant est créé, lu par clé, et consommé (single-use).
+ * Les grants expirés ne sont pas supprimés : ils restent lisibles
+ * pour l'audit et le diagnostic.
+ */
+export interface ExecutionGrantRepository {
+  create(grant: ExecutionGrant): Promise<ExecutionGrant>;
+  getById(id: string): Promise<ExecutionGrant | null>;
+  /**
+   * Consomme le grant (single-use) : set consumed=true si le grant
+   * existe, n'est pas expiré, et n'est pas déjà consommé.
+   */
+  consume(id: string): Promise<ConsumeGrantRepoResult>;
+  listForTenant(tenant: string): Promise<ExecutionGrant[]>;
+}
+
+export type ConsumeGrantRepoResult =
+  | { ok: true; grant: ExecutionGrant }
+  | { ok: false; reason: "already_consumed" | "expired" | "not_found"; message: string };
+
+/**
+ * Repository pour l'état d'idempotence (mutable, transactionnel).
+ */
+export interface IdempotencyStateRepository {
+  /**
+   * Crée une réservation (RESERVED) ou retourne l'état existant.
+   * L'insertion concurrente est détectée (unique key conflict).
+   */
+  create(input: IdempotencyState): Promise<IdempotencyState | null>;
+  /**
+   * Lit l'état par clé d'idempotence.
+   */
+  getByKey(key: IdempotencyKey): Promise<IdempotencyState | null>;
+  /**
+   * Transition atomique conditionnelle sur les états.
+   * Ne modifie que si l'état actuel correspond à `expected`.
+   */
+  transition(key: IdempotencyKey, expected: IdempotencyStateStatus, target: IdempotencyStateStatus): Promise<TransitionResult>;
+  /**
+   * Mise à jour complète (pour UNKNOWN recovery context).
+   */
+  update(state: IdempotencyState): Promise<void>;
+  /**
+   * Liste les états dans un état donné (ex: stale RESERVED/EXECUTING).
+   */
+  listByStatus(status: IdempotencyStateStatus): Promise<IdempotencyState[]>;
+  /**
+   * Liste les états d'un tenant.
+   */
+  listForTenant(tenant: string): Promise<IdempotencyState[]>;
+}
+
+export type TransitionResult =
+  | { ok: true; state: IdempotencyState }
+  | { ok: false; reason: "not_found" | "conflict"; message: string };
+
+/**
+ * Repository pour les ExecutionRecord (append-only, immuable).
+ */
+export interface ExecutionRecordRepository {
+  append(record: ExecutionRecord): Promise<ExecutionRecord>;
+  listForTenant(tenant: string): Promise<ExecutionRecord[]>;
+  listForKey(key: IdempotencyKey): Promise<ExecutionRecord[]>;
+  list(): Promise<ExecutionRecord[]>;
+}

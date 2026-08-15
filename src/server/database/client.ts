@@ -2,8 +2,9 @@ import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
 import * as schema from "./schema";
+import * as g1Schema from "./g1-schema";
 
-export type Database = PostgresJsDatabase<typeof schema>;
+export type Database = PostgresJsDatabase<typeof schema & typeof g1Schema>;
 
 export interface DatabaseHandle {
   db: Database;
@@ -31,7 +32,7 @@ export function createDatabase(url: string, options: CreateDatabaseOptions = {})
     idle_timeout: 20,
     connect_timeout: 10,
   });
-  const db = drizzle(sql, { schema });
+  const db = drizzle(sql, { schema: { ...schema, ...g1Schema } });
   return {
     db,
     sql,
