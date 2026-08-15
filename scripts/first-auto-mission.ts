@@ -628,6 +628,21 @@ describe("isSuspended", () => {
 
 class FakeReviewer implements ReviewerManagerPort {
   async conductReview(spec: ReviewSpec): Promise<ReviewResult> {
+    // NF-2 (Phase 2B) : zéro catégorie requise = configuration invalide,
+    // jamais un PASS par vacuité ([].every(...) === true).
+    if (spec.requiredChecks.length === 0) {
+      return {
+        verdict: "FAILED",
+        checks: [],
+        summary:
+          "INVALID_CONFIGURATION — aucune catégorie de revue requise (refus fail-closed, NF-2)",
+        confidence: 5,
+        durationMs: 0,
+        reviewerWorkerId: "reviewer-auto",
+        completedAt: new Date().toISOString(),
+      };
+    }
+
     // STUB : seule la présence d'AC est vérifiée — aucune revue de code réelle.
     const checks = spec.requiredChecks.map((category) => {
       const passed = spec.acceptanceCriteria.length >= 1;

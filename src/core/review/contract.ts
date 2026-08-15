@@ -55,9 +55,17 @@ export const reviewSpecSchema = z.object({
   objective: z.string().min(1),
   /** Critères d'acceptation spécifiques. */
   acceptanceCriteria: z.array(z.string()).default([]),
-  /** Catégories de vérification requises. */
+  /**
+   * Catégories de vérification requises.
+   *
+   * NF-2 (Phase 2B hardening) : `.min(1)` — une revue sans aucune catégorie
+   * requise est une configuration INVALIDE, jamais un PASS par vacuité.
+   * `[].every(...) === true` est un contournement démontré : il est interdit
+   * au niveau du contrat ET revérifié par le reviewer (défense en profondeur).
+   */
   requiredChecks: z
     .array(reviewCategorySchema)
+    .min(1)
     .default([
       "acceptance_criteria",
       "tests",

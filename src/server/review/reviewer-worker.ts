@@ -51,6 +51,29 @@ export class ReviewerWorker implements ReviewerManagerPort {
    */
   async conductReview(spec: ReviewSpec): Promise<ReviewResult> {
     const start = Date.now();
+
+    // NF-2 (Phase 2B) : zéro catégorie requise = configuration INVALIDE.
+    // `[].every(...) === true` produirait un PASS par vacuité — interdit.
+    // Défense en profondeur : le schéma impose déjà .min(1), mais ce
+    // reviewer revérifie car un appelant peut construire l'objet sans
+    // passer par le parse zod.
+    if (spec.requiredChecks.length === 0) {
+      return {
+        verdict: "FAILED",
+        checks: [],
+        summary:
+          "INVALID_CONFIGURATION — aucune catégorie de revue requise : " +
+          "une revue vide ne peut jamais rendre PASS (refus fail-closed, NF-2)",
+        comments:
+          "requiredChecks est vide. Un ensemble non vide de catégories est " +
+          "obligatoire pour qu'une revue soit valide.",
+        confidence: 5,
+        durationMs: Date.now() - start,
+        reviewerWorkerId: this.reviewerWorkerId,
+        completedAt: new Date().toISOString(),
+      };
+    }
+
     const checks: ReviewCheck[] = [];
     let allPassed = true;
 
@@ -59,6 +82,12 @@ export class ReviewerWorker implements ReviewerManagerPort {
       const check = this.evaluateCategory(category, spec);
       checks.push(check);
       if (!check.passed) allPassed = false;
+    }
+
+    // NF-2 : chaque catégorie requise DOIT avoir produit exactement un
+    // résultat de check. Un résultat manquant = revue incomplète = échec.
+    if (checks.length !== spec.requiredChecks.length) {
+      allPassed = false;
     }
 
     const verdict: ReviewVerdict = allPassed ? "PASS" : "CHANGES_REQUIRED";

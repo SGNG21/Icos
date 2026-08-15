@@ -108,6 +108,66 @@ describe("ReviewerWorker", () => {
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
     });
   });
+
+  // ─────────────────────────────────
+  // NF-2 (Phase 2B) — empty required-check bypass
+  // ─────────────────────────────────
+
+  describe("conductReview — REGRESSION NF-2 (empty requiredChecks)", () => {
+    it("NEVER returns PASS for requiredChecks: [] — INVALID_CONFIGURATION / FAILED", async () => {
+      const reviewer = new ReviewerWorker();
+      const result = await reviewer.conductReview(makeSpec({ requiredChecks: [] }));
+
+      expect(result.verdict).not.toBe("PASS");
+      expect(result.verdict).toBe("FAILED");
+      expect(result.summary).toContain("INVALID_CONFIGURATION");
+      expect(result.checks).toHaveLength(0);
+    });
+
+    it("schema rejects an explicit empty requiredChecks list (.min(1))", async () => {
+      const { reviewSpecSchema } = await import("@/core/review");
+      const parsed = reviewSpecSchema.safeParse({
+        taskId: "task-001",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Implémenter X",
+        acceptanceCriteria: ["AC1"],
+        worktreePath: "/tmp/test-wt",
+        requiredChecks: [],
+      });
+
+      expect(parsed.success).toBe(false);
+    });
+
+    it("schema default still provides a non-empty required set when omitted", async () => {
+      const { reviewSpecSchema } = await import("@/core/review");
+      const parsed = reviewSpecSchema.parse({
+        taskId: "task-001",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Implémenter X",
+        acceptanceCriteria: ["AC1"],
+        worktreePath: "/tmp/test-wt",
+      });
+
+      expect(parsed.requiredChecks.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("schema rejects unknown check categories (no unchecked category smuggling)", async () => {
+      const { reviewSpecSchema } = await import("@/core/review");
+      const parsed = reviewSpecSchema.safeParse({
+        taskId: "task-001",
+        missionId: "mission-001",
+        tenantId: "tenant-001",
+        objective: "Implémenter X",
+        acceptanceCriteria: ["AC1"],
+        worktreePath: "/tmp/test-wt",
+        requiredChecks: ["not_a_real_category"],
+      });
+
+      expect(parsed.success).toBe(false);
+    });
+  });
 });
 
 describe("CorrectionWorker", () => {
