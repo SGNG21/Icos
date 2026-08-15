@@ -8,3 +8,4 @@ export * from "./audit";
 export * from "./capability";
 export * from "./skill";
 export * from "./tenant";
+export * from "./tool";
