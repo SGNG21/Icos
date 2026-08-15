@@ -39,24 +39,66 @@ describe("ReviewerWorker", () => {
   // Review verdicts
   // ─────────────────────────────────
 
-  describe("conductReview", () => {
-    it("returns PASS for valid work", async () => {
+  describe("conductReview — STUB V1 fail-closed (F5.1)", () => {
+    it("NEVER returns PASS when unimplemented categories are required (no rubber stamp)", async () => {
       const reviewer = new ReviewerWorker();
+      // makeSpec exige `tests` et `security_boundaries` — non implémentées en V1.
       const result = await reviewer.conductReview(makeSpec());
 
-      expect(result.verdict).toBe("PASS");
+      expect(result.verdict).not.toBe("PASS");
+      expect(result.verdict).toBe("CHANGES_REQUIRED");
       expect(result.checks.length).toBeGreaterThan(0);
       expect(result.completedAt).toBeDefined();
+
+      // Chaque catégorie non implémentée échoue explicitement comme STUB.
+      const stubChecks = result.checks.filter((c) =>
+        ["tests", "security_boundaries"].includes(c.category),
+      );
+      expect(stubChecks).toHaveLength(2);
+      expect(stubChecks.every((c) => c.passed === false)).toBe(true);
+      expect(stubChecks.every((c) => c.details?.includes("STUB"))).toBe(true);
+    });
+
+    it("passes only the genuinely implemented category (acceptance_criteria)", async () => {
+      const reviewer = new ReviewerWorker();
+      const result = await reviewer.conductReview(
+        makeSpec({ requiredChecks: ["acceptance_criteria"] }),
+      );
+
+      expect(result.verdict).toBe("PASS");
+      expect(result.checks).toHaveLength(1);
+      expect(result.checks[0]!.passed).toBe(true);
     });
 
     it("returns CHANGES_REQUIRED when acceptance criteria are missing", async () => {
       const reviewer = new ReviewerWorker();
-      const result = await reviewer.conductReview(makeSpec({
-        acceptanceCriteria: [],
-      }));
+      const result = await reviewer.conductReview(
+        makeSpec({
+          acceptanceCriteria: [],
+          requiredChecks: ["acceptance_criteria"],
+        }),
+      );
 
       expect(result.verdict).toBe("CHANGES_REQUIRED");
       expect(result.checks.some((c) => !c.passed)).toBe(true);
+    });
+
+    it("fails closed on every unimplemented category individually", async () => {
+      const reviewer = new ReviewerWorker();
+      const stubbed = [
+        "tests",
+        "scope",
+        "security_boundaries",
+        "architecture_boundaries",
+        "regressions",
+        "code_quality",
+      ] as const;
+
+      for (const category of stubbed) {
+        const result = await reviewer.conductReview(makeSpec({ requiredChecks: [category] }));
+        expect(result.verdict, `catégorie ${category}`).toBe("CHANGES_REQUIRED");
+        expect(result.checks[0]!.passed).toBe(false);
+      }
     });
 
     it("reports duration", async () => {
@@ -69,8 +111,8 @@ describe("ReviewerWorker", () => {
 });
 
 describe("CorrectionWorker", () => {
-  describe("executeCorrection", () => {
-    it("returns CORRECTED", async () => {
+  describe("executeCorrection — STUB V1 fail-closed (F5.1)", () => {
+    it("NEVER claims CORRECTED without acting — escalates to a human", async () => {
       const worker = new CorrectionWorker();
       const result = await worker.executeCorrection({
         originalTaskId: "task-001",
@@ -84,7 +126,9 @@ describe("CorrectionWorker", () => {
         worktreePath: "/tmp/wt",
       });
 
-      expect(result.outcome).toBe("CORRECTED");
+      expect(result.outcome).not.toBe("CORRECTED");
+      expect(result.outcome).toBe("ESCALATED");
+      expect(result.summary).toContain("STUB");
     });
   });
 

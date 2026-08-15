@@ -4,8 +4,19 @@ import type { ReviewerManagerPort, CorrectionLoopManagerPort } from "./ports";
 /**
  * ReviewerWorker — implémente ReviewerManagerPort.
  *
- * V1 : Évalue les critères de revue directement.
- * V2+ : Spawnera un worker de revue indépendant via WorkerManager.
+ * ⚠️ STUB V1 EXPLICITE — FAIL-CLOSED (F5.1, Phase 2 hardening).
+ *
+ * Ce reviewer n'implémente AUCUNE vérification réelle pour les catégories
+ * `tests`, `scope`, `security_boundaries`, `architecture_boundaries`,
+ * `regressions` et `code_quality`. Un stub qui répondrait « PASS » sans
+ * vérifier serait un tampon en blanc (rubber stamp) : c'est interdit.
+ *
+ * Comportement V1 : toute catégorie non réellement vérifiée échoue
+ * (`passed: false`, détail « STUB »). Conséquence : une revue exigeant ces
+ * catégories ne peut JAMAIS rendre PASS avec ce stub — le chemin de mission
+ * autonome qui en dépend reste inerte/fail-closed (boucle de correction →
+ * escalade humaine) jusqu'à l'implémentation d'une revue réelle (V2 :
+ * worker de revue indépendant spawné via WorkerManager, avec évidence).
  *
  * INVARIANT : implémenteur ≠ reviewer.
  * La vérification est faite dans ensureIndependentReview().
@@ -13,20 +24,23 @@ import type { ReviewerManagerPort, CorrectionLoopManagerPort } from "./ports";
 export class ReviewerWorker implements ReviewerManagerPort {
   private readonly reviewerWorkerId: string;
 
-  constructor(
-    reviewerWorkerId?: string,
-  ) {
+  constructor(reviewerWorkerId?: string) {
     this.reviewerWorkerId = reviewerWorkerId ?? "reviewer-default";
   }
 
   /**
    * Vérifie que le reviewer n'est pas l'implémentateur.
+   *
+   * Le SupervisorService passe l'ID du worker IMPLÉMENTEUR en premier
+   * argument (voir supervisor-service). Fail-closed : identités vides ou
+   * identiques → refus.
    */
   async ensureIndependentReview(
-    taskId: string,
+    implementerWorkerId: string,
     reviewerWorkerId: string,
   ): Promise<boolean> {
-    return reviewerWorkerId !== taskId;
+    if (!implementerWorkerId || !reviewerWorkerId) return false;
+    return reviewerWorkerId !== implementerWorkerId;
   }
 
   /**
@@ -71,64 +85,19 @@ export class ReviewerWorker implements ReviewerManagerPort {
   /**
    * Évalue une catégorie de check.
    *
-   * V1 : basé sur la présence d'AC et de contenu.
-   * V2+ : vérifications réelles (tests, lint, etc.)
+   * V1 (STUB fail-closed) : seules `acceptance_criteria` et `documentation`
+   * ont une logique réelle (présence d'AC). Toute catégorie sans
+   * vérification réelle ÉCHOUE explicitement — jamais de PASS non vérifié.
    */
-  private evaluateCategory(
-    category: ReviewCheck["category"],
-    spec: ReviewSpec,
-  ): ReviewCheck {
+  private evaluateCategory(category: ReviewCheck["category"], spec: ReviewSpec): ReviewCheck {
     switch (category) {
       case "acceptance_criteria":
         return {
           category,
           description: "Critères d'acceptation définis et mesurables",
           passed: spec.acceptanceCriteria.length >= 1,
-          details: spec.acceptanceCriteria.length === 0
-            ? "Aucun critère d'acceptation défini"
-            : undefined,
-        };
-
-      case "tests":
-        return {
-          category,
-          description: "Tests présents et passants",
-          passed: true,
-        };
-
-      case "scope":
-        return {
-          category,
-          description: "Le travail reste dans le périmètre défini",
-          passed: true,
-        };
-
-      case "security_boundaries":
-        return {
-          category,
-          description: "Pas de contournement des invariants de sécurité",
-          passed: true,
-        };
-
-      case "architecture_boundaries":
-        return {
-          category,
-          description: "Respect des limites architecturales",
-          passed: true,
-        };
-
-      case "regressions":
-        return {
-          category,
-          description: "Pas de régressions introduites",
-          passed: true,
-        };
-
-      case "code_quality":
-        return {
-          category,
-          description: "Code clair et maintenable",
-          passed: true,
+          details:
+            spec.acceptanceCriteria.length === 0 ? "Aucun critère d'acceptation défini" : undefined,
         };
 
       case "documentation":
@@ -136,16 +105,34 @@ export class ReviewerWorker implements ReviewerManagerPort {
           category,
           description: "Documentation mise à jour",
           passed: spec.acceptanceCriteria.length > 0,
-          details: spec.acceptanceCriteria.length === 0
-            ? "Documentation insuffisante"
-            : undefined,
+          details: spec.acceptanceCriteria.length === 0 ? "Documentation insuffisante" : undefined,
+        };
+
+      case "tests":
+      case "scope":
+      case "security_boundaries":
+      case "architecture_boundaries":
+      case "regressions":
+      case "code_quality":
+        // STUB V1 : aucune vérification réelle implémentée pour cette
+        // catégorie → échec explicite (fail-closed). Un PASS sans
+        // vérification serait un tampon en blanc.
+        return {
+          category,
+          description: `Vérification réelle non implémentée (STUB V1) — ${category}`,
+          passed: false,
+          details:
+            "STUB fail-closed : cette catégorie exige un reviewer réel (V2). " +
+            "Escalade humaine requise.",
         };
 
       default:
+        // Catégorie inconnue : fail-closed, jamais de PASS par défaut.
         return {
           category,
           description: "Check non reconnu",
-          passed: true,
+          passed: false,
+          details: "Catégorie de revue inconnue — refus fail-closed",
         };
     }
   }
@@ -154,22 +141,28 @@ export class ReviewerWorker implements ReviewerManagerPort {
 /**
  * CorrectionWorker — implémente CorrectionLoopManagerPort.
  *
- * V1 : délègue au WorkerManager pour exécuter les corrections.
- * V2+ : vérifications réelles après correction.
+ * ⚠️ STUB V1 EXPLICITE — FAIL-CLOSED (F5.1, Phase 2 hardening).
+ *
+ * Ce worker n'applique AUCUNE correction réelle. Prétendre « CORRECTED »
+ * sans agir serait un mensonge d'état qui casse la boucle de revue.
+ * V1 : toute demande de correction est ESCALADÉE vers un humain.
+ * V2+ : spawner un vrai worker de correction via WorkerManager.
  */
 export class CorrectionWorker implements CorrectionLoopManagerPort {
-  constructor(
-    private readonly maxAttempts: number = 3,
-  ) {}
+  constructor(private readonly maxAttempts: number = 3) {}
 
-  async executeCorrection(spec: import("@/core/review").CorrectionSpec): Promise<import("@/core/review").CorrectionResult> {
+  async executeCorrection(
+    spec: import("@/core/review").CorrectionSpec,
+  ): Promise<import("@/core/review").CorrectionResult> {
     const start = Date.now();
 
-    // V1 : marquer la correction comme appliquée
-    // V2+ : spawner un vrai worker de correction
+    // STUB V1 fail-closed : aucune capacité de correction autonome —
+    // ne JAMAIS déclarer CORRECTED sans avoir agi.
     return {
-      outcome: "CORRECTED",
-      summary: `Corrections appliquées sur la base des ${spec.failedChecks.length} check(s) échoué(s)`,
+      outcome: "ESCALATED",
+      summary:
+        `STUB V1 — aucune correction autonome appliquée (${spec.failedChecks.length} check(s) échoué(s)). ` +
+        "Escalade humaine requise.",
       durationMs: Date.now() - start,
     };
   }
@@ -182,7 +175,7 @@ export class CorrectionWorker implements CorrectionLoopManagerPort {
     // V1 : log l'escalade
     console.warn(
       `[ESCALADE] Tâche ${spec.originalTaskId} — ${spec.attemptNumber}/${spec.maxAttempts} tentatives épuisées. ` +
-      `Dernière revue : ${spec.reviewComments.slice(0, 100)}`,
+        `Dernière revue : ${spec.reviewComments.slice(0, 100)}`,
     );
   }
 }
