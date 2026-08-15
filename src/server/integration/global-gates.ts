@@ -32,6 +32,34 @@ export class GlobalGates implements GlobalGatesPort {
   /** Ordre déterministe des gates lancées par executeAll. */
   private static readonly GATE_ORDER = ["lint", "typecheck", "test", "build"] as const;
 
+  /**
+   * Allowlist explicite des variables d'environnement transmises aux
+   * sous-processus de gate (F6.1, Phase 2 hardening).
+   *
+   * Les gates s'exécutent sur du code fraîchement intégré par des workers :
+   * l'environnement parent (clés API, credentials, tokens) ne doit JAMAIS
+   * se propager par défaut. Seul le strict nécessaire au fonctionnement de
+   * pnpm/node/git est transmis. NODE_ENV est volontairement exclu
+   * (empoisonnement d'environnement démontré sur les gates du dépôt).
+   */
+  private static readonly ENV_ALLOWLIST = [
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PNPM_HOME",
+    "COREPACK_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+  ] as const;
+
   constructor(timeoutMs = 120_000) {
     this.timeoutMs = timeoutMs;
   }
@@ -119,6 +147,28 @@ export class GlobalGates implements GlobalGatesPort {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024,
+      // F6.1 : jamais l'environnement parent complet — allowlist explicite.
+      // (même idiome de cast que local-runtime-adapter.ts : ProcessEnv est
+      // augmenté avec NODE_ENV requis, exclu ici volontairement)
+      env: this.buildGateEnv() as NodeJS.ProcessEnv,
     });
+  }
+
+  /**
+   * Construit l'environnement minimal des sous-processus de gate à partir
+   * de l'allowlist explicite. Toute variable absente de l'allowlist
+   * (clés API, secrets, credentials) est exclue par construction.
+   */
+  protected buildGateEnv(
+    source: Record<string, string | undefined> = process.env,
+  ): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = {};
+    for (const key of GlobalGates.ENV_ALLOWLIST) {
+      const value = source[key];
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    return env;
   }
 }

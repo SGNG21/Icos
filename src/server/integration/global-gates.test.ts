@@ -263,6 +263,100 @@ describe("GlobalGates.executeAll — deterministic ordering & sequencing", () =>
   });
 });
 
+// ─────────────────────────────────────────────────────────────
+// F6.1 (Phase 2 hardening) — environnement des sous-processus :
+// allowlist explicite, aucun secret propagé par défaut.
+// ─────────────────────────────────────────────────────────────
+
+interface EnvBuildableGates {
+  buildGateEnv(source?: Record<string, string | undefined>): Record<string, string | undefined>;
+  run(
+    command: string,
+    args: string[],
+    cwd: string,
+    timeoutMs: number,
+  ): Promise<{ stdout: string; stderr: string }>;
+}
+
+function envBuildable(gates: GlobalGates): EnvBuildableGates {
+  return gates as unknown as EnvBuildableGates;
+}
+
+describe("GlobalGates — subprocess env allowlist (F6.1)", () => {
+  const POISONED_SOURCE: Record<string, string | undefined> = {
+    PATH: "/usr/bin:/bin",
+    HOME: "/home/icos",
+    TMPDIR: "/tmp",
+    // Variables sensibles qui NE DOIVENT PAS traverser :
+    OMNIROUTE_API_KEY: "fake-secret-for-test",
+    ANTHROPIC_AUTH_TOKEN: "fake-token-for-test",
+    DATABASE_URL: "postgres://user:pass@host/db",
+    AWS_SECRET_ACCESS_KEY: "fake-aws-secret",
+    GITHUB_TOKEN: "fake-gh-token",
+    NPM_TOKEN: "fake-npm-token",
+    // NODE_ENV exclu volontairement (empoisonnement des gates) :
+    NODE_ENV: "test",
+    PERSISTENCE: "postgres",
+  };
+
+  it("forwards only allowlisted variables", () => {
+    const gates = new GlobalGates();
+    const env = envBuildable(gates).buildGateEnv(POISONED_SOURCE);
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.HOME).toBe("/home/icos");
+    expect(env.TMPDIR).toBe("/tmp");
+  });
+
+  it("never forwards sensitive variables (secrets absent by construction)", () => {
+    const gates = new GlobalGates();
+    const env = envBuildable(gates).buildGateEnv(POISONED_SOURCE);
+
+    expect(env).not.toHaveProperty("OMNIROUTE_API_KEY");
+    expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+    expect(env).not.toHaveProperty("DATABASE_URL");
+    expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+    expect(env).not.toHaveProperty("GITHUB_TOKEN");
+    expect(env).not.toHaveProperty("NPM_TOKEN");
+  });
+
+  it("does not forward NODE_ENV or PERSISTENCE (gate env poisoning)", () => {
+    const gates = new GlobalGates();
+    const env = envBuildable(gates).buildGateEnv(POISONED_SOURCE);
+
+    expect(env).not.toHaveProperty("NODE_ENV");
+    expect(env).not.toHaveProperty("PERSISTENCE");
+  });
+
+  it("omits allowlisted keys absent from the source (no undefined entries)", () => {
+    const gates = new GlobalGates();
+    const env = envBuildable(gates).buildGateEnv({ PATH: "/bin" });
+
+    expect(Object.keys(env)).toEqual(["PATH"]);
+  });
+
+  it("REAL SUBPROCESS — a sensitive parent variable never reaches the child", async () => {
+    vi.stubEnv("ICOS_TEST_FAKE_SECRET", "must-not-propagate");
+    try {
+      const gates = new GlobalGates();
+      // Appel direct du seam réel (non mocké) : le sous-processus imprime
+      // ses clés d'environnement ; la variable empoisonnée doit être absente.
+      const { stdout } = await envBuildable(gates).run(
+        "node",
+        ["-p", "JSON.stringify(Object.keys(process.env))"],
+        process.cwd(),
+        15_000,
+      );
+      const childKeys = JSON.parse(stdout) as string[];
+
+      expect(childKeys).not.toContain("ICOS_TEST_FAKE_SECRET");
+      expect(childKeys).toContain("PATH");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("GlobalGates — public port compatibility", () => {
   it("remains assignable to GlobalGatesPort", () => {
     const port: GlobalGatesPort = new GlobalGates();
