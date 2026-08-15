@@ -104,14 +104,12 @@ export function CkConversation({
           <div className="ck-empty-state">
             <h3>Que veux-tu faire ?</h3>
             <p>
-              Décris ton objectif en langage naturel. ICOS planifie, exécute et
-              te rend compte à chaque étape.
+              Décris ton objectif en langage naturel. ICOS planifie, exécute et te rend compte à
+              chaque étape.
             </p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageRow key={msg.id} message={msg} onRetry={onRetry} />
-          ))
+          messages.map((msg) => <MessageRow key={msg.id} message={msg} onRetry={onRetry} />)
         )}
         <div ref={bottomRef} />
       </div>
@@ -136,13 +134,7 @@ function MessageRow({ message, onRetry }: MessageRowProps) {
   const { role, content, errorLabel } = message;
 
   if (role === "user" || role === "icos") {
-    return (
-      <CkMessageBubble
-        role={role}
-        content={content ?? ""}
-        timestamp={undefined}
-      />
-    );
+    return <CkMessageBubble role={role} content={content ?? ""} timestamp={undefined} />;
   }
 
   if (role === "error") {
@@ -164,9 +156,7 @@ function MessageRow({ message, onRetry }: MessageRowProps) {
   if (meta) {
     return (
       <CkInFlowCard title={meta.title} icon={meta.icon} variant={meta.variant}>
-        <p className="ck-inflow-placeholder">
-          Détails disponibles prochainement.
-        </p>
+        <p className="ck-inflow-placeholder">Détails disponibles prochainement.</p>
       </CkInFlowCard>
     );
   }

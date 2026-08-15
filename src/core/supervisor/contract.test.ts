@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  taskNodeSchema,
-  taskDagSchema,
-  dagStatusSchema,
-  taskNodeStatusSchema,
-} from "./contract";
+import { taskNodeSchema, taskDagSchema, dagStatusSchema, taskNodeStatusSchema } from "./contract";
 
 // ─────────────────────────────────────
 // Contract validation

@@ -74,9 +74,7 @@ export function CkSidebar({
         </span>
       </div>
 
-      {advancedChildren ? (
-        <div className="ck-sidebar-section">{advancedChildren}</div>
-      ) : null}
+      {advancedChildren ? <div className="ck-sidebar-section">{advancedChildren}</div> : null}
 
       {footer ? <div className="ck-sidebar-footer">{footer}</div> : null}
     </nav>

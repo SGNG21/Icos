@@ -37,17 +37,13 @@ describe("isScrolledUp", () => {
 
 describe("CkConversation", () => {
   it("renders the empty state when there are no messages", () => {
-    const html = renderToStaticMarkup(
-      <CkConversation messages={[]} onSend={() => {}} />,
-    );
+    const html = renderToStaticMarkup(<CkConversation messages={[]} onSend={() => {}} />);
     expect(html).toContain("ck-empty-state");
     expect(html).toContain("Que veux-tu faire ?");
   });
 
   it("renders the composer", () => {
-    const html = renderToStaticMarkup(
-      <CkConversation messages={[]} onSend={() => {}} />,
-    );
+    const html = renderToStaticMarkup(<CkConversation messages={[]} onSend={() => {}} />);
     expect(html).toContain("ck-composer");
   });
 
@@ -56,9 +52,7 @@ describe("CkConversation", () => {
       { id: "m1", role: "user", content: "Salut", timestamp: "t" },
       { id: "m2", role: "icos", content: "Bonjour", timestamp: "t" },
     ];
-    const html = renderToStaticMarkup(
-      <CkConversation messages={messages} onSend={() => {}} />,
-    );
+    const html = renderToStaticMarkup(<CkConversation messages={messages} onSend={() => {}} />);
     expect(html).toContain("ck-message-user");
     expect(html).toContain("Salut");
     expect(html).toContain("ck-message-icos");
@@ -67,12 +61,8 @@ describe("CkConversation", () => {
   });
 
   it("renders a thinking indicator for the thinking role", () => {
-    const messages: ChatMessage[] = [
-      { id: "m1", role: "thinking", timestamp: "t" },
-    ];
-    const html = renderToStaticMarkup(
-      <CkConversation messages={messages} onSend={() => {}} />,
-    );
+    const messages: ChatMessage[] = [{ id: "m1", role: "thinking", timestamp: "t" }];
+    const html = renderToStaticMarkup(<CkConversation messages={messages} onSend={() => {}} />);
     expect(html).toContain("ck-thinking");
   });
 
@@ -83,9 +73,7 @@ describe("CkConversation", () => {
       { id: "m3", role: "activity", timestamp: "t" },
       { id: "m4", role: "result", timestamp: "t" },
     ];
-    const html = renderToStaticMarkup(
-      <CkConversation messages={messages} onSend={() => {}} />,
-    );
+    const html = renderToStaticMarkup(<CkConversation messages={messages} onSend={() => {}} />);
     expect(html).toContain("ck-inflow-card mission");
     expect(html).toContain("ck-inflow-card approval");
     expect(html).toContain("ck-inflow-card activity");

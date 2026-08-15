@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { RepositoryMappingError } from "@/server/database/errors";
-import {
-  missionContextToRow,
-  rowToMissionContext,
-} from "@/server/database/mappers";
+import { missionContextToRow, rowToMissionContext } from "@/server/database/mappers";
 import type { missionContexts } from "@/server/database/schema";
 
 import { makeMissionContext } from "./testing/fixtures";

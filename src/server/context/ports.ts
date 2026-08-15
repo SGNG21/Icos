@@ -34,8 +34,7 @@ export type SaveConflictReason =
   | "invalid_context";
 
 export type SaveContextResult =
-  | { ok: true; context: MissionContext }
-  | { ok: false; reason: SaveConflictReason };
+  { ok: true; context: MissionContext } | { ok: false; reason: SaveConflictReason };
 
 export interface SaveMissionContextInput {
   context: MissionContext;
@@ -55,17 +54,10 @@ export interface MissionContextRepository {
   save(input: SaveMissionContextInput): Promise<SaveContextResult>;
 
   /** Dernière version connue pour `(tenant, mission)`, ou `null`. */
-  findLatest(
-    tenantId: string,
-    missionId: string,
-  ): Promise<MissionContext | null>;
+  findLatest(tenantId: string, missionId: string): Promise<MissionContext | null>;
 
   /** Version exacte pour `(tenant, mission)`, ou `null` si absente. */
-  findVersion(
-    tenantId: string,
-    missionId: string,
-    version: number,
-  ): Promise<MissionContext | null>;
+  findVersion(tenantId: string, missionId: string, version: number): Promise<MissionContext | null>;
 }
 
 /**

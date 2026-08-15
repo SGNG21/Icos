@@ -31,11 +31,7 @@ describe("CkSidebar", () => {
 
   it("shows the active mission and history counts", () => {
     const html = renderToStaticMarkup(
-      <CkSidebar
-        projectSelector={<div />}
-        activeMissionCount={3}
-        historyCount={9}
-      />,
+      <CkSidebar projectSelector={<div />} activeMissionCount={3} historyCount={9} />,
     );
     expect(html).toContain("En cours");
     expect(html).toContain(">3<");

@@ -23,8 +23,10 @@ const createCockpitJobBodySchema = z
 const idempotencyKeySchema = z.uuid();
 
 function isJsonRequest(request: Request): boolean {
-  return request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
-    "application/json";
+  return (
+    request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
+    "application/json"
+  );
 }
 
 function cockpitError(
@@ -63,9 +65,7 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides");
     }
 
-    const idempotencyKey = idempotencyKeySchema.safeParse(
-      request.headers.get("idempotency-key"),
-    );
+    const idempotencyKey = idempotencyKeySchema.safeParse(request.headers.get("idempotency-key"));
     if (!idempotencyKey.success) {
       return apiError("invalid_input", "Idempotency-Key UUID requis.");
     }

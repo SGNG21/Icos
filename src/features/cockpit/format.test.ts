@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  formatSizeBytes,
-  formatDurationMs,
-  formatRelativeTime,
-  formatStepCount,
-} from "./format";
+import { formatSizeBytes, formatDurationMs, formatRelativeTime, formatStepCount } from "./format";
 
 describe("formatSizeBytes", () => {
   it("returns '0 o' for 0 bytes", () => {

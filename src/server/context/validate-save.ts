@@ -1,7 +1,4 @@
-import {
-  missionContextSchema,
-  type MissionContext,
-} from "@/core/context/contract";
+import { missionContextSchema, type MissionContext } from "@/core/context/contract";
 
 import type { SaveConflictReason } from "./ports";
 

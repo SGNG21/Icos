@@ -63,14 +63,7 @@ export interface ActivityItem {
  * Message roles in the conversation flow.
  */
 export type MessageRole =
-  | "user"
-  | "icos"
-  | "thinking"
-  | "mission-progress"
-  | "approval"
-  | "activity"
-  | "result"
-  | "error";
+  "user" | "icos" | "thinking" | "mission-progress" | "approval" | "activity" | "result" | "error";
 
 /**
  * A single message in the conversation history.

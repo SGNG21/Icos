@@ -5,9 +5,7 @@ import type { MissionContext } from "@/core/context/contract";
  * N'introduit JAMAIS de champ d'autorité : le contrat 1A `.strict()` le
  * refuserait de toute façon.
  */
-export function makeMissionContext(
-  overrides: Partial<MissionContext> = {},
-): MissionContext {
+export function makeMissionContext(overrides: Partial<MissionContext> = {}): MissionContext {
   return {
     tenantId: "tenant-alpha",
     missionId: "mission-001",

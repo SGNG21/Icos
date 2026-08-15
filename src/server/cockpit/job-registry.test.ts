@@ -21,11 +21,13 @@ function input(overrides: Partial<CreateCockpitJobInput> = {}): CreateCockpitJob
   };
 }
 
-function deterministicRegistry(options: {
-  now?: Date;
-  capacity?: number;
-  terminalTtlMs?: number;
-} = {}) {
+function deterministicRegistry(
+  options: {
+    now?: Date;
+    capacity?: number;
+    terminalTtlMs?: number;
+  } = {},
+) {
   let now = options.now ?? new Date("2026-07-29T10:00:00.000Z");
   let sequence = 0;
   return {
@@ -67,9 +69,9 @@ describe("CockpitJobRegistry", () => {
     const { registry } = deterministicRegistry();
     registry.createOrGet(input());
 
-    expect(() =>
-      registry.createOrGet(input({ objective: "A different objective" })),
-    ).toThrow(CockpitJobConflictError);
+    expect(() => registry.createOrGet(input({ objective: "A different objective" }))).toThrow(
+      CockpitJobConflictError,
+    );
   });
 
   it("isolates idempotency and lookup by tenant", () => {
@@ -104,10 +106,12 @@ describe("CockpitJobRegistry", () => {
       updatedAt: "2026-07-29T10:00:03.000Z",
       completedAt: "2026-07-29T10:00:03.000Z",
     });
-    expect(() => clock.registry.markFailed("tenant-a", created.jobId, {
-      code: "late",
-      message: "late",
-    })).toThrow("already terminal");
+    expect(() =>
+      clock.registry.markFailed("tenant-a", created.jobId, {
+        code: "late",
+        message: "late",
+      }),
+    ).toThrow("already terminal");
   });
 
   it("expires terminal records at the 60 minute TTL", () => {
@@ -146,16 +150,14 @@ describe("CockpitJobRegistry", () => {
     const { registry } = deterministicRegistry();
     const activeIds: string[] = [];
     for (let index = 0; index < COCKPIT_JOB_CAPACITY; index++) {
-      const created = registry.createOrGet(
-        input({ idempotencyKey: `active-${index}` }),
-      ).record;
+      const created = registry.createOrGet(input({ idempotencyKey: `active-${index}` })).record;
       registry.markRunning("tenant-a", created.jobId);
       activeIds.push(created.jobId);
     }
 
-    expect(() =>
-      registry.createOrGet(input({ idempotencyKey: "over-capacity" })),
-    ).toThrow(CockpitJobCapacityError);
+    expect(() => registry.createOrGet(input({ idempotencyKey: "over-capacity" }))).toThrow(
+      CockpitJobCapacityError,
+    );
     expect(activeIds.every((jobId) => registry.get("tenant-a", jobId) !== null)).toBe(true);
   });
 

@@ -20,9 +20,7 @@ import { validateSaveInput } from "../validate-save";
  * l'atomicité check-then-insert que PostgreSQL obtient via la clé primaire
  * composite (même discipline que `InMemoryMissionUnitOfWork`).
  */
-export class InMemoryMissionContextRepository
-  implements MissionContextRepository
-{
+export class InMemoryMissionContextRepository implements MissionContextRepository {
   /** Clé dérivée de `(tenantId, missionId)` → versions triées par `version`. */
   private readonly byMission = new Map<string, MissionContext[]>();
 
@@ -44,9 +42,7 @@ export class InMemoryMissionContextRepository
     const key = this.key(context.tenantId, context.missionId);
     const versions = this.byMission.get(key);
     const currentLatest =
-      versions && versions.length > 0
-        ? versions[versions.length - 1].version
-        : null;
+      versions && versions.length > 0 ? versions[versions.length - 1].version : null;
 
     // Le latest attendu par l'appelant doit correspondre au latest réel.
     if (input.expectedVersion !== currentLatest) {
@@ -71,10 +67,7 @@ export class InMemoryMissionContextRepository
     return { ok: true, context: structuredClone(stored) };
   }
 
-  async findLatest(
-    tenantId: string,
-    missionId: string,
-  ): Promise<MissionContext | null> {
+  async findLatest(tenantId: string, missionId: string): Promise<MissionContext | null> {
     const versions = this.byMission.get(this.key(tenantId, missionId));
     if (!versions || versions.length === 0) {
       return null;

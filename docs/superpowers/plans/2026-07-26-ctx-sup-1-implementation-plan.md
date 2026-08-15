@@ -12,11 +12,11 @@
 
 ## Découpage en sous-lots
 
-| Sous-lot | Contenu | Câble le Supervisor ? | Statut |
-|---|---|---|---|
-| **1A** | Contrats purs `core` + tests (aucune persistance, aucun câblage) | Non | **Ce lot** |
-| 1B | Ports + persistance (in-memory + PostgreSQL) + versioning + migration additive | Non | Ultérieur |
-| 1C | Adaptateur d'entrée `SupervisorContextInput` + mapping | Non (fige la forme, ne branche pas) | Ultérieur |
+| Sous-lot | Contenu                                                                        | Câble le Supervisor ?               | Statut     |
+| -------- | ------------------------------------------------------------------------------ | ----------------------------------- | ---------- |
+| **1A**   | Contrats purs `core` + tests (aucune persistance, aucun câblage)               | Non                                 | **Ce lot** |
+| 1B       | Ports + persistance (in-memory + PostgreSQL) + versioning + migration additive | Non                                 | Ultérieur  |
+| 1C       | Adaptateur d'entrée `SupervisorContextInput` + mapping                         | Non (fige la forme, ne branche pas) | Ultérieur  |
 
 > L'intégration réelle au Supervisor vivant reste **hors** de CTX-SUP et exige
 > une autorisation humaine explicite + un lot dédié.
@@ -70,26 +70,17 @@ unresolved_ambiguity, over_budget, non_serializable_input }`.
 ### Tests 1A (TDD — RED d'abord)
 
 **Forme / contrat (`contract.test.ts`)**
+
 1. `missionContextSchema` accepte un contexte valide minimal.
 2. Rejette tout champ inconnu ressemblant à de l'autorité (`grant`, `token`,
    `approved`, `credential`) — le schéma est strict.
 3. Bornes : `statement`/`boundedSummary` au-delà de la limite → rejet.
 4. `memoryReferences` n'accepte que `source = "memory_reference"`.
 
-**Build (`build.test.ts`)**
-5. Objectif confirmé présent → `ok:true`, `confirmedObjective` = valeur confirmée.
-6. Aucun objectif confirmé → `ok:false, reason: "no_confirmed_objective"`.
-7. Tour non confirmé → classé `assumption`, jamais `confirmed_fact`.
-8. Question ouverte → présente dans `openQuestions`.
-9. `conversation.tenantId ≠ mission.tenantId` → `tenant_mismatch`.
-10. Conversation contredisant la Mission (ex. objectif ≠ `userRequest` de façon
-    incompatible marquée) → `mission_conflict`.
-11. Dépassement de bornes → `over_budget`.
-12. **Déterminisme** : mêmes entrées + même `now` → sortie identique.
-13. **Propriété "no authority"** : pour toute entrée acceptée, la sortie
-    sérialisée ne contient aucune clé d'autorité ni aucun secret
-    (`grant|token|credential|password|cookie|allow`).
-14. Entrée non sérialisable / suspecte → `non_serializable_input`.
+**Build (`build.test.ts`)** 5. Objectif confirmé présent → `ok:true`, `confirmedObjective` = valeur confirmée. 6. Aucun objectif confirmé → `ok:false, reason: "no_confirmed_objective"`. 7. Tour non confirmé → classé `assumption`, jamais `confirmed_fact`. 8. Question ouverte → présente dans `openQuestions`. 9. `conversation.tenantId ≠ mission.tenantId` → `tenant_mismatch`. 10. Conversation contredisant la Mission (ex. objectif ≠ `userRequest` de façon
+incompatible marquée) → `mission_conflict`. 11. Dépassement de bornes → `over_budget`. 12. **Déterminisme** : mêmes entrées + même `now` → sortie identique. 13. **Propriété "no authority"** : pour toute entrée acceptée, la sortie
+sérialisée ne contient aucune clé d'autorité ni aucun secret
+(`grant|token|credential|password|cookie|allow`). 14. Entrée non sérialisable / suspecte → `non_serializable_input`.
 
 ### Critères d'acceptation 1A
 
@@ -108,7 +99,7 @@ unresolved_ambiguity, over_budget, non_serializable_input }`.
   signatures asynchrones, ressource absente = `null`.
 - Impl in-memory (tests Docker-free) + impl PostgreSQL (Drizzle).
 - Migration **additive** : table `mission_contexts` clé `(tenant_id, mission_id,
-  version)`, colonnes bornées, JSON sérialisable, aucun secret.
+version)`, colonnes bornées, JSON sérialisable, aucun secret.
 - Versioning monotone mission-scopé ; artefact immuable (append).
 - Émission optionnelle d'`AuditEntry` par référence (pas de nouveau type
   d'événement ; `contextId/version/missionId` uniquement).
@@ -128,18 +119,18 @@ unresolved_ambiguity, over_budget, non_serializable_input }`.
 
 ## Journal des menaces couvertes par sous-lot
 
-| Menace | 1A | 1B | 1C |
-|---|---|---|---|
-| T1 prompt injection | ✅ (no authority) | | |
-| T2 vieux contexte = permission | ✅ (version/builtAt) | ✅ (persistance versionnée) | |
-| T3 « merge main » | ✅ (assumption) | | |
-| T4 mémoire malveillante | ✅ (memory_reference) | | |
-| T5 cross-tenant | ✅ (tenant_mismatch) | ✅ (filtre repo) | |
-| T6 stale | ✅ (snapshot) | ✅ (version) | |
-| T7 conflit Mission | ✅ (mission_conflict) | | |
-| T8 conflit D1/G1 | ✅ (aucune décision portée) | | ✅ (DTO non autoritaire) |
-| T9 Supervisor = permission | | | ✅ (DTO + règles §5) |
-| T10 secret persisté | ✅ (jsonValue + test) | ✅ (test persistance) | |
+| Menace                         | 1A                          | 1B                          | 1C                       |
+| ------------------------------ | --------------------------- | --------------------------- | ------------------------ |
+| T1 prompt injection            | ✅ (no authority)           |                             |                          |
+| T2 vieux contexte = permission | ✅ (version/builtAt)        | ✅ (persistance versionnée) |                          |
+| T3 « merge main »              | ✅ (assumption)             |                             |                          |
+| T4 mémoire malveillante        | ✅ (memory_reference)       |                             |                          |
+| T5 cross-tenant                | ✅ (tenant_mismatch)        | ✅ (filtre repo)            |                          |
+| T6 stale                       | ✅ (snapshot)               | ✅ (version)                |                          |
+| T7 conflit Mission             | ✅ (mission_conflict)       |                             |                          |
+| T8 conflit D1/G1               | ✅ (aucune décision portée) |                             | ✅ (DTO non autoritaire) |
+| T9 Supervisor = permission     |                             |                             | ✅ (DTO + règles §5)     |
+| T10 secret persisté            | ✅ (jsonValue + test)       | ✅ (test persistance)       |                          |
 
 ---
 

@@ -4,7 +4,12 @@
 import type { Mission } from "@/core/mission";
 import type { AgentAction } from "@/core/contracts";
 
-import type { ChatMessage, CockpitStore, MissionHistoryItem, ProjectInfo } from "@/features/cockpit/types";
+import type {
+  ChatMessage,
+  CockpitStore,
+  MissionHistoryItem,
+  ProjectInfo,
+} from "@/features/cockpit/types";
 
 import { mockMissions } from "@/features/cockpit/mocks/mock-missions";
 import { mockMessages } from "@/features/cockpit/mocks/mock-messages";

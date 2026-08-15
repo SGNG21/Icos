@@ -11,9 +11,7 @@ export const dynamic = "force-dynamic";
 
 const cockpitJobIdSchema = z
   .string()
-  .regex(
-    /^cockpit-job-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
+  .regex(/^cockpit-job-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
 export async function GET(
   request: Request,

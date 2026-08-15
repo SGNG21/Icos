@@ -38,7 +38,12 @@ const FULL_CONTEXT: MissionContext = {
     },
   ],
   openQuestions: [
-    { id: "oq-1", statement: "Quelle langue ?", epistemics: "open_question", provenance: { source: "user_message", ref: "turn-q", observedAt: NOW } },
+    {
+      id: "oq-1",
+      statement: "Quelle langue ?",
+      epistemics: "open_question",
+      provenance: { source: "user_message", ref: "turn-q", observedAt: NOW },
+    },
   ],
   boundedSummary: "Livrer le rapport trimestriel",
   memoryReferences: [{ source: "memory_reference", ref: "mem-1", observedAt: NOW }],
@@ -65,18 +70,27 @@ function mission(overrides: Partial<Mission> = {}): Mission {
 
 describe("CTX-SUP-E2E — checkMissionSupremacy (Règle 1)", () => {
   it("accepte quand l'objectif contexte est compatible avec la demande Mission", () => {
-    const r = checkMissionSupremacy("Livrer le rapport trimestriel", "Livrer le rapport trimestriel");
+    const r = checkMissionSupremacy(
+      "Livrer le rapport trimestriel",
+      "Livrer le rapport trimestriel",
+    );
     expect(r.outcome).toBe("accepted");
     expect(r.rule).toBe("mission_supremacy");
   });
 
   it("accepte un objectif plus précis qui contient des tokens de la demande", () => {
-    const r = checkMissionSupremacy("Livrer le rapport T3 avec graphiques", "Livrer le rapport trimestriel");
+    const r = checkMissionSupremacy(
+      "Livrer le rapport T3 avec graphiques",
+      "Livrer le rapport trimestriel",
+    );
     expect(r.outcome).toBe("accepted");
   });
 
   it("refuse un objectif totalement divergent sans aucun token commun", () => {
-    const r = checkMissionSupremacy("Déployer le microservice en production", "Livrer le rapport trimestriel");
+    const r = checkMissionSupremacy(
+      "Déployer le microservice en production",
+      "Livrer le rapport trimestriel",
+    );
     expect(r.outcome).toBe("conflict");
   });
 
@@ -185,7 +199,9 @@ describe("CTX-SUP-E2E — resolveSupervisorContext (succès)", () => {
     if (!result.ok) return;
 
     // Sans mission, la règle mission_supremacy n'est pas appliquée
-    expect(result.envelope.precedenceRecords.some((r) => r.rule === "mission_supremacy")).toBe(false);
+    expect(result.envelope.precedenceRecords.some((r) => r.rule === "mission_supremacy")).toBe(
+      false,
+    );
   });
 
   it("le DTO projeté est strictement valide (passe le schéma imbriqué)", () => {
@@ -281,7 +297,10 @@ describe("CTX-SUP-E2E — resolveSupervisorContext (fail-closed)", () => {
   });
 
   it("refuse par precedence_conflict si l'objectif contredit la Mission", () => {
-    const result = resolveSupervisorContext(FULL_CONTEXT, mission({ userRequest: "Nettoyer les logs serveur" }));
+    const result = resolveSupervisorContext(
+      FULL_CONTEXT,
+      mission({ userRequest: "Nettoyer les logs serveur" }),
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("precedence_conflict");
@@ -292,7 +311,12 @@ describe("CTX-SUP-E2E — resolveSupervisorContext (fail-closed)", () => {
     const criticalContext: MissionContext = {
       ...FULL_CONTEXT,
       openQuestions: [
-        { id: "oq-sec", statement: "Qui peut merger en production ?", epistemics: "open_question", provenance: { source: "user_message", ref: "turn-sec", observedAt: NOW } },
+        {
+          id: "oq-sec",
+          statement: "Qui peut merger en production ?",
+          epistemics: "open_question",
+          provenance: { source: "user_message", ref: "turn-sec", observedAt: NOW },
+        },
       ],
     };
     const result = resolveSupervisorContext(criticalContext, mission());
@@ -306,7 +330,12 @@ describe("CTX-SUP-E2E — resolveSupervisorContext (fail-closed)", () => {
     const ctx: MissionContext = {
       ...FULL_CONTEXT,
       openQuestions: [
-        { id: "oq-dep", statement: "Quand déployer en production ?", epistemics: "open_question", provenance: { source: "user_message", ref: "turn-dep", observedAt: NOW } },
+        {
+          id: "oq-dep",
+          statement: "Quand déployer en production ?",
+          epistemics: "open_question",
+          provenance: { source: "user_message", ref: "turn-dep", observedAt: NOW },
+        },
       ],
     };
     const result = resolveSupervisorContext(ctx, mission());
@@ -394,7 +423,15 @@ describe("CTX-SUP-E2E — chaîne E2E (build → bridge)", () => {
       }
     };
     walk(bridged.envelope);
-    for (const forbidden of ["grant", "token", "credential", "password", "cookie", "approved", "allow"]) {
+    for (const forbidden of [
+      "grant",
+      "token",
+      "credential",
+      "password",
+      "cookie",
+      "approved",
+      "allow",
+    ]) {
       expect(keys.has(forbidden), `clé "${forbidden}" interdite`).toBe(false);
     }
 
@@ -408,16 +445,18 @@ describe("CTX-SUP-E2E — chaîne E2E (build → bridge)", () => {
     const built = buildMissionContext({
       conversation: {
         tenantId: "tenant-OTHER",
-        turns: [{
-          id: "turn-obj",
-          role: "user",
-          text: "Objectif",
-          confirmed: true,
-          isObjective: true,
-          isOpenQuestion: false,
-          conflictsWithMission: false,
-          observedAt: NOW,
-        }],
+        turns: [
+          {
+            id: "turn-obj",
+            role: "user",
+            text: "Objectif",
+            confirmed: true,
+            isObjective: true,
+            isOpenQuestion: false,
+            conflictsWithMission: false,
+            observedAt: NOW,
+          },
+        ],
         memoryReferences: [],
       },
       mission: {
@@ -443,16 +482,18 @@ describe("CTX-SUP-E2E — chaîne E2E (build → bridge)", () => {
     const built = buildMissionContext({
       conversation: {
         tenantId: "tenant-1",
-        turns: [{
-          id: "turn-obj",
-          role: "user",
-          text: "Déployer en production",
-          confirmed: true,
-          isObjective: true,
-          isOpenQuestion: false,
-          conflictsWithMission: false,
-          observedAt: NOW,
-        }],
+        turns: [
+          {
+            id: "turn-obj",
+            role: "user",
+            text: "Déployer en production",
+            confirmed: true,
+            isObjective: true,
+            isOpenQuestion: false,
+            conflictsWithMission: false,
+            observedAt: NOW,
+          },
+        ],
         memoryReferences: [],
       },
       mission: {
@@ -491,25 +532,28 @@ describe("CTX-SUP-E2E — chaîne E2E (build → bridge)", () => {
     const built = buildMissionContext({
       conversation: {
         tenantId: "tenant-1",
-        turns: [{
-          id: "turn-obj",
-          role: "user",
-          text: "Livrer le rapport",
-          confirmed: true,
-          isObjective: true,
-          isOpenQuestion: false,
-          conflictsWithMission: false,
-          observedAt: NOW,
-        }, {
-          id: "turn-q",
-          role: "user",
-          text: "Quelle police utiliser ?",
-          isOpenQuestion: true,
-          confirmed: false,
-          isObjective: false,
-          conflictsWithMission: false,
-          observedAt: NOW,
-        }],
+        turns: [
+          {
+            id: "turn-obj",
+            role: "user",
+            text: "Livrer le rapport",
+            confirmed: true,
+            isObjective: true,
+            isOpenQuestion: false,
+            conflictsWithMission: false,
+            observedAt: NOW,
+          },
+          {
+            id: "turn-q",
+            role: "user",
+            text: "Quelle police utiliser ?",
+            isOpenQuestion: true,
+            confirmed: false,
+            isObjective: false,
+            conflictsWithMission: false,
+            observedAt: NOW,
+          },
+        ],
         memoryReferences: [],
       },
       mission: {

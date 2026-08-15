@@ -17,12 +17,7 @@ export interface CkInFlowCardProps {
  * assigns no meaning and grants no authority; the child decides what is shown
  * and the caller owns any behaviour.
  */
-export function CkInFlowCard({
-  title,
-  icon,
-  children,
-  variant = "mission",
-}: CkInFlowCardProps) {
+export function CkInFlowCard({ title, icon, children, variant = "mission" }: CkInFlowCardProps) {
   return (
     <section className={`ck-inflow-card ${variant}`}>
       <header className="ck-inflow-card-header">

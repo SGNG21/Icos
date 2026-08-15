@@ -24,11 +24,7 @@ export interface SupervisorRepository {
   findActiveDags(): Promise<TaskDag[]>;
 
   /** Met à jour l'état d'un DAG. */
-  updateDagStatus(
-    dagId: string,
-    status: DagStatus,
-    error?: string,
-  ): Promise<TaskDag | null>;
+  updateDagStatus(dagId: string, status: DagStatus, error?: string): Promise<TaskDag | null>;
 
   /** Ajoute un nœud à un DAG. */
   addNode(dagId: string, node: TaskNode): Promise<TaskNode | null>;

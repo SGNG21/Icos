@@ -5,17 +5,13 @@ import { CkMessageBubble } from "./CkMessageBubble";
 
 describe("CkMessageBubble", () => {
   it("renders a user message right-aligned", () => {
-    const html = renderToStaticMarkup(
-      <CkMessageBubble role="user" content="Déploie la staging" />,
-    );
+    const html = renderToStaticMarkup(<CkMessageBubble role="user" content="Déploie la staging" />);
     expect(html).toContain("ck-message-user");
     expect(html).toContain("Déploie la staging");
   });
 
   it("renders an ICOS message", () => {
-    const html = renderToStaticMarkup(
-      <CkMessageBubble role="icos" content="C'est parti." />,
-    );
+    const html = renderToStaticMarkup(<CkMessageBubble role="icos" content="C'est parti." />);
     expect(html).toContain("ck-message-icos");
     expect(html).toContain("C&#x27;est parti.");
   });

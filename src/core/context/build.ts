@@ -57,9 +57,7 @@ function toClaim(
   };
 }
 
-export function buildMissionContext(
-  input: BuildMissionContextInput,
-): BuildContextResult {
+export function buildMissionContext(input: BuildMissionContextInput): BuildContextResult {
   // 1. Entrée sérialisable et bien formée ? Sinon fail-closed.
   const parsed = conversationContextSchema.safeParse(input.conversation);
   if (!parsed.success) {
@@ -85,9 +83,7 @@ export function buildMissionContext(
 
   // 5. Objectif confirmé : uniquement depuis un tour explicitement confirmé et
   //    marqué comme objectif. Jamais inféré. Absent → refus.
-  const objectiveTurn = conversation.turns.find(
-    (t) => t.isObjective && t.confirmed,
-  );
+  const objectiveTurn = conversation.turns.find((t) => t.isObjective && t.confirmed);
   if (!objectiveTurn) {
     return { ok: false, reason: "no_confirmed_objective" };
   }
@@ -122,10 +118,7 @@ export function buildMissionContext(
   }
 
   // 8. Résumé borné, déterministe, dérivé du seul objectif confirmé.
-  const boundedSummary = objectiveTurn.text.slice(
-    0,
-    CONTEXT_LIMITS.summaryMaxLength,
-  );
+  const boundedSummary = objectiveTurn.text.slice(0, CONTEXT_LIMITS.summaryMaxLength);
 
   // 9. Références mémoire : preuve uniquement (jamais promues en fait).
   const memoryReferences: MemoryReference[] = conversation.memoryReferences;

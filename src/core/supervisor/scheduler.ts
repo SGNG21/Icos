@@ -1,9 +1,5 @@
 import type { TaskDag, TaskNode, TaskNodeStatus } from "./contract";
-import {
-  computeReadyNodes,
-  isNodeTerminal,
-  canRetryNode,
-} from "./lifecycle";
+import { computeReadyNodes, isNodeTerminal, canRetryNode } from "./lifecycle";
 
 // ─────────────────────────────────────
 // Scheduler events
@@ -50,8 +46,7 @@ export type SchedulerEventHandler = (event: SchedulerEvent) => void | Promise<vo
  * Résultat d'une opération du Scheduler.
  */
 export type SchedulerResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; code: string; message: string };
+  { ok: true; data: T } | { ok: false; code: string; message: string };
 
 /**
  * Moteur de planification / exécution du DAG.
@@ -149,10 +144,7 @@ export class Scheduler {
    * - Si retry possible → marque READY
    * - Sinon → marque FAILED, propage BLOCKED aux dépendants
    */
-  async onNodeFailed(
-    nodeId: string,
-    error?: string,
-  ): Promise<SchedulerResult<string[]>> {
+  async onNodeFailed(nodeId: string, error?: string): Promise<SchedulerResult<string[]>> {
     const node = this.dag.nodes[nodeId];
     if (!node) {
       return { ok: false, code: "NODE_NOT_FOUND", message: `Nœud "${nodeId}" introuvable` };

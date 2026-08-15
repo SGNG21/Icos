@@ -6,11 +6,7 @@ import { idSchema, isoDateTimeSchema } from "@/core/contracts/common";
 // Preview delivery status
 // ─────────────────────────────────────
 
-export const previewStatusSchema = z.enum([
-  "LOCAL_RESULT_READY",
-  "WAITING_FOR_HUMAN",
-  "FAILED",
-]);
+export const previewStatusSchema = z.enum(["LOCAL_RESULT_READY", "WAITING_FOR_HUMAN", "FAILED"]);
 
 export type PreviewStatus = z.infer<typeof previewStatusSchema>;
 

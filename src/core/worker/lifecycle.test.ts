@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isWorkerTransitionAllowed, isWorkerTerminal, allowedWorkerTransitionsFrom } from "./lifecycle";
+import {
+  isWorkerTransitionAllowed,
+  isWorkerTerminal,
+  allowedWorkerTransitionsFrom,
+} from "./lifecycle";
 import type { WorkerStatus } from "./contract";
 
 describe("isWorkerTransitionAllowed", () => {

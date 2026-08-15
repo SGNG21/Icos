@@ -36,9 +36,7 @@ export interface ArtifactRef {
  * Uses only fields confirmed present in the Mission Zod schema.
  */
 export function missionToHistoryItem(mission: Mission): MissionHistoryItem {
-  const completedSteps = mission.runs?.filter(
-    (r) => r.status === "completed",
-  ).length;
+  const completedSteps = mission.runs?.filter((r) => r.status === "completed").length;
 
   return {
     id: mission.id,

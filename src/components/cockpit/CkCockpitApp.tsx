@@ -8,19 +8,10 @@ import type {
   CockpitJobProjection,
   CockpitJobStatus,
 } from "@/features/cockpit/clients";
-import {
-  CockpitHttpError,
-  createCockpitHttpClient,
-} from "@/features/cockpit/http-clients";
+import { CockpitHttpError, createCockpitHttpClient } from "@/features/cockpit/http-clients";
 
 export type CockpitUiState =
-  | "idle"
-  | "submitting"
-  | "polling"
-  | "succeeded"
-  | "failed"
-  | "blocked"
-  | "network-error";
+  "idle" | "submitting" | "polling" | "succeeded" | "failed" | "blocked" | "network-error";
 
 export interface CockpitViewState {
   phase: CockpitUiState;

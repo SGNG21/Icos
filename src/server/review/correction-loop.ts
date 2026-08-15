@@ -92,10 +92,7 @@ export class CorrectionLoop {
     let attempts = 0;
     let currentReview = initialReview;
 
-    while (
-      currentReview.verdict !== "PASS" &&
-      attempts < this.config.maxAttempts
-    ) {
+    while (currentReview.verdict !== "PASS" && attempts < this.config.maxAttempts) {
       attempts++;
 
       // Créer la spécification de correction
@@ -104,7 +101,8 @@ export class CorrectionLoop {
         missionId: reviewSpec.missionId,
         reviewId: `review-${reviewSpec.taskId}-${attempts}`,
         reviewVerdict: currentReview.verdict === "FAILED" ? "FAILED" : "CHANGES_REQUIRED",
-        reviewComments: currentReview.summary + (currentReview.comments ? `\n${currentReview.comments}` : ""),
+        reviewComments:
+          currentReview.summary + (currentReview.comments ? `\n${currentReview.comments}` : ""),
         failedChecks: currentReview.checks.filter((c) => !c.passed),
         attemptNumber: attempts,
         maxAttempts: this.config.maxAttempts,

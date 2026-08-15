@@ -69,11 +69,7 @@ describe("CkCockpitApp active path", () => {
   it("visibly disables the composer while submitting and polling", () => {
     for (const uiState of ["submitting", "polling"] as const) {
       const html = renderToStaticMarkup(
-        <CkSupervisorSurface
-          uiState={uiState}
-          onSubmitObjective={() => {}}
-          onRetry={() => {}}
-        />,
+        <CkSupervisorSurface uiState={uiState} onSubmitObjective={() => {}} onRetry={() => {}} />,
       );
       expect(html).toContain("textarea");
       expect(html).toContain("disabled");
@@ -175,10 +171,7 @@ describe("CockpitController submission", () => {
     await controller.retry();
 
     expect(submitJob).toHaveBeenCalledTimes(2);
-    expect(submitJob.mock.calls.map((call) => call[1])).toEqual([
-      "stable-key",
-      "stable-key",
-    ]);
+    expect(submitJob.mock.calls.map((call) => call[1])).toEqual(["stable-key", "stable-key"]);
   });
 });
 
@@ -248,9 +241,7 @@ describe("CockpitController polling", () => {
 
   it("clears its timer on unmount cleanup", async () => {
     vi.useFakeTimers();
-    const controller = new CockpitController(
-      client({ getJob: vi.fn(async () => job("RUNNING")) }),
-    );
+    const controller = new CockpitController(client({ getJob: vi.fn(async () => job("RUNNING")) }));
 
     await controller.submit("Une mission");
     expect(vi.getTimerCount()).toBe(1);

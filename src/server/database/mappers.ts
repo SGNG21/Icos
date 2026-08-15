@@ -30,10 +30,7 @@ import {
   type ExecutionRecord,
   type IdempotencyEntry,
 } from "@/core/g1";
-import {
-  missionContextSchema,
-  type MissionContext,
-} from "@/core/context/contract";
+import { missionContextSchema, type MissionContext } from "@/core/context/contract";
 
 import { RepositoryMappingError } from "./errors";
 import type {
@@ -318,7 +315,8 @@ export function rowToSkill(row: SkillRow): Skill {
     dependencyDeclarations: row.dependencyDeclarations as Skill["dependencyDeclarations"],
     networkRequirements: row.networkRequirements as Skill["networkRequirements"],
     credentialRequirements: row.credentialRequirements as Skill["credentialRequirements"],
-    executionIsolationRequirement: row.executionIsolationRequirement as Skill["executionIsolationRequirement"],
+    executionIsolationRequirement:
+      row.executionIsolationRequirement as Skill["executionIsolationRequirement"],
     toolRequirements: row.toolRequirements as Skill["toolRequirements"],
     inputSchema: row.inputSchema as Record<string, unknown> | undefined,
     outputSchema: row.outputSchema as Record<string, unknown> | undefined,

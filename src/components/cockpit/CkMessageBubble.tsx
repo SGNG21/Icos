@@ -38,17 +38,11 @@ export function CkMessageBubble({
       ) : null}
       <span>{content}</span>
       {actionLabel && onAction ? (
-        <button
-          type="button"
-          className="ck-message-action"
-          onClick={onAction}
-        >
+        <button type="button" className="ck-message-action" onClick={onAction}>
           {actionLabel}
         </button>
       ) : null}
-      {timestamp ? (
-        <span className="ck-message-timestamp">{timestamp}</span>
-      ) : null}
+      {timestamp ? <span className="ck-message-timestamp">{timestamp}</span> : null}
     </div>
   );
 }

@@ -141,12 +141,14 @@ export const riskStyleMap: Record<string, RiskConfigItem> = {
  * to ensure the UI never breaks on new backend statuses.
  */
 export function getStatusConfig(status: MissionStatus): StatusConfigItem {
-  return statusConfig[status] ?? {
-    label: String(status),
-    icon: "?",
-    color: "muted",
-    cssClass: "status-unknown",
-  };
+  return (
+    statusConfig[status] ?? {
+      label: String(status),
+      icon: "?",
+      color: "muted",
+      cssClass: "status-unknown",
+    }
+  );
 }
 
 /**
@@ -154,8 +156,10 @@ export function getStatusConfig(status: MissionStatus): StatusConfigItem {
  * Falls back to a label derived from the raw risk value for unknown levels.
  */
 export function getRiskConfig(risk: RiskLevel): RiskConfigItem {
-  return riskStyleMap[risk] ?? {
-    label: riskLabelMap[risk] ?? String(risk),
-    cssClass: "risk-unknown",
-  };
+  return (
+    riskStyleMap[risk] ?? {
+      label: riskLabelMap[risk] ?? String(risk),
+      cssClass: "risk-unknown",
+    }
+  );
 }
