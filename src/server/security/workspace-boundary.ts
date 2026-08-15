@@ -17,7 +17,14 @@ export type WorkspaceBoundaryViolation =
   | "unresolvable_worktree_path"
   | "not_a_directory"
   | "forbidden_root"
-  | "path_outside_workspace";
+  | "path_outside_workspace"
+  // NF-3 (Phase 2B) — écritures race-safe
+  | "unsupported_platform"
+  | "non_canonical_workspace_root"
+  | "symlink_component"
+  | "parent_not_directory"
+  | "race_detected"
+  | "unsafe_write_target";
 
 export class WorkspaceBoundaryError extends Error {
   readonly code: WorkspaceBoundaryViolation;

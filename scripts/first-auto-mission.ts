@@ -26,7 +26,6 @@
 
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 
@@ -69,10 +68,8 @@ import {
   EXTERNAL_EFFECT_SCOPE_PUSH_PR,
   loadExternalEffectApproval,
 } from "@/server/security/external-effect-approval";
-import {
-  resolveAuthorizedWorkspace,
-  resolveInsideWorkspace,
-} from "@/server/security/workspace-boundary";
+import { resolveAuthorizedWorkspace } from "@/server/security/workspace-boundary";
+import { safeWriteFileInsideWorkspace } from "@/server/security/safe-workspace-writer";
 import { isFirstAutoFinalStateSuccessful } from "./first-auto-verifier";
 
 const exec = promisify(execFile);
@@ -234,12 +231,17 @@ class FirstAutoWorker implements WorkerManagerPort {
     // Le test suit exactement le modèle de src/core/supervisor/lifecycle.test.ts
     const testContent = this.generateTestCode();
 
-    // Écrire le fichier de test — chemin validé strictement à l'intérieur
-    // du workspace (aucune traversée possible).
-    const testFilePath = resolveInsideWorkspace(repoRoot, "src/core/mission/lifecycle.test.ts");
-    console.log(`  [WORKER] writing: ${testFilePath}`);
-    await writeFile(testFilePath, testContent, "utf-8");
-    console.log(`  [WORKER] test file written (${testContent.length} bytes)`);
+    // NF-3 (Phase 2B) : écriture race-safe — validation et écriture non
+    // séparables par un swap de symlink (descripteur vérifié dev+ino,
+    // O_NOFOLLOW, re-canonicalisation du parent post-open). Fail-closed.
+    const testFilePath = await safeWriteFileInsideWorkspace(
+      repoRoot,
+      "src/core/mission/lifecycle.test.ts",
+      testContent,
+    );
+    console.log(
+      `  [WORKER] test file written race-safe (${testContent.length} bytes): ${testFilePath}`,
+    );
 
     // Formatter le fichier
     try {
