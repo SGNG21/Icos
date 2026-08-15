@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ICOS Task Contract",
+  "type": "object",
+  "required": [
+    "task_id",
+    "goal",
+    "assigned_role",
+    "acceptance_criteria",
+    "evidence_required"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "assigned_role": {
+      "type": "string"
+    },
+    "tenant_scope": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allowed_resources": {
+      "type": "array"
+    },
+    "forbidden_resources": {
+      "type": "array"
+    },
+    "security_invariants": {
+      "type": "array"
+    },
+    "acceptance_criteria": {
+      "type": "array"
+    },
+    "evidence_required": {
+      "type": "array"
+    },
+    "budget_eur": {
+      "type": "number",
+      "minimum": 0
+    },
+    "max_retries": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

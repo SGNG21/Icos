@@ -1,0 +1,15 @@
+policy_id: SEC-BASE-001
+status: ACTIVE
+rules:
+  - id: tenant-required
+    effect: deny
+    when: tenant_scoped_operation and tenant_id_missing
+  - id: explicit-permission
+    effect: deny
+    when: required_permission_missing
+  - id: direct-prod-db-agent
+    effect: deny
+    when: actor_type == agent and target == production_database and access == direct
+  - id: secret-in-repo
+    effect: deny
+    when: content_class == SECRET and destination == git_repository

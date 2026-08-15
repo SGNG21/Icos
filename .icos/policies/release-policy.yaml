@@ -1,0 +1,10 @@
+policy_id: REL-001
+status: ACTIVE
+production_release_requires:
+  - accepted_task_or_release_scope
+  - tests_pass
+  - security_gate_pass
+  - rollback_plan
+  - observability_ready
+  - migration_review_if_applicable
+  - evidence_bundle

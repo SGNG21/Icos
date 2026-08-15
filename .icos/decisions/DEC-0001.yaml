@@ -1,0 +1,9 @@
+decision_id: DEC-0001
+status: ACCEPTED
+topic: "Human owner retains final strategic authority"
+authority: APPROVAL
+owner: human-owner
+rationale: "Established in ICOS master blueprint v2.0."
+reversible: true
+evidence: []
+supersedes: null

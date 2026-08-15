@@ -1,0 +1,11 @@
+policy_id: GOV-AUTH-001
+status: ACTIVE
+levels:
+  AUTO:
+    requires: [reversible, within_budget, within_policy]
+  REPORT:
+    requires: [reversible, within_policy]
+  APPROVAL:
+    triggers: [irreversible, legal_commitment, material_pricing, destructive_customer_data_action, security_downgrade]
+  VETO:
+    holders: [CISO, CFO_HARD_BUDGET]

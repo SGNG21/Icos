@@ -1,0 +1,7 @@
+policy_id: AI-DATA-001
+status: PROVISIONAL
+principles:
+  - route_by_data_classification
+  - never_send_secrets_unnecessarily
+  - provider_must_be_approved_for_data_class
+  - local_compute_preferred_when_quality_sufficient_and_data_sensitivity_high

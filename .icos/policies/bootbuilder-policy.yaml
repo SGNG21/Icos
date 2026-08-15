@@ -1,0 +1,9 @@
+policy_id: BOOT-001
+status: ACTIVE
+default_profile: AUDIT
+profiles:
+  AUDIT: {write: false, production: false}
+  SETUP: {write_local_config: true, production: false}
+  RECOVERY: {temporary_elevation: true, production: false}
+  PRODUCTION_CHANGE: {temporary_elevation: true, explicit_change_plan: true, explicit_approval: true}
+permanent_omnipotence: forbidden

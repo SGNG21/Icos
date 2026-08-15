@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ICOS Decision",
+  "type": "object",
+  "required": [
+    "decision_id",
+    "status",
+    "topic",
+    "authority",
+    "owner",
+    "rationale"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "PROPOSED",
+        "ACCEPTED",
+        "REJECTED",
+        "SUPERSEDED"
+      ]
+    },
+    "topic": {
+      "type": "string"
+    },
+    "authority": {
+      "enum": [
+        "AUTO",
+        "REPORT",
+        "APPROVAL",
+        "VETO"
+      ]
+    },
+    "owner": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "reversible": {
+      "type": "boolean"
+    },
+    "evidence": {
+      "type": "array"
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ICOS Agent",
+  "type": "object",
+  "required": [
+    "employee_id",
+    "display_name",
+    "role",
+    "manager_id",
+    "authority",
+    "mission",
+    "status"
+  ],
+  "properties": {
+    "employee_id": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "manager_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "authority": {
+      "enum": [
+        "AUTO",
+        "REPORT",
+        "APPROVAL",
+        "VETO",
+        "ADVISORY"
+      ]
+    },
+    "mission": {
+      "type": "string"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "data_scopes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tenant_scope": {
+      "type": "string"
+    },
+    "memory_scopes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "budget": {
+      "type": "object"
+    },
+    "kpis": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "enum": [
+        "ACTIVE",
+        "SUSPENDED",
+        "DRAFT",
+        "RETIRED"
+      ]
+    }
+  }
+}
