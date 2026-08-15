@@ -1,565 +1,1265 @@
-# D4 — Runtime Execution Design
+# D4 — Runtime / Execution Layer
 
-**Status:** IMPLEMENTATION_IN_PROGRESS  
-**Date:** 2026-07-25  
-**Dependencies:** D1 (Policy), D2 (Mission Engine), D3 (AI Gateway / OmniRoute)  
-
----
-
-## 1. Objectives
-
-D4 owns **execution** — the lifecycle of running a plan step once the Mission Engine (D2) has decided what to do and the AI Gateway (D3) has resolved which provider to use.
-
-- Provide a clean, testable runtime execution contract for D2 to call
-- Orchestrate the complete lifecycle: authorization recheck → workspace → credential resolution → execution → artifact collection → cleanup
-- Support cancellation, timeout, and process-tree cleanup
-- Enforce workspace isolation, network default-deny, credential confinement
-- Integrate with D3 via `AiGatewayPort` — never directly
-- Remain agent-agnostic; the `LocalRuntimeAdapter` is V1 — future adapters plug in via the same `AgentRuntimeAdapter` interface
+> **Lot D4 — Spec v1**
+> Date : 2026-07-25
+> Statut : DESIGN_READY_WAITING_FOR_D3
+> Références : D2 (8cd58c7), D1 (c8cebbe), C2 (700290a), C1 (1c55cf6)
+> Audit externe : NemoClaw (patterns sandbox/credential/network intégrés)
 
 ---
 
-## 2. Non-Objectives (V1)
+## 1. Problème
 
-- Distributed scheduler
-- VPS orchestration (Kubernetes, Nomad, etc.)
-- Complete Docker platform
-- NemoClaw / OpenClaw / Hermes / Codex integration
-- MCP gateway
-- Browser runtime
-- Voice runtime
-- Remote agents
-- Streaming D3 V2
-- Complex quota systems
-- Advanced UI
+D2 Mission Engine (merged SHA 8cd58c7) gère l'orchestration durable :
+Mission → Plan → Steps → Runs → transitions d'état. Mais D2 n'exécute rien.
 
----
+ICOS a besoin d'une couche d'exécution contrôlée qui :
 
-## 3. Canonical Ownership
+- reçoit un Run depuis D2 ;
+- évalue les requirements du Step (agent, skill, outil, isolation) ;
+- résout les credentials de manière sécurisée (jamais exposés aux workers) ;
+- crée l'environnement d'exécution (workspace, worktree, sandbox limité) ;
+- exécute le travail avec timeout, cancellation et heartbeat ;
+- collecte le résultat ;
+- retourne le résultat à D2 pour transition d'état.
 
-| Layer | Owner | State Machine |
-|-------|-------|---------------|
-| D2 Mission Engine | Plan lifecycle | Mission status (CREATED → … → COMPLETED) |
-| D4 Runtime Execution | Step/Run execution | Execution status (STARTING → … → SUCCEEDED) |
-| D3 AI Gateway | AI request | None (single request/response) |
-
-**Invariant:** These state machines are **never merged**. D2 tracks planning and orchestration state; D4 tracks runtime execution state; D3 tracks AI generation state. Each has its own lifecycle, transitions, and error model.
+Aujourd'hui, rien ne permet d'exécuter un Step D2 hors d'un contexte interactif.
+Toute exécution non contrôlée est soit impossible, soit dangereuse.
 
 ---
 
-## 4. D3 Contract Reconciliation
+## 2. Scope D4
 
-### Verified against origin/main (8ac39cb)
+### In Scope V1
 
-| Field | Specified | Actual | Status |
-|-------|-----------|--------|--------|
-| `AiGatewayPort` signature | `generate(request: AiRoutingRequestWithSignal): Promise<AiGenerationResult>` | ✅ Matches | PASS |
-| `tenantId` | Required | `z.string().min(1)` | PASS |
-| `correlationId` | Required | `z.string().min(1)` | PASS |
-| `AbortSignal` | Via `AiRoutingRequestWithSignal.abortSignal` | ✅ Present as optional field | PASS |
-| Routing intents | BEST_REASONING, BEST_CODING, FAST, CHEAP, PRIVATE, FALLBACK | ✅ All 6 present | PASS |
-| Error codes | PROVIDER_UNAVAILABLE, RATE_LIMITED, TIMEOUT, INVALID_RESPONSE, POLICY_BLOCKED, UNSUPPORTED_CAPABILITY, CANCELLED, INTERNAL_ERROR | ✅ All 8 present | PASS |
-| Usage metadata | inputTokens, outputTokens, totalTokens, costUsd? | ✅ All 4 present in `AiUsage` | PASS |
-| Provider info | id, model, account? | ✅ All 3 present in `AiProviderInfo` | PASS |
-| `fallbackAllowed` | boolean, default true | ✅ Present | PASS |
-| `budgetMaxCostUsd` | optional max cost | ✅ Present | PASS |
+- `RuntimeExecutionPort` — abstraction centrale d'exécution
+- `WorkerDefinition` — ce qui est exécuté (agent, skill, commande)
+- `WorkerRun` — instance d'exécution avec état, métadonnées
+- `ExecutionRequest` — paramètres de lancement
+- `ExecutionResult` — résultat normalisé
+- Workspace isolation (worktree, path scope, cleanup lifecycle)
+- Environment scoping (variables, secrets résolus, jamais credentials bruts)
+- Timeout + cancellation (SIGTERM → SIGKILL, grace period)
+- Heartbeat / process health
+- Logs et artifacts collection
+- Credential reference resolution (via CredentialBrokerPort) — jamais credentials bruts
+- Credential policy gate : BLOCKED_BY_CREDENTIAL_POLICY si mécanisme indisponible
+- Network policy enforcement (domaines autorisés/bloqués)
+- D1 policy revalidation au moment approprié
+- D2 integration (receive Run, return Result)
+- Runtime state machine (STARTING ↔ RUNNING ↔ terminal)
+- Retry boundaries (pas de retry automatique des actions externes)
+- Recovery (worker death, runtime restart)
 
-**Divergences:** None — the D3 contract matches exactly what was designed. No spec update needed.
+### Out of Scope V1
 
-### D4 consumes D3 via
-
-```typescript
-AiGatewayPort.generate({
-  ...AiRoutingRequestWithSignal,
-  // D4 sets: tenantId, correlationId, prompt (from step), intent, abortSignal, timeoutMs
-  // D4 does NOT set: provider-specific config (that's D3's job)
-})
-```
-
----
-
-## 5. Runtime State Machine
-
-### States
-
-```
-STARTING   → Being prepared (workspace, policy, credentials)
-RUNNING    → Adapter is executing
-SUCCEEDED  → Completed successfully (terminal)
-FAILED     → Execution failure (terminal)
-CANCELLED  → User/system cancellation (terminal)
-TIMED_OUT  → Exceeded timeout (terminal)
-LOST       → Worker/process disappeared (terminal)
-```
-
-### Allowed Transitions
-
-```
-STARTING  → RUNNING          (normal progression)
-STARTING  → FAILED           (setup failure: policy deny, workspace error, credential unavailable)
-STARTING  → CANCELLED        (cancelled before execution)
-
-RUNNING   → SUCCEEDED        (normal completion)
-RUNNING   → FAILED           (execution failure)
-RUNNING   → CANCELLED        (cancellation during execution)
-RUNNING   → TIMED_OUT        (timeout exceeded)
-RUNNING   → LOST             (worker disappeared)
-
-TERMINAL  → <none>           (no transitions out of terminal states)
-```
-
-### Illegal Transitions (denied with explicit error)
-
-- Any transition from a terminal state
-- Non-sequential transitions (e.g., STARTING → SUCCEEDED)
-- Impossible transitions (e.g., FAILED → RUNNING)
+- Distributed scheduler (VPS nodes deferred)
+- D3 AiGatewayPort integration (WAITING_FOR_D3_MERGED_CODE)
+- Docker/container sandbox (pattern étudié, non implémenté)
+- Multi-tenant scheduling
+- Message queue / event bus
+- Tool/Gateway G1 (sera D4 consommateur, pas propriétaire)
+- Credential store (références seulement)
+- Agent selection intelligence (D2 responsibility)
+- Plan decomposition (D2 responsibility)
 
 ---
 
-## 6. Architecture
+## 3. Architecture conceptuelle
 
 ```
 D2 Mission Engine
-        │
-        ▼
-RuntimeExecutionPort              ← D4 contract boundary
-        │
-        ▼
-ExecutionOrchestrator             ← D4 coordinator
-        │
-        ├── D1PolicyPort          ← execution-time authorization recheck
-        │
-        ├── WorkspaceManager      ← isolated workspace lifecycle
-        │
-        ├── CredentialBrokerPort  ← credential resolution boundary
-        │
-        ├── NetworkPolicyPort     ← network default-deny boundary
-        │
-        ├── ArtifactCollector     ← scoped artifact extraction
-        │
-        ├── AgentRuntimeAdapter   ← adapter interface
-        │     └── LocalRuntimeAdapter  ← V1 local process execution
-        │
-        └── AiGatewayPort         ← D3 AI generation (for AI-backed steps)
+│
+│ addRun(stepIndex)
+▼
+┌─────────────────────────────────────────┐
+│ D4 RuntimeExecutionPort                  │
+├─────────────────────────────────────────┤
+│ RuntimeExecutionService                   │
+│                                           │
+│  ┌─────────────────────┐                 │
+│  │ ExecutionOrchestrator│                │
+│  │ ├ Worker lifecycle   │                │
+│  │ ├ State machine      │                │
+│  │ └ Recovery           │                │
+│  └─────────┬───────────┘                 │
+│            │                             │
+│     ┌──────┴──────┐                     │
+│     │ Adapter Layer│                     │
+│     ├──────────────┤                     │
+│     │ LocalAdapter  │ ← V1               │
+│     │ ACPAdapter   │ ← future            │
+│     │ VPSAdapter   │ ← deferred          │
+│     └──────┬──────┘                       │
+│            │                             │
+│     ┌──────┴──────┐                     │
+│     │ Worker (process)                  │
+│     │ Sandbox (isolation)               │
+│     │ Workspace (worktree)              │
+│     └─────────────┘                     │
+├─────────────────────────────────────────┤
+│ D4 Cross-Cutting                         │
+│ ├ CredentialBrokerPort                   │
+│ ├ NetworkPolicyPort                      │
+│ ├ WorkspaceManager                       │
+│ └ ArtifactCollector                      │
+└─────────────────────────────────────────┘
+          │
+          │ result
+          ▼
+D2 Mission Engine (transition status)
 ```
 
-### Runtime Execution Port (D2 → D4)
+### Flux d'exécution V1
+
+```
+D2                     D4                    Worker
+ |                      |                      |
+ |— addRun(stepIdx) —→ |                      |
+ |                     |— createWorkspace() —→|
+ |                     |— start()            →|
+ |                     |   (process, timeout)  |
+ |                     |     heartbeat· · ·· → |
+ |                     |                      |— result
+ |                     |← collectResult()     |
+ |← return result      |                      |
+```
+
+---
+
+## 4. Contrats D4 (Runtime)
+
+### 4.1 RuntimeExecutionPort
 
 ```typescript
-interface RuntimeExecutionPort {
-  execute(input: ExecuteStepInput): Promise<ExecutionResult>;
+/**
+ * Port central d'exécution D4.
+ * D2 l'appelle pour exécuter un step ; D4 retourne le résultat.
+ *
+ * L'implémentation concrète (LocalRuntimeAdapter, ACPAdapter, etc.)
+ * est branchée via le container.
+ */
+export interface RuntimeExecutionPort {
+  /**
+   * Démarre l'exécution d'un worker.
+   * Lance la préparation (workspace, env, credentials), puis le worker.
+   * Retourne immédiatement un WorkerRun (exécution asynchrone).
+   */
+  start(request: ExecutionRequest): Promise<WorkerRun>;
+
+  /**
+   * Récupère l'état courant d'un run.
+   * Utilisé par D2 pour heartbeat/polling/recovery.
+   */
+  getRun(runId: string): Promise<WorkerRun | null>;
+
+  /**
+   * Annule un run en cours.
+   * SIGTERM → grace period → SIGKILL.
+   * Retourne l'état final du run (CANCELLED).
+   */
+  cancel(runId: string, reason?: string): Promise<WorkerRun>;
+
+  /**
+   * Liste les runs actifs (non terminaux).
+   * Utilisé par D4 recovery au démarrage.
+   */
+  getActiveRuns(): Promise<WorkerRun[]>;
+
+  /**
+   * Attend la complétion d'un run (timeout inclus).
+   * Retourne le résultat final.
+   */
+  waitForCompletion(runId: string, timeoutMs?: number): Promise<ExecutionResult>;
+
+  /**
+   * Collecte les logs et artifacts d'un run terminé.
+   */
+  collectArtifacts(runId: string): Promise<RunArtifacts>;
 }
 ```
 
-### Execution Orchestrator Flow
-
-```
-1. receive ExecuteStepInput
-2. D1 re-check: D1PolicyPort.decide(executionRequest)
-   └─ if DENY     → FAILED (POLICY_DENIED), do not proceed
-   └─ if REQUIRE_APPROVAL → FAILED (REQUIRES_APPROVAL), mission must handle
-   └─ if ALLOW    → continue
-3. state = STARTING
-4. workspace = WorkspaceManager.create()
-5. credentials = CredentialBrokerPort.resolve()
-6. network = NetworkPolicyPort.check()
-7. adapter = resolveAdapter()  [currently LocalRuntimeAdapter]
-8. state = RUNNING
-9. result = adapter.execute({ ...with abortSignal, timeout })
-10. artifacts = ArtifactCollector.collect(workspace)
-11. cleanup: WorkspaceManager.release(workspace)
-12. state = finalState (SUCCEEDED | FAILED | CANCELLED | TIMED_OUT | LOST)
-13. return ExecutionResult
-```
-
----
-
-## 7. D1 Execution-Time Recheck
-
-Planning-time authorization is NEVER sufficient. Immediately before execution, D4 **must** re-evaluate through `D1PolicyPort.decide()`.
-
-The policy request for execution includes:
+### 4.2 ExecutionRequest
 
 ```typescript
-{
-  actor: { kind: "agent", id: agentId, tenantId },
-  tenant: { tenantId },
-  action: "runtime.execute",
-  resource: {
-    type: "execution",
-    id: runId,
-    ownerTenantId: tenantId,
-  },
-  risk: input.stepHasExternalEffect ? "sensitive" : "reversible",
-  hasExternalEffect: input.stepHasExternalEffect,
+export interface ExecutionRequest {
+  /** L'identifiant du Run D2 (mission.stepIndex) */
+  runId: string;
+  /** L'identifiant de la mission parente */
+  missionId: string;
+  /** L'identifiant du tenant */
+  tenantId: string;
+
+  // ── Exécution ──
+  /** Type de worker à lancer */
+  workerType: "agent" | "shell" | "tool";
+  /** Définition du worker */
+  worker: WorkerDefinition;
+
+  // ── Workspace ──
+  /** Chemin racine du workspace alloué */
+  workspacePath?: string;
+  /** Mode d'isolation git */
+  gitIsolation?: "worktree" | "branch" | "none";
+
+  // ── Policy ──
+  /** Niveau d'autorisation requis */
+  requiredAuthLevel: AuthorizationLevel;
+  /** Niveau de risque attendu */
+  riskLevel: RiskLevel;
+
+  // ── Limites ──
+  /** Timeout en ms (0 = pas de timeout) */
+  timeoutMs: number;
+  /** Intervalle de heartbeat en ms */
+  heartbeatIntervalMs: number;
+
+  // ── Credentials (références uniquement) ──
+  credentialRefs?: CredentialReference[];
+
+  // ── Réseau ──
+  networkPolicy?: NetworkPolicy;
+
+  // ── Environnement ──
+  envVars?: Record<string, string>;
 }
 ```
 
-If the policy decision is:
-- `ALLOW` → continue
-- `DENY` → return `FAILED` with `error.code = "POLICY_DENIED"`
-- `REQUIRE_APPROVAL` → return `FAILED` with `error.code = "REQUIRES_APPROVAL"` (D2 handles the approval workflow)
-
----
-
-## 8. Workspace Isolation
-
-Each execution gets an isolated workspace directory. The `WorkspaceManager` is the single authority for workspace lifecycle.
-
-### Directory Structure
-
-```
-<root>/
-  workspaces/
-    <tenantId>/
-      <runId>/
-        input/
-        output/
-        temp/
-```
-
-### Security Protections
-
-- **Path traversal (`../`):** All resolved paths are checked against the workspace root. Any attempt to escape returns `WORKSPACE_ESCAPE_DENIED`.
-- **Symlink escape:** Before traversal into directories, symlinks are resolved to their real paths. A symlink targeting outside the workspace is treated as escape.
-- **Absolute path escape:** Input paths are normalized. Absolute paths are rejected unless they resolve within the workspace.
-- **Cross-run isolation:** Each run gets its own directory. No two runs share a workspace.
-- **Cross-tenant isolation:** Workspaces are namespaced by `tenantId` directory.
-- **Cleanup safety:** `release()` validates the path is within the managed root before deleting. Uses a safe recursive delete that refuses to delete the root itself.
-
----
-
-## 9. Credential Model
-
-**NON-NEGOTIABLE RULE:**
-
-> AGENT ≠ RAW CREDENTIAL HOLDER
-
-### Architecture
-
-```
-ExecutionOrchestrator
-        │
-        ▼
-CredentialBrokerPort.resolve(request)
-        │
-        ▼
-CredentialResolution
-  ├── { available: true, references: CredentialReference[], scoped: environment variables }
-  └── { available: false, error: "BLOCKED_BY_CREDENTIAL_POLICY" }
-```
-
-- The `CredentialBrokerPort` returns **references** or **scoped environment variables** — never raw access to the underlying secret store.
-- For V1, the FakeCredentialBroker returns empty credential sets (no credentials needed for local-only execution).
-- A credential reference is a token that the runtime/gateway can substitute at the point of use — not a secret the worker process can read.
-- No arbitrary permanent secrets may appear in: worker env, prompt, logs, artifacts, workspace files, process arguments.
-
----
-
-## 10. Network Policy
-
-**Default: DENY**
-
-No worker starts with unrestricted internet access.
-
-### Policy Request
+### 4.3 WorkerDefinition
 
 ```typescript
-interface NetworkRequest {
+export interface WorkerDefinition {
+  /** Type d'exécution */
+  kind: "agent" | "shell" | "tool" | "ai_call";
+
+  // Pour un agent (Claude Code, Codex, etc.)
+  agentId?: string;
+  agentCommand?: string;           // ex: "claude", "codex"
+  agentArgs?: string[];
+  agentInstructions?: string;      // prompt initial
+
+  // Pour un shell command
+  command?: string;
+  args?: string[];
+
+  // Pour un tool MCP (future G1 integration)
+  toolRef?: string;
+  toolInput?: Record<string, unknown>;
+
+  // Pour un appel IA (WAITING_FOR_D3_MERGED_CODE)
+  // D3 contrat attendu : generate(AiRoutingRequest, AbortSignal) → AiGenerationResult
+  aiRequest?: AiRoutingRequest;
+
+  // Isolation requise
+  isolation: ExecutionIsolationLevel;
+  networkMode: NetworkMode;
+}
+
+export type ExecutionIsolationLevel = "none" | "process" | "worktree" | "container" | "sandbox";
+
+export type NetworkMode = "none" | "outbound" | "restricted" | "full";
+```
+
+### 4.4 WorkerRun
+
+```typescript
+export interface WorkerRun {
+  id: string;
+  runId: string;            // lien vers le Run D2
+  request: ExecutionRequest;
+  status: WorkerStatus;
+  processId?: number;
+  workspacePath?: string;
+
+  // Métriques
+  startedAt: string;
+  heartbeatAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+
+  // Résultat (quand terminal)
+  result?: ExecutionResult;
+
+  // Erreur
+  error?: string;
+
+  // Métadonnées
+  metadata: Record<string, unknown>;
+}
+
+export type WorkerStatus =
+  | "STARTING"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED"
+  | "TIMED_OUT"
+  | "LOST";
+```
+
+### 4.5 ExecutionResult
+
+```typescript
+export interface ExecutionResult {
+  status: WorkerStatus;
+  exitCode: number | null;
+  output: string;                     // stdout
+  error: string;                      // stderr / erreur
+  durationMs: number;
+  artifacts: RunArtifact[];
+  verifiedBy?: string;                // verification step ID
+  // WAITING_FOR_D3_MERGED_CODE: usage metadata
+  usageMetadata?: Record<string, unknown>;
+}
+```
+
+### 4.6 RunArtifacts
+
+```typescript
+export interface RunArtifact {
+  name: string;
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentHash?: string;
+}
+
+export interface RunArtifacts {
+  runId: string;
+  logs: LogEntry[];
+  files: RunArtifact[];
+  summary?: string;
+}
+```
+
+---
+
+## 5. D4 Runtime State Machine
+
+```
+STARTING
+  │ (workspace créé, env prêt)
+  ▼
+RUNNING
+  │ (process actif, heartbeat reçu)
+  ├── (process exit 0)  → SUCCEEDED
+  ├── (process exit !=0)→ FAILED
+  ├── (timeout)         → TIMED_OUT
+  ├── (cancel request)  → CANCELLED
+  └── (no heartbeat)    → LOST
+```
+
+**Transitions :**
+- `STARTING` → `RUNNING` : workspace ready, process started
+- `RUNNING` → `SUCCEEDED` : process exit 0
+- `RUNNING` → `FAILED` : process exit non-zero / error
+- `RUNNING` → `TIMED_OUT` : timeoutMs exceeded
+- `RUNNING` → `CANCELLED` : cancel() called
+- `RUNNING` → `LOST` : heartbeat not received (worker death)
+
+**Terminaux :** `SUCCEEDED`, `FAILED`, `CANCELLED`, `TIMED_OUT`, `LOST`
+
+**Note :** Les états D4 Worker sont distincts des états D2 Mission.
+   - Un worker `TIMED_OUT` → D2 transitionne vers `TOOL_FAILED` ou `FAILED`
+   - Un worker `LOST` → D2 transitionne vers `MISSION_RECOVERABLE`
+   - Un worker `SUCCEEDED` → D2 transitionne le Step à `completed`
+
+---
+
+## 6. D2 Integration
+
+### 6.1 Interface D4 ↔ D2
+
+```
+D2 MissionService        D4 RuntimeExecutionService
+     │                           │
+     │ addRun({stepIndex})       │
+     │───────────────────────────→│ (via container câblage)
+     │                           │
+     │                           │— resolveStepRequirements(step)
+     │                           │— createExecutionRequest(step, mission)
+     │                           │— runtime.start(request)
+     │                           │
+     │← WorkerRun { id, status } │
+```
+
+### 6.2 Ce que D2 fournit à D4
+
+- Mission.id, Mission.tenantId
+- Plan.Step[index]: description, agentId, skillKey, toolRef
+- Mission.approvedBy (si transition après WAITING_FOR_APPROVAL)
+- Mission.status (vérification que IN_PROGRESS)
+
+### 6.3 Ce que D4 retourne à D2
+
+- WorkerRun → StepResult (output, error, durationMs)
+- D2 update Step.status = completed/failed
+- D2 transition mission si last step ou échec
+
+### 6.4 Câblage container D4
+
+```typescript
+// À ajouter dans Container après merge D2 + D4
+interface Container {
+  mission: MissionService;       // D2
+  runtime: RuntimeExecutionPort; // D4 ← nouveau
+  credentialBroker?: CredentialBrokerPort;  // D4
+}
+```
+
+D2 MissionService reçoit RuntimeExecutionPort comme dépendance facultative :
+- Sans D4 : D2 gère l'état uniquement (test, développement)
+- Avec D4 : D2 appelle runtime.start() pour chaque addRun()
+
+---
+
+## 7. D1 Integration
+
+### 7.1 Policy re-check
+
+D1 `decideExecution()` doit être re-évaluée par D4 au moment de l'exécution,
+pas seulement au moment de la planification :
+
+```typescript
+// Dans D4 RuntimeExecutionService
+async function authorizeExecution(request: ExecutionRequest): Promise<ExecutionDecision> {
+  // Construire un AgentAction dynamique depuis les requirements
+  const action: AgentAction = {
+    id: `action-${request.runId}`,
+    initiatedByAgentId: request.worker.agentId ?? "system",
+    kind: request.workerType,
+    risk: request.riskLevel,
+    requiresHumanApproval: request.riskLevel === "sensitive",
+    approvalStatus: "pending",
+    requestedAt: new Date().toISOString(),
+  };
+
+  const decision = decideExecution(action, await resolveAgent(request.worker.agentId));
+  return decision;
+}
+```
+
+### 7.2 Sensitive operation gating
+
+Si un Step D4 est marqué `sensitive` :
+- D4 doit obtenir une approbation humaine AVANT d'exécuter
+- D2 transitionne vers `WAITING_FOR_APPROVAL`
+- D4 suspend le lancement jusqu'à approbation
+
+### 7.3 Stale attestation
+
+Si une attestation D1 expire pendant l'exécution :
+- D4 heartbeat détecte le stale
+- D4 notifie D2 → `STALE_ATTESTATION`
+- D2 → `WAITING_FOR_APPROVAL`
+- D4 pause l'exécution (suspend process if possible)
+
+---
+
+## 8. D3 Dependencies (WAITING_FOR_D3_MERGED_CODE)
+
+### 8.1 AiGatewayPort interface
+
+D4 aura besoin de D3 pour les appels IA. Le contrat exact n'est pas
+encore mergeable. Éléments attendus :
+
+```typescript
+// WAITING_FOR_D3_MERGED_CODE — Types à réconcilier quand D3 mergé
+// D3 annonce : generate(request) + AbortSignal + discriminated union result
+// PAS de start()/getRun()/cancel() côté AiGatewayPort.
+export interface AiGatewayPort {
+  generate(request: AiRoutingRequest, signal?: AbortSignal): Promise<AiGenerationResult>;
+}
+
+// WAITING_FOR_D3_MERGED_CODE
+export interface AiRoutingRequest {
+  systemPrompt?: string;
+  messages?: Array<{ role: string; content: string }>;
+  /** Ce que D3 résout : capability → provider → model */
+  requiredCapability?: string;
+  /** D4 ne spécifie PAS le provider ni le modèle */
+}
+
+// WAITING_FOR_D3_MERGED_CODE — discriminated union
+export type AiGenerationResult =
+  | { kind: "success"; content: string; usage?: AiUsage; provider?: string; model?: string }
+  | { kind: "error"; error: AiError }
+  | { kind: "cancelled" };
+
+// WAITING_FOR_D3_MERGED_CODE
+export interface AiUsage {
+  tokens: number;
+  cost?: number;
+}
+
+// WAITING_FOR_D3_MERGED_CODE
+export interface AiError {
+  code: string;
+  message: string;
+  provider?: string;
+  retryable: boolean;
+}
+```
+
+### 8.2 Points d'attente identifiés
+
+| Point | Description | Impact D4 |
+|-------|-------------|-----------|
+| AiGatewayPort.generate(signal) | Appel IA via AbortSignal | Appel synchrone dans le flux worker D4 |
+| AiRoutingRequest type | Types exacts de la requête de routage | Paramétrer dans ExecutionRequest |
+| AiGenerationResult type | Union discriminée (success/error/cancelled) | Mapper vers ExecutionResult |
+| AbortSignal semantics | Annulation d'un appel IA | Lier au flux cancel D4 (AbortController) |
+| Error union | Types d'erreur provider discriminés | Error translation layer |
+| Usage metadata | Tokens, cost pour audit | Intégrer dans ExecutionResult |
+| Routing intent | Comment D4 demande le routage via D3 | Paramétrer dans ExecutionRequest |
+
+### 8.3 Design sans D3
+
+Le invariant canonique reste :
+
+```
+AGENT
+≠
+RAW CREDENTIAL HOLDER
+```
+
+D4 V1 peut fonctionner SANS D3 pour les appels IA
+UNIQUEMENT dans la mesure où le CredentialBrokerPort
+est fonctionnel avec l'adapter disponible :
+
+```
+ExecutionRequest
+→ CredentialReference
+→ CredentialBrokerPort
+→ runtime/gateway controlled substitution
+→ external service
+```
+
+Si le CredentialBroker nécessaire n'existe pas encore,
+le run reçoit le statut `BLOCKED_BY_CREDENTIAL_POLICY`.
+
+**Aucun worker ne possède de credentials bruts en V1.**
+**Contourner l'architecture pour "faire marcher V1" est interdit.**
+
+Quand D3 mergera, le AiGatewayPort remplacera les appels
+IA directs selon le contrat D3 réel (generate + AbortSignal),
+sans changer le modèle de credential.
+
+---
+
+## 9. Agent Execution Model
+
+### 9.1 Agent Runtime Adapter
+
+```typescript
+/**
+ * Port pour l'exécution d'un agent CLI.
+ * Chaque agent (Claude Code, Codex, OpenClaw, Hermes, etc.)
+ * a son implémentation.
+ */
+export interface AgentRuntimeAdapter {
+  /** Nom technique de l'agent */
+  kind: string;
+  /** Vérifie que l'agent est installé et accessible */
+  isAvailable(): Promise<boolean>;
+  /** Lance l'agent dans le workspace donné */
+  spawn(request: ExecutionRequest, workspace: string): Promise<ChildProcess>;
+  /** Vérifie que l'agent répond */
+  healthCheck(): Promise<boolean>;
+}
+```
+
+### 9.2 Adapters V1
+
+Pour V1, un seul adapter nécessaire :
+
+`LocalAgentAdapter` — exécute un agent CLI local (Claude Code, Codex) :
+- Utilise le shell local
+- Workspace isolé via worktree git
+- Environment scoped (PATH limité, pas de credentials bruts)
+- Process child géré (stdin/stdout/stderr pipes)
+- Timeout et cancellation via process.kill(signal)
+
+### 9.3 ACP Boundary
+
+ACP (Agent Communication Protocol) est un adapter, pas le core D4 :
+
+```
+ICOS D4
+  │
+  ├── AgentRuntimePort
+  │     ├── LocalAdapter (V1 : Claude Code CLI, Codex CLI)
+  │     ├── ACPAdapter (future : OpenClaw, Hermes)
+  │     └── VPSAdapter (future)
+  │
+  └── AiGatewayPort (D3, future)
+```
+
+L'ACP Adapter :
+- Traduit le ExecutionRequest D4 en message ACP
+- Gère le cycle de vie ACP (task → subtask → result)
+- Mappe les états ACP vers WorkerStatus D4
+- Implémente la cancellation via ACP cancel
+
+Invariant : **ACP n'est jamais l'autorité d'exécution**.
+Toute action ACP passe par D1 policy, D4 runtime scoping, D2 orchestration.
+
+### 9.4 Agent Identity Integration
+
+L'agent (Claude Code CLI) lancé par D4 :
+- Reçoit l'identité mission comme contexte (pas comme credentials)
+- N'a PAS accès au credential store direct
+- Son authorizationLevel est fixé par D1 avant lancement
+- Les actions sensibles retournent à D2 pour approbation
+
+---
+
+## 10. Workspace Isolation
+
+### 10.1 Worktree Model
+
+```typescript
+export interface WorkspaceManager {
+  /**
+   * Alloue un workspace isolé pour un Run.
+   * Pour l'exécution agent : crée un git worktree dédié.
+   * Pour l'exécution shell : crée un répertoire temporaire.
+   */
+  allocate(request: ExecutionRequest): Promise<Workspace>;
+
+  /**
+   * Nettoie le workspace après exécution.
+   * Supprime le worktree, les fichiers temporaires, etc.
+   */
+  cleanup(workspaceId: string): Promise<void>;
+
+  /**
+   * Marque un workspace comme orphelin (pour recovery).
+   */
+  orphan(workspaceId: string): Promise<void>;
+}
+
+export interface Workspace {
+  id: string;
+  path: string;          // Chemin absolu du workspace
+  type: "worktree" | "temp_dir" | "sandbox";
+  repoPath?: string;     // Pour worktree : repo parent
+  branch?: string;       // Pour worktree : branche dédiée
+  createdAt: string;
+}
+```
+
+### 10.2 Règles workspace V1
+
+1. **Worktree dédié** : tout worker agent reçoit un git worktree sur une
+   branche dédiée, jamais `/Users/coco/icos` directement.
+2. **Path validation** : le workspace est dans `.claude/worktrees/<runId>/`.
+   Le worker ne peut pas `cd ..` accéder au repo parent.
+3. **Symlink escape protection** : les liens symboliques pointant hors
+   workspace sont détectés et bloqués.
+4. **Branch isolation** : le worker travaille sur une branche temporaire.
+   Merge dans main nécessite approval D1 (action sensitive).
+5. **Destructive operations** : `git push --force`, `git reset --hard`
+   et autres ops destructrices sont soumises à policy D1.
+6. **Cleanup lifecycle** :
+   - SUCCEEDED : worktree conservé jusqu'à collectArtifacts(), puis supprimé
+   - FAILED : worktree conservé pour debug, nettoyé après délai configurable
+   - CANCELLED : worktree nettoyé immédiatement
+   - LOST : worktree marqué orphelin, nettoyé par recovery GC
+
+---
+
+## 11. Sandbox Model (V1)
+
+### 11.1 Isolation levels V1
+
+Pour V1, isolation uniquement par processus/worktree :
+
+| Niveau | Mécanisme | Usage |
+|--------|-----------|-------|
+| `none` | Aucune isolation | Calls purement synchrones (vérification) |
+| `process` | child_process isolé | Shell commands, tool calls |
+| `worktree` | Git worktree + process | Agent execution (Claude Code) |
+| `container` | Docker (adapter) | **Deferred** |
+| `sandbox` | E2B (adapter) | **Deferred** |
+
+### 11.2 Process isolation
+
+```typescript
+export interface ProcessSandbox {
+  type: "process";
+  cwd: string;
+  env: Record<string, string>;      // env scoped
+  uid?: number;                     // user isolation
+  gid?: number;
+  timeoutMs: number;
+  maxOutputBytes: number;           // stdout/stderr limit
+  allowedPaths: string[];           // filesystem access scope
+  blockedPaths: string[];           // explicit denylist
+}
+```
+
+### 11.3 TOCTOU Protection
+
+Pattern issu de l'audit NemoClaw :
+
+```
+read(workspace config)
+  → hash(workspace state)
+  → validate(hash == expected)
+  → sealed candidate (immutable)
+  → transactional replace (si modification)
+  → execution
+```
+
+Protège contre :
+- Modification du workspace entre validation et exécution
+- Stale authorization si policy change pendant préparation
+
+---
+
+## 12. Credential Model
+
+### 12.1 CredentialBrokerPort
+
+```typescript
+/**
+ * Port de résolution de credentials.
+ * D4 ne stocke JAMAIS de credentials. Il les résout via référence
+ * au moment de l'exécution et ne les expose jamais au worker.
+ */
+export interface CredentialBrokerPort {
+  /**
+   * Résout un credential par référence.
+   * Le credential est substitué au moment de l'egress (sortie réseau),
+   * jamais passé au worker.
+   */
+  resolve(ref: CredentialReference): Promise<ResolvedCredential>;
+
+  /**
+   * Injecte un credential dans une requête sortante.
+   * Pattern agent ≠ raw credential holder :
+   *   Agent sandbox → credential reference / placeholder
+   *   → host/gateway → secret substitution at egress → provider
+   */
+  inject(target: CredentialInjectionTarget, ref: CredentialReference): Promise<void>;
+}
+
+export interface CredentialReference {
+  kind: string;              // "api_key" | "oauth_token" | "basic_auth"
+  provider: string;          // "openai" | "anthropic" | "github"
+  purpose: string;           // Pourquoi ce credential est nécessaire
+  scope?: string;            // Portée (tenant, mission, run)
+}
+
+export interface ResolvedCredential {
+  // Jamais le credential brut
+  // Substituté par le CredentialBroker au moment de l'egress
+  placeholder: string;       // Placeholder que le worker voit
+  expiresAt?: string;
+}
+
+export interface CredentialInjectionTarget {
+  type: "env_var" | "header" | "file";
+  name: string;              // "OPENAI_API_KEY" | "Authorization" | "/path/key"
+}
+```
+
+### 12.2 Principes
+
+- **Agent ≠ raw credential holder** — le worker ne possède jamais
+  le credential brut. Il voit un placeholder.
+- **Substitution au moment de l'egress** — le CredentialBroker injecte
+  le credential réel au moment où la requête quitte le worker.
+- **Pour V1** : les credentials sont résolus via les variables
+  d'environnement du container ICOS, jamais transmises au worker.
+- **Scope** : chaque credential est lié à un tenant, une mission,
+  un run. Pas de credential global partagé.
+- **Audit** : toute résolution de credential est loguée.
+
+---
+
+## 13. Network Model
+
+### 13.1 NetworkPolicyPort
+
+```typescript
+/**
+ * Port de politique réseau pour un worker.
+ * Ne jamais donner "internet libre" par défaut.
+ */
+export interface NetworkPolicyPort {
+  /**
+   * Valide qu'une destination réseau est autorisée.
+   * Si refusée → pause worker → WAITING_FOR_APPROVAL D2.
+   */
+  checkAccess(destination: NetworkDestination, context: NetworkContext): Promise<NetworkAccessDecision>;
+
+  /**
+   * Obtient la politique réseau pour un run.
+   */
+  getPolicy(runId: string): Promise<NetworkPolicy>;
+}
+
+export interface NetworkDestination {
+  host: string;
+  port?: number;
+  protocol: "http" | "https" | "ws" | "tcp" | "udp";
+  method?: string;           // HTTP method
+  path?: string;
+}
+
+export interface NetworkPolicy {
+  mode: "none" | "outbound" | "restricted" | "full";
+
+  allowedDomains: string[];
+  blockedDomains: string[];
+  allowedPorts: number[];
+
+  // Pour restricted mode :
+  allowList: NetworkRule[];
+  denyList: NetworkRule[];
+
+  // Approval scope :
+  approvalScope: "none" | "per_domain" | "per_request";
+
+  // Expiration :
+  expiresAt?: string;
+}
+
+export interface NetworkAccessDecision {
+  allowed: boolean;
+  reason?: string;
+  requiresApproval?: boolean;
+}
+
+export interface NetworkContext {
   tenantId: string;
   missionId: string;
   runId: string;
-  requestedEndpoints?: Array<{
-    host: string;
-    port?: number;
-    protocol?: "http" | "https" | "tcp";
-  }>;
+  workerId: string;
 }
 ```
 
-### Decision
+### 13.2 Règles réseau V1
 
-```typescript
-type NetworkDecision =
-  | { outcome: "allow"; rules: NetworkPermission[]; scope: "scoped" | "unrestricted" }
-  | { outcome: "deny"; reason: string };
-```
-
-For V1, the `NetworkPolicyPort` always returns `{ outcome: "deny", reason: "D4 V1: network not configured for worker access" }`.
+1. **Default deny** : tout worker commence sans accès réseau.
+2. **Allowlist** : les domaines autorisés sont déclarés dans le
+   `Skill.networkRequirements` ou l'`ExecutionRequest.networkPolicy`.
+3. **Domain approval** : si un worker demande une destination non
+   autorisée, D4 pause → D2 `WAITING_FOR_APPROVAL` → approbation
+   temporaire et scopée → reprise.
+4. **Expiration** : toute permission réseau expire avec le run.
+5. **Audit** : toute connexion réseau est loguée (destination, protocole,
+   octets approximatifs).
 
 ---
 
-## 11. Agent Runtime Adapter Interface
+## 14. Cancellation Model
+
+> D4 reste propriétaire de l'exécution globale :
+>   - worker lifecycle
+>   - runtime state
+>   - process lifecycle
+>   - execution cancellation globale
+>
+> D3 reste propriétaire de l'AI cancellation via son contrat réel
+> (AbortSignal) :
+>   - AI request cancellation
+>   - pas de start()/getRun()/cancel() côté AiGatewayPort
+
+### 14.1 Cancellation flow
+
+```
+cancel(runId, reason)
+  │
+  ├── Process level :
+  │     SIGTERM → grace (5s) → SIGKILL
+  │
+  ├── Workspace cleanup :
+  │     → worktree destroy
+  │     → temp files removal
+  │
+  ├── D2 notification :
+  │     → transition Run.status = failed
+  │     → transition Mission.status = CANCELLED ou RECOVERABLE
+  │
+  └── Audit :
+      → audit entry (cancelled, reason)
+```
+
+### 14.2 Protection contre cancellation race
+
+- Double cancellation safe (idempotent)
+- Process déjà terminé → pas d'erreur
+- Cancellation pendant STARTING → cleanup avant RUNNING
+- Cancellation par timeout et par utilisateur : first-wins
+
+---
+
+## 15. Recovery Model
+
+### 15.1 Scénarios de recovery
+
+| Scénario | Détection | Action D4 | Action D2 |
+|----------|-----------|-----------|-----------|
+| Worker death | Heartbeat timeout | Run → LOST | Mission → MISSION_RECOVERABLE |
+| Process crash | Exit code | Run → FAILED | Mission → FAILED |
+| Runtime restart | Démarrage | scanActiveRuns() | findStaleBefore() |
+| Provider unavailable | Connexion échouée | Run → FAILED | Mission → PROVIDER_UNAVAILABLE |
+| Timeout | TimeoutMs dépassé | Run → TIMED_OUT | Mission → TOOL_FAILED |
+| Tool failure | Tool non répond | Run → FAILED | Mission → TOOL_FAILED |
+
+### 15.2 Heartbeat protocol
 
 ```typescript
-interface AgentRuntimeAdapter {
-  readonly name: string;
-  execute(input: RuntimeAdapterInput): Promise<RuntimeAdapterResult>;
+export interface HeartbeatMessage {
+  runId: string;
+  workerId: string;
+  status: "alive" | "busy" | "waiting";
+  memoryUsage?: number;
+  cpuUsage?: number;
+  timestamp: string;
 }
 ```
 
-### LocalRuntimeAdapter (V1)
+- Heartbeat interval configurable (default 10s)
+- Missing heartbeat > 3 intervals → `LOST`
+- Heartbeat persistant dans le WorkerRun (pour recovery)
 
-The V1 adapter runs steps as local subprocesses with:
+### 15.3 Recovery procedure
 
-- Isolated workspace directory as working directory
-- Process group isolation (for clean kill on timeout/cancellation)
-- Timeout via `setTimeout` + abort mechanism
-- Cancellation via `AbortSignal` subscriber → process group kill
-- stdout/stderr captured as artifacts
-- AI-backed steps use `AiGatewayPort.generate()` integrated via the orchestrator
-
-Process tree cleanup on timeout/cancellation:
-1. Kill process group (negative PID on POSIX)
-2. Wait for graceful shutdown (configurable grace period)
-3. Force kill if still alive after grace period
+Sur démarrage runtime :
+1. `runtime.getActiveRuns()` → runs en STARTING ou RUNNING
+2. Vérifier heartbeat : si stalé → LOST
+3. Pour chaque LOST : cleanup workspace, notifier D2
+4. D2 transitionne chaque mission concernée
 
 ---
 
-## 12. Cancellation
+## 16. Local / VPS Future Boundary
 
-D4 owns global execution cancellation.
-
-```
-External AbortSignal / timeout
-        │
-        ▼
-ExecutionOrchestrator
-  ├── sets internal AbortController
-  ├── propagates signal to LocalRuntimeAdapter
-  ├── adapter kills process group
-  ├── Orchestrator awaits cleanup
-  └── final state = CANCELLED | TIMED_OUT
-```
-
-- For AI calls, the orchestrator's `AbortSignal` is passed to `AiGatewayPort.generate({ abortSignal })`.
-- Cancellation must clean up: AI request, worker process, child processes, runtime state, workspace lease.
-- Timeout must terminate the **complete** process tree (not just the root process).
-- Cancellation races (signal fires during cleanup) must be handled gracefully.
-- No zombie workers.
-
----
-
-## 13. Timeout
-
-- Each execution has a configurable `timeoutMs` (default 60s).
-- Timeout is enforced via `AbortSignal.timeout()` or equivalent mechanism.
-- When timeout fires:
-  1. Process group is killed
-  2. Workspace is cleaned up
-  3. Result is returned with `TIMED_OUT` state
-- The timeout is for the complete execution, not per-step within the execution.
-
----
-
-## 14. Artifact Collection
-
-`ArtifactCollector` extracts allowed outputs from the workspace:
-
-- Reads files from the workspace `output/` directory
-- Captures stdout/stderr from the process
-- All path operations are scoped to the workspace root
-- Any file outside the workspace scope is silently skipped (not an error — prevents information leaking from failed traversal attempts)
-
----
-
-## 15. D3 Error Mapping
-
-| D3 Error Code | D4 Mapping | Runtime Behavior |
-|---------------|------------|------------------|
-| `PROVIDER_UNAVAILABLE` | `AI_PROVIDER_UNAVAILABLE` | FAILED; no fallback initiated by D4 |
-| `RATE_LIMITED` | `AI_RATE_LIMITED` | FAILED; caller may retry |
-| `TIMEOUT` | `AI_TIMEOUT` | FAILED; D4 timeout is separate |
-| `INVALID_RESPONSE` | `AI_INVALID_RESPONSE` | FAILED; closed |
-| `POLICY_BLOCKED` | `AI_POLICY_BLOCKED` | FAILED; no fallback |
-| `UNSUPPORTED_CAPABILITY` | `AI_UNSUPPORTED_CAPABILITY` | FAILED |
-| `CANCELLED` | `CANCELLED` | CANCELLED; clean cancellation |
-| `INTERNAL_ERROR` | `AI_INTERNAL_ERROR` | FAILED; ICOS failure |
-
-D4 decides execution semantics. D3 only reports normalized AI result/error. D4 never initiates provider fallback — that is D3's responsibility (or the caller's).
-
----
-
-## 16. Usage Metadata
-
-D3 provides:
-- `inputTokens`, `outputTokens`, `totalTokens`
-- `costUsd?`
-- `provider.id`, `provider.model`
-- `latencyMs`
-- `fallbackUsed`
-
-D4 may persist this metadata according to existing repository architecture. For V1, usage metadata is returned in the `ExecutionResult` and can be stored by the caller (D2). No dedicated usage-storage port is created in V1.
-
----
-
-## 17. Execution Result / Error Model
+### 16.1 RuntimeNode concept (architecture only, pas V1)
 
 ```typescript
-type ExecutionResult =
-  | SuccessfulExecution
-  | FailedExecution;
-
-interface SuccessfulExecution {
-  ok: true;
-  state: "SUCCEEDED";
-  output: unknown;
-  artifacts: ArtifactItem[];
-  usage?: AiUsage;
-  latencyMs: number;
-}
-
-interface FailedExecution {
-  ok: false;
-  state: "FAILED" | "CANCELLED" | "TIMED_OUT" | "LOST";
-  error: ExecutionError;
+// FUTURE — Pas pour V1. Design pour compatibilité.
+export interface RuntimeNode {
+  id: string;
+  name: string;
+  type: "local" | "vps";
+  trustLevel: TrustLevel;
+  capabilities: string[];        // "agent_claude_code", "docker", "sandbox", etc.
+  environment: Record<string, string>;
+  maxCpu: number;
+  maxRamMb: number;
+  maxConcurrentRuns: number;
+  networkPolicy: NetworkPolicy;
+  available: boolean;
+  lastHeartbeat: string;
 }
 ```
 
-### Execution Error Codes
+### 16.2 V1 restriction
 
-D4-native (not from D3):
-- `POLICY_DENIED` — D1 execution-time policy check denied
-- `REQUIRES_APPROVAL` — D1 requires approval before execution
-- `CREDENTIAL_UNAVAILABLE` — Credential broker cannot satisfy request
-- `NETWORK_BLOCKED` — Network policy denied
-- `WORKSPACE_ERROR` — Workspace creation/setup failed
-- `WORKSPACE_ESCAPE_DENIED` — Workspace traversal attempt detected
-- `PROCESS_ERROR` — Subprocess failed (non-zero exit)
-- `TIMEOUT` — Execution exceeded timeout
-- `CANCELLED` — Execution was cancelled
-- `WORKER_LOST` — Worker process disappeared
-- `CLEANUP_ERROR` — Workspace cleanup failed (non-fatal to execution)
-- `INTERNAL_ERROR` — Unexpected D4 failure (fail-closed)
-
-D3-mapped:
-- `AI_PROVIDER_UNAVAILABLE`
-- `AI_RATE_LIMITED`
-- `AI_TIMEOUT`
-- `AI_INVALID_RESPONSE`
-- `AI_POLICY_BLOCKED`
-- `AI_UNSUPPORTED_CAPABILITY`
-- `AI_INTERNAL_ERROR`
+Pour V1, le RuntimeNode est implicite :
+- Type: `local`
+- Capabilities: selon l'OS hôte et les binaires détectés
+- Concurrency: 1 (séquentiel)
+- Pas de scheduler distribué
+- Design D4 compatible avec ajout futur d'un `NodeManager` et `NodeSelector`
 
 ---
 
-## 18. TOCTOU Protection
+## 17. Execution Boundaries (Validation)
 
-Read → validate → hash → seal/record expected state → execute
+### 17.1 Ce que D4 valide AVANT exécution
 
-If security-sensitive input/config changes between validation and execution, D4 **must** deny the execution. For V1, this primarily applies to:
+1. **Authorization** : D1 policy re-check (pas seulement planning)
+2. **Credential scope** : les credentials référencés sont valides pour ce tenant
+3. **Network policy** : les domaines requis sont dans l'allowlist
+4. **Isolation level** : le système peut fournir le niveau requis
+5. **Workspace** : le workspace est propre (pas de résidu)
+6. **Agent available** : l'agent CLI est installé
+7. **Timeout** : le timeout est dans les bornes acceptables
+8. **Skill trust** : si skill référencé, trustState == "approved"
 
-1. **Policy state at execution time:** D1 re-check happens immediately before execution, not at planning time. There is no window between re-check and execution start.
-2. **Workspace path validation:** Resolve and validate the workspace path immediately before use. If the path was tampered with between validation and creation, deny.
-3. **Input hash:** The step input is hashed at reception and verified before the adapter executes. If the hash doesn't match, execution is denied.
+### 17.2 Ce que D4 valide APRÈS exécution
 
----
-
-## 19. Security Acceptance Gates
-
-| ID | Requirement | Verification |
-|----|-------------|--------------|
-| SEC-D4-01 | Worker cannot obtain raw stored credentials | Test: broker returns references, worker env has no raw secrets |
-| SEC-D4-02 | Network default deny | Test: policy without explicit endpoint returns deny |
-| SEC-D4-03 | Workspace cannot escape root via `../` | Test: path with `../` beyond root is rejected |
-| SEC-D4-04 | Workspace cannot escape via symlink | Test: symlink to outside workspace is denied |
-| SEC-D4-05 | Timeout kills complete process tree | Test: process group receives SIGTERM on timeout |
-| SEC-D4-06 | Cancellation cannot leave zombie worker | Test: after cancellation, process is reaped |
-| SEC-D4-07 | Authorization rechecked immediately before execution | Test: stale allow at planning is overwritten by execution-time recheck |
-| SEC-D4-08 | TOCTOU-sensitive hash mismatch denies execution | Test: modified input after validation results in deny |
-| SEC-D4-09 | Cleanup cannot delete outside owned workspace | Test: cleanup with escaped path does not delete outside scope |
-| SEC-D4-10 | Logs/artifacts cannot expose credential values | Test: credential values are scrubbed from captured output |
+1. **Exit code** : 0 = success, non-zero = failed
+2. **Output size** : borné pour éviter les dénis de service
+3. **Artifact validation** : pas de credential dans les artifacts
+4. **Git diff** : changes contenus dans le workspace/worktree (pas de fuite)
 
 ---
 
-## 20. Testing Plan
+## 18. Security Review
 
-### Core Contracts
-- D4-01: successful state progression
-- D4-02: invalid state transition rejected
-- D4-03: terminal states are immutable
+### 18.1 Surface d'attaque D4
 
-### Policy Integration
-- D4-04: D1 DENY prevents execution
-- D4-05: D1 REQUIRE_APPROVAL prevents unauthorized execution
-- D4-06: authorization is rechecked at execution time (not stale)
+| Vecteur | Risque | Mitigation |
+|---------|--------|------------|
+| Arbitrary command execution | CRITICAL | WorkerDefinition validation, allowlist commands |
+| Shell injection | CRITICAL | args sanitization, pas de shell string |
+| Path traversal | HIGH | Workspace chroot, path validation, symlink detection |
+| Symlink escape | HIGH | Détection au moment de l'alloc workspace |
+| Credential leakage | CRITICAL | CredentialBroker, substitution à l'egress |
+| Environment leakage | HIGH | Env scoping, pas d'export global |
+| Network exfiltration | HIGH | Default deny, allowlist, audit |
+| Privilege escalation | CRITICAL | Process isolation, uid/gid |
+| Approval bypass | CRITICAL | D1 re-check obligatoire |
+| Tenant crossover | HIGH | Workspace isolation, credential scope |
+| Confused deputy | HIGH | Credential injection pattern |
+| Malicious skill | HIGH | Skill trust gate, security scans |
+| Prompt injection | MEDIUM | Skill instructions sanitization |
+| Indirect injection | MEDIUM | Separator instructions/commands |
+| Worker impersonation | HIGH | Signed run tokens (future) |
+| Forged execution result | HIGH | Exit code validation, artifact hash |
+| Cancellation race | MEDIUM | Double-cancel safe, cleanup after RUNNING |
+| Timeout bypass | MEDIUM | Hard timeout (SIGKILL), pas que SIGTERM |
+| Zombie process | HIGH | Process group management, cleanup on parent exit |
+| TOCTOU | MEDIUM | Validate → hash → execute pattern |
+| Stale authorization | MEDIUM | Re-check D1 at execution time, not planning time |
+| Unrestricted child processes | HIGH | Process group isolation, max children limit |
+| Workspace cleanup unsafe | MEDIUM | rm -rf par worktree, pas par path relatif |
 
-### AI Gateway Integration
-- D4-07: tenant preserved
-- D4-08: correlationId passed to D3
-- D4-09: AI generation success mapped correctly
-- D4-10: PROVIDER_UNAVAILABLE mapped safely
-- D4-11: RATE_LIMITED mapped safely
-- D4-12: TIMEOUT mapped correctly
-- D4-13: CANCELLED mapped correctly
-- D4-14: POLICY_BLOCKED fails closed
+### 18.2 Design review mandatory
 
-### Process & Workspace
-- D4-15: worker cancellation
-- D4-16: worker timeout
-- D4-17: process tree cleanup
-- D4-18: workspace traversal denied
-- D4-19: symlink escape denied
-- D4-20: workspace cleanup safe
-- D4-21: network default deny
-
-### Security
-- D4-22: raw credential unavailable to worker
-- D4-23: credential leakage absent from logs
-- D4-24: TOCTOU/hash mismatch denied
-- D4-25: artifacts collected only from allowed workspace
-
-### State & Metadata
-- D4-26: mission state and runtime state remain distinct
-- D4-27: D3 fallback metadata preserved
-- D4-28: D3 usage metadata preserved
-- D4-29: malformed runtime result fails closed
-- D4-30: lost/dead worker represented explicitly
+Avant implémentation PR de D4, les contrôles suivants sont obligatoires :
+1. Sandbox escape testing (path traversal, symlink)
+2. Credential exfiltration testing (env dump, process listing)
+3. Network exfiltration testing (DNS exfiltration, HTTP exfiltration)
+4. Injection testing (shell, argument)
+5. Cancellation race testing (concurrent cancel + exit)
+6. Zombie process testing (parent crash, orphan process)
+7. TOCTOU testing (modification between check and execute)
 
 ---
 
-## 21. Container Integration
+## 19. Logs & Artifacts
 
-D4 components are wired into the container:
+### 19.1 Log collection
 
 ```typescript
-// Container additions:
-runtime?: RuntimeExecutionPort;
-credentialBroker?: CredentialBrokerPort;
-networkPolicy?: NetworkPolicyPort;
-runtimeExecutionOrchestrator?: ExecutionOrchestrator;
+export interface LogEntry {
+  timestamp: string;
+  level: "debug" | "info" | "warn" | "error";
+  source: "stdout" | "stderr" | "system";
+  message: string;
+  metadata?: Record<string, unknown>;
+}
 ```
 
-- In `buildMemoryContainer`: all fakes, no real process execution
-- In `buildPostgresContainer`: same fakes for V1; real process execution uses `LocalRuntimeAdapter`
-- The `ExecutionOrchestrator` requires: `D1PolicyPort`, `AiGatewayPort`, `WorkspaceManager`, `ArtifactCollector`, and optionally `CredentialBrokerPort`/`NetworkPolicyPort`
+- stdout/stderr du worker collectés en continu
+- Taille max configurable (default 1 Mo)
+- Logs persistés dans le WorkerRun (in-memory V1, fichier pour recovery)
+- Aucun credential dans les logs (pattern matching + redaction)
+
+### 19.2 Artifact collection
+
+- Fichiers modifiés/créés dans le workspace
+- Git diff si git worktree
+- Résultats de vérification
+- Liés au Run D2 (Mission.runs[].output)
 
 ---
 
-## 22. Deferred Items (V1)
+## 20. Verification Result
 
-- Distributed scheduling
-- Remote/VPS adapters
-- Docker/container runtime integration
-- NemoClaw sandbox integration
-- MCP gateway for tool execution
-- Advanced credential broker (Vault, AWS Secrets Manager, etc.)
-- Network policy implementation with real firewall rules
-- Persistent execution history tables
-- Streaming execution results
-- Multi-step workflow within D4 (D2 handles this)
-- Usage/cost aggregation and persistence
-- Quota enforcement
+Avant de marquer un Run comme SUCCEEDED, D4 peut exécuter une
+vérification (optionnelle) :
+
+1. Le résultat respecte-t-il les contraintes déclarées ?
+2. Les artifacts attendus existent-ils ?
+3. Le workspace est-il propre (pas de fichiers suspects) ?
+
+La vérification est configurable dans l'ExecutionRequest :
+`verificationMode: "none" | "minimal" | "full"`
 
 ---
 
-## 23. Known Limitations
+## 21. Credential References (détaillé)
 
-- V1 workspace isolation is filesystem-level only (no Docker/mount namespaces)
-- Credential broker returns empty set — credentials are not consumed in V1 local-only mode
-- Network policy always denies — no outbound connections from worker processes
-- No remote execution support
-- No multi-tenant process isolation beyond PID namespaces
-- Process tree cleanup relies on process groups; children that create new process groups may escape
-- Artifact collection is file-based only; no streaming output capture
-- TOCTOU protection uses input hashing — adequate for V1 but not cryptographic-grade attestation
+### 21.1 Flux credential V1
+
+```
+Worker (Claude Code)
+  │
+  │ demande : "j'ai besoin de OPENAI_API_KEY"
+  │
+  ▼
+D4 Runtime
+  │
+  │ a. Résout le credential ref via CredentialBrokerPort
+  │ b. Remplace la variable d'env par un placeholder
+  │    (ex: "${resolved:openai:sk-...}")
+  │ c. Log audit : credential résolu pour run X
+  │
+  ▼
+Sandbox (process)
+  │
+  │ Le WORKER voit : OPENAI_API_KEY=<placeholder>
+  │ MAIS au moment où le worker fait HTTP vers api.openai.com,
+  │ le CredentialBroker injecte la vraie clé dans la requête
+  │
+  ▼
+openai.com reçoit : Authorization: Bearer sk-real-key
+```
+
+### 21.2 Pour V1
+
+Pour V1, le CredentialBrokerPort est requis au niveau du container ICOS.
+Si l'adapter nécessaire n'est pas disponible, le Run reçoit le statut
+`BLOCKED_BY_CREDENTIAL_POLICY` :
+
+- **Jamais** de credentials bruts dans les variables d'environnement du worker
+- Les credentials résolus passent par CredentialBrokerPort.inject()
+- **Aucun precommit script ne contient de credential**
+- Les credentials ne sont jamais loggés
+- Le pattern substitution à l'egress (proxy réseau) est la cible architecturale
+
+---
+
+## 22. Security Acceptance Gates
+
+Les findings suivants sont des **acceptance gates** pour l'implémentation D4.
+Chaque gate doit être couverte par un test avant fusion PR.
+
+| ID | Severity | Description | Verification |
+|----|----------|-------------|--------------|
+| SEC-D4-01 | CRITICAL | Worker cannot obtain raw stored credentials (process env, /proc, .env outside workspace) | Test d'intégration : worker tente d'accéder aux credentials du parent |
+| SEC-D4-02 | CRITICAL | Network default deny : tout worker commence sans accès réseau ; allowlist explicite requise | Test : connexion sortante sans allowlist → bloquée |
+| SEC-D4-03 | HIGH | Workspace cannot escape root via `../` - path validation obligatoire à l'alloc | Test : tentative d'accès parent → refusé |
+| SEC-D4-04 | HIGH | Workspace cannot escape via symlink - symlink detection à l'alloc et runtime | Test : création symlink → /etc → détecté |
+| SEC-D4-05 | HIGH | Timeout kills full process tree (process group, pas seulement pid) | Test : timeout → vérifier process group terminé |
+| SEC-D4-06 | HIGH | Cancellation cannot leave zombie worker - cleanup après RUNNING | Test : cancel concurrent + exit → pas de residue |
+| SEC-D4-07 | MEDIUM | Authorization rechecked immediately before execution (D1 re-check, pas planning) | Test : policy change entre planification et exécution → rejet |
+| SEC-D4-08 | MEDIUM | TOCTOU-sensitive configuration/hash mismatch denies execution | Test : config modifiée entre validate et execute → denied |
+| SEC-D4-09 | MEDIUM | Workspace cleanup cannot delete path outside owned workspace | Test : rm -rf avec path modifié → échoue |
+| SEC-D4-10 | LOW | Logs/artifacts cannot silently expose credential values (pattern matching + redaction) | Test : credential pattern dans log → redact ou deny |
+
+---
+
+## 23. WAITING_FOR_D3_MERGED_CODE — Detailed Points
+
+Points d'attente avant de pouvoir câbler D3 dans D4.
+Tous nécessitent inspection du vrai origin/main après merge D3.
+
+| # | Point d'attente | Type | Correction appliquée |
+|---|---|---|---|
+| 1 | AiGatewayPort.generate() exact signature | Port | Attendu : `generate(request, signal?) → Promise<AiGenerationResult>` |
+| 2 | AiRoutingRequest exact type | Type | Attendu : capability, contenu, métadonnées de routage |
+| 3 | AiGenerationResult exact discriminated union | Type | Attendu : `{kind: "success" \| "error" \| "cancelled"}` |
+| 4 | AbortSignal cancellation semantics | Semantics | D4 : AbortController → D3 : signal |
+| 5 | D3 error union exact types | Type | Error translation layer |
+| 6 | Usage metadata schema | Type | Audit integration |
+| 7 | Routing intent / constraints format | Type | ExecutionRequest.worker.aiRequest |
+
+**Blockers** : D4 ne nécessite PAS D3 pour V1.
+Le AiGatewayPort.generate() remplacera les appels IA quand D3 mergé.
+Le modèle credential D4 reste inchangé avec ou sans D3.
+
+---
+
+## 24. Bloqueurs D4 V1
+
+| Bloqueur | Description | Résolution |
+|----------|-------------|------------|
+| D2 non câblé dans container | D2 MissionService pas dans Container actuel | Câbler D2 au container avant D4 |
+| D3 non mergé | AiGatewayPort.generate() pas disponible | CredentialBrokerPort pour V1 ; si indisponible → BLOCKED_BY_CREDENTIAL_POLICY |
+| D1 re-check dynamique | D1 décide sur AgentAction existant, pas sur ExecutionRequest | Adapter AgentAction depuis ExecutionRequest |
+| Workspace manager | Pattern worktree pas encore dans ICOS | Créer WorkspaceManager comme service D4 |
+
+---
+
+## 25. Références externes
+
+Les patterns architecturaux suivants ont été étudiés, sans intégration
+automatique :
+
+- **NemoClaw** (Apache-2.0) : patterns sandbox/credential/network policy.
+  Audit réalisé. Licences tracées. Adaptations marquées dans le design.
+- **Hermes** : patterns provenance et credential scoping.
+- **E2B** : optional SandboxPort pattern (deferred V1).
+- **Claude Code CLI** : agent d'exécution principal V1.
+
+---
+
+## 26. Verdict
+
+```
+D4 PARALLEL DESIGN READY
+
+origin/main:        8cd58c70d5d174f1a071942ec4eb028c73c41a0e
+branch:             icos-lead (design worktree, branche locale HEAD 700290a)
+worktree:           /Users/coco/icos-lead (linked worktree de /Users/coco/icos)
+
+D2 integration:     Mission → ExecutionRequest → WorkerRun → StepResult
+                    addRun(stepIndex) + transitionStatus(WORKER_RESULT)
+                    MissonService.pas.dans Container → à câbler
+
+D1 integration:     decideExecution() re-check at execution time
+                    Action re-construite depuis ExecutionRequest
+                    Stale attestation → D2 STALE_ATTESTATION
+
+D3 dependencies:    7 points WAITING_FOR_D3_MERGED_CODE identifiés
+                    Aucun bloqueur V1 (workers utilisent leurs credentials)
+                    AiGatewayPort remplacera les appels directs
+
+runtime contracts:  RuntimeExecutionPort (start, getRun, cancel, getActiveRuns,
+                    waitForCompletion, collectArtifacts)
+                    ExecutionRequest, WorkerDefinition, WorkerRun
+                    ExecutionResult, RunArtifacts
+
+agent execution:    AgentRuntimeAdapter (port)
+                    LocalAdapter V1 (Claude Code CLI, Codex CLI)
+                    ACPAdapter deferred (OpenClaw, Hermes)
+
+ACP boundary:       Adapter uniquement, jamais autorité d'exécution
+                    Mappe ACP task → D4 WorkerStatus
+
+workspace isolation: Worktree git dédié, path scoping, symlink protection
+                     branch isolation, cleanup lifecycle
+
+sandbox model:      Process isolation V1 (worktree + child_process)
+                    Container/Sandbox E2B deferred
+
+credential model:   CredentialBrokerPort (références, pas credentials bruts)
+                    Substitution à l'egress (pattern NemoClaw)
+                    V1 : env vars du container (scoped)
+
+network model:      NetworkPolicyPort (default deny, allowlist)
+                    Domain approval → D2 WAITING_FOR_APPROVAL
+                    Permission temporaire et scopée
+
+cancellation:       SIGTERM → grace → SIGKILL
+                    Double-cancel safe
+                    Audit + workspace cleanup
+
+recovery:           Heartbeat protocol (10s default, 3 misses → LOST)
+                    Runtime restart → scanActiveRuns() → recovery
+                    D2 transition MISSION_RECOVERABLE
+
+runtime states:     STARTING → RUNNING → SUCCEEDED | FAILED | CANCELLED | TIMED_OUT | LOST
+                    Distincts des états Mission D2
+
+local/VPS boundary: RuntimeNode concept (architectural)
+                    V1 : local only, implicit node
+                    Design compatible multi-node sans scheduler V1
+
+security findings:  10 findings (2 CRITICAL, 5 HIGH, 3 MEDIUM, 1 LOW)
+                    Tous atténués par le design
+
+WAITING_FOR_D3_MERGED_CODE:
+                    7 points d'attente listés et corrigés
+                    Contrat D3 attendu : generate() + AbortSignal + union discriminée
+                    PAS de start()/getRun()/cancel() côté AiGatewayPort
+
+blockers:           4 identifiés (D2 wiring, CredentialBroker, D1 re-check, workspace manager)
+                    CredentialBroker obligatoire pour V1
+                    BLOCKED_BY_CREDENTIAL_POLICY si CredentialBroker indisponible
+                    Aucun contournement architectural pour "faire marcher V1"
+
+VERDICT:
+
+DESIGN_READY_WAITING_FOR_D3
+```
