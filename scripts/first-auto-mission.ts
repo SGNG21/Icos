@@ -65,6 +65,14 @@ import type { GlobalGatesPort, IntegrationOrchestratorPort } from "@/server/inte
 import type { PreviewDeliveryPort } from "@/server/preview/ports";
 import type { SystemAgent } from "@/core/policy";
 import { PERMISSION_SUPERVISOR_WORKER_EXECUTE } from "@/core/policy";
+import {
+  EXTERNAL_EFFECT_SCOPE_PUSH_PR,
+  loadExternalEffectApproval,
+} from "@/server/security/external-effect-approval";
+import {
+  resolveAuthorizedWorkspace,
+  resolveInsideWorkspace,
+} from "@/server/security/workspace-boundary";
 import { isFirstAutoFinalStateSuccessful } from "./first-auto-verifier";
 
 const exec = promisify(execFile);
@@ -120,8 +128,20 @@ class FirstAutoWorker implements WorkerManagerPort {
       risk: "reversible",
     });
 
-    if (policyDecision.outcome === "deny") {
-      throw new Error(`Worker refusé par D1 : ${policyDecision.reason}`);
+    // Fail-closed (F3.2, Phase 2 hardening) : seul un ALLOW explicite
+    // autorise l'exécution. REQUIRE_APPROVAL est un état BLOQUANT
+    // (approbation humaine non obtenue), jamais un état passant. Tout
+    // outcome inconnu est traité comme un refus (invariant D1).
+    if (policyDecision.outcome !== "allow") {
+      if (policyDecision.outcome === "require_approval") {
+        throw new Error(
+          `Worker bloqué par D1 : approbation humaine requise — ${policyDecision.reason}`,
+        );
+      }
+      if (policyDecision.outcome === "deny") {
+        throw new Error(`Worker refusé par D1 : ${policyDecision.reason}`);
+      }
+      throw new Error("Worker refusé par D1 : décision de politique inconnue (fail-closed)");
     }
 
     const worker: Worker = {
@@ -171,13 +191,16 @@ class FirstAutoWorker implements WorkerManagerPort {
 
     try {
       const objective = worker.spec.objective;
-      // Utiliser le worktree path stocké (transmis par SupervisorService)
-      // ou le repo root comme fallback
-      const worktreePath = worker.worktreePath ?? "";
-      console.log(`  [WORKER] worktreePath: ${worktreePath || "(repo root)"}`);
+      // F4.1 (Phase 2 hardening) : le worker n'exécute QUE dans le worktree
+      // assigné par le SupervisorService. Aucun repli vers la racine du
+      // dépôt : worktree absent/invalide → échec fermé.
+      const worktreePath = await resolveAuthorizedWorkspace(worker.worktreePath, [
+        await this.getRepoRoot(),
+      ]);
+      console.log(`  [WORKER] worktreePath: ${worktreePath}`);
       console.log(`  [WORKER] objective: ${objective.slice(0, 200)}...`);
 
-      // Exécuter la tâche dans le worktree
+      // Exécuter la tâche dans le worktree validé
       const result = await this.implementTask(worktreePath, objective);
 
       console.log(`  [WORKER] result: ${result.outcome} — ${result.summary}`);
@@ -203,16 +226,17 @@ class FirstAutoWorker implements WorkerManagerPort {
   private async implementTask(worktreePath: string, objective: string): Promise<WorkerResult> {
     const start = Date.now();
 
-    // Déterminer où travailler : worktree ou repo racine
-    const repoRoot = worktreePath ? worktreePath : await this.getRepoRoot();
+    // F4.1 : le workspace est le worktree validé — jamais la racine du dépôt.
+    const repoRoot = worktreePath;
 
-    console.log(`  [WORKER] repoRoot: ${repoRoot}`);
+    console.log(`  [WORKER] workspace: ${repoRoot}`);
 
     // Le test suit exactement le modèle de src/core/supervisor/lifecycle.test.ts
     const testContent = this.generateTestCode();
 
-    // Écrire le fichier de test
-    const testFilePath = path.join(repoRoot, "src/core/mission/lifecycle.test.ts");
+    // Écrire le fichier de test — chemin validé strictement à l'intérieur
+    // du workspace (aucune traversée possible).
+    const testFilePath = resolveInsideWorkspace(repoRoot, "src/core/mission/lifecycle.test.ts");
     console.log(`  [WORKER] writing: ${testFilePath}`);
     await writeFile(testFilePath, testContent, "utf-8");
     console.log(`  [WORKER] test file written (${testContent.length} bytes)`);
@@ -594,16 +618,22 @@ describe("isSuspended", () => {
 // ─────────────────────────────────────────────────
 // Fake implementations for infrastructure not needed
 // in FIRST-AUTO-1 (PreviewDelivery is a no-op for local)
+//
+// ⚠️ STUB EXPLICITE (F5.1, Phase 2 hardening) : FakeReviewer ne fait
+// AUCUNE revue réelle — il ne vérifie que la présence d'AC. Son verdict
+// PASS n'est PAS une preuve de qualité et ne doit jamais être présenté
+// comme telle. Les effets externes (push/PR) restent gardés par
+// l'artefact d'approbation humaine (F2) indépendamment de ce verdict.
 // ─────────────────────────────────────────────────
 
 class FakeReviewer implements ReviewerManagerPort {
   async conductReview(spec: ReviewSpec): Promise<ReviewResult> {
-    // V1 : revue basée sur présence d'AC et critères
+    // STUB : seule la présence d'AC est vérifiée — aucune revue de code réelle.
     const checks = spec.requiredChecks.map((category) => {
       const passed = spec.acceptanceCriteria.length >= 1;
       return {
         category,
-        description: `Check ${category}`,
+        description: `Check ${category} (STUB — présence d'AC uniquement, pas de revue réelle)`,
         passed,
         details: passed ? undefined : "Aucun critère d'acceptation",
       };
@@ -622,16 +652,25 @@ class FakeReviewer implements ReviewerManagerPort {
     };
   }
 
-  async ensureIndependentReview(_taskId: string, _reviewerWorkerId: string): Promise<boolean> {
-    return true;
+  async ensureIndependentReview(
+    implementerWorkerId: string,
+    reviewerWorkerId: string,
+  ): Promise<boolean> {
+    // Invariant : implémenteur ≠ reviewer, identités non vides (fail-closed).
+    if (!implementerWorkerId || !reviewerWorkerId) return false;
+    return implementerWorkerId !== reviewerWorkerId;
   }
 }
 
 class FakeCorrector implements CorrectionLoopManagerPort {
   async executeCorrection(spec: CorrectionSpec): Promise<CorrectionResult> {
+    // ⚠️ STUB fail-closed (F5.1) : aucune correction autonome n'est appliquée.
+    // Prétendre « CORRECTED » sans agir serait un mensonge d'état — on escalade.
     return {
-      outcome: "CORRECTED",
-      summary: `Correction basée sur ${spec.failedChecks.length} check(s)`,
+      outcome: "ESCALATED",
+      summary:
+        `STUB — aucune correction autonome appliquée (${spec.failedChecks.length} check(s) échoué(s)). ` +
+        "Escalade humaine requise.",
       durationMs: 5,
     };
   }
@@ -978,16 +1017,36 @@ async function main(): Promise<void> {
     allGatesPassed,
   });
 
-  // ── Phase 9 : PR (bloquée par auth externe) ──
+  // ── Phase 9 : PR — effet externe gardé par approbation humaine ──
+  // F5.2 (Phase 2 hardening) : `git push` et `gh pr create` sont des effets
+  // externes. Ils n'exécutent JAMAIS sans un artefact d'approbation humaine
+  // explicite, valide et non expiré. Absent / refusé / malformé / expiré /
+  // illisible → BLOCAGE (fail-closed). L'authentification gh ambiante n'est
+  // PAS une approbation.
   console.log("[PHASE 9] Préparation de la PR...");
+  const approvalArtifactPath =
+    process.env.ICOS_EXTERNAL_EFFECT_APPROVAL_FILE ??
+    path.join(repoRoot, ".icos", "approvals", "first-auto-external-effect.json");
+  const approvalDecision = await loadExternalEffectApproval(approvalArtifactPath, {
+    scope: EXTERNAL_EFFECT_SCOPE_PUSH_PR,
+    branch: `integration/${dag.id}`,
+  });
   try {
     const { stdout: ghAuth } = await exec("gh", ["auth", "status"], {
       timeout: 10_000,
     }).catch(() => ({ stdout: "" }));
     const hasGhAuth = ghAuth.includes("Logged in");
 
-    if (hasGhAuth) {
-      console.log("  GitHub CLI authentifié — tentative de push et PR...");
+    if (!approvalDecision.granted) {
+      console.log(
+        `  PR_CREATION_BLOCKED_BY_MISSING_APPROVAL (${approvalDecision.code}): ${approvalDecision.reason}`,
+      );
+      console.log("  Aucun push/PR autonome sans approbation humaine explicite (fail-closed).");
+      console.log(`  Artefact attendu : ${approvalArtifactPath}`);
+    } else if (hasGhAuth) {
+      console.log(
+        `  Approbation humaine vérifiée (par ${approvalDecision.approval.approvedBy}) + GitHub CLI authentifié — push et PR...`,
+      );
       try {
         // Push la branche d'intégration
         await exec("git", ["push", "origin", `integration/${dag.id}`], {
@@ -1068,6 +1127,9 @@ Ajout de tests unitaires pour \`src/core/mission/lifecycle.ts\`
     "G1 bypass": "NO" as const,
     "D1 bypass": "NO" as const,
     "Self-authorization": "NO" as const,
+    "External effect human-approved": approvalDecision.granted
+      ? ("YES" as const)
+      : ("NO — external effects blocked fail-closed" as const),
     "Main modified": "NO" as const,
     "Production touched": "NO" as const,
     "SUP-7 resumed": "NO" as const,
