@@ -86,12 +86,7 @@ export const retentionPolicyRefSchema = z.object({
   /** Durée de conservation maximale en jours */
   maxRetentionDays: z.number().int().positive(),
   /** Base légale RGPD */
-  legalBasis: z.enum([
-    "consent",
-    "contract",
-    "legal_obligation",
-    "legitimate_interest",
-  ]),
+  legalBasis: z.enum(["consent", "contract", "legal_obligation", "legitimate_interest"]),
   /** Description de la finalité du traitement */
   purpose: z.string().min(1),
 });

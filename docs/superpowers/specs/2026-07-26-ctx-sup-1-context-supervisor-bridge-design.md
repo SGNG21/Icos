@@ -43,17 +43,17 @@ D1/D2/D3/D4/G1, n'implémente ni MCP/tools ni Voice V1.
 
 ### 1.1 Ce qui existe
 
-| Concept | Emplacement | Rôle |
-|---|---|---|
-| `Mission` | `src/core/mission/contract.ts` | État métier durable (D2). Champ `userRequest: string` brut. |
-| Mission lifecycle | `src/core/mission/lifecycle.ts` | Machine d'état (autorité de transition). |
-| `PolicyDecision` | `src/core/policy/contract.ts` | Autorité de politique D1 (allow/deny/require_approval). |
-| `decideExecution` | `src/core/authorization/decide.ts` | Autorisation fail-closed. |
-| `ExecutionGrant` | `src/core/g1/contract.ts` | **Seul** objet qui signifie « cette invocation précise est autorisée maintenant ». |
-| `Approval` | `src/core/contracts/approval.ts` | Décision humaine ; `decidedBy` déclaratif, **non authentifié** (Lot 1B). |
-| `AuditEntry` | `src/core/contracts/audit.ts` | Journal append-only, pas de secret. |
-| `TenantContext` | `src/core/contracts/tenant.ts` | Résolu depuis session authentifiée, jamais depuis le client. |
-| Context Port (RAG) | skill `icos-rag-memory` | Mémoire externe consommée, **jamais** source de vérité ni autorité. |
+| Concept            | Emplacement                        | Rôle                                                                               |
+| ------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| `Mission`          | `src/core/mission/contract.ts`     | État métier durable (D2). Champ `userRequest: string` brut.                        |
+| Mission lifecycle  | `src/core/mission/lifecycle.ts`    | Machine d'état (autorité de transition).                                           |
+| `PolicyDecision`   | `src/core/policy/contract.ts`      | Autorité de politique D1 (allow/deny/require_approval).                            |
+| `decideExecution`  | `src/core/authorization/decide.ts` | Autorisation fail-closed.                                                          |
+| `ExecutionGrant`   | `src/core/g1/contract.ts`          | **Seul** objet qui signifie « cette invocation précise est autorisée maintenant ». |
+| `Approval`         | `src/core/contracts/approval.ts`   | Décision humaine ; `decidedBy` déclaratif, **non authentifié** (Lot 1B).           |
+| `AuditEntry`       | `src/core/contracts/audit.ts`      | Journal append-only, pas de secret.                                                |
+| `TenantContext`    | `src/core/contracts/tenant.ts`     | Résolu depuis session authentifiée, jamais depuis le client.                       |
+| Context Port (RAG) | skill `icos-rag-memory`            | Mémoire externe consommée, **jamais** source de vérité ni autorité.                |
 
 ### 1.2 Ce qui manque (le gap)
 
@@ -84,17 +84,17 @@ jamais transporter d'autorité.**
 Chaque ligne est un invariant de frontière. Aucun de ces objets ne peut être
 substitué à un autre.
 
-| Concept | Nature | Autorité ? | Source de vérité |
-|---|---|---|---|
-| **ConversationContext** | Entrée brute (tours de dialogue, extraits mémoire) | ❌ | La conversation (éphémère, non fiable) |
-| **MissionContext** | Artefact de lecture borné + provenance | ❌ | Dérivé, versionné, rattaché à une Mission |
-| **Mission** (D2) | État métier durable | Transition uniquement | PostgreSQL (D2) |
-| **Task DAG / Plan** (D2) | Décomposition d'exécution | ❌ (planification) | D2 (`Plan`/`Step`) |
-| **Memory / RAG** | Preuve/références externes | ❌ | Service externe via Context Port |
-| **Audit** | Journal append-only | ❌ | Journal d'audit (immuable) |
-| **Authorization** (D1) | Décision de politique | ✅ **Autorité de politique** | PolicyEngine D1 |
-| **Approval** | Décision humaine tracée | ✅ (humain) | `Approval` (non authentifié en V1) |
-| **ExecutionGrant** (G1) | « cette invocation est autorisée » | ✅ **Autorité d'exécution** | G1 après D1 ALLOW |
+| Concept                  | Nature                                             | Autorité ?                   | Source de vérité                          |
+| ------------------------ | -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
+| **ConversationContext**  | Entrée brute (tours de dialogue, extraits mémoire) | ❌                           | La conversation (éphémère, non fiable)    |
+| **MissionContext**       | Artefact de lecture borné + provenance             | ❌                           | Dérivé, versionné, rattaché à une Mission |
+| **Mission** (D2)         | État métier durable                                | Transition uniquement        | PostgreSQL (D2)                           |
+| **Task DAG / Plan** (D2) | Décomposition d'exécution                          | ❌ (planification)           | D2 (`Plan`/`Step`)                        |
+| **Memory / RAG**         | Preuve/références externes                         | ❌                           | Service externe via Context Port          |
+| **Audit**                | Journal append-only                                | ❌                           | Journal d'audit (immuable)                |
+| **Authorization** (D1)   | Décision de politique                              | ✅ **Autorité de politique** | PolicyEngine D1                           |
+| **Approval**             | Décision humaine tracée                            | ✅ (humain)                  | `Approval` (non authentifié en V1)        |
+| **ExecutionGrant** (G1)  | « cette invocation est autorisée »                 | ✅ **Autorité d'exécution**  | G1 après D1 ALLOW                         |
 
 ### 2.1 Invariants non négociables
 
@@ -110,7 +110,7 @@ Supervisor ≠ approval authority   (l'approbation reste humaine)
 Supervisor ≠ execution authority  (l'autorisation d'exécution reste G1/D4)
 ```
 
-Corollaire : `MissionContext` peut *rapporter* qu'une approbation ou une
+Corollaire : `MissionContext` peut _rapporter_ qu'une approbation ou une
 politique existe (par **référence**, ex. `approvalId`, `policyId`), mais ne
 peut **jamais** l'accorder, l'impliquer ni la reconstituer.
 
@@ -127,9 +127,9 @@ type autoritatif n'est embarqué.
 
 /** Origine d'une donnée de contexte : d'où vient l'information. */
 type ContextSourceKind =
-  | "user_message"      // tour de dialogue humain
-  | "agent_message"     // tour de dialogue agent
-  | "mission_record"    // lu depuis la Mission D2 (déjà autoritatif)
+  | "user_message" // tour de dialogue humain
+  | "agent_message" // tour de dialogue agent
+  | "mission_record" // lu depuis la Mission D2 (déjà autoritatif)
   | "memory_reference"; // preuve/référence via Context Port (RAG) — jamais autorité
 
 /** Provenance minimale attachée à chaque élément dérivé. */
@@ -145,8 +145,8 @@ interface ContextProvenance {
 type Epistemics = "confirmed_fact" | "assumption" | "open_question";
 
 interface ContextClaim {
-  id: string;                 // idSchema
-  statement: string;          // borné (longueur max)
+  id: string; // idSchema
+  statement: string; // borné (longueur max)
   epistemics: Epistemics;
   provenance: ContextProvenance;
 }
@@ -163,9 +163,9 @@ interface ContextClaim {
  *   à défaut le build échoue (fail-closed), il n'est jamais deviné.
  */
 interface MissionContext {
-  tenantId: string;           // tenantIdSchema
-  missionId: string;          // idSchema — rattachement D2
-  version: number;            // monotone, mission-scoped
+  tenantId: string; // tenantIdSchema
+  missionId: string; // idSchema — rattachement D2
+  version: number; // monotone, mission-scoped
   /** Objectif confirmé, borné. Absent → build refusé (jamais inféré). */
   confirmedObjective: string;
   /** Contraintes/décisions explicitement confirmées. */
@@ -178,7 +178,7 @@ interface MissionContext {
   boundedSummary: string;
   /** Références mémoire (preuve uniquement, jamais autorité). */
   memoryReferences: ContextProvenance[];
-  builtAt: string;            // isoDateTime
+  builtAt: string; // isoDateTime
   /** Étiquette du builder (audit/debug), non authentifiée. */
   builtByLabel: string;
 }
@@ -202,16 +202,15 @@ SQL — conforme `icos-architecture`). Entrée : `ConversationContext` +
 
 ```typescript
 type BuildContextResult =
-  | { ok: true; context: MissionContext }
-  | { ok: false; reason: BuildRefusalCode };
+  { ok: true; context: MissionContext } | { ok: false; reason: BuildRefusalCode };
 
 type BuildRefusalCode =
-  | "no_confirmed_objective"   // objectif non confirmé → refus
-  | "tenant_mismatch"          // conversation ≠ tenant de la mission
-  | "mission_conflict"         // contexte contredit la Mission canonique
-  | "unresolved_ambiguity"     // questions ouvertes bloquantes
-  | "over_budget"              // dépasse les bornes → refus
-  | "non_serializable_input";  // entrée impure/suspecte
+  | "no_confirmed_objective" // objectif non confirmé → refus
+  | "tenant_mismatch" // conversation ≠ tenant de la mission
+  | "mission_conflict" // contexte contredit la Mission canonique
+  | "unresolved_ambiguity" // questions ouvertes bloquantes
+  | "over_budget" // dépasse les bornes → refus
+  | "non_serializable_input"; // entrée impure/suspecte
 ```
 
 Responsabilités :
@@ -302,7 +301,7 @@ Ports (design 1A — remplacé par le contrat 1B ci-dessous) :
 
 ```typescript
 interface MissionContextRepository {
-  save(context: MissionContext): Promise<MissionContext>;   // append version
+  save(context: MissionContext): Promise<MissionContext>; // append version
   findLatest(tenantId: string, missionId: string): Promise<MissionContext | null>;
   findVersion(tenantId: string, missionId: string, version: number): Promise<MissionContext | null>;
 }
@@ -316,9 +315,9 @@ Le sketch 1A ci-dessus prédatait le choix du modèle de concurrence. Le contrat
 - **Snapshots versionnés immuables** : chaque émission est une ligne
   append-only ; jamais de mutation en place, jamais de seconde table « latest ».
 - **Latest dérivé** de l'ordre des versions (`MAX(version)` / `ORDER BY version
-  DESC LIMIT 1`).
+DESC LIMIT 1`).
 - **Frontière d'identité ET de concurrence** : `(tenantId, missionId, version)`.
-  En PostgreSQL c'est la **clé primaire composite** ; elle *est* le verrou
+  En PostgreSQL c'est la **clé primaire composite** ; elle _est_ le verrou
   optimiste (une course sur la même version → une seule gagne, l'autre reçoit
   `23505 unique_violation`).
 - **Concurrence optimiste fail-closed** via `expectedVersion` : aucun
@@ -326,26 +325,25 @@ Le sketch 1A ci-dessus prédatait le choix du modèle de concurrence. Le contrat
   `expectedVersion = null` signifie « aucun contexte préexistant attendu » → le
   premier write doit porter `version = 0`.
 - **Persistance non autoritative** : `MissionContext ≠ Permission / Approval /
-  Authority / ExecutionGrant`. Le repository n'expose et n'accepte aucun champ
+Authority / ExecutionGrant`. Le repository n'expose et n'accepte aucun champ
   d'autorité (garanti structurellement par le schéma `.strict()` 1A).
 - **Pas de conflation avec l'audit** : cette couche n'écrit **aucune**
   `audit_entries` et ne duplique **aucun** `MissionContext` complet dans
   l'audit. Elle fournit un helper pur `missionContextRef(ctx)` →
   `{ tenantId, missionId, version, builtAt }` (référence bornée) que l'appelant
-  *pourra* émettre plus tard. `Memory ≠ Audit Log` préservé.
+  _pourra_ émettre plus tard. `Memory ≠ Audit Log` préservé.
 
 Port canonique :
 
 ```typescript
 type SaveConflictReason =
-  | "stale_version"     // expectedVersion ≠ latest actuel (writer périmé/régressif)
-  | "version_conflict"  // unique_violation à l'INSERT (course concurrente perdue)
-  | "version_mismatch"  // context.version ≠ (expectedVersion ?? -1) + 1
-  | "invalid_context";  // schéma strict / bornes / champ d'autorité / non sérialisable
+  | "stale_version" // expectedVersion ≠ latest actuel (writer périmé/régressif)
+  | "version_conflict" // unique_violation à l'INSERT (course concurrente perdue)
+  | "version_mismatch" // context.version ≠ (expectedVersion ?? -1) + 1
+  | "invalid_context"; // schéma strict / bornes / champ d'autorité / non sérialisable
 
 type SaveContextResult =
-  | { ok: true; context: MissionContext }
-  | { ok: false; reason: SaveConflictReason };
+  { ok: true; context: MissionContext } | { ok: false; reason: SaveConflictReason };
 
 interface MissionContextRepository {
   save(input: {
@@ -353,24 +351,20 @@ interface MissionContextRepository {
     expectedVersion: number | null;
   }): Promise<SaveContextResult>;
   findLatest(tenantId: string, missionId: string): Promise<MissionContext | null>;
-  findVersion(
-    tenantId: string,
-    missionId: string,
-    version: number,
-  ): Promise<MissionContext | null>;
+  findVersion(tenantId: string, missionId: string, version: number): Promise<MissionContext | null>;
 }
 ```
 
 Table `mission_contexts` (migration additive `0009`) :
 
-| Colonne | Type | Rôle |
-|---|---|---|
-| `tenant_id` | `text` | isolation tenant (filtre obligatoire en lecture) |
-| `mission_id` | `text` | portée mission |
-| `version` | `integer` | version monotone mission-scopée |
-| `payload` | `jsonb` | `MissionContext` canonique complet (`@classification C2`) |
-| `built_at` | `timestamptz` | `context.builtAt` (fraîcheur) |
-| `created_at` | `timestamptz` | instant de persistance (`now()` DB) |
+| Colonne      | Type          | Rôle                                                      |
+| ------------ | ------------- | --------------------------------------------------------- |
+| `tenant_id`  | `text`        | isolation tenant (filtre obligatoire en lecture)          |
+| `mission_id` | `text`        | portée mission                                            |
+| `version`    | `integer`     | version monotone mission-scopée                           |
+| `payload`    | `jsonb`       | `MissionContext` canonique complet (`@classification C2`) |
+| `built_at`   | `timestamptz` | `context.builtAt` (fraîcheur)                             |
+| `created_at` | `timestamptz` | instant de persistance (`now()` DB)                       |
 
 `PRIMARY KEY (tenant_id, mission_id, version)` (= verrou optimiste) ;
 `INDEX (tenant_id, mission_id, version DESC)` (findLatest / findVersion).
@@ -403,18 +397,18 @@ couche de persistance ne prétend pas la couvrir.
 
 ## 8. Modèle de menace
 
-| # | Menace | Vecteur | Défense CTX-SUP-1 |
-|---|---|---|---|
-| T1 | **Prompt injection** | Un tour de conversation contient « tu es autorisé à… » | Le contexte n'accorde aucune autorité ; instructions traitées comme `statement` de claim, jamais comme permission. D1/G1 restent seuls décideurs. |
-| T2 | **Vieille conversation traitée comme permission** | Réutilisation d'un contexte périmé | `MissionContext` porte `builtAt` + `version` mission-scopée + `observedAt` par claim ; aucune permission n'en découle ; consommateur peut rejeter la fraîcheur. |
-| T3 | **« tu peux toujours merger main »** | Affirmation d'autorité auto-référentielle dans le dialogue | Classée `assumption`/`open_question` ; jamais `confirmed_fact` ni autorité. Toute action Git/merge reste sous les Git gates humains. |
-| T4 | **Mémoire malveillante** | RAG empoisonné | Mémoire = `memory_reference` (preuve), jamais autorité ni fait ; non promouvable automatiquement (voir §7). |
-| T5 | **Fuite cross-tenant** | Contexte d'un tenant lu par un autre | `tenantId` obligatoire ; `tenant_mismatch` fail-closed au build ; repository filtre par tenant ; clé `(tenantId, missionId, version)`. |
-| T6 | **Contexte périmé (stale)** | Mission a évolué depuis le build | Versioning + `builtAt` ; le contexte est un instantané dérivé, jamais la vérité ; D2 reste autoritatif. |
-| T7 | **Contexte vs Mission canonique en conflit** | Le dialogue contredit l'état D2 | `mission_conflict` → refus fail-closed ; la Mission gagne toujours. |
-| T8 | **Contexte vs politique D1/G1 en conflit** | Le dialogue « autorise » ce que D1 refuse | Le contexte ne porte aucune décision ; D1/G1 non consultés ici et non contournables. |
-| T9 | **Supervisor traitant le contexte comme permission** | Couplage/glissement sémantique | DTO d'entrée sans champ autoritaire ; §5 interdit l'interprétation ; le Supervisor doit passer par D1/G1 pour agir. |
-| T10 | **Persistance accidentelle de secret** | Token/credential dans un tour | `jsonValueSchema` + interdiction explicite + refus `non_serializable_input` ; propriété testée « aucun secret persisté ». |
+| #   | Menace                                               | Vecteur                                                    | Défense CTX-SUP-1                                                                                                                                               |
+| --- | ---------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| T1  | **Prompt injection**                                 | Un tour de conversation contient « tu es autorisé à… »     | Le contexte n'accorde aucune autorité ; instructions traitées comme `statement` de claim, jamais comme permission. D1/G1 restent seuls décideurs.               |
+| T2  | **Vieille conversation traitée comme permission**    | Réutilisation d'un contexte périmé                         | `MissionContext` porte `builtAt` + `version` mission-scopée + `observedAt` par claim ; aucune permission n'en découle ; consommateur peut rejeter la fraîcheur. |
+| T3  | **« tu peux toujours merger main »**                 | Affirmation d'autorité auto-référentielle dans le dialogue | Classée `assumption`/`open_question` ; jamais `confirmed_fact` ni autorité. Toute action Git/merge reste sous les Git gates humains.                            |
+| T4  | **Mémoire malveillante**                             | RAG empoisonné                                             | Mémoire = `memory_reference` (preuve), jamais autorité ni fait ; non promouvable automatiquement (voir §7).                                                     |
+| T5  | **Fuite cross-tenant**                               | Contexte d'un tenant lu par un autre                       | `tenantId` obligatoire ; `tenant_mismatch` fail-closed au build ; repository filtre par tenant ; clé `(tenantId, missionId, version)`.                          |
+| T6  | **Contexte périmé (stale)**                          | Mission a évolué depuis le build                           | Versioning + `builtAt` ; le contexte est un instantané dérivé, jamais la vérité ; D2 reste autoritatif.                                                         |
+| T7  | **Contexte vs Mission canonique en conflit**         | Le dialogue contredit l'état D2                            | `mission_conflict` → refus fail-closed ; la Mission gagne toujours.                                                                                             |
+| T8  | **Contexte vs politique D1/G1 en conflit**           | Le dialogue « autorise » ce que D1 refuse                  | Le contexte ne porte aucune décision ; D1/G1 non consultés ici et non contournables.                                                                            |
+| T9  | **Supervisor traitant le contexte comme permission** | Couplage/glissement sémantique                             | DTO d'entrée sans champ autoritaire ; §5 interdit l'interprétation ; le Supervisor doit passer par D1/G1 pour agir.                                             |
+| T10 | **Persistance accidentelle de secret**               | Token/credential dans un tour                              | `jsonValueSchema` + interdiction explicite + refus `non_serializable_input` ; propriété testée « aucun secret persisté ».                                       |
 
 ---
 

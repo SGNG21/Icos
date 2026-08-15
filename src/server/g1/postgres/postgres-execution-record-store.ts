@@ -3,10 +3,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import type { ExecutionRecord, IdempotencyKey } from "@/core/g1";
 import type { Database } from "@/server/database/client";
-import {
-  executionRecordToRow,
-  rowToExecutionRecord,
-} from "@/server/database/mappers";
+import { executionRecordToRow, rowToExecutionRecord } from "@/server/database/mappers";
 import { executionRecords } from "@/server/database/schema";
 import type { ExecutionRecordStore } from "@/server/g1/ports";
 

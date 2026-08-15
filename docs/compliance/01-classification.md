@@ -1,7 +1,7 @@
 # Classification des données — ICOS
 
 | Statut   | Version |
-|----------|---------|
+| -------- | ------- |
 | Approuvé | 0.1     |
 
 ## 1. Objectif
@@ -29,12 +29,12 @@ cette classification combinée.
 
 ## 2. SensitivityLevel — Niveaux de criticité (C0–C3)
 
-| Niveau | Tag             | Définition                                                                 | Exemples ICOS                                                    |
-|--------|-----------------|----------------------------------------------------------------------------|------------------------------------------------------------------|
-| **C0** | `public`        | Information dont la divulgation ne cause aucun préjudice. Accessible sans authentification. | Documentation publique, readme, bannières, statistiques agrégées et anonymisées. |
-| **C1** | `internal`      | Information interne à l'organisation. Accidentellement publique → préjudice mineur (image, concurrence). | Architecture interne, ADR, plans de développement,logs d'infrastructure non nominatifs. |
-| **C2** | `confidential`  | Information à accès restreint. Divulgation → préjudice significatif (légal, contractuel, réputation). | Identifiants techniques (API keys, tokens), configuration d'accès, adresses IP internes, secrets. |
-| **C3** | `restricted`    | Données personnelles ou sensibles au sens RGPD. Divulgation → préjudice grave (sanction, plainte, perte de confiance). | E-mail, nom, rôle, identifiant interne d'une personne physique, préférences d'un utilisateur, métriques comportementales. |
+| Niveau | Tag            | Définition                                                                                                             | Exemples ICOS                                                                                                             |
+| ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **C0** | `public`       | Information dont la divulgation ne cause aucun préjudice. Accessible sans authentification.                            | Documentation publique, readme, bannières, statistiques agrégées et anonymisées.                                          |
+| **C1** | `internal`     | Information interne à l'organisation. Accidentellement publique → préjudice mineur (image, concurrence).               | Architecture interne, ADR, plans de développement,logs d'infrastructure non nominatifs.                                   |
+| **C2** | `confidential` | Information à accès restreint. Divulgation → préjudice significatif (légal, contractuel, réputation).                  | Identifiants techniques (API keys, tokens), configuration d'accès, adresses IP internes, secrets.                         |
+| **C3** | `restricted`   | Données personnelles ou sensibles au sens RGPD. Divulgation → préjudice grave (sanction, plainte, perte de confiance). | E-mail, nom, rôle, identifiant interne d'une personne physique, préférences d'un utilisateur, métriques comportementales. |
 
 ## 3. DataCategory — Catégories sémantiques
 
@@ -45,23 +45,23 @@ identifiant technique d'infrastructure est AUTH_SECRET C2.
 
 ### 3.1 Référentiel des catégories
 
-| DataCategory | Définition | Exemples ICOS | SensitivityLevel typique |
-|---|---|---|---|
-| `PUBLIC` | Information librement diffusable | Documentation publique, statistiques agrégées | C0 |
-| `INTERNAL` | Information interne à l'organisation | ADR, plans, code source, logs non nominatifs | C1 |
-| `PERSONAL` | Donnée personnelle d'un utilisateur (RGPD art. 4) | E-mail, nom, identifiant interne, préférences | C3 |
-| `SENSITIVE_PERSONAL` | Catégorie spéciale (RGPD art. 9) | Santé, biométrie, opinions (hors périmètre ICOS) | C3 |
-| `CONFIDENTIAL_CLIENT` | Donnée d'un client ICOS | Nom, email, historique commercial, documents | C3 |
-| `AUTH_SECRET` | Secret d'authentification ou de session | Token, hash, clé API, session ID | C2–C3 |
-| `FINANCIAL` | Donnée financière ou de paiement | Abonnement, crédits, facture | C2–C3 |
-| `LEGAL` | Document ou trace à valeur juridique | Contrat, audit, consentement, DPA | C2–C3 |
-| `HEALTH` | Donnée de santé (hors périmètre actuel) | Information médicale, dossier patient | C3 |
-| `HR` | Donnée RH d'un membre de l'organisation | Contrat, évaluation, salaire | C3 |
-| `CHILD_DATA` | Donnée d'un mineur (hors périmètre actuel) | Identité, consentement parental | C3 |
-| `BIOMETRIC` | Donnée biométrique (hors périmètre actuel) | Empreinte, reconnaissance faciale | C3 |
-| `DERIVED_PROFILE` | Profil ou inférence générée par le système | Recommandation, classification, score | C2–C3 |
+| DataCategory          | Définition                                        | Exemples ICOS                                    | SensitivityLevel typique |
+| --------------------- | ------------------------------------------------- | ------------------------------------------------ | ------------------------ |
+| `PUBLIC`              | Information librement diffusable                  | Documentation publique, statistiques agrégées    | C0                       |
+| `INTERNAL`            | Information interne à l'organisation              | ADR, plans, code source, logs non nominatifs     | C1                       |
+| `PERSONAL`            | Donnée personnelle d'un utilisateur (RGPD art. 4) | E-mail, nom, identifiant interne, préférences    | C3                       |
+| `SENSITIVE_PERSONAL`  | Catégorie spéciale (RGPD art. 9)                  | Santé, biométrie, opinions (hors périmètre ICOS) | C3                       |
+| `CONFIDENTIAL_CLIENT` | Donnée d'un client ICOS                           | Nom, email, historique commercial, documents     | C3                       |
+| `AUTH_SECRET`         | Secret d'authentification ou de session           | Token, hash, clé API, session ID                 | C2–C3                    |
+| `FINANCIAL`           | Donnée financière ou de paiement                  | Abonnement, crédits, facture                     | C2–C3                    |
+| `LEGAL`               | Document ou trace à valeur juridique              | Contrat, audit, consentement, DPA                | C2–C3                    |
+| `HEALTH`              | Donnée de santé (hors périmètre actuel)           | Information médicale, dossier patient            | C3                       |
+| `HR`                  | Donnée RH d'un membre de l'organisation           | Contrat, évaluation, salaire                     | C3                       |
+| `CHILD_DATA`          | Donnée d'un mineur (hors périmètre actuel)        | Identité, consentement parental                  | C3                       |
+| `BIOMETRIC`           | Donnée biométrique (hors périmètre actuel)        | Empreinte, reconnaissance faciale                | C3                       |
+| `DERIVED_PROFILE`     | Profil ou inférence générée par le système        | Recommandation, classification, score            | C2–C3                    |
 
-La colonne *SensitivityLevel typique* est une indication ; le niveau réel est
+La colonne _SensitivityLevel typique_ est une indication ; le niveau réel est
 déterminé par la politique de donnée attachée à chaque entité, jamais par
 inférence.
 
@@ -132,9 +132,9 @@ les champs `dataCategory` et `sensitivityLevel` sur chaque capacité publiée.
 
 ## 7. Responsabilités
 
-| Rôle                  | Responsabilité                                              |
-|-----------------------|-------------------------------------------------------------|
-| Développeur           | Marquer les données manipulées selon leur niveau réel.      |
-| Relecteur (PR)        | Vérifier que le marquage correspond à la classification.    |
-| DPO (désigné)         | Valider les cas limites et les reclassifications.           |
-| Révision annuelle     | Mise à jour du référentiel DataCategory et des SensitivityLevel, ajout des catégories manquantes. |
+| Rôle              | Responsabilité                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| Développeur       | Marquer les données manipulées selon leur niveau réel.                                            |
+| Relecteur (PR)    | Vérifier que le marquage correspond à la classification.                                          |
+| DPO (désigné)     | Valider les cas limites et les reclassifications.                                                 |
+| Révision annuelle | Mise à jour du référentiel DataCategory et des SensitivityLevel, ajout des catégories manquantes. |

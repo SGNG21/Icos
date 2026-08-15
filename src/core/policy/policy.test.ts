@@ -86,7 +86,13 @@ describe("D1PolicyEngine — CLASSIFICATION gate", () => {
   it("CLASS-03: C2 avec niveau 2 est accepté", () => {
     const engine = new D1PolicyEngine();
     const result = engine.decide({
-      actor: { kind: "human", id: "u1", tenantId: "default", roles: ["capabilities.read"], authorizationLevel: 2 },
+      actor: {
+        kind: "human",
+        id: "u1",
+        tenantId: "default",
+        roles: ["capabilities.read"],
+        authorizationLevel: 2,
+      },
       tenant: { tenantId: "default" },
       action: "read",
       resource: { type: "capabilities", id: "cap-1", sensitivityLevel: "C2" },
@@ -355,7 +361,13 @@ describe("D1PolicyEngine — SYSTEM AGENT AUTHORIZATION", () => {
     // Governance: SystemAgent (kind: "system") is separate from AI agents (kind: "agent").
     const engine = new D1PolicyEngine();
     const sysResult = engine.decide({
-      actor: { kind: "system", id: "sys-1", tenantId: "default", roles: ["capabilities.read"], authorizationLevel: 0 },
+      actor: {
+        kind: "system",
+        id: "sys-1",
+        tenantId: "default",
+        roles: ["capabilities.read"],
+        authorizationLevel: 0,
+      },
       tenant: { tenantId: "default" },
       action: "read",
       resource: { type: "capabilities", id: "cap-1" },
@@ -370,7 +382,13 @@ describe("D1PolicyEngine — RETENTION gate", () => {
     const engine = new D1PolicyEngine();
     const result = engine.decide(
       makeRequest({
-        actor: { kind: "human", id: "u1", tenantId: "default", roles: ["capabilities.status.write"], authorizationLevel: 3 },
+        actor: {
+          kind: "human",
+          id: "u1",
+          tenantId: "default",
+          roles: ["capabilities.status.write"],
+          authorizationLevel: 3,
+        },
         action: "activate",
         resource: {
           type: "capabilities",
@@ -389,7 +407,13 @@ describe("D1PolicyEngine — RETENTION gate", () => {
   it("RET-02: activation C3 avec retention → allow", () => {
     const engine = new D1PolicyEngine();
     const result = engine.decide({
-      actor: { kind: "human", id: "u1", tenantId: "default", roles: ["capabilities.status.write"], authorizationLevel: 3 },
+      actor: {
+        kind: "human",
+        id: "u1",
+        tenantId: "default",
+        roles: ["capabilities.status.write"],
+        authorizationLevel: 3,
+      },
       tenant: { tenantId: "default" },
       action: "status.write",
       resource: {
@@ -408,7 +432,13 @@ describe("D1PolicyEngine — RISK gate", () => {
   it("RISK-01: action sensible sans niveau suffisant → require_approval", () => {
     const engine = new D1PolicyEngine();
     const result = engine.decide({
-      actor: { kind: "human", id: "u1", tenantId: "default", roles: ["tasks.write"], authorizationLevel: 1 },
+      actor: {
+        kind: "human",
+        id: "u1",
+        tenantId: "default",
+        roles: ["tasks.write"],
+        authorizationLevel: 1,
+      },
       tenant: { tenantId: "default" },
       action: "write",
       resource: { type: "tasks", id: "task-1" },

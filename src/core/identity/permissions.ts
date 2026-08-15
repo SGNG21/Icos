@@ -40,7 +40,13 @@ export type Permission = (typeof PERMISSIONS)[number];
 // Permissions PROPRES à chaque rôle (hors héritage) ; l'héritage est appliqué
 // ci-dessous pour produire l'ensemble cumulé.
 const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  viewer: ["cockpit.read", "audit.read.limited", "capabilities.read", "agentCapabilities.read", "skills.read"],
+  viewer: [
+    "cockpit.read",
+    "audit.read.limited",
+    "capabilities.read",
+    "agentCapabilities.read",
+    "skills.read",
+  ],
   operator: ["tasks.write", "approvals.decide", "audit.read.full", "skills.propose"],
   admin: [
     "agents.manage",

@@ -117,7 +117,9 @@ describe("WorktreeManager (git integration)", () => {
         if (line.startsWith("worktree ")) {
           const wtPath = line.slice(9).trim();
           if (wtPath && wtPath !== tmpDir) {
-            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(() => {});
+            await exec("git", ["worktree", "remove", "--force", wtPath], { cwd: tmpDir }).catch(
+              () => {},
+            );
           }
         }
       }
@@ -257,7 +259,9 @@ describe("WorktreeManager (git integration)", () => {
     // Le nouveau worktree est propre et au bon SHA
     const head = (await exec("git", ["rev-parse", "HEAD"], { cwd: spec2.path })).stdout.trim();
     expect(head).toBe(baseSha);
-    const status = (await exec("git", ["status", "--porcelain"], { cwd: spec2.path })).stdout.trim();
+    const status = (
+      await exec("git", ["status", "--porcelain"], { cwd: spec2.path })
+    ).stdout.trim();
     expect(status).toBe("");
 
     await mgr.cleanupWorktree(spec2.path).catch(() => {});

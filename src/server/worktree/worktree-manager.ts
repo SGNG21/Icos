@@ -24,9 +24,7 @@ export class WorktreeManager implements WorktreeManagerPort {
   private readonly entries = new Map<string, WorktreeEntry>();
   private resolvedRoot: string | null = null;
 
-  constructor(
-    private readonly worktreeBase: string = ".claude/worktrees",
-  ) {}
+  constructor(private readonly worktreeBase: string = ".claude/worktrees") {}
 
   private async getRepoRoot(): Promise<string> {
     if (!this.resolvedRoot) {
@@ -38,7 +36,7 @@ export class WorktreeManager implements WorktreeManagerPort {
 
   private async git(args: string[], cwd?: string): Promise<string> {
     const { stdout } = await execGit("git", args, {
-      cwd: cwd ?? await this.getRepoRoot(),
+      cwd: cwd ?? (await this.getRepoRoot()),
       maxBuffer: 10 * 1024 * 1024,
     });
     return stdout.trim();
@@ -141,18 +139,22 @@ export class WorktreeManager implements WorktreeManagerPort {
 
     // Récupérer le baseSha stocké (le SHA au moment de la création du worktree)
     const storedBase = this.findEntryByPath(worktreePath)?.spec.baseSha;
-    const effectiveBase = storedBase && storedBase.length === 40
-      ? storedBase
-      : headSha;
+    const effectiveBase = storedBase && storedBase.length === 40 ? storedBase : headSha;
 
-    const changedOut = await this.git(["diff", "--name-only", `${effectiveBase}..HEAD`], worktreePath).catch(() => "");
+    const changedOut = await this.git(
+      ["diff", "--name-only", `${effectiveBase}..HEAD`],
+      worktreePath,
+    ).catch(() => "");
     const changedList = changedOut ? changedOut.split("\n").filter(Boolean) : [];
 
     // État dirty
     const statusOut = await this.git(["status", "--porcelain"], worktreePath);
     const isDirty = statusOut.length > 0;
     const uncommittedFiles = statusOut
-      ? statusOut.split("\n").filter(Boolean).map((line) => line.slice(3).trim())
+      ? statusOut
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => line.slice(3).trim())
       : [];
 
     // Commits depuis la base
@@ -194,7 +196,10 @@ export class WorktreeManager implements WorktreeManagerPort {
   async detectChanges(worktreePath: string): Promise<string[]> {
     const status = await this.git(["status", "--porcelain"], worktreePath);
     if (!status) return [];
-    return status.split("\n").filter(Boolean).map((line) => line.slice(3).trim());
+    return status
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3).trim());
   }
 
   // ─────────────────────────────────────

@@ -39,14 +39,12 @@ export class FakeCredentialBroker implements CredentialBrokerPort {
     }
 
     // Comportement par défaut : pas de credentials V1
-    const references = Object.entries(this.predefinedCredentials).map(
-      ([key, value]) => ({
-        key,
-        envVar: `CRED_${key.toUpperCase().replace(/[^a-zA-Z0-9]/g, "_")}`,
-        description: `Credential: ${key}`,
-        // Note: la valeur réelle n'est pas exposée via les références
-      }),
-    );
+    const references = Object.entries(this.predefinedCredentials).map(([key, value]) => ({
+      key,
+      envVar: `CRED_${key.toUpperCase().replace(/[^a-zA-Z0-9]/g, "_")}`,
+      description: `Credential: ${key}`,
+      // Note: la valeur réelle n'est pas exposée via les références
+    }));
 
     return {
       available: true,
@@ -82,10 +80,12 @@ export class FakeNetworkPolicy implements NetworkPolicyPort {
 
   async check(request: NetworkRequest): Promise<NetworkDecision> {
     this.calls.push(request);
-    return this.nextDecision ?? {
-      outcome: "deny",
-      reason: "D4 V1: réseau non configuré pour l'accès worker",
-    };
+    return (
+      this.nextDecision ?? {
+        outcome: "deny",
+        reason: "D4 V1: réseau non configuré pour l'accès worker",
+      }
+    );
   }
 
   /** Configure la politique pour autoriser. */

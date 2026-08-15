@@ -14,7 +14,10 @@ export class TenantGate implements PolicyGate {
     }
 
     // Si la resource a un tenant propriétaire, vérifier la correspondance.
-    if (request.resource.ownerTenantId && request.resource.ownerTenantId !== request.actor.tenantId) {
+    if (
+      request.resource.ownerTenantId &&
+      request.resource.ownerTenantId !== request.actor.tenantId
+    ) {
       return {
         decision: "deny",
         code: "cross_tenant_idor",

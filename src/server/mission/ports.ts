@@ -1,9 +1,5 @@
 import type { AuditEntry } from "@/core/contracts";
-import type {
-  Mission,
-  MissionResult,
-  MissionStatus,
-} from "@/core/mission";
+import type { Mission, MissionResult, MissionStatus } from "@/core/mission";
 
 /**
  * Repository de missions — accès persistant aux missions.

@@ -69,27 +69,27 @@ prérequis du premier scénario utile.
 
 ## 3. Ce qui est réellement bloquant pour le premier jalon
 
-| Composant | Bloquant ? | Justification |
-|---|---:|---|
-| Lot 2B-2 | Oui | Autorité humain↔agent avant délégation |
-| Capability Registry | Oui | Contrat de ce qui peut être fait |
-| Skill Registry minimal | Oui | Contrat versionné de comment le faire |
-| Policy/Approval v2 minimal | Oui | Classification et décision fail-closed |
-| Mission/Plan/Run | Oui | État durable, arrêt, reprise, audit |
-| `AiGatewayPort` + `CapabilityRequirement` + policy minimale | Oui | Exprimer les contraintes ICOS sans dupliquer le routing |
-| OmniRouteAdapter | Oui | OmniRoute reste l'unique runtime multi-provider et la vérité technique |
-| SkillsMP Discovery | Non | Une skill native active suffit ; C3 avance en parallèle après C2 |
-| Orchestrateur v1 | Oui | Décomposition et coordination |
-| Tool Gateway + ExecutionRecord | Oui pour effet externe | Policy juste avant effet + idempotence |
-| Premier connecteur métier | Oui | Sans effet métier contrôlé, le système reste une démo |
-| Mémoire long terme / RAG | Non | Le premier dossier peut utiliser des données explicitement fournies |
-| pgvector / Graphiti | Non | Optimisation de retrieval, pas prérequis fonctionnel |
-| Temporal | Non | PostgreSQL suffit pour un run court et peu profond |
-| Scheduler / heartbeat | Non | Proactivité périodique ultérieure |
-| Multi-provider dynamique | Non | OmniRoute peut initialement exposer un seul choix autorisé |
-| Health/quota-aware fallback | Non | Nécessaire avant exploitation multi-source robuste, pas avant v1 |
-| Eval-based routing | Non | Nécessite un historique d'évaluation |
-| WhatsApp / Telegram / voix | Non | Le cockpit web suffit au premier jalon |
+| Composant                                                   |             Bloquant ? | Justification                                                          |
+| ----------------------------------------------------------- | ---------------------: | ---------------------------------------------------------------------- |
+| Lot 2B-2                                                    |                    Oui | Autorité humain↔agent avant délégation                                 |
+| Capability Registry                                         |                    Oui | Contrat de ce qui peut être fait                                       |
+| Skill Registry minimal                                      |                    Oui | Contrat versionné de comment le faire                                  |
+| Policy/Approval v2 minimal                                  |                    Oui | Classification et décision fail-closed                                 |
+| Mission/Plan/Run                                            |                    Oui | État durable, arrêt, reprise, audit                                    |
+| `AiGatewayPort` + `CapabilityRequirement` + policy minimale |                    Oui | Exprimer les contraintes ICOS sans dupliquer le routing                |
+| OmniRouteAdapter                                            |                    Oui | OmniRoute reste l'unique runtime multi-provider et la vérité technique |
+| SkillsMP Discovery                                          |                    Non | Une skill native active suffit ; C3 avance en parallèle après C2       |
+| Orchestrateur v1                                            |                    Oui | Décomposition et coordination                                          |
+| Tool Gateway + ExecutionRecord                              | Oui pour effet externe | Policy juste avant effet + idempotence                                 |
+| Premier connecteur métier                                   |                    Oui | Sans effet métier contrôlé, le système reste une démo                  |
+| Mémoire long terme / RAG                                    |                    Non | Le premier dossier peut utiliser des données explicitement fournies    |
+| pgvector / Graphiti                                         |                    Non | Optimisation de retrieval, pas prérequis fonctionnel                   |
+| Temporal                                                    |                    Non | PostgreSQL suffit pour un run court et peu profond                     |
+| Scheduler / heartbeat                                       |                    Non | Proactivité périodique ultérieure                                      |
+| Multi-provider dynamique                                    |                    Non | OmniRoute peut initialement exposer un seul choix autorisé             |
+| Health/quota-aware fallback                                 |                    Non | Nécessaire avant exploitation multi-source robuste, pas avant v1       |
+| Eval-based routing                                          |                    Non | Nécessite un historique d'évaluation                                   |
+| WhatsApp / Telegram / voix                                  |                    Non | Le cockpit web suffit au premier jalon                                 |
 
 ## 4. Sous-chemins parallélisables sans casser le chemin critique
 

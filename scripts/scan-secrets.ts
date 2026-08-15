@@ -29,26 +29,23 @@ const SECRET_PATTERNS: { pattern: RegExp; name: string }[] = [
   { pattern: /gho_[A-Za-z0-9]{36,}/, name: "GitHub OAuth token" },
   { pattern: /ghu_[A-Za-z0-9]{36,}/, name: "GitHub user token" },
   { pattern: /(?:password|passwd|pwd)\s*[:=]\s*['"][^'"]{6,}['"]/i, name: "Password in config" },
-  { pattern: /(?:secret|api[_-]?key|token)\s*[:=]\s*['"][A-Za-z0-9+/]{20,}['"]/i, name: "Secret/token in config" },
+  {
+    pattern: /(?:secret|api[_-]?key|token)\s*[:=]\s*['"][A-Za-z0-9+/]{20,}['"]/i,
+    name: "Secret/token in config",
+  },
 ];
 
 /** Fichiers exclus du scan */
-const EXCLUDE_PATTERNS = [
-  /\/node_modules\//,
-  /\.git\//,
-  /\/dist\//,
-  /\/\.next\//,
-];
+const EXCLUDE_PATTERNS = [/\/node_modules\//, /\.git\//, /\/dist\//, /\/\.next\//];
 
 /** Fichiers avec ce commentaire en header sont ignorés */
 const SKIP_COMMENT = "@secret-scanner-ignore";
 
 function getModifiedFiles(): string[] {
   try {
-    const stdout = execSync(
-      "git diff --name-only --diff-filter=ACMRT origin/main...HEAD",
-      { encoding: "utf-8" },
-    );
+    const stdout = execSync("git diff --name-only --diff-filter=ACMRT origin/main...HEAD", {
+      encoding: "utf-8",
+    });
     return stdout.trim().split("\n").filter(Boolean);
   } catch {
     const stdout = execSync("git diff --name-only HEAD --", { encoding: "utf-8" });
@@ -116,7 +113,9 @@ function main(): void {
       console.error("");
     }
     console.error("⚠️  Ce scan n'est pas exhaustif. Vérifiez manuellement avant de commit.");
-    console.error("💡 Ajoutez // @secret-scanner-ignore en header du fichier si c'est un faux positif documenté.");
+    console.error(
+      "💡 Ajoutez // @secret-scanner-ignore en header du fichier si c'est un faux positif documenté.",
+    );
     process.exit(1);
   }
 

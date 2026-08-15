@@ -12,9 +12,15 @@ import { WorkerManager, PromiseSemaphore } from "./worker-manager";
 // ─────────────────────────────────────
 
 class FakePolicyPort implements D1PolicyPort {
-  private response: PolicyDecision = { outcome: "allow", reason: "test", attestedAt: new Date().toISOString() };
+  private response: PolicyDecision = {
+    outcome: "allow",
+    reason: "test",
+    attestedAt: new Date().toISOString(),
+  };
 
-  setResponse(r: PolicyDecision) { this.response = r; }
+  setResponse(r: PolicyDecision) {
+    this.response = r;
+  }
 
   async decide(_request: PolicyRequest): Promise<PolicyDecision> {
     return this.response;
@@ -40,8 +46,12 @@ class FakeRuntimePort implements RuntimeExecutionPort {
     latencyMs: 10,
   };
 
-  setDelay(ms: number) { this.delayMs = ms; }
-  setResult(r: ExecutionResult) { this.result = r; }
+  setDelay(ms: number) {
+    this.delayMs = ms;
+  }
+  setResult(r: ExecutionResult) {
+    this.result = r;
+  }
 
   async execute(_input: ExecuteStepInput, _signal?: AbortSignal): Promise<ExecutionResult> {
     await new Promise((r) => setTimeout(r, this.delayMs));
@@ -330,9 +340,7 @@ describe("WorkerManager", () => {
       );
 
       // Attendre que tous se terminent
-      const results = await Promise.all(
-        ids.map((id) => manager.waitForCompletion(id, 10000)),
-      );
+      const results = await Promise.all(ids.map((id) => manager.waitForCompletion(id, 10000)));
 
       expect(results).toHaveLength(4);
       // Tous doivent réussir

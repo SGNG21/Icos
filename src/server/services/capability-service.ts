@@ -105,11 +105,16 @@ export class CapabilityService {
 
     // COMPLIANCE-1 : une Capability classifiée C3 ne peut pas être activée
     // sans politique de rétention associée.
-    if (input.targetStatus === "active" && existing.sensitivityLevel === "C3" && !existing.retentionPolicyRef) {
+    if (
+      input.targetStatus === "active" &&
+      existing.sensitivityLevel === "C3" &&
+      !existing.retentionPolicyRef
+    ) {
       return {
         ok: false,
         reason: "retention_policy_required",
-        message: "Cette Capability est classifiée C3 mais ne possède pas de politique de rétention. Ajoutez retentionPolicyRef avant activation.",
+        message:
+          "Cette Capability est classifiée C3 mais ne possède pas de politique de rétention. Ajoutez retentionPolicyRef avant activation.",
       };
     }
 

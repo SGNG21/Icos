@@ -24,8 +24,5 @@ export interface AgentRuntimeAdapter {
    * @param abortSignal - Signal d'annulation (optionnel)
    * @returns Résultat de l'adaptateur
    */
-  execute(
-    input: RuntimeAdapterInput,
-    abortSignal?: AbortSignal,
-  ): Promise<RuntimeAdapterResult>;
+  execute(input: RuntimeAdapterInput, abortSignal?: AbortSignal): Promise<RuntimeAdapterResult>;
 }

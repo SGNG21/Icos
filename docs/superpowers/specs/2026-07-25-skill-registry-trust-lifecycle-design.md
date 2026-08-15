@@ -67,6 +67,7 @@ C1 (Capability Registry)                C2 (Skill Registry)
 ### 2. C2 owns vs C2 does not own
 
 **C2 owns :**
+
 - Skill identity (key, version, name, description)
 - Source, provenance, write origin
 - Content integrity (hash)
@@ -81,6 +82,7 @@ C1 (Capability Registry)                C2 (Skill Registry)
 - Original manifest metadata (opaque, provenance only)
 
 **C2 does not own :**
+
 - Effective authorization
 - Permission grants
 - Capability assignments (C1 + human)
@@ -94,34 +96,34 @@ C1 (Capability Registry)                C2 (Skill Registry)
 
 ### 3. Modèle métier — Skill
 
-| Champ | Type | Remarques |
-|-------|------|-----------|
-| `id` | `text` PK | Interne, généré |
-| `tenantId` | `text` NOT NULL | Tenant isolation |
-| `skillKey` | `text` NOT NULL | Identifiant métier stable, ex. `code.review.agent`. Format `capabilityKeySchema` |
-| `version` | `text` NOT NULL | Semver, ex. `1.0.0`. Partie de l'identité |
-| `name` | `text` NOT NULL | Libellé mutable |
-| `description` | `text` | Optionnel |
-| `capabilityKeys` | `jsonb` NOT NULL | `string[]` — clés stables C1. Déclaration, jamais auto-assignation |
-| `category` | `text` NOT NULL | Regroupement fonctionnel (ex. `cognitive`, `tool`, `data`, `communication`) |
-| `trustState` | `text` NOT NULL | Voir §5 |
-| `activationState` | `text` NOT NULL | Voir §6 |
-| `scripts` | `jsonb` | Contenu du skill |
-| `resources` | `jsonb` | Prompts, configs, etc. |
-| `references` | `jsonb` | Documentation, sources |
-| `dependencyDeclarations` | `jsonb` | Dépendances vers d'autres skills (déclaratif) |
-| `networkRequirements` | `jsonb` | Déclaratif |
-| `credentialRequirements` | `jsonb` | Déclaratif — jamais de valeur |
-| `executionIsolationRequirement` | `jsonb` | Déclaratif |
-| `toolRequirements` | `jsonb` | Déclaratif |
-| `inputSchema` | `jsonb` | Opaque, metadata provenance uniquement |
-| `outputSchema` | `jsonb` | Opaque, metadata provenance uniquement |
-| `dataCategory` | `text` | Nullable en C2. COMPLIANCE-0 : PUBLIC, INTERNAL, PERSONAL, etc. |
-| `sensitivityLevel` | `text` | Nullable en C2. COMPLIANCE-0 : C0, C1, C2, C3 |
-| `contentHash` | `text` NOT NULL | SHA-256 du contenu canonique |
-| `provenance` | `jsonb` NOT NULL | Inclut originalManifest |
-| `createdAt` | `timestamptz` | |
-| `updatedAt` | `timestamptz` | |
+| Champ                           | Type             | Remarques                                                                        |
+| ------------------------------- | ---------------- | -------------------------------------------------------------------------------- |
+| `id`                            | `text` PK        | Interne, généré                                                                  |
+| `tenantId`                      | `text` NOT NULL  | Tenant isolation                                                                 |
+| `skillKey`                      | `text` NOT NULL  | Identifiant métier stable, ex. `code.review.agent`. Format `capabilityKeySchema` |
+| `version`                       | `text` NOT NULL  | Semver, ex. `1.0.0`. Partie de l'identité                                        |
+| `name`                          | `text` NOT NULL  | Libellé mutable                                                                  |
+| `description`                   | `text`           | Optionnel                                                                        |
+| `capabilityKeys`                | `jsonb` NOT NULL | `string[]` — clés stables C1. Déclaration, jamais auto-assignation               |
+| `category`                      | `text` NOT NULL  | Regroupement fonctionnel (ex. `cognitive`, `tool`, `data`, `communication`)      |
+| `trustState`                    | `text` NOT NULL  | Voir §5                                                                          |
+| `activationState`               | `text` NOT NULL  | Voir §6                                                                          |
+| `scripts`                       | `jsonb`          | Contenu du skill                                                                 |
+| `resources`                     | `jsonb`          | Prompts, configs, etc.                                                           |
+| `references`                    | `jsonb`          | Documentation, sources                                                           |
+| `dependencyDeclarations`        | `jsonb`          | Dépendances vers d'autres skills (déclaratif)                                    |
+| `networkRequirements`           | `jsonb`          | Déclaratif                                                                       |
+| `credentialRequirements`        | `jsonb`          | Déclaratif — jamais de valeur                                                    |
+| `executionIsolationRequirement` | `jsonb`          | Déclaratif                                                                       |
+| `toolRequirements`              | `jsonb`          | Déclaratif                                                                       |
+| `inputSchema`                   | `jsonb`          | Opaque, metadata provenance uniquement                                           |
+| `outputSchema`                  | `jsonb`          | Opaque, metadata provenance uniquement                                           |
+| `dataCategory`                  | `text`           | Nullable en C2. COMPLIANCE-0 : PUBLIC, INTERNAL, PERSONAL, etc.                  |
+| `sensitivityLevel`              | `text`           | Nullable en C2. COMPLIANCE-0 : C0, C1, C2, C3                                    |
+| `contentHash`                   | `text` NOT NULL  | SHA-256 du contenu canonique                                                     |
+| `provenance`                    | `jsonb` NOT NULL | Inclut originalManifest                                                          |
+| `createdAt`                     | `timestamptz`    |                                                                                  |
+| `updatedAt`                     | `timestamptz`    |                                                                                  |
 
 ### 4. Provenance — SkillProvenance
 
@@ -142,6 +144,7 @@ C1 (Capability Registry)                C2 (Skill Registry)
 ```
 
 **Enforcement de l'immutabilité :** Domain/Application-enforced (pas de trigger DB) :
+
 1. Constructeur/uniquement écrit à la création
 2. Aucun setter public sur provenance
 3. Aucun use case de mutation de provenance
@@ -160,15 +163,15 @@ rejected         : rejeté — TERMINAL pour ce contentHash
 
 **Transitions autorisées :**
 
-| From → To | Conditions | Permission |
-|-----------|-----------|------------|
-| `untrusted → quarantined` | Hash + provenance enregistrés | `skills.trust.write` |
-| `quarantined → reviewed` | Scan PASS + eval PASS, ou review manuelle | `skills.trust.write` |
-| `quarantined → rejected` | Scan FAIL ou review rejette | `skills.trust.write` |
-| `reviewed → approved` | **HUMAN ONLY** | `skills.trust.write` |
-| `reviewed → rejected` | Humain rejette | `skills.trust.write` |
-| `approved → rejected` | **Atomic : rejected + revoked** | `skills.trust.write` |
-| `rejected → *` | **TERMINAL** — aucune transition | — |
+| From → To                 | Conditions                                | Permission           |
+| ------------------------- | ----------------------------------------- | -------------------- |
+| `untrusted → quarantined` | Hash + provenance enregistrés             | `skills.trust.write` |
+| `quarantined → reviewed`  | Scan PASS + eval PASS, ou review manuelle | `skills.trust.write` |
+| `quarantined → rejected`  | Scan FAIL ou review rejette               | `skills.trust.write` |
+| `reviewed → approved`     | **HUMAN ONLY**                            | `skills.trust.write` |
+| `reviewed → rejected`     | Humain rejette                            | `skills.trust.write` |
+| `approved → rejected`     | **Atomic : rejected + revoked**           | `skills.trust.write` |
+| `rejected → *`            | **TERMINAL** — aucune transition          | —                    |
 
 ### 6. ActivationState — lifecycle d'activation
 
@@ -181,16 +184,16 @@ revoked      : révoqué — TERMINAL pour cette SkillVersion
 
 **Transitions autorisées :**
 
-| From → To | Conditions | Permission |
-|-----------|-----------|------------|
-| `inactive → active` | trustState = approved, **HUMAN ONLY** | `skills.activation.write` |
-| `inactive → revoked` | Révocation avant activation | `skills.activation.write` |
-| `active → suspended` | Suspension temporaire | `skills.activation.write` |
-| `active → inactive` | Désactivation (ex. remplacement de version) | `skills.activation.write` |
-| `active → revoked` | Révocation définitive | `skills.activation.write` |
-| `suspended → active` | Réactivation | `skills.activation.write` |
-| `suspended → revoked` | Révocation depuis suspension | `skills.activation.write` |
-| `revoked → *` | **TERMINAL** — aucune transition | — |
+| From → To             | Conditions                                  | Permission                |
+| --------------------- | ------------------------------------------- | ------------------------- |
+| `inactive → active`   | trustState = approved, **HUMAN ONLY**       | `skills.activation.write` |
+| `inactive → revoked`  | Révocation avant activation                 | `skills.activation.write` |
+| `active → suspended`  | Suspension temporaire                       | `skills.activation.write` |
+| `active → inactive`   | Désactivation (ex. remplacement de version) | `skills.activation.write` |
+| `active → revoked`    | Révocation définitive                       | `skills.activation.write` |
+| `suspended → active`  | Réactivation                                | `skills.activation.write` |
+| `suspended → revoked` | Révocation depuis suspension                | `skills.activation.write` |
+| `revoked → *`         | **TERMINAL** — aucune transition            | —                         |
 
 ### 7. Cross-invariants Trust/Activation
 
@@ -212,10 +215,12 @@ CROSS-I-2 : trustState = rejected ⇒ activationState = revoked
 - `rejected + revoked` → UNIQUE ÉTAT VALIDE après rejet
 
 **Atomicité :** la transition `approved → rejected` produit atomiquement :
+
 ```
 trustState = rejected
 activationState = revoked
 ```
+
 dans la même transaction PostgreSQL.
 
 ### 8. Requirements déclaratifs
@@ -226,17 +231,17 @@ Le préfixe `required*` ou le suffixe `*Requirement` est obligatoire.
 ```typescript
 // === Network Requirement ===
 interface SkillNetworkRequirement {
-  requiredDomain: string;        // ex. "api.github.com"
-  purpose: string;               // ex. "fetch pull requests"
-  required: boolean;             // true = bloquant si inaccessible
-  dataSentDescription?: string;  // description de ce qui est envoyé
+  requiredDomain: string; // ex. "api.github.com"
+  purpose: string; // ex. "fetch pull requests"
+  required: boolean; // true = bloquant si inaccessible
+  dataSentDescription?: string; // description de ce qui est envoyé
 }
 
 // === Credential Requirement (aucune valeur stockée) ===
 interface SkillCredentialRequirement {
-  requiredCredentialKind: string;  // ex. "github_token"
+  requiredCredentialKind: string; // ex. "github_token"
   purpose: string;
-  requiredScope: string;           // ex. "repo:read"
+  requiredScope: string; // ex. "repo:read"
   required: boolean;
 }
 //  ⚠ JAMAIS : credentialValue, credentialSecret, token, apiKey
@@ -252,7 +257,7 @@ interface SkillExecutionIsolationRequirement {
 
 // === Tool Requirement ===
 interface SkillToolRequirement {
-  requiredTool: string;   // correspond à une Capability (ex. "gmail.send")
+  requiredTool: string; // correspond à une Capability (ex. "gmail.send")
   required: boolean;
   purpose: string;
 }
@@ -260,12 +265,13 @@ interface SkillToolRequirement {
 // === Dependency Declaration ===
 interface SkillDependencyDeclaration {
   dependencySkillKey: string;
-  versionConstraint?: string;    // ex. ">=1.0.0"
+  versionConstraint?: string; // ex. ">=1.0.0"
   optional: boolean;
 }
 ```
 
 **Invariant :** Aucun de ces champs n'est interprété par C2 comme :
+
 - une permission accordée (D1)
 - une capability assignée (C1)
 - un accès réseau effectif (G1)
@@ -283,25 +289,26 @@ const hashPayload = canonicalStringify({
   skillKey,
   version,
   name,
-  description,           // null si absent
+  description, // null si absent
   category,
-  capabilityKeys,        // trié
-  scripts,               // trié par name
-  resources,             // trié par path
-  references,            // trié par url
+  capabilityKeys, // trié
+  scripts, // trié par name
+  resources, // trié par path
+  references, // trié par url
   dependencyDeclarations, // trié par dependencySkillKey
-  networkRequirements,    // trié par requiredDomain
+  networkRequirements, // trié par requiredDomain
   credentialRequirements, // trié par requiredCredentialKind
   executionIsolationRequirement, // null si absent
-  toolRequirements,       // trié par requiredTool
-  inputSchema,            // null si absent (opaque, inclus si présent dans manifest)
-  outputSchema,           // null si absent (opaque, inclus si présent dans manifest)
-  originalManifest,       // null si absent (inclus car security/content relevant)
+  toolRequirements, // trié par requiredTool
+  inputSchema, // null si absent (opaque, inclus si présent dans manifest)
+  outputSchema, // null si absent (opaque, inclus si présent dans manifest)
+  originalManifest, // null si absent (inclus car security/content relevant)
 });
 contentHash = sha256(hashPayload);
 ```
 
 **Ce qui n'entre PAS dans le hash :**
+
 ```
 id, tenant_id, created_at, updated_at,
 trust_state, activation_state,
@@ -315,6 +322,7 @@ security_scans, security_findings, evaluations
 **CONTENT_MUTABLE_STATES :** `untrusted`, `quarantined`, `reviewed`
 
 Dans ces états, le contenu (champs participant au hash) peut être modifié. Cela déclenche :
+
 1. Recalcul du hash
 2. trustState ← `untrusted`
 3. activationState ← `inactive`
@@ -327,6 +335,7 @@ Dans ces états, toute modification d'un champ participant au hash est **REFUSÉ
 Pour modifier le contenu → créer une nouvelle SkillVersion avec version incrémentée.
 
 Les champs non-hash restent mutables :
+
 - `trustState`, `activationState` (lifecycle)
 - `dataCategory`, `sensitivityLevel` (classification)
 
@@ -334,49 +343,49 @@ Les champs non-hash restent mutables :
 
 **Table `skill_security_scans`** :
 
-| Champ | Type | Remarques |
-|-------|------|-----------|
-| `id` | `text` PK | |
-| `tenantId` | `text` NOT NULL | |
-| `skillId` | `text` NOT NULL | FK → skills.id ON DELETE RESTRICT |
-| `evaluatedContentHash` | `text` NOT NULL | Le hash EXACT du contenu scanné |
-| `scannerId` | `text` NOT NULL | ex. `skillspector`, `manual` |
-| `scannerVersion` | `text` | |
-| `status` | `text` NOT NULL | `running`, `passed`, `failed`, `error` |
-| `startedAt` | `timestamptz` NOT NULL | |
-| `completedAt` | `timestamptz` | |
-| `metadata` | `jsonb` | |
-| `createdAt` | `timestamptz` NOT NULL | |
+| Champ                  | Type                   | Remarques                              |
+| ---------------------- | ---------------------- | -------------------------------------- |
+| `id`                   | `text` PK              |                                        |
+| `tenantId`             | `text` NOT NULL        |                                        |
+| `skillId`              | `text` NOT NULL        | FK → skills.id ON DELETE RESTRICT      |
+| `evaluatedContentHash` | `text` NOT NULL        | Le hash EXACT du contenu scanné        |
+| `scannerId`            | `text` NOT NULL        | ex. `skillspector`, `manual`           |
+| `scannerVersion`       | `text`                 |                                        |
+| `status`               | `text` NOT NULL        | `running`, `passed`, `failed`, `error` |
+| `startedAt`            | `timestamptz` NOT NULL |                                        |
+| `completedAt`          | `timestamptz`          |                                        |
+| `metadata`             | `jsonb`                |                                        |
+| `createdAt`            | `timestamptz` NOT NULL |                                        |
 
 **Table `skill_security_findings`** :
 
-| Champ | Type | Remarques |
-|-------|------|-----------|
-| `id` | `text` PK | |
-| `scanId` | `text` NOT NULL | FK → skill_security_scans.id ON DELETE RESTRICT |
-| `severity` | `text` NOT NULL | `low`, `medium`, `high`, `critical` |
+| Champ      | Type            | Remarques                                                                                                                          |
+| ---------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `id`       | `text` PK       |                                                                                                                                    |
+| `scanId`   | `text` NOT NULL | FK → skill_security_scans.id ON DELETE RESTRICT                                                                                    |
+| `severity` | `text` NOT NULL | `low`, `medium`, `high`, `critical`                                                                                                |
 | `category` | `text` NOT NULL | `prompt_injection`, `exfiltration`, `privilege_escalation`, `dangerous_code`, `supply_chain`, `excessive_agency`, `tool_poisoning` |
-| `code` | `text` | Identifiant du scanner pour ce finding |
-| `message` | `text` NOT NULL | |
-| `location` | `text` | Script/path concerné |
-| `metadata` | `jsonb` | |
+| `code`     | `text`          | Identifiant du scanner pour ce finding                                                                                             |
+| `message`  | `text` NOT NULL |                                                                                                                                    |
+| `location` | `text`          | Script/path concerné                                                                                                               |
+| `metadata` | `jsonb`         |                                                                                                                                    |
 
 **Table `skill_evaluations`** :
 
-| Champ | Type | Remarques |
-|-------|------|-----------|
-| `id` | `text` PK | |
-| `tenantId` | `text` NOT NULL | |
-| `skillId` | `text` NOT NULL | FK → skills.id ON DELETE RESTRICT |
-| `evaluatedContentHash` | `text` NOT NULL | Le hash EXACT du contenu évalué |
-| `evaluatorType` | `text` NOT NULL | ex. `behavioral`, `unit`, `integration` |
-| `evaluatorVersion` | `text` | |
-| `status` | `text` NOT NULL | `running`, `passed`, `failed`, `error` |
-| `score` | `jsonb` | Structuré, pas un chiffre nu |
-| `startedAt` | `timestamptz` NOT NULL | |
-| `completedAt` | `timestamptz` | |
-| `metadata` | `jsonb` | |
-| `createdAt` | `timestamptz` NOT NULL | |
+| Champ                  | Type                   | Remarques                               |
+| ---------------------- | ---------------------- | --------------------------------------- |
+| `id`                   | `text` PK              |                                         |
+| `tenantId`             | `text` NOT NULL        |                                         |
+| `skillId`              | `text` NOT NULL        | FK → skills.id ON DELETE RESTRICT       |
+| `evaluatedContentHash` | `text` NOT NULL        | Le hash EXACT du contenu évalué         |
+| `evaluatorType`        | `text` NOT NULL        | ex. `behavioral`, `unit`, `integration` |
+| `evaluatorVersion`     | `text`                 |                                         |
+| `status`               | `text` NOT NULL        | `running`, `passed`, `failed`, `error`  |
+| `score`                | `jsonb`                | Structuré, pas un chiffre nu            |
+| `startedAt`            | `timestamptz` NOT NULL |                                         |
+| `completedAt`          | `timestamptz`          |                                         |
+| `metadata`             | `jsonb`                |                                         |
+| `createdAt`            | `timestamptz` NOT NULL |                                         |
 
 **Règle de promotion :** Un scan ou eval `passed` n'est valable pour une promotion
 que si `evaluatedContentHash` === `skill.contentHash`. Sinon : STALE_ATTESTATION
@@ -445,16 +454,17 @@ UNIQUE ACTIVE (tenant_id, skill_key)
 Permissions ajoutées à `src/core/identity/permissions.ts` (sans référence à des
 rôles spécifiques — C2 définit la permission, 2B-2 définit le rôle) :
 
-| Permission | Description | Transition concernée |
-|-----------|-------------|---------------------|
-| `skills.read` | Consulter le registre | Routes GET skills |
-| `skills.propose` | Proposer/import un skill | Import |
-| `skills.create` | Créer un skill directement | Création |
-| `skills.trust.write` | Changer TrustState | quarantined/reviewed/approved/rejected |
-| `skills.activation.write` | Changer ActivationState | active/suspended/revoked |
-| `skills.delete` | Supprimer une version | DELETE |
+| Permission                | Description                | Transition concernée                   |
+| ------------------------- | -------------------------- | -------------------------------------- |
+| `skills.read`             | Consulter le registre      | Routes GET skills                      |
+| `skills.propose`          | Proposer/import un skill   | Import                                 |
+| `skills.create`           | Créer un skill directement | Création                               |
+| `skills.trust.write`      | Changer TrustState         | quarantined/reviewed/approved/rejected |
+| `skills.activation.write` | Changer ActivationState    | active/suspended/revoked               |
+| `skills.delete`           | Supprimer une version      | DELETE                                 |
 
 **HUMAN ONLY transitions :**
+
 - `reviewed → approved` : nécessite `skills.trust.write` + actorType = HUMAN
 - `inactive → active` : nécessite `skills.activation.write` + actorType = HUMAN
 - Ces transitions vérifient que l'acteur est humain (session) mais ne spécifient
@@ -462,32 +472,32 @@ rôles spécifiques — C2 définit la permission, 2B-2 définit le rôle) :
 
 ### 15. Use cases — CapabilityService
 
-| Use case | Permission | Actor | Transaction | Audit events |
-|----------|-----------|-------|------------|-------------|
-| `importSkill(input)` | `skills.propose` | human, system | Hash+provenance, trustState=untrusted | `skill.imported` |
-| `createSkill(input)` | `skills.create` | human | Création directe | `skill.created` |
-| `quarantineSkill(id)` | `skills.trust.write` | human, system | trustState=quarantined | `skill.trust_changed` |
-| `approveSkill(id)` | `skills.trust.write` + HUMAN | human | trustState=approved | `skill.trust_changed` |
-| `rejectSkill(id)` | `skills.trust.write` | human | trustState=rejected + activationState=revoked | `skill.trust_changed` + `skill.activation_changed` |
-| `activateSkill(id)` | `skills.activation.write` + HUMAN | human | FOR UPDATE, desactive ancien, active nouveau | `skill.activation_changed` |
-| `suspendSkill(id)` | `skills.activation.write` | human | activationState=suspended | `skill.activation_changed` |
-| `reactivateSkill(id)` | `skills.activation.write` | human | activationState=active (si approved) | `skill.activation_changed` |
-| `revokeSkill(id)` | `skills.activation.write` | human | activationState=revoked | `skill.activation_changed` |
-| `updateSkillContent(id, data)` | `skills.create` | human | Rehash, trustState=untrusted (SI mutable) | `skill.content_changed` |
-| `deleteSkill(id)` | `skills.delete` | human | DELETE (jamais si actif) | — |
-| `recordScan(id, results)` | `skills.trust.write` | system | Insert scan + findings | `skill.security_scan_recorded` |
-| `recordEval(id, result)` | `skills.trust.write` | system | Insert eval | `skill.eval_recorded` |
+| Use case                       | Permission                        | Actor         | Transaction                                   | Audit events                                       |
+| ------------------------------ | --------------------------------- | ------------- | --------------------------------------------- | -------------------------------------------------- |
+| `importSkill(input)`           | `skills.propose`                  | human, system | Hash+provenance, trustState=untrusted         | `skill.imported`                                   |
+| `createSkill(input)`           | `skills.create`                   | human         | Création directe                              | `skill.created`                                    |
+| `quarantineSkill(id)`          | `skills.trust.write`              | human, system | trustState=quarantined                        | `skill.trust_changed`                              |
+| `approveSkill(id)`             | `skills.trust.write` + HUMAN      | human         | trustState=approved                           | `skill.trust_changed`                              |
+| `rejectSkill(id)`              | `skills.trust.write`              | human         | trustState=rejected + activationState=revoked | `skill.trust_changed` + `skill.activation_changed` |
+| `activateSkill(id)`            | `skills.activation.write` + HUMAN | human         | FOR UPDATE, desactive ancien, active nouveau  | `skill.activation_changed`                         |
+| `suspendSkill(id)`             | `skills.activation.write`         | human         | activationState=suspended                     | `skill.activation_changed`                         |
+| `reactivateSkill(id)`          | `skills.activation.write`         | human         | activationState=active (si approved)          | `skill.activation_changed`                         |
+| `revokeSkill(id)`              | `skills.activation.write`         | human         | activationState=revoked                       | `skill.activation_changed`                         |
+| `updateSkillContent(id, data)` | `skills.create`                   | human         | Rehash, trustState=untrusted (SI mutable)     | `skill.content_changed`                            |
+| `deleteSkill(id)`              | `skills.delete`                   | human         | DELETE (jamais si actif)                      | —                                                  |
+| `recordScan(id, results)`      | `skills.trust.write`              | system        | Insert scan + findings                        | `skill.security_scan_recorded`                     |
+| `recordEval(id, result)`       | `skills.trust.write`              | system        | Insert eval                                   | `skill.eval_recorded`                              |
 
 ### 16. API — Routes
 
-| Méthode | Route | Permission | Corps | Réponse |
-|---------|-------|-----------|-------|---------|
-| `GET` | `/api/skills` | `skills.read` | Query: `?trustState=&activationState=&capabilityKey=&skillKey=` | `{ skills: Skill[] }` |
-| `GET` | `/api/skills/[id]` | `skills.read` | — | `{ skill: Skill }` |
-| `POST` | `/api/skills` | `skills.propose` ou `skills.create` | `{ skillKey, version, name, category, ... }` | `201 { skill }` |
-| `PATCH` | `/api/skills/[id]/trust` | `skills.trust.write` | `{ targetTrustState }` | `{ skill }` |
-| `PATCH` | `/api/skills/[id]/activation` | `skills.activation.write` | `{ targetActivationState }` | `{ skill }` |
-| `DELETE` | `/api/skills/[id]` | `skills.delete` | — | `204` |
+| Méthode  | Route                         | Permission                          | Corps                                                           | Réponse               |
+| -------- | ----------------------------- | ----------------------------------- | --------------------------------------------------------------- | --------------------- |
+| `GET`    | `/api/skills`                 | `skills.read`                       | Query: `?trustState=&activationState=&capabilityKey=&skillKey=` | `{ skills: Skill[] }` |
+| `GET`    | `/api/skills/[id]`            | `skills.read`                       | —                                                               | `{ skill: Skill }`    |
+| `POST`   | `/api/skills`                 | `skills.propose` ou `skills.create` | `{ skillKey, version, name, category, ... }`                    | `201 { skill }`       |
+| `PATCH`  | `/api/skills/[id]/trust`      | `skills.trust.write`                | `{ targetTrustState }`                                          | `{ skill }`           |
+| `PATCH`  | `/api/skills/[id]/activation` | `skills.activation.write`           | `{ targetActivationState }`                                     | `{ skill }`           |
+| `DELETE` | `/api/skills/[id]`            | `skills.delete`                     | —                                                               | `204`                 |
 
 **Routes trust et activation sont SEPARÉES :** impossible de modifier les deux
 dans un même appel.
@@ -499,15 +509,15 @@ origine → corps JSON → validation métier → exécution.
 
 Événements à ajouter à `auditEventTypeSchema` (motif DROP+ADD CHECK existant) :
 
-| # | Événement | Acteur | Détails (fermés) | Transition |
-|---|-----------|--------|-------------------|-----------|
-| 1 | `skill.created` | human, system | `{ skillKey, version }` | Création |
-| 2 | `skill.imported` | human, system | `{ skillKey, version, source, contentHash }` | Import |
-| 3 | `skill.content_changed` | human, system | `{ skillKey, version, previousHash, newHash }` | Mise à jour contenu |
-| 4 | `skill.trust_changed` | human, system | `{ skillKey, version, previousTrustState, newTrustState, reason? }` | Transition TrustState |
-| 5 | `skill.activation_changed` | human | `{ skillKey, version, previousActivationState, newActivationState, previousActiveVersion? }` | Transition ActivationState |
-| 6 | `skill.security_scan_recorded` | system | `{ skillId, scanId, evaluatedHash, status }` | Scan complété |
-| 7 | `skill.eval_recorded` | system | `{ skillId, evalId, evaluatedHash, status }` | Eval complétée |
+| #   | Événement                      | Acteur        | Détails (fermés)                                                                             | Transition                 |
+| --- | ------------------------------ | ------------- | -------------------------------------------------------------------------------------------- | -------------------------- |
+| 1   | `skill.created`                | human, system | `{ skillKey, version }`                                                                      | Création                   |
+| 2   | `skill.imported`               | human, system | `{ skillKey, version, source, contentHash }`                                                 | Import                     |
+| 3   | `skill.content_changed`        | human, system | `{ skillKey, version, previousHash, newHash }`                                               | Mise à jour contenu        |
+| 4   | `skill.trust_changed`          | human, system | `{ skillKey, version, previousTrustState, newTrustState, reason? }`                          | Transition TrustState      |
+| 5   | `skill.activation_changed`     | human         | `{ skillKey, version, previousActivationState, newActivationState, previousActiveVersion? }` | Transition ActivationState |
+| 6   | `skill.security_scan_recorded` | system        | `{ skillId, scanId, evaluatedHash, status }`                                                 | Scan complété              |
+| 7   | `skill.eval_recorded`          | system        | `{ skillId, evalId, evaluatedHash, status }`                                                 | Eval complétée             |
 
 **Aucune donnée sensible** dans les détails : pas de contenu de scan brut,
 pas de credential, pas de message de finding complet si sensible.
@@ -618,6 +628,7 @@ CREATE INDEX evals_by_skill_hash ON skill_evaluations(skill_id, evaluated_conten
 ```
 
 **Pas de table :**
+
 - `skill_status_history` (couvert par audit_entries)
 - `skill_attestations` (couvert par scans + evals)
 - `skill_import_record` (couvert par provenance)
@@ -633,7 +644,11 @@ interface SkillRepository {
   updateTrustState(id: string, trustState: TrustState): Promise<Skill>;
   updateActivationState(id: string, activationState: ActivationState): Promise<Skill>;
   updateContent(id: string, skill: Skill, previousHash: string): Promise<Skill>;
-  deactivateIfActive(tenantId: string, skillKey: string, excludingId: string): Promise<string | null>;
+  deactivateIfActive(
+    tenantId: string,
+    skillKey: string,
+    excludingId: string,
+  ): Promise<string | null>;
   delete(id: string): Promise<boolean>;
 }
 
@@ -668,27 +683,27 @@ interface Container {
 
 ### 21. Frontières C2 / C1 / D1 / D2 / D4 / G1
 
-| Domaine | Porte | Ne porte pas |
-|---------|-------|-------------|
-| **C2** | Skill identity, TrustState, ActivationState, provenance, hash, requirements déclaratifs, scans, evals | Permissions effectives, exécution, credentials, accès réseau |
-| **C1** | Capability identity, Capability lifecycle, Agent↔Capability assignment | Skill registry, execution, trust |
-| **2B-2** | Rôles humains, permissions, Human↔Agent links | Skill registry, capability registry |
-| **D1** | Policy evaluation, effective authorization, approval for external effects | Skill storage, runtime execution |
-| **D2** | Mission/Plan/Run orchestration, compatibility resolution | Skill registry, policy, execution |
-| **D4** | Runtime execution, validation d'appel, skill selection | Registry, permissions, approval |
-| **G1** | Tool execution, credential resolution, sandbox, network access | Registry, lifecycle, policy |
+| Domaine  | Porte                                                                                                 | Ne porte pas                                                 |
+| -------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **C2**   | Skill identity, TrustState, ActivationState, provenance, hash, requirements déclaratifs, scans, evals | Permissions effectives, exécution, credentials, accès réseau |
+| **C1**   | Capability identity, Capability lifecycle, Agent↔Capability assignment                                | Skill registry, execution, trust                             |
+| **2B-2** | Rôles humains, permissions, Human↔Agent links                                                         | Skill registry, capability registry                          |
+| **D1**   | Policy evaluation, effective authorization, approval for external effects                             | Skill storage, runtime execution                             |
+| **D2**   | Mission/Plan/Run orchestration, compatibility resolution                                              | Skill registry, policy, execution                            |
+| **D4**   | Runtime execution, validation d'appel, skill selection                                                | Registry, permissions, approval                              |
+| **G1**   | Tool execution, credential resolution, sandbox, network access                                        | Registry, lifecycle, policy                                  |
 
 ### 22. Compliance — Alignement COMPLIANCE-0
 
-| Contrainte COMPLIANCE-0 | Application C2 |
-|------------------------|----------------|
-| **DataCategory** | Champ `dataCategory` nullable en C2 (13 valeurs canoniques) |
-| **SensitivityLevel** | Champ `sensitivityLevel` nullable en C2 (C0–C3) |
-| **Tenant boundaries** | `tenant_id` dans toutes les contraintes UNIQUE |
-| **Retention** | Skills : durée de vie + 5 ans d'audit (identique à C1) |
-| **Secrets** | Aucun credential stocké ; `credentialRequirements` déclaratif seulement |
-| **Provenance** | Obligatoire sur tout skill, immutable après import |
-| **Audit** | Append-only, sans donnée sensible dans les détails |
+| Contrainte COMPLIANCE-0 | Application C2                                                          |
+| ----------------------- | ----------------------------------------------------------------------- |
+| **DataCategory**        | Champ `dataCategory` nullable en C2 (13 valeurs canoniques)             |
+| **SensitivityLevel**    | Champ `sensitivityLevel` nullable en C2 (C0–C3)                         |
+| **Tenant boundaries**   | `tenant_id` dans toutes les contraintes UNIQUE                          |
+| **Retention**           | Skills : durée de vie + 5 ans d'audit (identique à C1)                  |
+| **Secrets**             | Aucun credential stocké ; `credentialRequirements` déclaratif seulement |
+| **Provenance**          | Obligatoire sur tout skill, immutable après import                      |
+| **Audit**               | Append-only, sans donnée sensible dans les détails                      |
 
 ### 23. Tests
 

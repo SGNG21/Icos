@@ -82,10 +82,7 @@ describe("D4.1 — LocalRuntimeAdapter (real subprocess)", () => {
       expect(output.stdout).toContain("hello-from-child");
     }
 
-    const stdoutLog = await readFile(
-      path.join(workspacePath, "output", "stdout.log"),
-      "utf-8",
-    );
+    const stdoutLog = await readFile(path.join(workspacePath, "output", "stdout.log"), "utf-8");
     expect(stdoutLog).toContain("hello-from-child");
   });
 

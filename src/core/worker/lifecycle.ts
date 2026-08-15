@@ -18,10 +18,7 @@ const VALID_TRANSITIONS: Record<WorkerStatus, readonly WorkerStatus[]> = {
 /**
  * Vérifie si une transition est autorisée.
  */
-export function isWorkerTransitionAllowed(
-  from: WorkerStatus,
-  to: WorkerStatus,
-): boolean {
+export function isWorkerTransitionAllowed(from: WorkerStatus, to: WorkerStatus): boolean {
   const allowed = VALID_TRANSITIONS[from];
   if (!allowed) return false;
   return allowed.includes(to);
@@ -30,9 +27,7 @@ export function isWorkerTransitionAllowed(
 /**
  * Retourne les transitions autorisées depuis un état donné.
  */
-export function allowedWorkerTransitionsFrom(
-  status: WorkerStatus,
-): readonly WorkerStatus[] {
+export function allowedWorkerTransitionsFrom(status: WorkerStatus): readonly WorkerStatus[] {
   return VALID_TRANSITIONS[status] ?? [];
 }
 

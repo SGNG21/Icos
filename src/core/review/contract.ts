@@ -6,11 +6,7 @@ import { idSchema, isoDateTimeSchema } from "@/core/contracts/common";
 // Review verdicts
 // ─────────────────────────────────────
 
-export const reviewVerdictSchema = z.enum([
-  "PASS",
-  "CHANGES_REQUIRED",
-  "FAILED",
-]);
+export const reviewVerdictSchema = z.enum(["PASS", "CHANGES_REQUIRED", "FAILED"]);
 
 export type ReviewVerdict = z.infer<typeof reviewVerdictSchema>;
 
@@ -60,13 +56,15 @@ export const reviewSpecSchema = z.object({
   /** Critères d'acceptation spécifiques. */
   acceptanceCriteria: z.array(z.string()).default([]),
   /** Catégories de vérification requises. */
-  requiredChecks: z.array(reviewCategorySchema).default([
-    "acceptance_criteria",
-    "tests",
-    "scope",
-    "security_boundaries",
-    "architecture_boundaries",
-  ]),
+  requiredChecks: z
+    .array(reviewCategorySchema)
+    .default([
+      "acceptance_criteria",
+      "tests",
+      "scope",
+      "security_boundaries",
+      "architecture_boundaries",
+    ]),
   /** Chemin du worktree contenant le travail à reviewer. */
   worktreePath: z.string().min(1),
   /** SHA du commit à reviewer. */

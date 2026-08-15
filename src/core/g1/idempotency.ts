@@ -19,10 +19,7 @@ const TRANSITIONS: Record<IdempotencyState, IdempotencyState[]> = {
  *
  * @throws Error si la transition est invalide.
  */
-export function assertIdempotencyTransition(
-  from: IdempotencyState,
-  to: IdempotencyState,
-): void {
+export function assertIdempotencyTransition(from: IdempotencyState, to: IdempotencyState): void {
   if (from === to) {
     // Rester dans le même état est toujours autorisé
     // (utilisé pour les lectures / rejeu).
@@ -31,9 +28,7 @@ export function assertIdempotencyTransition(
 
   const allowed = TRANSITIONS[from];
   if (!allowed) {
-    throw new Error(
-      `Transition d'état invalide : '${from}' → '${to}' (état source inconnu)`,
-    );
+    throw new Error(`Transition d'état invalide : '${from}' → '${to}' (état source inconnu)`);
   }
 
   if (!allowed.includes(to)) {
@@ -56,10 +51,7 @@ export function isIdempotencyTerminal(state: IdempotencyState): boolean {
  * @param updatedAt Date ISO de dernière mise à jour.
  * @param staleThresholdMs Seuil de staleness en ms (défaut = 5 minutes).
  */
-export function isStaleExecuting(
-  updatedAt: string,
-  staleThresholdMs = 300_000,
-): boolean {
+export function isStaleExecuting(updatedAt: string, staleThresholdMs = 300_000): boolean {
   const elapsed = Date.now() - new Date(updatedAt).getTime();
   return elapsed > staleThresholdMs;
 }

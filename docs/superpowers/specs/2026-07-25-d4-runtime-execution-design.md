@@ -2,7 +2,7 @@
 
 **Status:** IMPLEMENTATION_IN_PROGRESS  
 **Date:** 2026-07-25  
-**Dependencies:** D1 (Policy), D2 (Mission Engine), D3 (AI Gateway / OmniRoute)  
+**Dependencies:** D1 (Policy), D2 (Mission Engine), D3 (AI Gateway / OmniRoute)
 
 ---
 
@@ -37,11 +37,11 @@ D4 owns **execution** — the lifecycle of running a plan step once the Mission 
 
 ## 3. Canonical Ownership
 
-| Layer | Owner | State Machine |
-|-------|-------|---------------|
-| D2 Mission Engine | Plan lifecycle | Mission status (CREATED → … → COMPLETED) |
+| Layer                | Owner              | State Machine                               |
+| -------------------- | ------------------ | ------------------------------------------- |
+| D2 Mission Engine    | Plan lifecycle     | Mission status (CREATED → … → COMPLETED)    |
 | D4 Runtime Execution | Step/Run execution | Execution status (STARTING → … → SUCCEEDED) |
-| D3 AI Gateway | AI request | None (single request/response) |
+| D3 AI Gateway        | AI request         | None (single request/response)              |
 
 **Invariant:** These state machines are **never merged**. D2 tracks planning and orchestration state; D4 tracks runtime execution state; D3 tracks AI generation state. Each has its own lifecycle, transitions, and error model.
 
@@ -51,18 +51,18 @@ D4 owns **execution** — the lifecycle of running a plan step once the Mission 
 
 ### Verified against origin/main (8ac39cb)
 
-| Field | Specified | Actual | Status |
-|-------|-----------|--------|--------|
-| `AiGatewayPort` signature | `generate(request: AiRoutingRequestWithSignal): Promise<AiGenerationResult>` | ✅ Matches | PASS |
-| `tenantId` | Required | `z.string().min(1)` | PASS |
-| `correlationId` | Required | `z.string().min(1)` | PASS |
-| `AbortSignal` | Via `AiRoutingRequestWithSignal.abortSignal` | ✅ Present as optional field | PASS |
-| Routing intents | BEST_REASONING, BEST_CODING, FAST, CHEAP, PRIVATE, FALLBACK | ✅ All 6 present | PASS |
-| Error codes | PROVIDER_UNAVAILABLE, RATE_LIMITED, TIMEOUT, INVALID_RESPONSE, POLICY_BLOCKED, UNSUPPORTED_CAPABILITY, CANCELLED, INTERNAL_ERROR | ✅ All 8 present | PASS |
-| Usage metadata | inputTokens, outputTokens, totalTokens, costUsd? | ✅ All 4 present in `AiUsage` | PASS |
-| Provider info | id, model, account? | ✅ All 3 present in `AiProviderInfo` | PASS |
-| `fallbackAllowed` | boolean, default true | ✅ Present | PASS |
-| `budgetMaxCostUsd` | optional max cost | ✅ Present | PASS |
+| Field                     | Specified                                                                                                                        | Actual                               | Status |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------ |
+| `AiGatewayPort` signature | `generate(request: AiRoutingRequestWithSignal): Promise<AiGenerationResult>`                                                     | ✅ Matches                           | PASS   |
+| `tenantId`                | Required                                                                                                                         | `z.string().min(1)`                  | PASS   |
+| `correlationId`           | Required                                                                                                                         | `z.string().min(1)`                  | PASS   |
+| `AbortSignal`             | Via `AiRoutingRequestWithSignal.abortSignal`                                                                                     | ✅ Present as optional field         | PASS   |
+| Routing intents           | BEST_REASONING, BEST_CODING, FAST, CHEAP, PRIVATE, FALLBACK                                                                      | ✅ All 6 present                     | PASS   |
+| Error codes               | PROVIDER_UNAVAILABLE, RATE_LIMITED, TIMEOUT, INVALID_RESPONSE, POLICY_BLOCKED, UNSUPPORTED_CAPABILITY, CANCELLED, INTERNAL_ERROR | ✅ All 8 present                     | PASS   |
+| Usage metadata            | inputTokens, outputTokens, totalTokens, costUsd?                                                                                 | ✅ All 4 present in `AiUsage`        | PASS   |
+| Provider info             | id, model, account?                                                                                                              | ✅ All 3 present in `AiProviderInfo` | PASS   |
+| `fallbackAllowed`         | boolean, default true                                                                                                            | ✅ Present                           | PASS   |
+| `budgetMaxCostUsd`        | optional max cost                                                                                                                | ✅ Present                           | PASS   |
 
 **Divergences:** None — the D3 contract matches exactly what was designed. No spec update needed.
 
@@ -73,7 +73,7 @@ AiGatewayPort.generate({
   ...AiRoutingRequestWithSignal,
   // D4 sets: tenantId, correlationId, prompt (from step), intent, abortSignal, timeoutMs
   // D4 does NOT set: provider-specific config (that's D3's job)
-})
+});
 ```
 
 ---
@@ -196,6 +196,7 @@ The policy request for execution includes:
 ```
 
 If the policy decision is:
+
 - `ALLOW` → continue
 - `DENY` → return `FAILED` with `error.code = "POLICY_DENIED"`
 - `REQUIRE_APPROVAL` → return `FAILED` with `error.code = "REQUIRES_APPROVAL"` (D2 handles the approval workflow)
@@ -310,6 +311,7 @@ The V1 adapter runs steps as local subprocesses with:
 - AI-backed steps use `AiGatewayPort.generate()` integrated via the orchestrator
 
 Process tree cleanup on timeout/cancellation:
+
 1. Kill process group (negative PID on POSIX)
 2. Wait for graceful shutdown (configurable grace period)
 3. Force kill if still alive after grace period
@@ -365,16 +367,16 @@ ExecutionOrchestrator
 
 ## 15. D3 Error Mapping
 
-| D3 Error Code | D4 Mapping | Runtime Behavior |
-|---------------|------------|------------------|
-| `PROVIDER_UNAVAILABLE` | `AI_PROVIDER_UNAVAILABLE` | FAILED; no fallback initiated by D4 |
-| `RATE_LIMITED` | `AI_RATE_LIMITED` | FAILED; caller may retry |
-| `TIMEOUT` | `AI_TIMEOUT` | FAILED; D4 timeout is separate |
-| `INVALID_RESPONSE` | `AI_INVALID_RESPONSE` | FAILED; closed |
-| `POLICY_BLOCKED` | `AI_POLICY_BLOCKED` | FAILED; no fallback |
-| `UNSUPPORTED_CAPABILITY` | `AI_UNSUPPORTED_CAPABILITY` | FAILED |
-| `CANCELLED` | `CANCELLED` | CANCELLED; clean cancellation |
-| `INTERNAL_ERROR` | `AI_INTERNAL_ERROR` | FAILED; ICOS failure |
+| D3 Error Code            | D4 Mapping                  | Runtime Behavior                    |
+| ------------------------ | --------------------------- | ----------------------------------- |
+| `PROVIDER_UNAVAILABLE`   | `AI_PROVIDER_UNAVAILABLE`   | FAILED; no fallback initiated by D4 |
+| `RATE_LIMITED`           | `AI_RATE_LIMITED`           | FAILED; caller may retry            |
+| `TIMEOUT`                | `AI_TIMEOUT`                | FAILED; D4 timeout is separate      |
+| `INVALID_RESPONSE`       | `AI_INVALID_RESPONSE`       | FAILED; closed                      |
+| `POLICY_BLOCKED`         | `AI_POLICY_BLOCKED`         | FAILED; no fallback                 |
+| `UNSUPPORTED_CAPABILITY` | `AI_UNSUPPORTED_CAPABILITY` | FAILED                              |
+| `CANCELLED`              | `CANCELLED`                 | CANCELLED; clean cancellation       |
+| `INTERNAL_ERROR`         | `AI_INTERNAL_ERROR`         | FAILED; ICOS failure                |
 
 D4 decides execution semantics. D3 only reports normalized AI result/error. D4 never initiates provider fallback — that is D3's responsibility (or the caller's).
 
@@ -383,6 +385,7 @@ D4 decides execution semantics. D3 only reports normalized AI result/error. D4 n
 ## 16. Usage Metadata
 
 D3 provides:
+
 - `inputTokens`, `outputTokens`, `totalTokens`
 - `costUsd?`
 - `provider.id`, `provider.model`
@@ -396,9 +399,7 @@ D4 may persist this metadata according to existing repository architecture. For 
 ## 17. Execution Result / Error Model
 
 ```typescript
-type ExecutionResult =
-  | SuccessfulExecution
-  | FailedExecution;
+type ExecutionResult = SuccessfulExecution | FailedExecution;
 
 interface SuccessfulExecution {
   ok: true;
@@ -419,6 +420,7 @@ interface FailedExecution {
 ### Execution Error Codes
 
 D4-native (not from D3):
+
 - `POLICY_DENIED` — D1 execution-time policy check denied
 - `REQUIRES_APPROVAL` — D1 requires approval before execution
 - `CREDENTIAL_UNAVAILABLE` — Credential broker cannot satisfy request
@@ -433,6 +435,7 @@ D4-native (not from D3):
 - `INTERNAL_ERROR` — Unexpected D4 failure (fail-closed)
 
 D3-mapped:
+
 - `AI_PROVIDER_UNAVAILABLE`
 - `AI_RATE_LIMITED`
 - `AI_TIMEOUT`
@@ -457,34 +460,37 @@ If security-sensitive input/config changes between validation and execution, D4 
 
 ## 19. Security Acceptance Gates
 
-| ID | Requirement | Verification |
-|----|-------------|--------------|
-| SEC-D4-01 | Worker cannot obtain raw stored credentials | Test: broker returns references, worker env has no raw secrets |
-| SEC-D4-02 | Network default deny | Test: policy without explicit endpoint returns deny |
-| SEC-D4-03 | Workspace cannot escape root via `../` | Test: path with `../` beyond root is rejected |
-| SEC-D4-04 | Workspace cannot escape via symlink | Test: symlink to outside workspace is denied |
-| SEC-D4-05 | Timeout kills complete process tree | Test: process group receives SIGTERM on timeout |
-| SEC-D4-06 | Cancellation cannot leave zombie worker | Test: after cancellation, process is reaped |
+| ID        | Requirement                                          | Verification                                                           |
+| --------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
+| SEC-D4-01 | Worker cannot obtain raw stored credentials          | Test: broker returns references, worker env has no raw secrets         |
+| SEC-D4-02 | Network default deny                                 | Test: policy without explicit endpoint returns deny                    |
+| SEC-D4-03 | Workspace cannot escape root via `../`               | Test: path with `../` beyond root is rejected                          |
+| SEC-D4-04 | Workspace cannot escape via symlink                  | Test: symlink to outside workspace is denied                           |
+| SEC-D4-05 | Timeout kills complete process tree                  | Test: process group receives SIGTERM on timeout                        |
+| SEC-D4-06 | Cancellation cannot leave zombie worker              | Test: after cancellation, process is reaped                            |
 | SEC-D4-07 | Authorization rechecked immediately before execution | Test: stale allow at planning is overwritten by execution-time recheck |
-| SEC-D4-08 | TOCTOU-sensitive hash mismatch denies execution | Test: modified input after validation results in deny |
-| SEC-D4-09 | Cleanup cannot delete outside owned workspace | Test: cleanup with escaped path does not delete outside scope |
-| SEC-D4-10 | Logs/artifacts cannot expose credential values | Test: credential values are scrubbed from captured output |
+| SEC-D4-08 | TOCTOU-sensitive hash mismatch denies execution      | Test: modified input after validation results in deny                  |
+| SEC-D4-09 | Cleanup cannot delete outside owned workspace        | Test: cleanup with escaped path does not delete outside scope          |
+| SEC-D4-10 | Logs/artifacts cannot expose credential values       | Test: credential values are scrubbed from captured output              |
 
 ---
 
 ## 20. Testing Plan
 
 ### Core Contracts
+
 - D4-01: successful state progression
 - D4-02: invalid state transition rejected
 - D4-03: terminal states are immutable
 
 ### Policy Integration
+
 - D4-04: D1 DENY prevents execution
 - D4-05: D1 REQUIRE_APPROVAL prevents unauthorized execution
 - D4-06: authorization is rechecked at execution time (not stale)
 
 ### AI Gateway Integration
+
 - D4-07: tenant preserved
 - D4-08: correlationId passed to D3
 - D4-09: AI generation success mapped correctly
@@ -495,6 +501,7 @@ If security-sensitive input/config changes between validation and execution, D4 
 - D4-14: POLICY_BLOCKED fails closed
 
 ### Process & Workspace
+
 - D4-15: worker cancellation
 - D4-16: worker timeout
 - D4-17: process tree cleanup
@@ -504,12 +511,14 @@ If security-sensitive input/config changes between validation and execution, D4 
 - D4-21: network default deny
 
 ### Security
+
 - D4-22: raw credential unavailable to worker
 - D4-23: credential leakage absent from logs
 - D4-24: TOCTOU/hash mismatch denied
 - D4-25: artifacts collected only from allowed workspace
 
 ### State & Metadata
+
 - D4-26: mission state and runtime state remain distinct
 - D4-27: D3 fallback metadata preserved
 - D4-28: D3 usage metadata preserved

@@ -60,10 +60,7 @@ export class ArtifactCollector {
         // SEC-D4-25: Ne collecter que depuis le workspace
         if (safePath.startsWith("..")) continue;
 
-        const content = await this.safeReadContent(
-          validatedPath,
-          maxSizeBytes - totalSize,
-        );
+        const content = await this.safeReadContent(validatedPath, maxSizeBytes - totalSize);
 
         const artifact: ArtifactItem = {
           name: path.basename(validatedPath),
@@ -86,11 +83,7 @@ export class ArtifactCollector {
   /**
    * Collecte le stdout/stderr comme artefacts virtuels.
    */
-  createVirtualArtifact(
-    name: string,
-    content: string,
-    mimeType = "text/plain",
-  ): ArtifactItem {
+  createVirtualArtifact(name: string, content: string, mimeType = "text/plain"): ArtifactItem {
     return {
       name,
       path: `virtual/${name}`,
@@ -104,10 +97,7 @@ export class ArtifactCollector {
    * Lecture sécurisée des entrées d'un répertoire.
    * Ignore les entrées qui échouent à la validation.
    */
-  private async safeReadDir(
-    dirPath: string,
-    workspacePath: string,
-  ): Promise<string[]> {
+  private async safeReadDir(dirPath: string, workspacePath: string): Promise<string[]> {
     try {
       const entries = await readdir(dirPath);
 
@@ -122,14 +112,9 @@ export class ArtifactCollector {
    * Lecture sécurisée du contenu d'un fichier.
    * Limite la taille et gère les erreurs silencieusement.
    */
-  private async safeReadContent(
-    filePath: string,
-    maxBytes: number,
-  ): Promise<string | undefined> {
+  private async safeReadContent(filePath: string, maxBytes: number): Promise<string | undefined> {
     try {
-      const fd = await import("node:fs").then((fs) =>
-        fs.promises.open(filePath, "r"),
-      );
+      const fd = await import("node:fs").then((fs) => fs.promises.open(filePath, "r"));
       try {
         const buffer = Buffer.alloc(Math.min(maxBytes, 1024 * 1024));
         const { bytesRead } = await fd.read(buffer, 0, buffer.length, 0);

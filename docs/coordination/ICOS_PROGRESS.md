@@ -9,19 +9,19 @@
 
 ## Lots
 
-| Lot | Status | PR | Merge SHA | Branch | Notes |
-|-----|--------|----|-----------|--------|-------|
-| 1A — Socle métier | DONE | — | a6fd58e | — | |
-| 1B — API interne simulée | DONE | — | 90e39f1 | — | |
-| 2A-1 — Persistence foundation | DONE | — | 00376f1 | — | |
-| 2B-1a — Identity | DONE | — | 724735d | — | |
-| 2B-1b — Authentication | DONE | — | 3a9f206 | — | |
-| 2B-2 — Admin / Human-Agent | DONE | — | — | — | |
-| COMPLIANCE-0 | DONE | — | f5470d6 | — | |
-| C1 — Capability Registry | DONE | — | — | — | |
-| C2 — Skill Registry & Trust | DONE | #13 | — | — | |
-| **COMPLIANCE-1** | **DONE** | **#14** | **e101014** | feat/compliance-1-classification | Merged 2026-07-25 |
-| **D1 — Policy / Authorization** | **IN PROGRESS** | — | — | feat/d1-policy | En cours |
+| Lot                             | Status          | PR      | Merge SHA   | Branch                           | Notes             |
+| ------------------------------- | --------------- | ------- | ----------- | -------------------------------- | ----------------- |
+| 1A — Socle métier               | DONE            | —       | a6fd58e     | —                                |                   |
+| 1B — API interne simulée        | DONE            | —       | 90e39f1     | —                                |                   |
+| 2A-1 — Persistence foundation   | DONE            | —       | 00376f1     | —                                |                   |
+| 2B-1a — Identity                | DONE            | —       | 724735d     | —                                |                   |
+| 2B-1b — Authentication          | DONE            | —       | 3a9f206     | —                                |                   |
+| 2B-2 — Admin / Human-Agent      | DONE            | —       | —           | —                                |                   |
+| COMPLIANCE-0                    | DONE            | —       | f5470d6     | —                                |                   |
+| C1 — Capability Registry        | DONE            | —       | —           | —                                |                   |
+| C2 — Skill Registry & Trust     | DONE            | #13     | —           | —                                |                   |
+| **COMPLIANCE-1**                | **DONE**        | **#14** | **e101014** | feat/compliance-1-classification | Merged 2026-07-25 |
+| **D1 — Policy / Authorization** | **IN PROGRESS** | —       | —           | feat/d1-policy                   | En cours          |
 
 ---
 
@@ -34,6 +34,7 @@ Worktree: `/Users/coco/icos/.claude/worktrees/feat+d1-policy`
 Base SHA: `e1010149dcf2e6d55979c08aed7a95bb79b63d5b`
 
 ### Dependencies
+
 - 2B-1a/b (Identity + Auth) ✅
 - COMPLIANCE-0 (Classification taxonomy) ✅
 - COMPLIANCE-1 (TenantContext, C0-C3 on Capabilities) ✅
@@ -41,6 +42,7 @@ Base SHA: `e1010149dcf2e6d55979c08aed7a95bb79b63d5b`
 - C2 (Skill Registry) ✅
 
 ### Blockers
+
 - None
 
 ---

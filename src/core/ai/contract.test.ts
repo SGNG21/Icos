@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { aiErrorCodeSchema, aiGenerationResultSchema, aiProviderInfoSchema, aiRoutingIntentSchema, aiRoutingRequestSchema, aiUsageSchema } from "./contract";
+import {
+  aiErrorCodeSchema,
+  aiGenerationResultSchema,
+  aiProviderInfoSchema,
+  aiRoutingIntentSchema,
+  aiRoutingRequestSchema,
+  aiUsageSchema,
+} from "./contract";
 
 describe("AiRoutingIntentSchema", () => {
   it("accepts all valid intents", () => {
-    const valid = ["BEST_REASONING", "BEST_CODING", "FAST", "CHEAP", "PRIVATE", "FALLBACK"] as const;
+    const valid = [
+      "BEST_REASONING",
+      "BEST_CODING",
+      "FAST",
+      "CHEAP",
+      "PRIVATE",
+      "FALLBACK",
+    ] as const;
     for (const v of valid) {
       expect(aiRoutingIntentSchema.parse(v)).toBe(v);
     }
@@ -41,7 +55,11 @@ describe("AiProviderInfoSchema", () => {
   });
 
   it("accepts provider info with account", () => {
-    const result = aiProviderInfoSchema.parse({ id: "openai", model: "gpt-4o", account: "org-dev" });
+    const result = aiProviderInfoSchema.parse({
+      id: "openai",
+      model: "gpt-4o",
+      account: "org-dev",
+    });
     expect(result.account).toBe("org-dev");
   });
 
@@ -57,12 +75,19 @@ describe("AiUsageSchema", () => {
   });
 
   it("accepts usage with cost", () => {
-    const result = aiUsageSchema.parse({ inputTokens: 100, outputTokens: 50, totalTokens: 150, costUsd: 0.015 });
+    const result = aiUsageSchema.parse({
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      costUsd: 0.015,
+    });
     expect(result.costUsd).toBe(0.015);
   });
 
   it("rejects negative tokens", () => {
-    expect(() => aiUsageSchema.parse({ inputTokens: -1, outputTokens: 50, totalTokens: 49 })).toThrow();
+    expect(() =>
+      aiUsageSchema.parse({ inputTokens: -1, outputTokens: 50, totalTokens: 49 }),
+    ).toThrow();
   });
 });
 
@@ -86,7 +111,12 @@ describe("AiGenerationResultSchema", () => {
   it("validates error result", () => {
     const result = aiGenerationResultSchema.parse({
       success: false,
-      error: { code: "PROVIDER_UNAVAILABLE", message: "Provider is down", retryable: true, fallbackPossible: true },
+      error: {
+        code: "PROVIDER_UNAVAILABLE",
+        message: "Provider is down",
+        retryable: true,
+        fallbackPossible: true,
+      },
       latencyMs: 5000,
       fallbackUsed: false,
     });
@@ -96,7 +126,12 @@ describe("AiGenerationResultSchema", () => {
   it("validates error result with all fields", () => {
     const result = aiGenerationResultSchema.parse({
       success: false,
-      error: { code: "TIMEOUT", message: "Request timed out", retryable: true, fallbackPossible: true },
+      error: {
+        code: "TIMEOUT",
+        message: "Request timed out",
+        retryable: true,
+        fallbackPossible: true,
+      },
       latencyMs: 60000,
       provider: { id: "openai", model: "gpt-4o" },
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
@@ -117,7 +152,7 @@ describe("AiGenerationResultSchema", () => {
         provider: { id: "a", model: "b" },
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         latencyMs: 0,
-      })
+      }),
     ).toThrow();
   });
 });
@@ -147,7 +182,7 @@ describe("AiRoutingRequestSchema", () => {
       dataClassification: "C0",
       maxTokens: 4096,
       temperature: 0.7,
-      budgetMaxCostUsd: 0.10,
+      budgetMaxCostUsd: 0.1,
       qualityThreshold: "high",
       allowedProviderIds: ["anthropic"],
       fallbackAllowed: false,
@@ -158,7 +193,7 @@ describe("AiRoutingRequestSchema", () => {
     expect(result.intent).toBe("BEST_CODING");
     expect(result.dataClassification).toBe("C0");
     expect(result.fallbackAllowed).toBe(false);
-    expect(result.budgetMaxCostUsd).toBe(0.10);
+    expect(result.budgetMaxCostUsd).toBe(0.1);
   });
 
   it("rejects empty prompt", () => {
@@ -167,7 +202,7 @@ describe("AiRoutingRequestSchema", () => {
         prompt: "",
         tenantId: "tenant-001",
         correlationId: "corr-001",
-      })
+      }),
     ).toThrow();
   });
 
@@ -178,7 +213,7 @@ describe("AiRoutingRequestSchema", () => {
         tenantId: "tenant-001",
         correlationId: "corr-001",
         timeoutMs: -1,
-      })
+      }),
     ).toThrow();
   });
 
@@ -189,7 +224,7 @@ describe("AiRoutingRequestSchema", () => {
         tenantId: "tenant-001",
         correlationId: "corr-001",
         temperature: 3,
-      })
+      }),
     ).toThrow();
   });
 });

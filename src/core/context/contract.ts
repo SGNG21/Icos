@@ -82,11 +82,7 @@ export type MemoryReference = z.infer<typeof memoryReferenceSchema>;
 // Épistémologie : fait confirmé ≠ hypothèse ≠ question ouverte
 // ─────────────────────────────────────
 
-export const epistemicsSchema = z.enum([
-  "confirmed_fact",
-  "assumption",
-  "open_question",
-]);
+export const epistemicsSchema = z.enum(["confirmed_fact", "assumption", "open_question"]);
 
 export type Epistemics = z.infer<typeof epistemicsSchema>;
 
@@ -170,18 +166,9 @@ export const missionContextSchema = z
     missionId: idSchema,
     version: z.number().int().nonnegative(),
     confirmedObjective: z.string().min(1).max(CONTEXT_LIMITS.statementMaxLength),
-    confirmedConstraints: z
-      .array(contextClaimSchema)
-      .max(CONTEXT_LIMITS.maxClaims)
-      .default([]),
-    assumptions: z
-      .array(contextClaimSchema)
-      .max(CONTEXT_LIMITS.maxClaims)
-      .default([]),
-    openQuestions: z
-      .array(contextClaimSchema)
-      .max(CONTEXT_LIMITS.maxClaims)
-      .default([]),
+    confirmedConstraints: z.array(contextClaimSchema).max(CONTEXT_LIMITS.maxClaims).default([]),
+    assumptions: z.array(contextClaimSchema).max(CONTEXT_LIMITS.maxClaims).default([]),
+    openQuestions: z.array(contextClaimSchema).max(CONTEXT_LIMITS.maxClaims).default([]),
     boundedSummary: z.string().max(CONTEXT_LIMITS.summaryMaxLength),
     memoryReferences: z
       .array(memoryReferenceSchema)
@@ -211,5 +198,4 @@ export const buildRefusalCodeSchema = z.enum([
 export type BuildRefusalCode = z.infer<typeof buildRefusalCodeSchema>;
 
 export type BuildContextResult =
-  | { ok: true; context: MissionContext }
-  | { ok: false; reason: BuildRefusalCode };
+  { ok: true; context: MissionContext } | { ok: false; reason: BuildRefusalCode };

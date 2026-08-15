@@ -16,10 +16,10 @@ describe("Scheduler", () => {
       tenantId: "tenant-test",
       status: "EXECUTING",
       nodes: {
-        "a": makeNode("a", [], "SUCCEEDED"),
-        "b": makeNode("b", ["a"], "PENDING"),
-        "c": makeNode("c", ["a"], "PENDING"),
-        "d": makeNode("d", ["b", "c"], "PENDING"),
+        a: makeNode("a", [], "SUCCEEDED"),
+        b: makeNode("b", ["a"], "PENDING"),
+        c: makeNode("c", ["a"], "PENDING"),
+        d: makeNode("d", ["b", "c"], "PENDING"),
       },
       nodeOrder: [],
       createdAt: now,
@@ -35,9 +35,9 @@ describe("Scheduler", () => {
       tenantId: "tenant-test",
       status: "EXECUTING",
       nodes: {
-        "a": makeNode("a", [], "SUCCEEDED"),
-        "b": makeNode("b", ["a"], "RUNNING"),
-        "c": makeNode("c", ["a"], "PENDING"),
+        a: makeNode("a", [], "SUCCEEDED"),
+        b: makeNode("b", ["a"], "RUNNING"),
+        c: makeNode("c", ["a"], "PENDING"),
       },
       nodeOrder: [],
       createdAt: now,
@@ -266,11 +266,7 @@ describe("Scheduler", () => {
 // Helper
 // ─────────────────────────────────────
 
-function makeNode(
-  id: string,
-  deps: string[],
-  status: TaskNode["status"],
-): TaskNode {
+function makeNode(id: string, deps: string[], status: TaskNode["status"]): TaskNode {
   return {
     id,
     label: `Task ${id}`,

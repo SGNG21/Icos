@@ -23,21 +23,21 @@ rétention soient couvertes par au moins COMPLIANCE-0.
 
 ## 2. COMPLIANCE-0 — Fondation documentaire (en cours)
 
-| Aspect | Détail |
-|---|---|
-| **Dépendances** | Aucune |
-| **Blocant pour** | Lot 2B-2, toute collecte de données personnelles réelles |
-| **Livrables** | ADR-0023, `01-classification.md`, `02-retention.md`, `03-register.md`, `04-validation-gates.md`, `05-regulatory-baseline.md`, `06-privacy-architecture.md`, `ICOS_COMPLIANCE_TESTS.md`, `ICOS_COMPLIANCE_ROADMAP.md` |
-| **Acceptance** | Tous les documents révisés et approuvés ; gate Compliance décrite et applicable |
+| Aspect           | Détail                                                                                                                                                                                                               |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dépendances**  | Aucune                                                                                                                                                                                                               |
+| **Blocant pour** | Lot 2B-2, toute collecte de données personnelles réelles                                                                                                                                                             |
+| **Livrables**    | ADR-0023, `01-classification.md`, `02-retention.md`, `03-register.md`, `04-validation-gates.md`, `05-regulatory-baseline.md`, `06-privacy-architecture.md`, `ICOS_COMPLIANCE_TESTS.md`, `ICOS_COMPLIANCE_ROADMAP.md` |
+| **Acceptance**   | Tous les documents révisés et approuvés ; gate Compliance décrite et applicable                                                                                                                                      |
 
 ## 3. COMPLIANCE-1 — Vérification automatisée et marquage
 
-| Aspect | Détail |
-|---|---|
-| **Objectif** | Automatiser la vérification de la classification dans le code et la CI |
-| **Dépendances** | COMPLIANCE-0 ; C1 (Registre de capacités) |
-| **Blocant pour** | Phase D (Orchestration), toute exposition de données C3 via API |
-| **Livrables** | |
+| Aspect           | Détail                                                                 |
+| ---------------- | ---------------------------------------------------------------------- |
+| **Objectif**     | Automatiser la vérification de la classification dans le code et la CI |
+| **Dépendances**  | COMPLIANCE-0 ; C1 (Registre de capacités)                              |
+| **Blocant pour** | Phase D (Orchestration), toute exposition de données C3 via API        |
+| **Livrables**    |                                                                        |
 
 ### 3.1 Marquage des schémas de base
 
@@ -70,12 +70,12 @@ rétention soient couvertes par au moins COMPLIANCE-0.
 
 ## 4. COMPLIANCE-2 — Contrôles techniques
 
-| Aspect | Détail |
-|---|---|
-| **Objectif** | Implémenter les contrôles techniques de protection des données |
-| **Dépendances** | COMPLIANCE-1 ; D1 (Policy Engine) |
-| **Blocant pour** | Phase E (Mémoire), Phase G (Intégrations) |
-| **Livrables** | |
+| Aspect           | Détail                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| **Objectif**     | Implémenter les contrôles techniques de protection des données |
+| **Dépendances**  | COMPLIANCE-1 ; D1 (Policy Engine)                              |
+| **Blocant pour** | Phase E (Mémoire), Phase G (Intégrations)                      |
+| **Livrables**    |                                                                |
 
 ### 4.1 Chiffrement at-rest pour C3
 
@@ -118,12 +118,12 @@ rétention soient couvertes par au moins COMPLIANCE-0.
 
 ## 5. COMPLIANCE-3 — Conformité RGPD complète et AI Act
 
-| Aspect | Détail |
-|---|---|
-| **Objectif** | Atteindre un niveau de conformité complet pour les traitements en production |
-| **Dépendances** | COMPLIANCE-2 ; F1 (Contrat conversationnel) ; G1 (Tool Gateway) |
-| **Blocant pour** | Production avec utilisateurs réels non internes |
-| **Livrables** | |
+| Aspect           | Détail                                                                       |
+| ---------------- | ---------------------------------------------------------------------------- |
+| **Objectif**     | Atteindre un niveau de conformité complet pour les traitements en production |
+| **Dépendances**  | COMPLIANCE-2 ; F1 (Contrat conversationnel) ; G1 (Tool Gateway)              |
+| **Blocant pour** | Production avec utilisateurs réels non internes                              |
+| **Livrables**    |                                                                              |
 
 ### 5.1 Mentions d'information (Art. 13-14)
 
@@ -186,19 +186,19 @@ COMPLIANCE-2 ← D1 (Policy Engine)
 COMPLIANCE-3 ← F1, G1, phases à risque
 ```
 
-| Lot dépendant | Dépend de | Raison |
-|---|---|---|
-| Lot 2B-2 | COMPLIANCE-0 | Données personnelles dans l'administration humaine |
-| C1 | COMPLIANCE-0 | Classification requise pour le registre |
+| Lot dépendant           | Dépend de    | Raison                                               |
+| ----------------------- | ------------ | ---------------------------------------------------- |
+| Lot 2B-2                | COMPLIANCE-0 | Données personnelles dans l'administration humaine   |
+| C1                      | COMPLIANCE-0 | Classification requise pour le registre              |
 | Phase D (Orchestration) | COMPLIANCE-1 | Vérification automatisée avant exposition de données |
-| Phase E (Mémoire) | COMPLIANCE-2 | Chiffrement et purge requis pour la mémoire |
-| Phase G (Intégrations) | COMPLIANCE-2 | Contrôles techniques avant transfert externe |
-| Production réelle | COMPLIANCE-3 | Conformité complète avant utilisateurs non internes |
+| Phase E (Mémoire)       | COMPLIANCE-2 | Chiffrement et purge requis pour la mémoire          |
+| Phase G (Intégrations)  | COMPLIANCE-2 | Contrôles techniques avant transfert externe         |
+| Production réelle       | COMPLIANCE-3 | Conformité complète avant utilisateurs non internes  |
 
 ## 7. Risques et mitigations
 
-| Risque | Impact | Mitigation |
-|---|---|---|
-| COMPLIANCE-1 retarde la Phase D | Planning | Démarrer COMPLIANCE-1 dès que C1 est stable |
-| COMPLIANCE-2 dépend de D1 non livré | Blocage | Prioriser D1 dans la roadmap fonctionnelle |
-| COMPLIANCE-3 nécessite DPO externe | Coût | Provisionner budget DPO dès COMPLIANCE-2 |
+| Risque                              | Impact   | Mitigation                                  |
+| ----------------------------------- | -------- | ------------------------------------------- |
+| COMPLIANCE-1 retarde la Phase D     | Planning | Démarrer COMPLIANCE-1 dès que C1 est stable |
+| COMPLIANCE-2 dépend de D1 non livré | Blocage  | Prioriser D1 dans la roadmap fonctionnelle  |
+| COMPLIANCE-3 nécessite DPO externe  | Coût     | Provisionner budget DPO dès COMPLIANCE-2    |

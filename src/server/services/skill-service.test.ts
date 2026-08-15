@@ -99,7 +99,11 @@ describe("importSkill", () => {
     const result = await service.importSkill({
       skill: {
         ...baseSkill,
-        provenance: { ...baseSkill.provenance, source: "url", sourceUrl: "https://example.com/skill" },
+        provenance: {
+          ...baseSkill.provenance,
+          source: "url",
+          sourceUrl: "https://example.com/skill",
+        },
       },
       actor: HUMAN,
     });
@@ -361,11 +365,7 @@ describe("content update", () => {
     await service.approveSkill(skill.id, HUMAN);
     await service.activateSkill(skill.id, HUMAN);
 
-    const result = await service.updateSkillContent(
-      skill.id,
-      { ...baseSkill, name: "New" },
-      HUMAN,
-    );
+    const result = await service.updateSkillContent(skill.id, { ...baseSkill, name: "New" }, HUMAN);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("immutable_version");
   });

@@ -65,8 +65,16 @@ import { PostgresActionDecisionUnitOfWork } from "@/server/uow/postgres-action-d
 import { InMemoryCapabilityUnitOfWork } from "@/server/uow/in-memory-capability-uow";
 import { PostgresCapabilityUnitOfWork } from "@/server/uow/postgres-capability-uow";
 import { SkillService } from "@/server/services/skill-service";
-import { InMemorySkillRepository, InMemorySkillSecurityScanRepository, InMemorySkillEvaluationRepository } from "@/server/services/in-memory/skill-repository";
-import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
+import {
+  InMemorySkillRepository,
+  InMemorySkillSecurityScanRepository,
+  InMemorySkillEvaluationRepository,
+} from "@/server/services/in-memory/skill-repository";
+import {
+  PostgresSkillRepository,
+  PostgresSkillSecurityScanRepository,
+  PostgresSkillEvaluationRepository,
+} from "@/server/repositories/postgres/skill-repository";
 import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
 import { PostgresSkillUnitOfWork } from "@/server/uow/postgres-skill-uow";
 import { PersistenceConfigError, resolvePersistence } from "@/server/persistence";
@@ -154,7 +162,13 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const skillSecurityScans = new InMemorySkillSecurityScanRepository();
   const skillEvaluations = new InMemorySkillEvaluationRepository();
   const skillUow = new InMemorySkillUnitOfWork(skills, auditLog);
-  const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, new InMemoryAuditRepository(auditLog), skillUow);
+  const skillService = new SkillService(
+    skills,
+    skillSecurityScans,
+    skillEvaluations,
+    new InMemoryAuditRepository(auditLog),
+    skillUow,
+  );
 
   return {
     agents: new InMemoryAgentRepository(agents),
@@ -289,7 +303,13 @@ export async function buildPostgresContainer(
       const skillSecurityScans = new PostgresSkillSecurityScanRepository(handle.db);
       const skillEvaluations = new PostgresSkillEvaluationRepository(handle.db);
       const skillUow = new PostgresSkillUnitOfWork(handle.db);
-      const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, audit, skillUow);
+      const skillService = new SkillService(
+        skills,
+        skillSecurityScans,
+        skillEvaluations,
+        audit,
+        skillUow,
+      );
       return { skills, skillSecurityScans, skillEvaluations, skillUow, skillService };
     })(),
     auth: authentication?.auth,

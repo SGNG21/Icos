@@ -20,7 +20,11 @@ export class PermissionGate implements PolicyGate {
 
     const requiredPermission = `${request.resource.type}.${request.action}`;
     if (!permissions.includes(requiredPermission)) {
-      return { decision: "deny", code: "forbidden", reason: `Permission '${requiredPermission}' manquante` };
+      return {
+        decision: "deny",
+        code: "forbidden",
+        reason: `Permission '${requiredPermission}' manquante`,
+      };
     }
 
     return { decision: "next" };

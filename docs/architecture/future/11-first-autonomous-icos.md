@@ -29,14 +29,14 @@
 
 ## 2. Vérification par les tests comportementaux
 
-| Étape | Test couvert |
-|---|---|
-| 1-3 | CAS 1 (préparation sans envoi) + CAS 13 (consigne vague) |
-| 4-5 | CAS 1 (préparation) |
-| 6 | CAS 1 (résultat non soumis) |
-| 7 | CAS 2 + CAS 14 (envoi gouverné / refus) |
-| 8 | CAS 2 (exécution unique + audit) |
-| 9 | CAS 3 + CAS 11 (reprise après interruption / crash) |
+| Étape | Test couvert                                             |
+| ----- | -------------------------------------------------------- |
+| 1-3   | CAS 1 (préparation sans envoi) + CAS 13 (consigne vague) |
+| 4-5   | CAS 1 (préparation)                                      |
+| 6     | CAS 1 (résultat non soumis)                              |
+| 7     | CAS 2 + CAS 14 (envoi gouverné / refus)                  |
+| 8     | CAS 2 (exécution unique + audit)                         |
+| 9     | CAS 3 + CAS 11 (reprise après interruption / crash)      |
 
 Tests additionnels à faire passer dans le même contexte :
 
@@ -47,40 +47,41 @@ Tests additionnels à faire passer dans le même contexte :
 
 ## 3. Critères M1 (déclinaison des 12 critères du Master Plan §26)
 
-| # | Critère (MP $26) | Exigence pour M1 |
-|---|---|---|
-| 1 | Comprendre la demande même imparfaite | F1 : intention "préparer devis" extraite d'une phrase naturelle |
-| 2 | Retrouver le bon contexte | Dossier Dupont récupéré via D4 + G1 (premier connecteur) |
-| 3 | Planifier le travail | D4 : Mission `préparer_devis` → Plan (étapes séquentielles) |
-| 4 | Agir dans le périmètre autorisé | Précédé de la vérification policy |
-| 5 | Demander validation si nécessaire | CAS 2 : envoi bloqué si niveau ≥ 2 |
-| 6 | Vérifier le résultat | Post-exécution auditée |
-| 7 | Continuer après interruption | CAS 3 : reprise documentée |
-| 8 | Rester transparent | Résumé « Devis préparé, prêt envoi » |
-| 9 | Ne pas déranger inutilement | Pas de questions inutiles (CAS 13) |
-| 10 | Savoir refuser | CAS 14 : refus pour risque ; CAS 9 : tool non autorisé |
-| 11 | Progresser de manière gouvernée | Policy Engine + D1/D4 |
-| 12 | Offrir une expérience continue | CAS 3, CAS 11, CAS 12 |
+| #   | Critère (MP $26)                      | Exigence pour M1                                                |
+| --- | ------------------------------------- | --------------------------------------------------------------- |
+| 1   | Comprendre la demande même imparfaite | F1 : intention "préparer devis" extraite d'une phrase naturelle |
+| 2   | Retrouver le bon contexte             | Dossier Dupont récupéré via D4 + G1 (premier connecteur)        |
+| 3   | Planifier le travail                  | D4 : Mission `préparer_devis` → Plan (étapes séquentielles)     |
+| 4   | Agir dans le périmètre autorisé       | Précédé de la vérification policy                               |
+| 5   | Demander validation si nécessaire     | CAS 2 : envoi bloqué si niveau ≥ 2                              |
+| 6   | Vérifier le résultat                  | Post-exécution auditée                                          |
+| 7   | Continuer après interruption          | CAS 3 : reprise documentée                                      |
+| 8   | Rester transparent                    | Résumé « Devis préparé, prêt envoi »                            |
+| 9   | Ne pas déranger inutilement           | Pas de questions inutiles (CAS 13)                              |
+| 10  | Savoir refuser                        | CAS 14 : refus pour risque ; CAS 9 : tool non autorisé          |
+| 11  | Progresser de manière gouvernée       | Policy Engine + D1/D4                                           |
+| 12  | Offrir une expérience continue        | CAS 3, CAS 11, CAS 12                                           |
 
 **M1 est atteint quand :**
+
 - l'utilisateur donne l'instruction naturelle ;
 - ICOS exécute les étapes 1 à 8 sans intervention humaine sauf pour l'approbation d'envoi ;
 - l'utilisateur revient le lendemain et obtient un état cohérent en une phrase.
 
 ## 4. État requis pour M1
 
-| Composant | Statut M1 | Lot |
-|---|---|---|
-| Policy Engine v2 | Minimum : évaluation 5 niveaux, décision finale | D1 |
-| Mission/Plan/Run | En base, stoppable, reprenable | D2 |
-| AI Gateway Foundation | AiGatewayPort + requirements/policy métier minimale + OmniRouteAdapter ; aucun registre technique ICOS | D3 |
-| Orchestrateur v1 | Décomposition, planification, résolution skill | D4 |
-| Memory/Context Port | Provenance minimale (identité du dossier) | E1 (mini) |
-| Contrat conversationnel | Extraction intention + clarification minimale | F1 (mini) |
-| Tool/MCP Gateway | Premier connecteur : consultation CRM — send devis | G1 + G2 |
-| Premier connecteur métier | Consultation CRM et envoi devis | G2 |
-| Behavioral tests | CAS 1-14 passants | Q1 |
-| **Pas requis** | Mémoire longue, évolution skills, multi-fournisseur, omnicanal | Différable |
+| Composant                 | Statut M1                                                                                              | Lot        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ | ---------- |
+| Policy Engine v2          | Minimum : évaluation 5 niveaux, décision finale                                                        | D1         |
+| Mission/Plan/Run          | En base, stoppable, reprenable                                                                         | D2         |
+| AI Gateway Foundation     | AiGatewayPort + requirements/policy métier minimale + OmniRouteAdapter ; aucun registre technique ICOS | D3         |
+| Orchestrateur v1          | Décomposition, planification, résolution skill                                                         | D4         |
+| Memory/Context Port       | Provenance minimale (identité du dossier)                                                              | E1 (mini)  |
+| Contrat conversationnel   | Extraction intention + clarification minimale                                                          | F1 (mini)  |
+| Tool/MCP Gateway          | Premier connecteur : consultation CRM — send devis                                                     | G1 + G2    |
+| Premier connecteur métier | Consultation CRM et envoi devis                                                                        | G2         |
+| Behavioral tests          | CAS 1-14 passants                                                                                      | Q1         |
+| **Pas requis**            | Mémoire longue, évolution skills, multi-fournisseur, omnicanal                                         | Différable |
 
 ## 5. Ce que M1 n'est pas
 

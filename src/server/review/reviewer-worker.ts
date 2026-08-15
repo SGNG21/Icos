@@ -13,19 +13,14 @@ import type { ReviewerManagerPort, CorrectionLoopManagerPort } from "./ports";
 export class ReviewerWorker implements ReviewerManagerPort {
   private readonly reviewerWorkerId: string;
 
-  constructor(
-    reviewerWorkerId?: string,
-  ) {
+  constructor(reviewerWorkerId?: string) {
     this.reviewerWorkerId = reviewerWorkerId ?? "reviewer-default";
   }
 
   /**
    * Vérifie que le reviewer n'est pas l'implémentateur.
    */
-  async ensureIndependentReview(
-    taskId: string,
-    reviewerWorkerId: string,
-  ): Promise<boolean> {
+  async ensureIndependentReview(taskId: string, reviewerWorkerId: string): Promise<boolean> {
     return reviewerWorkerId !== taskId;
   }
 
@@ -74,19 +69,15 @@ export class ReviewerWorker implements ReviewerManagerPort {
    * V1 : basé sur la présence d'AC et de contenu.
    * V2+ : vérifications réelles (tests, lint, etc.)
    */
-  private evaluateCategory(
-    category: ReviewCheck["category"],
-    spec: ReviewSpec,
-  ): ReviewCheck {
+  private evaluateCategory(category: ReviewCheck["category"], spec: ReviewSpec): ReviewCheck {
     switch (category) {
       case "acceptance_criteria":
         return {
           category,
           description: "Critères d'acceptation définis et mesurables",
           passed: spec.acceptanceCriteria.length >= 1,
-          details: spec.acceptanceCriteria.length === 0
-            ? "Aucun critère d'acceptation défini"
-            : undefined,
+          details:
+            spec.acceptanceCriteria.length === 0 ? "Aucun critère d'acceptation défini" : undefined,
         };
 
       case "tests":
@@ -136,9 +127,7 @@ export class ReviewerWorker implements ReviewerManagerPort {
           category,
           description: "Documentation mise à jour",
           passed: spec.acceptanceCriteria.length > 0,
-          details: spec.acceptanceCriteria.length === 0
-            ? "Documentation insuffisante"
-            : undefined,
+          details: spec.acceptanceCriteria.length === 0 ? "Documentation insuffisante" : undefined,
         };
 
       default:
@@ -158,11 +147,11 @@ export class ReviewerWorker implements ReviewerManagerPort {
  * V2+ : vérifications réelles après correction.
  */
 export class CorrectionWorker implements CorrectionLoopManagerPort {
-  constructor(
-    private readonly maxAttempts: number = 3,
-  ) {}
+  constructor(private readonly maxAttempts: number = 3) {}
 
-  async executeCorrection(spec: import("@/core/review").CorrectionSpec): Promise<import("@/core/review").CorrectionResult> {
+  async executeCorrection(
+    spec: import("@/core/review").CorrectionSpec,
+  ): Promise<import("@/core/review").CorrectionResult> {
     const start = Date.now();
 
     // V1 : marquer la correction comme appliquée
@@ -182,7 +171,7 @@ export class CorrectionWorker implements CorrectionLoopManagerPort {
     // V1 : log l'escalade
     console.warn(
       `[ESCALADE] Tâche ${spec.originalTaskId} — ${spec.attemptNumber}/${spec.maxAttempts} tentatives épuisées. ` +
-      `Dernière revue : ${spec.reviewComments.slice(0, 100)}`,
+        `Dernière revue : ${spec.reviewComments.slice(0, 100)}`,
     );
   }
 }

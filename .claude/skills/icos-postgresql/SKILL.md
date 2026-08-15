@@ -20,7 +20,7 @@ SQL, erreurs mappées sans fuite de détails internes.
 - Toute logique de transaction multi-étapes (unité de travail).
 - Mapping d'une erreur Postgres/Drizzle vers une réponse HTTP.
 
-**Ne doit PAS s'activer quand** la question porte sur *qui* a le droit de
+**Ne doit PAS s'activer quand** la question porte sur _qui_ a le droit de
 faire l'action plutôt que sur le stockage (→ `icos-security`), ou sur la
 sémantique de rétention/fraîcheur/provenance d'un embedding une fois le
 schéma en place (→ `icos-rag-memory`).
@@ -49,9 +49,9 @@ schéma en place (→ `icos-rag-memory`).
   partielle.
 - L'ordre des listes est déterministe et identique entre backends mémoire et
   Postgres (`src/core/ordering.ts`) : agents par `authorizationLevel DESC,
-  id ASC` ; tâches/actions par `createdAt|requestedAt ASC, id ASC` ;
+id ASC` ; tâches/actions par `createdAt|requestedAt ASC, id ASC` ;
   approbations par `decidedAt ASC, id ASC` ; audit par `occurredAt ASC, id
-  ASC`.
+ASC`.
 - `PERSISTENCE=memory|postgres` est résolu explicitement, sans bascule
   silencieuse ; en production, une valeur explicite est obligatoire ; le
   backend `postgres` ne retombe jamais sur `memory` en cas d'échec de sonde.

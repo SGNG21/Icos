@@ -33,11 +33,11 @@ graph TD
 
 ### Vague 0 — Prérequis séquentiel
 
-| Lot | Raison non parallélisable |
-|---|---|
-| 2B-2 | En cours ailleurs ; pose la gouvernance humain↔agent |
-| C1 | Définit le vocabulaire partagé Capability |
-| C2 | Dépend de C1 et définit le contrat Skill utilisé ensuite |
+| Lot  | Raison non parallélisable                                |
+| ---- | -------------------------------------------------------- |
+| 2B-2 | En cours ailleurs ; pose la gouvernance humain↔agent     |
+| C1   | Définit le vocabulaire partagé Capability                |
+| C2   | Dépend de C1 et définit le contrat Skill utilisé ensuite |
 
 ### Vague 1 — Après C1/C2
 
@@ -88,22 +88,22 @@ La migration `auditEventTypeSchema` est un point de conflit probable. Chaque lot
 
 ## 3. Matrice de conflits
 
-| Paire de lots | Parallèle ? | Condition |
-|---|---:|---|
-| C1 + C2 | Non | C2 consomme le contrat C1 |
-| C2 + D1 | Oui partiel | D1 ne dépend que de C1 ; éviter modification simultanée du Container |
-| C3 + D1 | Oui | Adapters skills vs policy core |
-| D2 + D3 | Non pour fusion | D3 référence Mission/Run ; développement avec fake possible |
-| D3 + E1 | Oui | AI Runtime vs Memory ports, tables séparées |
-| D3 + D4 | Développement oui, fusion non | D4 dépend du port D3 stabilisé |
-| E1 + F1 | Oui | F1 consomme MemoryContextPort mocké |
-| Q1 + tous | Oui | Tests derrière ports ; maintient le catalogue comportemental |
-| G1 + R1 | Oui après contrats | `ExecutionRecord` vs overlays/ledger AI ; coordination sur Container |
-| G2 + E2 | Oui | Connector vs ingestion |
-| P1 + S1 | Non | Scheduler doit servir le contrat de proactivité validé |
-| R2 + Q2 | Oui | Projections OmniRoute vs skill discovery |
-| I2 WhatsApp + Telegram | Oui | Chaque adapter séparé derrière I1 |
-| T1 + H1 | Non initialement | Temporal, s'il est retenu, modifie le runtime de workflow H1 |
+| Paire de lots          |                   Parallèle ? | Condition                                                            |
+| ---------------------- | ----------------------------: | -------------------------------------------------------------------- |
+| C1 + C2                |                           Non | C2 consomme le contrat C1                                            |
+| C2 + D1                |                   Oui partiel | D1 ne dépend que de C1 ; éviter modification simultanée du Container |
+| C3 + D1                |                           Oui | Adapters skills vs policy core                                       |
+| D2 + D3                |               Non pour fusion | D3 référence Mission/Run ; développement avec fake possible          |
+| D3 + E1                |                           Oui | AI Runtime vs Memory ports, tables séparées                          |
+| D3 + D4                | Développement oui, fusion non | D4 dépend du port D3 stabilisé                                       |
+| E1 + F1                |                           Oui | F1 consomme MemoryContextPort mocké                                  |
+| Q1 + tous              |                           Oui | Tests derrière ports ; maintient le catalogue comportemental         |
+| G1 + R1                |            Oui après contrats | `ExecutionRecord` vs overlays/ledger AI ; coordination sur Container |
+| G2 + E2                |                           Oui | Connector vs ingestion                                               |
+| P1 + S1                |                           Non | Scheduler doit servir le contrat de proactivité validé               |
+| R2 + Q2                |                           Oui | Projections OmniRoute vs skill discovery                             |
+| I2 WhatsApp + Telegram |                           Oui | Chaque adapter séparé derrière I1                                    |
+| T1 + H1                |              Non initialement | Temporal, s'il est retenu, modifie le runtime de workflow H1         |
 
 ## 4. Contrats à geler avant fan-out
 
@@ -136,12 +136,12 @@ version/ADR. Il ne signifie pas que l'implémentation est finalisée.
 
 ## 6. Répartition recommandée de quatre agents de développement après D2
 
-| Agent | Périmètre | Fichiers/zone conceptuelle | Dépendance de fusion |
-|---|---|---|---|
-| A | D3 AI Gateway Foundation | `core/ai-gateway`, port/requirements/policy minimale, adapter OmniRoute | Fusion avant D4 |
-| B | E1 Memory/Context Port | `core/memory`, repositories memory | Indépendant de D3 |
-| C | Q1 Behavioral/Eval Harness | tests comportementaux, fakes | Suit contrats, bloque M1 si rouge |
-| D | D4 Orchestrateur | `core/orchestration`, domain missions | Développe sur fake D3, fusion après A |
+| Agent | Périmètre                  | Fichiers/zone conceptuelle                                              | Dépendance de fusion                  |
+| ----- | -------------------------- | ----------------------------------------------------------------------- | ------------------------------------- |
+| A     | D3 AI Gateway Foundation   | `core/ai-gateway`, port/requirements/policy minimale, adapter OmniRoute | Fusion avant D4                       |
+| B     | E1 Memory/Context Port     | `core/memory`, repositories memory                                      | Indépendant de D3                     |
+| C     | Q1 Behavioral/Eval Harness | tests comportementaux, fakes                                            | Suit contrats, bloque M1 si rouge     |
+| D     | D4 Orchestrateur           | `core/orchestration`, domain missions                                   | Développe sur fake D3, fusion après A |
 
 Cette répartition maximise l'indépendance et maintient le chemin critique : A→D→G1/G2→M1, tandis
 que B et C améliorent la qualité sans bloquer les fichiers du flux principal.

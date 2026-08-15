@@ -20,10 +20,7 @@ const VALID_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
 /**
  * Vérifie si une transition est autorisée par la machine d'état.
  */
-export function isExecutionTransitionAllowed(
-  from: ExecutionStatus,
-  to: ExecutionStatus,
-): boolean {
+export function isExecutionTransitionAllowed(from: ExecutionStatus, to: ExecutionStatus): boolean {
   const allowed = VALID_TRANSITIONS[from];
   if (!allowed) {
     return false;

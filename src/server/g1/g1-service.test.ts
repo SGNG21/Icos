@@ -589,12 +589,9 @@ describe("G1 — G1Service", () => {
       });
 
       // Transitionner vers EXECUTING avec updatedAt vieux
-      const started = await idempotencyStore.transition(
-        key,
-        "RESERVED",
-        "EXECUTING",
-        { updatedAt: new Date(Date.now() - 600_000).toISOString() },
-      );
+      const started = await idempotencyStore.transition(key, "RESERVED", "EXECUTING", {
+        updatedAt: new Date(Date.now() - 600_000).toISOString(),
+      });
       expect(started).not.toBeNull();
       expect(started!.state).toBe("EXECUTING");
 
@@ -693,9 +690,7 @@ describe("G1 — G1Service", () => {
   describe("Audit — append-only", () => {
     it("enregistre l'événement de réservation", async () => {
       await service.reserve(makeReserveInput());
-      const events = audit.entries.filter(
-        (e) => e.eventType === "tool.invocation_reserved",
-      );
+      const events = audit.entries.filter((e) => e.eventType === "tool.invocation_reserved");
       expect(events).toHaveLength(1);
     });
 
@@ -734,9 +729,7 @@ describe("G1 — G1Service", () => {
         errorCode: "PROCESS_ERROR",
       });
 
-      const failedEvents = audit.entries.filter(
-        (e) => e.eventType === "tool.invocation_failed",
-      );
+      const failedEvents = audit.entries.filter((e) => e.eventType === "tool.invocation_failed");
       expect(failedEvents).toHaveLength(1);
     });
 
@@ -756,21 +749,16 @@ describe("G1 — G1Service", () => {
         updatedAt: new Date().toISOString(),
       });
 
-      const started = await idempotencyStore.transition(
-        key,
-        "RESERVED",
-        "EXECUTING",
-        { updatedAt: new Date(Date.now() - 600_000).toISOString() },
-      );
+      const started = await idempotencyStore.transition(key, "RESERVED", "EXECUTING", {
+        updatedAt: new Date(Date.now() - 600_000).toISOString(),
+      });
       expect(started).not.toBeNull();
       expect(started!.state).toBe("EXECUTING");
 
       // start() détecte le stale → UNKNOWN
       await service.start(key);
 
-      const unknownEvents = audit.entries.filter(
-        (e) => e.eventType === "tool.invocation_unknown",
-      );
+      const unknownEvents = audit.entries.filter((e) => e.eventType === "tool.invocation_unknown");
       expect(unknownEvents).toHaveLength(1);
     });
 
@@ -783,9 +771,7 @@ describe("G1 — G1Service", () => {
       // Vérifier qu'on ne peut pas modifier les entrées existantes
       // (l'append-only est garanti par le store)
       const entriesSnapshot = [...audit.entries];
-      await service.reserve(
-        makeReserveInput({ runId: "another-run" }),
-      );
+      await service.reserve(makeReserveInput({ runId: "another-run" }));
 
       // Les nouvelles entrées ne modifient pas les anciennes
       expect(audit.entries.length).toBeGreaterThan(initialCount);
@@ -852,14 +838,11 @@ describe("G1 — G1Service", () => {
     it("sensitivityLevel est présent dans l'événement de réservation", async () => {
       await service.reserve(makeReserveInput({ sensitivityLevel: "C2" }));
 
-      const reservedEvent = audit.entries.find(
-        (e) => e.eventType === "tool.invocation_reserved",
-      );
+      const reservedEvent = audit.entries.find((e) => e.eventType === "tool.invocation_reserved");
       expect(reservedEvent).toBeDefined();
       expect(reservedEvent!.details.sensitivityLevel).toBe("C2");
     });
   });
-
 
   // ─────────────────────────────────────
   // SensitivityLevel — ExecutionRecord propagation
@@ -877,9 +860,13 @@ describe("G1 — G1Service", () => {
       const start = await service.start(res.entry.idempotencyKey);
       expect(start.ok).toBe(true);
       if (!start.ok) return null;
-      const comp = await service.complete(
-        { idempotencyKey: res.entry.idempotencyKey, grantId: res.grant.id, outputHash: "hash-"+sl, durationMs: 100, isSuccess: true },
-      );
+      const comp = await service.complete({
+        idempotencyKey: res.entry.idempotencyKey,
+        grantId: res.grant.id,
+        outputHash: "hash-" + sl,
+        durationMs: 100,
+        isSuccess: true,
+      });
       expect(comp.ok).toBe(true);
       if (!comp.ok) return null;
       return { reserve: res, recordId: comp.recordId };
@@ -927,9 +914,7 @@ describe("G1 — G1Service", () => {
       if (!result) return;
 
       // Audit de réservation
-      const reservedEvent = audit.entries.find(
-        (e) => e.eventType === "tool.invocation_reserved",
-      );
+      const reservedEvent = audit.entries.find((e) => e.eventType === "tool.invocation_reserved");
       expect(reservedEvent).not.toBeUndefined();
       expect(reservedEvent!.details.sensitivityLevel).toBe("C2");
 
@@ -939,7 +924,6 @@ describe("G1 — G1Service", () => {
       expect(record!.sensitivityLevel).toBe("C2");
     });
   });
-
 
   // ─────────────────────────────────────
   // Atomicity — No COMPLETED without durable result
@@ -1127,9 +1111,7 @@ describe("G1 — G1Service", () => {
 
       // Les clés doivent être différentes
       if (result1.ok && result2.ok) {
-        expect(result1.entry.idempotencyKey).not.toBe(
-          result2.entry.idempotencyKey,
-        );
+        expect(result1.entry.idempotencyKey).not.toBe(result2.entry.idempotencyKey);
       }
     });
   });
@@ -1265,102 +1247,106 @@ describe("G1 — G1Service", () => {
     });
   });
 
-      // ─────────────────────────────────────
-      // Failure injection A — UoW rollback après échec de transition
-      // ─────────────────────────────────────
+  // ─────────────────────────────────────
+  // Failure injection A — UoW rollback après échec de transition
+  // ─────────────────────────────────────
 
-      it("A: ExecutionRecord write + transition fails → UoW rollback supprime le record", async () => {
-        const uow = new InMemoryG1UnitOfWork();
-        const testAudit = new TestAuditRepository();
-        // Le service utilise les stores DU UoW — mêmes instances internes
-        const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
+  it("A: ExecutionRecord write + transition fails → UoW rollback supprime le record", async () => {
+    const uow = new InMemoryG1UnitOfWork();
+    const testAudit = new TestAuditRepository();
+    // Le service utilise les stores DU UoW — mêmes instances internes
+    const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
 
-        const r = await testService.reserve(makeReserveInput({ runId: "uow-rollback-A" }));
-        expect(r.ok).toBe(true);
-        if (!r.ok) return;
-        const ik = r.entry.idempotencyKey;
+    const r = await testService.reserve(makeReserveInput({ runId: "uow-rollback-A" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ik = r.entry.idempotencyKey;
 
-        const start = await testService.start(ik);
-        expect(start.ok).toBe(true);
+    const start = await testService.start(ik);
+    expect(start.ok).toBe(true);
 
-        // Espionner transition pour retourner null (échec atomique)
-        // après que le record a été append par complete()
-        vi.spyOn(uow.idempotency, "transition").mockResolvedValueOnce(null);
+    // Espionner transition pour retourner null (échec atomique)
+    // après que le record a été append par complete()
+    vi.spyOn(uow.idempotency, "transition").mockResolvedValueOnce(null);
 
-        const complete = await testService.complete({
-          idempotencyKey: ik,
-          grantId: r.grant.id,
-          outputHash: "uow-rollback-hash-A",
-          durationMs: 50,
-          isSuccess: true,
-        }, uow);
+    const complete = await testService.complete(
+      {
+        idempotencyKey: ik,
+        grantId: r.grant.id,
+        outputHash: "uow-rollback-hash-A",
+        durationMs: 50,
+        isSuccess: true,
+      },
+      uow,
+    );
 
-        expect(complete.ok).toBe(false);
-        if (!complete.ok) {
-          expect(complete.code).toBe("TRANSACTION_FAILED");
-        }
+    expect(complete.ok).toBe(false);
+    if (!complete.ok) {
+      expect(complete.code).toBe("TRANSACTION_FAILED");
+    }
 
-        // Vérifier que le record a été rollbacké (aucun record avec cette clé)
-        const records = await uow.records.findByIdempotencyKey(ik);
-        expect(records).toHaveLength(0);
+    // Vérifier que le record a été rollbacké (aucun record avec cette clé)
+    const records = await uow.records.findByIdempotencyKey(ik);
+    expect(records).toHaveLength(0);
 
-        // L'état d'idempotence n'a pas changé
-        const entry = await uow.idempotency.findByKey(ik);
-        expect(entry?.state).toBe("EXECUTING");
+    // L'état d'idempotence n'a pas changé
+    const entry = await uow.idempotency.findByKey(ik);
+    expect(entry?.state).toBe("EXECUTING");
 
-        // Le mock a été consommé
-        expect(vi.mocked(uow.idempotency.transition)).toHaveBeenCalledTimes(1);
-      });
+    // Le mock a été consommé
+    expect(vi.mocked(uow.idempotency.transition)).toHaveBeenCalledTimes(1);
+  });
 
-      // ─────────────────────────────────────
-      // Failure injection B — Audit failure recovery
-      // ─────────────────────────────────────
+  // ─────────────────────────────────────
+  // Failure injection B — Audit failure recovery
+  // ─────────────────────────────────────
 
-      it("B: audit.append échoue → rollback restaure l'état EXECUTING", async () => {
-        const uow = new InMemoryG1UnitOfWork();
-        const testAudit = new TestAuditRepository();
-        const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
+  it("B: audit.append échoue → rollback restaure l'état EXECUTING", async () => {
+    const uow = new InMemoryG1UnitOfWork();
+    const testAudit = new TestAuditRepository();
+    const testService = new G1Service(uow.grants, uow.idempotency, uow.records, testAudit);
 
-        const r = await testService.reserve(makeReserveInput({ runId: "uow-audit-fail-B" }));
-        expect(r.ok).toBe(true);
-        if (!r.ok) return;
-        const ik = r.entry.idempotencyKey;
+    const r = await testService.reserve(makeReserveInput({ runId: "uow-audit-fail-B" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ik = r.entry.idempotencyKey;
 
-        const start = await testService.start(ik);
-        expect(start.ok).toBe(true);
+    const start = await testService.start(ik);
+    expect(start.ok).toBe(true);
 
-        // Audit append va jeter une erreur simulée — après la transition
-        // d'idempotence (dans le try), avant le commit UoW
-        vi.spyOn(testAudit, "append").mockRejectedValueOnce(
-          new Error("Injected: audit crash"),
-        );
+    // Audit append va jeter une erreur simulée — après la transition
+    // d'idempotence (dans le try), avant le commit UoW
+    vi.spyOn(testAudit, "append").mockRejectedValueOnce(new Error("Injected: audit crash"));
 
-        const complete = await testService.complete({
-          idempotencyKey: ik,
-          grantId: r.grant.id,
-          outputHash: "audit-fail-hash",
-          durationMs: 50,
-          isSuccess: true,
-        }, uow);
+    const complete = await testService.complete(
+      {
+        idempotencyKey: ik,
+        grantId: r.grant.id,
+        outputHash: "audit-fail-hash",
+        durationMs: 50,
+        isSuccess: true,
+      },
+      uow,
+    );
 
-        // Le service retourne TRANSACTION_FAILED (audit en échec)
-        expect(complete.ok).toBe(false);
-        if (!complete.ok) {
-          expect(complete.code).toBe("TRANSACTION_FAILED");
-        }
+    // Le service retourne TRANSACTION_FAILED (audit en échec)
+    expect(complete.ok).toBe(false);
+    if (!complete.ok) {
+      expect(complete.code).toBe("TRANSACTION_FAILED");
+    }
 
-        // L'état d'idempotence a été rollbacké → EXECUTING
-        const entry = await uow.idempotency.findByKey(ik);
-        expect(entry?.state).toBe("EXECUTING");
+    // L'état d'idempotence a été rollbacké → EXECUTING
+    const entry = await uow.idempotency.findByKey(ik);
+    expect(entry?.state).toBe("EXECUTING");
 
-        // Le record a été rollbacké (via InMemoryG1UnitOfWork._restore)
-        const records = await uow.records.findByIdempotencyKey(ik);
-        expect(records).toHaveLength(0);
+    // Le record a été rollbacké (via InMemoryG1UnitOfWork._restore)
+    const records = await uow.records.findByIdempotencyKey(ik);
+    expect(records).toHaveLength(0);
 
-        // Note : la consommation du grant a lieu AVANT uow.begin(),
-        // donc hors du périmètre atomique du UoW.
-        // En PostgreSQL, la transaction englobe tout (grant + record + audit).
-      });
+    // Note : la consommation du grant a lieu AVANT uow.begin(),
+    // donc hors du périmètre atomique du UoW.
+    // En PostgreSQL, la transaction englobe tout (grant + record + audit).
+  });
 
   // ─────────────────────────────────────
   // Security invariants

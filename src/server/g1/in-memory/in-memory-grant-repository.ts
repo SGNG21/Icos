@@ -43,10 +43,7 @@ export class InMemoryGrantRepository implements GrantRepository {
   async listAvailable(tenantId: string): Promise<ExecutionGrant[]> {
     const now = new Date();
     return Array.from(this.grants.values()).filter(
-      (g) =>
-        g.tenantId === tenantId &&
-        g.consumedAt === null &&
-        new Date(g.expiresAt) > now,
+      (g) => g.tenantId === tenantId && g.consumedAt === null && new Date(g.expiresAt) > now,
     );
   }
 

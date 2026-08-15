@@ -145,17 +145,17 @@ fantômes / infrastructure-comme-agents / Holding-ia-hermes) :
 
 ## Carte de destination logique (Holding IA → ICOS)
 
-| Domaine Holding IA | Destination logique ICOS |
-|---|---|
+| Domaine Holding IA                           | Destination logique ICOS                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------- |
 | Approbations (`agent_actions`, n8n WF-A/B/C) | `Policies` / `ApprovalRequest` / `Decision` / `ExecutionResult` (icos-security) |
-| Mémoire (Sofia, `knowledge_base`) | Service de connaissance séparé, consommé via Context Port (icos-rag-memory) |
-| Agents (57 prompts, classification) | Catalogue versionné de capacités (icos-agent-orchestration) |
-| IRIS (routeur WhatsApp) | Command API + routage d'intention déterministe, jamais IRIS comme runtime |
-| Sites (fill-agent, site-starter) | DigitalOS — hors périmètre runtime ICOS |
-| CRM / qualification prospects | Événements Payload/CRM, scénarios de test |
-| WhatsApp/voix | Adaptateur de canal Polivia (icos-architecture) |
-| Observabilité (logs n8n) | Event journal ICOS + projections + DLQ (icos-workflows-temporal) |
-| Workflows n8n eux-mêmes | Source de cas d'usage/tests, jamais de code runtime |
+| Mémoire (Sofia, `knowledge_base`)            | Service de connaissance séparé, consommé via Context Port (icos-rag-memory)     |
+| Agents (57 prompts, classification)          | Catalogue versionné de capacités (icos-agent-orchestration)                     |
+| IRIS (routeur WhatsApp)                      | Command API + routage d'intention déterministe, jamais IRIS comme runtime       |
+| Sites (fill-agent, site-starter)             | DigitalOS — hors périmètre runtime ICOS                                         |
+| CRM / qualification prospects                | Événements Payload/CRM, scénarios de test                                       |
+| WhatsApp/voix                                | Adaptateur de canal Polivia (icos-architecture)                                 |
+| Observabilité (logs n8n)                     | Event journal ICOS + projections + DLQ (icos-workflows-temporal)                |
+| Workflows n8n eux-mêmes                      | Source de cas d'usage/tests, jamais de code runtime                             |
 
 ## Anti-patterns
 

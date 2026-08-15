@@ -74,55 +74,55 @@ Provider                 ← Anthropic, OpenAI, etc. (administré par OmniRoute)
 
 ### In scope
 
-| # | Élément | Justification |
-|---|---------|---------------|
-| 1 | `AiGatewayPort` — interface de génération | Port canonique ICOS |
-| 2 | `AiRoutingRequest` — enveloppe métier | Tenant, classification, contraintes |
-| 3 | `AiGenerationResult` — résultat normalisé | Provider, usage, latence, coût |
-| 4 | `OmniRouteAdapter` — implémentation du port | Mapping ICOS → OmniRoute → ICOS |
-| 5 | Routing intent (`BEST_REASONING`, `FAST`, etc.) | Abstraction métier, pas technique |
-| 6 | Provider metadata (id, model, account) | Retourné dans le résultat |
-| 7 | Usage metadata (tokens, cost, latency) | Retourné dans le résultat |
-| 8 | Error model normalisé | `PROVIDER_UNAVAILABLE`, `RATE_LIMITED`, etc. |
-| 9 | Timeout configurable | Par requête, propagé à fetch + OmniRoute |
-| 10 | Cancellation via `AbortSignal` | Standard JS, annule la requête HTTP |
-| 11 | Fallback metadata | Signalé dans le résultat, pas piloté par ICOS |
-| 12 | Compliance propagation | tenantId, dataClassification transmis |
-| 13 | Logging/redaction | Pas de secrets, pas de prompts bruts |
-| 14 | Observability hooks | Duration, provider, model, tokens, error |
-| 15 | Test strategy | Fake adapter, contract tests, unit tests |
+| #   | Élément                                         | Justification                                 |
+| --- | ----------------------------------------------- | --------------------------------------------- |
+| 1   | `AiGatewayPort` — interface de génération       | Port canonique ICOS                           |
+| 2   | `AiRoutingRequest` — enveloppe métier           | Tenant, classification, contraintes           |
+| 3   | `AiGenerationResult` — résultat normalisé       | Provider, usage, latence, coût                |
+| 4   | `OmniRouteAdapter` — implémentation du port     | Mapping ICOS → OmniRoute → ICOS               |
+| 5   | Routing intent (`BEST_REASONING`, `FAST`, etc.) | Abstraction métier, pas technique             |
+| 6   | Provider metadata (id, model, account)          | Retourné dans le résultat                     |
+| 7   | Usage metadata (tokens, cost, latency)          | Retourné dans le résultat                     |
+| 8   | Error model normalisé                           | `PROVIDER_UNAVAILABLE`, `RATE_LIMITED`, etc.  |
+| 9   | Timeout configurable                            | Par requête, propagé à fetch + OmniRoute      |
+| 10  | Cancellation via `AbortSignal`                  | Standard JS, annule la requête HTTP           |
+| 11  | Fallback metadata                               | Signalé dans le résultat, pas piloté par ICOS |
+| 12  | Compliance propagation                          | tenantId, dataClassification transmis         |
+| 13  | Logging/redaction                               | Pas de secrets, pas de prompts bruts          |
+| 14  | Observability hooks                             | Duration, provider, model, tokens, error      |
+| 15  | Test strategy                                   | Fake adapter, contract tests, unit tests      |
 
 ### Not in scope (D3 V1)
 
-| # | Élément | Raison | Lot futur |
-|---|---------|--------|-----------|
-| 1 | Streaming (`generateStream`) | Peut s'ajouter sans casser le port | D3 V2 ou D4 |
-| 2 | Embeddings / Images / Audio | Ports séparés non couverts par D3 | Lots futurs |
-| 3 | ACP agents / AgentBridge | Orthogonal à la génération texte | Lots futurs |
-| 4 | Memory APIs | Port séparé | E1 |
-| 5 | Agent Skills / Fetch / Search | Orthogonal, consomme AiGatewayPort | Lots futurs |
-| 6 | Table `ai_generations` | Persistance — relève de l'intégration D4 | D4 |
-| 7 | Business routing policy | Abonnement/budget métier | R1 |
-| 8 | Usage ledger | Corrélation des coûts | R1 |
-| 9 | Operational projections | Health/quota/latence OmniRoute | R2 |
-| 10 | OmniRoute management | Credentials, comptes, configuration | R2 |
-| 11 | Évaluation métier | Quality scoring | Q1/R3 |
+| #   | Élément                       | Raison                                   | Lot futur   |
+| --- | ----------------------------- | ---------------------------------------- | ----------- |
+| 1   | Streaming (`generateStream`)  | Peut s'ajouter sans casser le port       | D3 V2 ou D4 |
+| 2   | Embeddings / Images / Audio   | Ports séparés non couverts par D3        | Lots futurs |
+| 3   | ACP agents / AgentBridge      | Orthogonal à la génération texte         | Lots futurs |
+| 4   | Memory APIs                   | Port séparé                              | E1          |
+| 5   | Agent Skills / Fetch / Search | Orthogonal, consomme AiGatewayPort       | Lots futurs |
+| 6   | Table `ai_generations`        | Persistance — relève de l'intégration D4 | D4          |
+| 7   | Business routing policy       | Abonnement/budget métier                 | R1          |
+| 8   | Usage ledger                  | Corrélation des coûts                    | R1          |
+| 9   | Operational projections       | Health/quota/latence OmniRoute           | R2          |
+| 10  | OmniRoute management          | Credentials, comptes, configuration      | R2          |
+| 11  | Évaluation métier             | Quality scoring                          | Q1/R3       |
 
 ---
 
 ## 4. Terminology
 
-| Terme | Définition |
-|-------|------------|
-| **AiGatewayPort** | Interface ICOS pour la génération IA |
-| **AiRoutingRequest** | Requête de génération avec contraintes métier |
-| **AiGenerationResult** | Résultat normalisé d'une génération |
-| **RoutingIntent** | Intention métier abstraite de l'appel IA |
-| **AiError** | Erreur normalisée avec code et classification |
-| **OmniRouteAdapter** | Implémentation du port vers OmniRoute |
-| **Provider** | Fournisseur IA externe (Anthropic, OpenAI, etc.) |
-| **Fallback** | Bascule vers un autre provider en cas d'échec |
-| **CorrelationId** | Identifiant traçable vers une Mission/Run D2 |
+| Terme                  | Définition                                       |
+| ---------------------- | ------------------------------------------------ |
+| **AiGatewayPort**      | Interface ICOS pour la génération IA             |
+| **AiRoutingRequest**   | Requête de génération avec contraintes métier    |
+| **AiGenerationResult** | Résultat normalisé d'une génération              |
+| **RoutingIntent**      | Intention métier abstraite de l'appel IA         |
+| **AiError**            | Erreur normalisée avec code et classification    |
+| **OmniRouteAdapter**   | Implémentation du port vers OmniRoute            |
+| **Provider**           | Fournisseur IA externe (Anthropic, OpenAI, etc.) |
+| **Fallback**           | Bascule vers un autre provider en cas d'échec    |
+| **CorrelationId**      | Identifiant traçable vers une Mission/Run D2     |
 
 ---
 
@@ -134,12 +134,12 @@ Provider                 ← Anthropic, OpenAI, etc. (administré par OmniRoute)
 // Intention métier abstraite : ICOS exprime ce qu'il veut,
 // pas quel provider utiliser.
 export const aiRoutingIntentSchema = z.enum([
-  "BEST_REASONING",  // Raisonnement profond, Opus/Fable-level
-  "BEST_CODING",     // Génération de code, haute qualité
-  "FAST",            // Réponse rapide, qualité moindre acceptable
-  "CHEAP",           // Coût minimal, qualité dégradée acceptable
-  "PRIVATE",         // Provider local/privé exigé (données sensibles)
-  "FALLBACK",        // Fallback explicite, dernier recours
+  "BEST_REASONING", // Raisonnement profond, Opus/Fable-level
+  "BEST_CODING", // Génération de code, haute qualité
+  "FAST", // Réponse rapide, qualité moindre acceptable
+  "CHEAP", // Coût minimal, qualité dégradée acceptable
+  "PRIVATE", // Provider local/privé exigé (données sensibles)
+  "FALLBACK", // Fallback explicite, dernier recours
 ]);
 ```
 
@@ -147,14 +147,14 @@ export const aiRoutingIntentSchema = z.enum([
 
 ```typescript
 export const aiErrorCodeSchema = z.enum([
-  "PROVIDER_UNAVAILABLE",   // Provider injoignable ou en erreur
-  "RATE_LIMITED",           // Quota dépassé ou rate limit
-  "TIMEOUT",                // Délai d'attente dépassé
-  "INVALID_RESPONSE",       // Réponse invalide du modèle
-  "POLICY_BLOCKED",         // Bloqué par une politique (ICOS ou OmniRoute)
+  "PROVIDER_UNAVAILABLE", // Provider injoignable ou en erreur
+  "RATE_LIMITED", // Quota dépassé ou rate limit
+  "TIMEOUT", // Délai d'attente dépassé
+  "INVALID_RESPONSE", // Réponse invalide du modèle
+  "POLICY_BLOCKED", // Bloqué par une politique (ICOS ou OmniRoute)
   "UNSUPPORTED_CAPABILITY", // Capacité non supportée par le modèle
-  "CANCELLED",              // Requête annulée via AbortSignal
-  "INTERNAL_ERROR",         // Erreur interne du port/adapter
+  "CANCELLED", // Requête annulée via AbortSignal
+  "INTERNAL_ERROR", // Erreur interne du port/adapter
 ]);
 ```
 
@@ -309,47 +309,47 @@ export interface AiHealthPort {
 L'adapter construit un appel HTTP POST vers `{baseUrl}/v1/chat/completions`
 (ou l'endpoint OmniRoute équivalent pour les messages).
 
-| ICOS Field | OmniRoute Mapping | Notes |
-|------------|-------------------|-------|
-| `prompt` | `messages[].content` | Dernier message utilisateur |
-| `systemPrompt` | `messages[0]` (system) | Premier message système |
-| `intent` | Header `X-Routing-Intent` ou paramètre de routage | OmniRoute peut choisir le provider selon l'intention |
-| `maxTokens` | `max_tokens` | Passé tel quel |
-| `temperature` | `temperature` | Passé tel quel |
-| `timeoutMs` | Timeout de la requête fetch | Le signal Abort coupe le fetch |
-| `tenantId` | Header `X-Tenant-Id` | Pour routage tenant-scoped OmniRoute |
-| `dataClassification` | Header `X-Data-Classification` | Pour sélection provider compliant |
-| `correlationId` | Header `X-Correlation-Id` | Tracing |
-| `allowedProviderIds` | `allowed_providers[]` | Contrainte de routage |
-| `disallowedProviderIds` | `disallowed_providers[]` | Contrainte de routage |
-| `fallbackAllowed` | `allow_fallback: boolean` | Si false, pas de fallback OmniRoute |
+| ICOS Field              | OmniRoute Mapping                                 | Notes                                                |
+| ----------------------- | ------------------------------------------------- | ---------------------------------------------------- |
+| `prompt`                | `messages[].content`                              | Dernier message utilisateur                          |
+| `systemPrompt`          | `messages[0]` (system)                            | Premier message système                              |
+| `intent`                | Header `X-Routing-Intent` ou paramètre de routage | OmniRoute peut choisir le provider selon l'intention |
+| `maxTokens`             | `max_tokens`                                      | Passé tel quel                                       |
+| `temperature`           | `temperature`                                     | Passé tel quel                                       |
+| `timeoutMs`             | Timeout de la requête fetch                       | Le signal Abort coupe le fetch                       |
+| `tenantId`              | Header `X-Tenant-Id`                              | Pour routage tenant-scoped OmniRoute                 |
+| `dataClassification`    | Header `X-Data-Classification`                    | Pour sélection provider compliant                    |
+| `correlationId`         | Header `X-Correlation-Id`                         | Tracing                                              |
+| `allowedProviderIds`    | `allowed_providers[]`                             | Contrainte de routage                                |
+| `disallowedProviderIds` | `disallowed_providers[]`                          | Contrainte de routage                                |
+| `fallbackAllowed`       | `allow_fallback: boolean`                         | Si false, pas de fallback OmniRoute                  |
 
 ### 7.2 Mapping OmniRoute → ICOS
 
-| OmniRoute Response | AiGenerationResult |
-|--------------------|-------------------|
-| `choices[0].message.content` | `content` |
-| `model` | `provider.model` |
-| `provider` | `provider.id` |
-| `usage.prompt_tokens` | `usage.inputTokens` |
-| `usage.completion_tokens` | `usage.outputTokens` |
-| `usage.total_tokens` | `usage.totalTokens` |
-| `cost` (si présent) | `usage.costUsd` |
-| `routing_explanation` | `routeExplanation` |
-| Temps mesuré côté adapter | `latencyMs` |
-| `fallback_used` | `fallbackUsed` |
+| OmniRoute Response           | AiGenerationResult   |
+| ---------------------------- | -------------------- |
+| `choices[0].message.content` | `content`            |
+| `model`                      | `provider.model`     |
+| `provider`                   | `provider.id`        |
+| `usage.prompt_tokens`        | `usage.inputTokens`  |
+| `usage.completion_tokens`    | `usage.outputTokens` |
+| `usage.total_tokens`         | `usage.totalTokens`  |
+| `cost` (si présent)          | `usage.costUsd`      |
+| `routing_explanation`        | `routeExplanation`   |
+| Temps mesuré côté adapter    | `latencyMs`          |
+| `fallback_used`              | `fallbackUsed`       |
 
 ### 7.3 Error Mapping
 
-| Situation | AiErrorCode | Retryable | Fallback |
-|-----------|-------------|-----------|----------|
-| HTTP 503 / réseau | `PROVIDER_UNAVAILABLE` | true | true |
-| HTTP 429 | `RATE_LIMITED` | true (après backoff) | true |
-| Timeout fetch | `TIMEOUT` | true | true |
-| HTTP 400 | `INVALID_RESPONSE` | false | true |
-| HTTP 403 | `POLICY_BLOCKED` | false | false |
-| Annulation AbortSignal | `CANCELLED` | false | false |
-| 5xx inattendu | `PROVIDER_UNAVAILABLE` | true | true |
+| Situation              | AiErrorCode            | Retryable            | Fallback |
+| ---------------------- | ---------------------- | -------------------- | -------- |
+| HTTP 503 / réseau      | `PROVIDER_UNAVAILABLE` | true                 | true     |
+| HTTP 429               | `RATE_LIMITED`         | true (après backoff) | true     |
+| Timeout fetch          | `TIMEOUT`              | true                 | true     |
+| HTTP 400               | `INVALID_RESPONSE`     | false                | true     |
+| HTTP 403               | `POLICY_BLOCKED`       | false                | false    |
+| Annulation AbortSignal | `CANCELLED`            | false                | false    |
+| 5xx inattendu          | `PROVIDER_UNAVAILABLE` | true                 | true     |
 
 ### 7.4 Séquence d'appel
 
@@ -416,16 +416,16 @@ export interface OmniRouteConfig {
 
 ## 9. Error Model
 
-| Code | HTTP Mapping | Description | Action |
-|------|-------------|-------------|--------|
-| `PROVIDER_UNAVAILABLE` | 502/503/504 | Provider injoignable, saturation, crash | Retry ou fallback |
-| `RATE_LIMITED` | 429 | Quota ou rate limit atteint | Backoff + retry ou fallback |
-| `TIMEOUT` | — | Délai dépassé | Retry ou fallback |
-| `INVALID_RESPONSE` | 200 malformed | JSON invalide, réponse tronquée | Fallback (ne pas retry same model) |
-| `POLICY_BLOCKED` | 403 | Bloqué par politique ICOS ou OmniRoute | Signaler, pas de retry |
-| `UNSUPPORTED_CAPABILITY` | 400 | Modèle ne supporte pas la modalité | Changer d'intention |
-| `CANCELLED` | — | Annulé via AbortSignal | Arrêt propre |
-| `INTERNAL_ERROR` | 500 | Erreur interne de l'adapter | Bug ICOS |
+| Code                     | HTTP Mapping  | Description                             | Action                             |
+| ------------------------ | ------------- | --------------------------------------- | ---------------------------------- |
+| `PROVIDER_UNAVAILABLE`   | 502/503/504   | Provider injoignable, saturation, crash | Retry ou fallback                  |
+| `RATE_LIMITED`           | 429           | Quota ou rate limit atteint             | Backoff + retry ou fallback        |
+| `TIMEOUT`                | —             | Délai dépassé                           | Retry ou fallback                  |
+| `INVALID_RESPONSE`       | 200 malformed | JSON invalide, réponse tronquée         | Fallback (ne pas retry same model) |
+| `POLICY_BLOCKED`         | 403           | Bloqué par politique ICOS ou OmniRoute  | Signaler, pas de retry             |
+| `UNSUPPORTED_CAPABILITY` | 400           | Modèle ne supporte pas la modalité      | Changer d'intention                |
+| `CANCELLED`              | —             | Annulé via AbortSignal                  | Arrêt propre                       |
+| `INTERNAL_ERROR`         | 500           | Erreur interne de l'adapter             | Bug ICOS                           |
 
 **Règle fail-closed** : toute erreur non reconnue, toute exception non
 attendue, tout timeout interne produit `INTERNAL_ERROR` avec `success: false`.
@@ -489,16 +489,19 @@ export interface AiGatewayObservabilityHooks {
   /** Appelée avant l'envoi de la requête HTTP */
   onRequestStarted?: (correlationId: string, intent: string) => void;
   /** Appelée après réception de la réponse HTTP */
-  onRequestCompleted?: (correlationId: string, result: {
-    success: boolean;
-    latencyMs: number;
-    providerId?: string;
-    modelId?: string;
-    inputTokens?: number;
-    outputTokens?: number;
-    costUsd?: number;
-    errorCode?: string;
-  }) => void;
+  onRequestCompleted?: (
+    correlationId: string,
+    result: {
+      success: boolean;
+      latencyMs: number;
+      providerId?: string;
+      modelId?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      costUsd?: number;
+      errorCode?: string;
+    },
+  ) => void;
 }
 ```
 
@@ -550,12 +553,12 @@ OMNIROUTE_MAX_TIMEOUT_MS=300000
 
 ### Defaults
 
-| Param | Valeur | Source |
-|-------|--------|--------|
-| `baseUrl` | `http://127.0.0.1:20128` | `OMNIROUTE_BASE_URL` |
-| `apiKey` | `undefined` | `OMNIROUTE_API_KEY` |
-| `defaultTimeoutMs` | `60000` | `OMNIROUTE_DEFAULT_TIMEOUT_MS` |
-| `maxTimeoutMs` | `300000` | `OMNIROUTE_MAX_TIMEOUT_MS` |
+| Param              | Valeur                   | Source                         |
+| ------------------ | ------------------------ | ------------------------------ |
+| `baseUrl`          | `http://127.0.0.1:20128` | `OMNIROUTE_BASE_URL`           |
+| `apiKey`           | `undefined`              | `OMNIROUTE_API_KEY`            |
+| `defaultTimeoutMs` | `60000`                  | `OMNIROUTE_DEFAULT_TIMEOUT_MS` |
+| `maxTimeoutMs`     | `300000`                 | `OMNIROUTE_MAX_TIMEOUT_MS`     |
 
 ### Configuration object (Zod validated)
 
@@ -574,24 +577,24 @@ export const omniRouteConfigSchema = z.object({
 
 ### Unit tests (Vitest, pas de Docker)
 
-| # | Test | Fichier |
-|---|------|---------|
-| 1 | `AiRoutingRequest` Zod parse valide | `core/ai/contract.test.ts` |
-| 2 | `AiRoutingRequest` Zod parse rejette prompt vide | `core/ai/contract.test.ts` |
-| 3 | `AiGenerationResult` Zod parse succès | `core/ai/contract.test.ts` |
-| 4 | `AiGenerationResult` Zod parse échec | `core/ai/contract.test.ts` |
-| 5 | `AiErrorCode` toutes les valeurs | `core/ai/contract.test.ts` |
-| 6 | OmniRoute adapter — timeout → TIMEOUT error | `server/ai/omniroute-adapter.test.ts` |
-| 7 | OmniRoute adapter — AbortSignal → CANCELLED | `server/ai/omniroute-adapter.test.ts` |
-| 8 | OmniRoute adapter — HTTP 429 → RATE_LIMITED | `server/ai/omniroute-adapter.test.ts` |
-| 9 | OmniRoute adapter — HTTP 503 → PROVIDER_UNAVAILABLE | `server/ai/omniroute-adapter.test.ts` |
-| 10 | OmniRoute adapter — HTTP 200 succès → parsed result | `server/ai/omniroute-adapter.test.ts` |
-| 11 | OmniRoute adapter — fallback flag propagé | `server/ai/omniroute-adapter.test.ts` |
-| 12 | OmniRoute adapter — tenant/classification headers | `server/ai/omniroute-adapter.test.ts` |
-| 13 | OmniRoute adapter — pas de prompt dans les logs | `server/ai/omniroute-adapter.test.ts` |
-| 14 | OmniRoute adapter — timeout > maxTimeoutMs refusé | `server/ai/omniroute-adapter.test.ts` |
-| 15 | Port — génération avec fake adapter | `server/ai/ports.test.ts` |
-| 16 | OmniRouteConfig Zod parse validation | `config/env.test.ts` |
+| #   | Test                                                | Fichier                               |
+| --- | --------------------------------------------------- | ------------------------------------- |
+| 1   | `AiRoutingRequest` Zod parse valide                 | `core/ai/contract.test.ts`            |
+| 2   | `AiRoutingRequest` Zod parse rejette prompt vide    | `core/ai/contract.test.ts`            |
+| 3   | `AiGenerationResult` Zod parse succès               | `core/ai/contract.test.ts`            |
+| 4   | `AiGenerationResult` Zod parse échec                | `core/ai/contract.test.ts`            |
+| 5   | `AiErrorCode` toutes les valeurs                    | `core/ai/contract.test.ts`            |
+| 6   | OmniRoute adapter — timeout → TIMEOUT error         | `server/ai/omniroute-adapter.test.ts` |
+| 7   | OmniRoute adapter — AbortSignal → CANCELLED         | `server/ai/omniroute-adapter.test.ts` |
+| 8   | OmniRoute adapter — HTTP 429 → RATE_LIMITED         | `server/ai/omniroute-adapter.test.ts` |
+| 9   | OmniRoute adapter — HTTP 503 → PROVIDER_UNAVAILABLE | `server/ai/omniroute-adapter.test.ts` |
+| 10  | OmniRoute adapter — HTTP 200 succès → parsed result | `server/ai/omniroute-adapter.test.ts` |
+| 11  | OmniRoute adapter — fallback flag propagé           | `server/ai/omniroute-adapter.test.ts` |
+| 12  | OmniRoute adapter — tenant/classification headers   | `server/ai/omniroute-adapter.test.ts` |
+| 13  | OmniRoute adapter — pas de prompt dans les logs     | `server/ai/omniroute-adapter.test.ts` |
+| 14  | OmniRoute adapter — timeout > maxTimeoutMs refusé   | `server/ai/omniroute-adapter.test.ts` |
+| 15  | Port — génération avec fake adapter                 | `server/ai/ports.test.ts`             |
+| 16  | OmniRouteConfig Zod parse validation                | `config/env.test.ts`                  |
 
 ### Test technique
 
@@ -618,17 +621,20 @@ D4 Orchestrator
 ```
 
 **D4 ne doit pas** :
+
 - Appeler OmniRouteAdapter directement
 - Connaître OmniRoute
 - Recevoir les credentials provider
 - Gérer la santé du provider
 
 **D3 ne doit pas** :
+
 - Dépendre de D4
 - Connaître Mission/Plan/Run
 - Définir la persistance des générations
 
 **Ce que D3 fournit** (export) :
+
 - `AiGatewayPort` (interface)
 - `OmniRouteAdapter` (implémentation, optionnelle — D4 peut aussi utiliser
   `FakeAiGateway` pour ses tests)
@@ -641,15 +647,15 @@ D4 Orchestrator
 Ces fonctionnalités sont des ports séparés, non inclus dans D3. Leur
 architecture future :
 
-| Capacité | Port | Notes |
-|----------|------|-------|
-| Search | `SearchPort` | Peut utiliser OmniRoute Search API à terme |
-| Fetch | `FetchPort` | Peut utiliser OmniRoute Fetch provider |
-| Audio STT | `SpeechToTextPort` | Peut utiliser Whisper via OmniRoute |
-| Audio TTS | `TextToSpeechPort` | Peut utiliser ElevenLabs via OmniRoute |
-| ACP Agents | `AgentRuntimePort` | OmniRoute ACP, orthogonal à AiGatewayPort |
-| Embeddings | `EmbeddingPort` | Peut utiliser OmniRoute embeddings |
-| Images | `ImageGenerationPort` | Peut utiliser OmniRoute image models |
+| Capacité   | Port                  | Notes                                      |
+| ---------- | --------------------- | ------------------------------------------ |
+| Search     | `SearchPort`          | Peut utiliser OmniRoute Search API à terme |
+| Fetch      | `FetchPort`           | Peut utiliser OmniRoute Fetch provider     |
+| Audio STT  | `SpeechToTextPort`    | Peut utiliser Whisper via OmniRoute        |
+| Audio TTS  | `TextToSpeechPort`    | Peut utiliser ElevenLabs via OmniRoute     |
+| ACP Agents | `AgentRuntimePort`    | OmniRoute ACP, orthogonal à AiGatewayPort  |
+| Embeddings | `EmbeddingPort`       | Peut utiliser OmniRoute embeddings         |
+| Images     | `ImageGenerationPort` | Peut utiliser OmniRoute image models       |
 
 Chacun de ces ports a sa propre interface, ses propres types et son propre
 adapter OmniRoute. Ils ne partagent que la configuration de base
@@ -738,9 +744,9 @@ src/
 
 ## 21. ADRs associés
 
-| ADR | Sujet | Décision D3 |
-|-----|-------|-------------|
-| ADR-0013 | Séparation génération / effet externe | AiGenerationResult n'est pas un ordre d'exécution |
-| ADR-0016 | Classification de confidentialité | `dataClassification` propagé à OmniRoute |
-| ADR-0018 | Propriété des credentials IA | ICOS ne stocke aucun credential provider |
-| ADR-0019 | OmniRoute comme controlled external runtime | AiGatewayPort seule abstraction ICOS |
+| ADR      | Sujet                                       | Décision D3                                       |
+| -------- | ------------------------------------------- | ------------------------------------------------- |
+| ADR-0013 | Séparation génération / effet externe       | AiGenerationResult n'est pas un ordre d'exécution |
+| ADR-0016 | Classification de confidentialité           | `dataClassification` propagé à OmniRoute          |
+| ADR-0018 | Propriété des credentials IA                | ICOS ne stocke aucun credential provider          |
+| ADR-0019 | OmniRoute comme controlled external runtime | AiGatewayPort seule abstraction ICOS              |

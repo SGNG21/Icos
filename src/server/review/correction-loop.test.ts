@@ -68,9 +68,7 @@ class FakeReviewerAlwaysFails implements ReviewerManagerPort {
   async conductReview(_spec: ReviewSpec): Promise<ReviewResult> {
     return {
       verdict: "CHANGES_REQUIRED",
-      checks: [
-        { category: "tests", description: "Toujours échoué", passed: false },
-      ],
+      checks: [{ category: "tests", description: "Toujours échoué", passed: false }],
       summary: "Toujours CHANGES_REQUIRED",
       confidence: 1,
       durationMs: 50,
@@ -85,13 +83,20 @@ class FakeReviewerAlwaysFails implements ReviewerManagerPort {
 class FakeCorrector implements CorrectionLoopManagerPort {
   private failAfter = Infinity;
 
-  setFailAfter(n: number) { this.failAfter = n; }
+  setFailAfter(n: number) {
+    this.failAfter = n;
+  }
 
   async executeCorrection(spec: CorrectionSpec): Promise<CorrectionResult> {
     if (spec.attemptNumber >= this.failAfter) {
       return { outcome: "FAILED", summary: "Échec de correction", durationMs: 5 };
     }
-    return { outcome: "CORRECTED", summary: "Correction appliquée", commitSha: "abc123", durationMs: 10 };
+    return {
+      outcome: "CORRECTED",
+      summary: "Correction appliquée",
+      commitSha: "abc123",
+      durationMs: 10,
+    };
   }
 
   isMaxAttemptsReached(spec: CorrectionSpec): boolean {
@@ -114,15 +119,9 @@ describe("CorrectionLoop", () => {
 
   describe("when initial review passes", () => {
     it("returns PASS without corrections", async () => {
-      const loop = new CorrectionLoop(
-        new FakeReviewerPass(),
-        new FakeCorrector(),
-      );
+      const loop = new CorrectionLoop(new FakeReviewerPass(), new FakeCorrector());
 
-      const result = await loop.execute(
-        makeReviewSpec("task-001"),
-        "/tmp/worktree",
-      );
+      const result = await loop.execute(makeReviewSpec("task-001"), "/tmp/worktree");
 
       expect(result.finalVerdict).toBe("PASS");
       expect(result.attemptsUsed).toBe(0);
@@ -137,15 +136,9 @@ describe("CorrectionLoop", () => {
 
   describe("when correction is needed", () => {
     it("applies corrections and re-reviews until PASS", async () => {
-      const loop = new CorrectionLoop(
-        new FakeReviewerFail(),
-        new FakeCorrector(),
-      );
+      const loop = new CorrectionLoop(new FakeReviewerFail(), new FakeCorrector());
 
-      const result = await loop.execute(
-        makeReviewSpec("task-001"),
-        "/tmp/worktree",
-      );
+      const result = await loop.execute(makeReviewSpec("task-001"), "/tmp/worktree");
 
       expect(result.finalVerdict).toBe("PASS");
       expect(result.attemptsUsed).toBe(1);
@@ -160,16 +153,11 @@ describe("CorrectionLoop", () => {
 
   describe("when max attempts exceeded", () => {
     it("escalates after exhausting retries", async () => {
-      const loop = new CorrectionLoop(
-        new FakeReviewerAlwaysFails(),
-        new FakeCorrector(),
-        { maxAttempts: 2 },
-      );
+      const loop = new CorrectionLoop(new FakeReviewerAlwaysFails(), new FakeCorrector(), {
+        maxAttempts: 2,
+      });
 
-      const result = await loop.execute(
-        makeReviewSpec("task-001"),
-        "/tmp/worktree",
-      );
+      const result = await loop.execute(makeReviewSpec("task-001"), "/tmp/worktree");
 
       expect(result.finalVerdict).toBe("ESCALATED");
       expect(result.attemptsUsed).toBe(2);
@@ -188,15 +176,9 @@ describe("CorrectionLoop", () => {
       const corrector = new FakeCorrector();
       corrector.setFailAfter(1); // First correction fails
 
-      const loop = new CorrectionLoop(
-        new FakeReviewerFail(),
-        corrector,
-      );
+      const loop = new CorrectionLoop(new FakeReviewerFail(), corrector);
 
-      const result = await loop.execute(
-        makeReviewSpec("task-001"),
-        "/tmp/worktree",
-      );
+      const result = await loop.execute(makeReviewSpec("task-001"), "/tmp/worktree");
 
       expect(result.finalVerdict).toBe("FAILED");
       expect(result.corrections[0].outcome).toBe("FAILED");

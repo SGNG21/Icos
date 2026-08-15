@@ -51,9 +51,11 @@ describe("ReviewerWorker", () => {
 
     it("returns CHANGES_REQUIRED when acceptance criteria are missing", async () => {
       const reviewer = new ReviewerWorker();
-      const result = await reviewer.conductReview(makeSpec({
-        acceptanceCriteria: [],
-      }));
+      const result = await reviewer.conductReview(
+        makeSpec({
+          acceptanceCriteria: [],
+        }),
+      );
 
       expect(result.verdict).toBe("CHANGES_REQUIRED");
       expect(result.checks.some((c) => !c.passed)).toBe(true);

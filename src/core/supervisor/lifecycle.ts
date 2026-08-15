@@ -1,9 +1,5 @@
 import type { TaskNodeStatus, TaskNode, TaskDag, DagStatus } from "./contract";
-import {
-  TERMINAL_NODE_STATUSES,
-  TERMINAL_DAG_STATUSES,
-  SUSPENDED_NODE_STATUSES,
-} from "./contract";
+import { TERMINAL_NODE_STATUSES, TERMINAL_DAG_STATUSES, SUSPENDED_NODE_STATUSES } from "./contract";
 
 // ─────────────────────────────────────
 // Node-level transitions
@@ -38,10 +34,7 @@ const NODE_TRANSITIONS: Record<TaskNodeStatus, readonly TaskNodeStatus[]> = {
  *
  * @returns true si la transition est valide, false sinon.
  */
-export function isNodeTransitionAllowed(
-  from: TaskNodeStatus,
-  to: TaskNodeStatus,
-): boolean {
+export function isNodeTransitionAllowed(from: TaskNodeStatus, to: TaskNodeStatus): boolean {
   const allowed = NODE_TRANSITIONS[from];
   if (!allowed) return false;
   return allowed.includes(to);
@@ -50,9 +43,7 @@ export function isNodeTransitionAllowed(
 /**
  * Retourne les transitions autorisées depuis un état donné.
  */
-export function allowedNodeTransitionsFrom(
-  status: TaskNodeStatus,
-): readonly TaskNodeStatus[] {
+export function allowedNodeTransitionsFrom(status: TaskNodeStatus): readonly TaskNodeStatus[] {
   return NODE_TRANSITIONS[status] ?? [];
 }
 
@@ -99,10 +90,7 @@ const DAG_TRANSITIONS: Record<DagStatus, readonly DagStatus[]> = {
 /**
  * Vérifie si une transition du DAG est autorisée.
  */
-export function isDagTransitionAllowed(
-  from: DagStatus,
-  to: DagStatus,
-): boolean {
+export function isDagTransitionAllowed(from: DagStatus, to: DagStatus): boolean {
   const allowed = DAG_TRANSITIONS[from];
   if (!allowed) return false;
   return allowed.includes(to);

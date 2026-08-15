@@ -91,10 +91,7 @@ export class MissionService {
     }
 
     // Validation spécifique aux transitions.
-    if (
-      input.targetStatus === "WAITING_FOR_APPROVAL" &&
-      isSuspended(mission.status)
-    ) {
+    if (input.targetStatus === "WAITING_FOR_APPROVAL" && isSuspended(mission.status)) {
       return {
         ok: false,
         reason: "already_suspended",
@@ -103,7 +100,10 @@ export class MissionService {
     }
 
     const now = new Date().toISOString();
-    const isTerminalTarget = input.targetStatus === "COMPLETED" || input.targetStatus === "FAILED" || input.targetStatus === "CANCELLED";
+    const isTerminalTarget =
+      input.targetStatus === "COMPLETED" ||
+      input.targetStatus === "FAILED" ||
+      input.targetStatus === "CANCELLED";
 
     const auditEntry: AuditEntry = {
       id: `audit-${randomUUID()}`,

@@ -11,16 +11,16 @@ Supervisor en cours de construction. Phases SUP-0 (design), SUP-1 (Task DAG + Sc
 
 ## Phases réalisées
 
-| Phase | Statut | Commit | Description |
-|-------|--------|--------|-------------|
-| SUP-0 | ✅ DONE | 392e7c5 | Architecture design, EXISTS/EXTEND/CREATE/DEFER/DISCARD matrix |
-| SUP-1 | ✅ DONE | 4eee1aa | Task DAG + Scheduler (cycle detection, ready-node, topo sort) |
-| SUP-2 | ✅ DONE | 7c2109c | Local Worker Manager (WorkerSpec, concurrency, D4 integration) |
-| SUP-3 | ▶ IN PROGRESS | — | Worktree / Git Manager |
-| SUP-4 | ⏳ NEXT | — | Review / Correction Loop |
-| SUP-5 | ⏳ | — | Integration + Global Gates |
-| SUP-6 | ⏳ | — | Preview Delivery |
-| SUP-7 | ⏳ | — | Self-development milestone |
+| Phase | Statut        | Commit  | Description                                                    |
+| ----- | ------------- | ------- | -------------------------------------------------------------- |
+| SUP-0 | ✅ DONE       | 392e7c5 | Architecture design, EXISTS/EXTEND/CREATE/DEFER/DISCARD matrix |
+| SUP-1 | ✅ DONE       | 4eee1aa | Task DAG + Scheduler (cycle detection, ready-node, topo sort)  |
+| SUP-2 | ✅ DONE       | 7c2109c | Local Worker Manager (WorkerSpec, concurrency, D4 integration) |
+| SUP-3 | ▶ IN PROGRESS | —       | Worktree / Git Manager                                         |
+| SUP-4 | ⏳ NEXT       | —       | Review / Correction Loop                                       |
+| SUP-5 | ⏳            | —       | Integration + Global Gates                                     |
+| SUP-6 | ⏳            | —       | Preview Delivery                                               |
+| SUP-7 | ⏳            | —       | Self-development milestone                                     |
 
 ## Infrastructure intégrée
 

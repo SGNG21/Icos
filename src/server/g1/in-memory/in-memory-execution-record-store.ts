@@ -13,9 +13,7 @@ export class InMemoryExecutionRecordStore implements ExecutionRecordStore {
   async append(record: ExecutionRecord): Promise<void> {
     // Append-only : refuser l'écrasement
     if (this.records.has(record.id)) {
-      throw new Error(
-        `ExecutionRecord ${record.id} existe déjà (append-only)`,
-      );
+      throw new Error(`ExecutionRecord ${record.id} existe déjà (append-only)`);
     }
     this.records.set(record.id, { ...record });
   }
@@ -24,18 +22,12 @@ export class InMemoryExecutionRecordStore implements ExecutionRecordStore {
     return this.records.get(id) ?? null;
   }
 
-  async findByIdempotencyKey(
-    idempotencyKey: IdempotencyKey,
-  ): Promise<ExecutionRecord[]> {
-    return Array.from(this.records.values()).filter(
-      (r) => r.idempotencyKey === idempotencyKey,
-    );
+  async findByIdempotencyKey(idempotencyKey: IdempotencyKey): Promise<ExecutionRecord[]> {
+    return Array.from(this.records.values()).filter((r) => r.idempotencyKey === idempotencyKey);
   }
 
   async listByTenant(tenantId: string): Promise<ExecutionRecord[]> {
-    return Array.from(this.records.values()).filter(
-      (r) => r.tenantId === tenantId,
-    );
+    return Array.from(this.records.values()).filter((r) => r.tenantId === tenantId);
   }
 
   /** Réinitialise le store. */

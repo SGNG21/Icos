@@ -11,7 +11,7 @@ async function createService() {
   const auditLog = new InMemoryAuditLog();
   const audit = new InMemoryAuditRepository(auditLog);
   return {
-    service: new MissionService(missions, audit),  // pas d'UoW pour les tests unitaires
+    service: new MissionService(missions, audit), // pas d'UoW pour les tests unitaires
     missions,
     audit,
   };
@@ -121,11 +121,19 @@ describe("D2 — transitionStatus (succès)", () => {
     if (!created.ok) return;
 
     // CREATED → PLANNING
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     // PLANNING → PLANNED (via setPlan)
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
     // PLANNED → IN_PROGRESS
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
     // IN_PROGRESS → WAITING_FOR_APPROVAL
     const r = await service.transitionStatus({
@@ -166,9 +174,17 @@ describe("D2 — transitionStatus (succès)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
     const r = await service.transitionStatus({
       missionId: created.data.id,
@@ -196,12 +212,29 @@ describe("D2 — transitionStatus (succès)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PROVIDER_UNAVAILABLE", actorLabel: "system", reason: "OpenAI down" });
-    const r2 = await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PROVIDER_UNAVAILABLE",
+      actorLabel: "system",
+      reason: "OpenAI down",
+    });
+    const r2 = await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
     expect(r2.data.status).toBe("IN_PROGRESS");
@@ -213,12 +246,28 @@ describe("D2 — transitionStatus (succès)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "SKILL_REVOKED", actorLabel: "system" });
-    const r2 = await service.transitionStatus({ missionId: created.data.id, targetStatus: "FAILED", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "SKILL_REVOKED",
+      actorLabel: "system",
+    });
+    const r2 = await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "FAILED",
+      actorLabel: "system",
+    });
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
     expect(r2.data.status).toBe("FAILED");
@@ -252,10 +301,22 @@ describe("D2 — transitionStatus (refus)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "COMPLETED", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "COMPLETED",
+      actorLabel: "system",
+    });
 
     const r = await service.transitionStatus({
       missionId: created.data.id,
@@ -283,7 +344,11 @@ describe("D2 — transitionStatus (refus)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
 
     const r = await service.transitionStatus({
@@ -317,10 +382,22 @@ describe("D2 — get missions", () => {
     expect(m2.ok).toBe(true);
     if (!m1.ok || !m2.ok) return;
 
-    await service.transitionStatus({ missionId: m1.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: m1.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: m1.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: m1.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
-    await service.transitionStatus({ missionId: m1.data.id, targetStatus: "COMPLETED", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: m1.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
+    await service.transitionStatus({
+      missionId: m1.data.id,
+      targetStatus: "COMPLETED",
+      actorLabel: "system",
+    });
 
     const actives = await service.getActiveMissions();
     expect(actives.length).toBe(1);
@@ -339,9 +416,17 @@ describe("D2 — addRun", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
     const run = await service.addRun({ missionId: created.data.id, stepIndex: 0 });
     expect(run.ok).toBe(true);
@@ -361,9 +446,17 @@ describe("D2 — addRun", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "PLANNING", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "PLANNING",
+      actorLabel: "system",
+    });
     await service.setPlan({ missionId: created.data.id, plan: testPlan, actorLabel: "system" });
-    await service.transitionStatus({ missionId: created.data.id, targetStatus: "IN_PROGRESS", actorLabel: "system" });
+    await service.transitionStatus({
+      missionId: created.data.id,
+      targetStatus: "IN_PROGRESS",
+      actorLabel: "system",
+    });
 
     const run = await service.addRun({ missionId: created.data.id, stepIndex: 99 });
     expect(run.ok).toBe(false);

@@ -1,8 +1,8 @@
 # Architecture vie privée — ICOS
 
-| Statut    | Version |
-|-----------|---------|
-| Projet    | 0.1     |
+| Statut | Version |
+| ------ | ------- |
+| Projet | 0.1     |
 
 ## 1. Objectif
 
@@ -128,13 +128,13 @@ métadonnées : acteur, action, type, horodatage).
 
 ## 4. Architecture physique (prévisions)
 
-| Composant              | Mesure prévue                                     | Lot        |
-|------------------------|---------------------------------------------------|------------|
-| Base de données        | Chiffrement at-rest (AES-256 via PostgreSQL TDE)  | COMPLIANCE-2 |
-| Transport              | TLS 1.3 (déjà en place)                           | Existant   |
-| Logs                   | Rotation, purge à 90 jours, pas de C3            | COMPLIANCE-1 |
-| Sauvegardes            | Chiffrement au repos, rétention 90 jours max     | COMPLIANCE-2 |
-| Cache (Redis)          | Pas de C3 en cache persistant                     | Règle immédiate |
+| Composant       | Mesure prévue                                    | Lot             |
+| --------------- | ------------------------------------------------ | --------------- |
+| Base de données | Chiffrement at-rest (AES-256 via PostgreSQL TDE) | COMPLIANCE-2    |
+| Transport       | TLS 1.3 (déjà en place)                          | Existant        |
+| Logs            | Rotation, purge à 90 jours, pas de C3            | COMPLIANCE-1    |
+| Sauvegardes     | Chiffrement au repos, rétention 90 jours max     | COMPLIANCE-2    |
+| Cache (Redis)   | Pas de C3 en cache persistant                    | Règle immédiate |
 
 ### 4.1 Architecture future — extension provider et mémoire
 
@@ -175,32 +175,33 @@ Ce glossaire définit les concepts manipulés par l'architecture de conformité
 ICOS. Chaque entrée précise son rôle, son statut actuel et le lot cible si
 l'implémentation est future.
 
-| Concept | Définition courte | Rôle dans ICOS | Statut | Lot cible |
-|---|---|---|---|---|
-| **Tenant** | Périmètre d'isolation logique (organisation, client). | Toute donnée C3 est associée à un tenant. L'isolation cross-tenant est un invariant. | PLANNED | COMPLIANCE-1 |
-| **Organization** | Entité administrative propriétaire d'un ou plusieurs tenants. | Regroupe les utilisateurs, les politiques et les souscriptions. | FUTURE | Phase B/H |
-| **Workspace** | Espace de travail à l'intérieur d'un tenant (projet, équipe). | Scope les données, les agents et les capacités accessibles. | FUTURE | Phase B/H |
-| **DataSubject** | Personne physique concernée par un traitement (RGPD art. 4). | Toute donnée PERSONAL/C3 est associée à un DataSubject. | PLANNED | COMPLIANCE-1 |
-| **DataCategory** | Catégorie sémantique de la donnée (PERSONAL, AUTH_SECRET, FINANCIAL…). | Axe sémantique de la classification combinée `(DataCategory, SensitivityLevel)`. | DEFINED | — |
-| **SensitivityLevel** | Niveau de criticité C0–C3. | Détermine les contrôles minimaux de protection. | DEFINED | — |
-| **ProcessingPurpose** | Finalité déclarée d'un traitement (RGPD art. 5.1.b). | Toute utilisation de données C3 est rattachée à une finalité. | PLANNED | D1 |
-| **LegalBasis** | Base légale du traitement (RGPD art. 6). | Associée à chaque couple `(DataCategory, ProcessingPurpose)`. | PLANNED | D1 |
-| **RetentionPolicy** | Règle bornant la durée de conservation d'une donnée. | Définie par `(DataCategory, SensitivityLevel)`. Purge à échéance. | DEFINED | — |
-| **DataProvenance** | Origine et chaîne de création d'une donnée. | Permet de tracer la source d'une donnée inférée ou importée. | FUTURE | E1 |
-| **DataLineage** | Graphe complet des transformations d'une donnée entre systèmes. | Requis pour l'audit des décisions et la reproductibilité. | FUTURE | E1 |
-| **ProviderComplianceProfile** | Profil de conformité d'un provider externe (région, certifications, trainingAllowed). | Détermine si un provider peut traiter une `(DataCategory, SensitivityLevel)` donnée. | PLANNED | D3 |
-| **DataTransferPolicy** | Politique encadrant le transfert de données vers un provider ou une région. | S'applique avant tout envoi de données C2+ vers l'extérieur. | FUTURE | D3 |
-| **SubprocessorRecord** | Enregistrement d'un sous-traitant (RGPD art. 28). | Documenté dans le registre des traitements. DPA signé requis avant mise en production. | DEFINED | — |
-| **DpiaAssessment** | Analyse d'impact sur la protection des données (RGPD art. 35). | Requise avant tout traitement à risque élevé. Planifiée pour les traitements réels. | PLANNED | COMPLIANCE-3 |
-| **SignificantDecision** | Décision automatisée à impact significatif pour une personne. | Nécessite intervention humaine (Policy Engine ≥ risk 4). | PLANNED | D1 |
-| **ConsentRecord** | Trace du consentement explicite (RGPD art. 7). | Enregistrement horodaté avec finalité, version, retrait possible. | PLANNED | COMPLIANCE-2 |
-| **DataSubjectRequest** | Demande d'exercice d'un droit RGPD (accès, rectification, etc.). | Workflow de réception, vérification et exécution de la demande. | PLANNED | COMPLIANCE-1 |
-| **DeletionRequest** | Demande d'effacement (RGPD art. 17). | Déclenche suppression logique + purge physique avec traçabilité. | PLANNED | COMPLIANCE-2 |
-| **LegalHold** | Gel de données pour contentieux (RGPD art. 18). | Suspend la purge automatique jusqu'à levée du gel. | PLANNED | COMPLIANCE-2 |
-| **PersonalDataBreach** | Violation de données personnelles (RGPD art. 33-34). | Workflow de détection, notification CNIL 72h et information des personnes. | PLANNED | COMPLIANCE-2 |
-| **SecurityIncident** | Tout incident de sécurité (avec ou sans données personnelles). | Déclenche investigation, escalade et, si nécessaire, procédure breach. | PLANNED | COMPLIANCE-1 |
+| Concept                       | Définition courte                                                                     | Rôle dans ICOS                                                                         | Statut  | Lot cible    |
+| ----------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------- | ------------ |
+| **Tenant**                    | Périmètre d'isolation logique (organisation, client).                                 | Toute donnée C3 est associée à un tenant. L'isolation cross-tenant est un invariant.   | PLANNED | COMPLIANCE-1 |
+| **Organization**              | Entité administrative propriétaire d'un ou plusieurs tenants.                         | Regroupe les utilisateurs, les politiques et les souscriptions.                        | FUTURE  | Phase B/H    |
+| **Workspace**                 | Espace de travail à l'intérieur d'un tenant (projet, équipe).                         | Scope les données, les agents et les capacités accessibles.                            | FUTURE  | Phase B/H    |
+| **DataSubject**               | Personne physique concernée par un traitement (RGPD art. 4).                          | Toute donnée PERSONAL/C3 est associée à un DataSubject.                                | PLANNED | COMPLIANCE-1 |
+| **DataCategory**              | Catégorie sémantique de la donnée (PERSONAL, AUTH_SECRET, FINANCIAL…).                | Axe sémantique de la classification combinée `(DataCategory, SensitivityLevel)`.       | DEFINED | —            |
+| **SensitivityLevel**          | Niveau de criticité C0–C3.                                                            | Détermine les contrôles minimaux de protection.                                        | DEFINED | —            |
+| **ProcessingPurpose**         | Finalité déclarée d'un traitement (RGPD art. 5.1.b).                                  | Toute utilisation de données C3 est rattachée à une finalité.                          | PLANNED | D1           |
+| **LegalBasis**                | Base légale du traitement (RGPD art. 6).                                              | Associée à chaque couple `(DataCategory, ProcessingPurpose)`.                          | PLANNED | D1           |
+| **RetentionPolicy**           | Règle bornant la durée de conservation d'une donnée.                                  | Définie par `(DataCategory, SensitivityLevel)`. Purge à échéance.                      | DEFINED | —            |
+| **DataProvenance**            | Origine et chaîne de création d'une donnée.                                           | Permet de tracer la source d'une donnée inférée ou importée.                           | FUTURE  | E1           |
+| **DataLineage**               | Graphe complet des transformations d'une donnée entre systèmes.                       | Requis pour l'audit des décisions et la reproductibilité.                              | FUTURE  | E1           |
+| **ProviderComplianceProfile** | Profil de conformité d'un provider externe (région, certifications, trainingAllowed). | Détermine si un provider peut traiter une `(DataCategory, SensitivityLevel)` donnée.   | PLANNED | D3           |
+| **DataTransferPolicy**        | Politique encadrant le transfert de données vers un provider ou une région.           | S'applique avant tout envoi de données C2+ vers l'extérieur.                           | FUTURE  | D3           |
+| **SubprocessorRecord**        | Enregistrement d'un sous-traitant (RGPD art. 28).                                     | Documenté dans le registre des traitements. DPA signé requis avant mise en production. | DEFINED | —            |
+| **DpiaAssessment**            | Analyse d'impact sur la protection des données (RGPD art. 35).                        | Requise avant tout traitement à risque élevé. Planifiée pour les traitements réels.    | PLANNED | COMPLIANCE-3 |
+| **SignificantDecision**       | Décision automatisée à impact significatif pour une personne.                         | Nécessite intervention humaine (Policy Engine ≥ risk 4).                               | PLANNED | D1           |
+| **ConsentRecord**             | Trace du consentement explicite (RGPD art. 7).                                        | Enregistrement horodaté avec finalité, version, retrait possible.                      | PLANNED | COMPLIANCE-2 |
+| **DataSubjectRequest**        | Demande d'exercice d'un droit RGPD (accès, rectification, etc.).                      | Workflow de réception, vérification et exécution de la demande.                        | PLANNED | COMPLIANCE-1 |
+| **DeletionRequest**           | Demande d'effacement (RGPD art. 17).                                                  | Déclenche suppression logique + purge physique avec traçabilité.                       | PLANNED | COMPLIANCE-2 |
+| **LegalHold**                 | Gel de données pour contentieux (RGPD art. 18).                                       | Suspend la purge automatique jusqu'à levée du gel.                                     | PLANNED | COMPLIANCE-2 |
+| **PersonalDataBreach**        | Violation de données personnelles (RGPD art. 33-34).                                  | Workflow de détection, notification CNIL 72h et information des personnes.             | PLANNED | COMPLIANCE-2 |
+| **SecurityIncident**          | Tout incident de sécurité (avec ou sans données personnelles).                        | Déclenche investigation, escalade et, si nécessaire, procédure breach.                 | PLANNED | COMPLIANCE-1 |
 
 **Légende des statuts :**
+
 - `DEFINED` : concept documenté dans COMPLIANCE-0, applicable dès maintenant.
 - `PLANNED` : concept identifié, implémentation prévue dans un lot futur.
 - `FUTURE` : concept reconnu, non priorisé à ce stade.

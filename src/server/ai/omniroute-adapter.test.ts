@@ -92,7 +92,8 @@ describe("D3-01: successful generation", () => {
   });
 
   it("sends correct request body to OmniRoute", async () => {
-    let capturedRequest: { url: string; body?: string; headers?: Record<string, string> } | undefined;
+    let capturedRequest:
+      { url: string; body?: string; headers?: Record<string, string> } | undefined;
 
     const trackingFetch: MockFetch = (url, init) => {
       capturedRequest = { url: url as string, body: init?.body as string | undefined };
@@ -107,7 +108,7 @@ describe("D3-01: successful generation", () => {
         intent: "BEST_CODING",
         maxTokens: 4096,
         temperature: 0.7,
-        budgetMaxCostUsd: 0.10,
+        budgetMaxCostUsd: 0.1,
         allowedProviderIds: ["anthropic"],
         fallbackAllowed: false,
         timeoutMs: 120_000,
@@ -123,7 +124,7 @@ describe("D3-01: successful generation", () => {
     expect(body.allowed_providers).toEqual(["anthropic"]);
     expect(body.allow_fallback).toBe(false);
     expect(body.routing_intent).toBe("BEST_CODING");
-    expect(body.max_cost_usd).toBe(0.10);
+    expect(body.max_cost_usd).toBe(0.1);
   });
 });
 
@@ -244,10 +245,8 @@ describe("D3-05: provider unavailable mapped correctly", () => {
 
 describe("D3-06: rate limit mapped correctly", () => {
   it("maps HTTP 429 to RATE_LIMITED", async () => {
-    const adapter = new OmniRouteAdapter(
-      defaultConfig,
-      undefined,
-      async () => errorResponse(429, { error: { message: "Rate limit exceeded" } }),
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      errorResponse(429, { error: { message: "Rate limit exceeded" } }),
     );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
@@ -325,7 +324,9 @@ describe("D3-08: AbortSignal cancels request", () => {
 
 describe("D3-09: invalid upstream response fails safely", () => {
   it("maps non-JSON response to INVALID_RESPONSE", async () => {
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse("<html>error</html>"));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse("<html>error</html>"),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -335,7 +336,9 @@ describe("D3-09: invalid upstream response fails safely", () => {
 
   it("maps empty choices response to INVALID_RESPONSE", async () => {
     const badBody = JSON.stringify({ model: "x", choices: [] });
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse(badBody));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse(badBody),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -351,11 +354,15 @@ describe("D3-09: invalid upstream response fails safely", () => {
 describe("D3-10: no prompt content in logs", () => {
   it("does not include prompt or response content in observability hooks", async () => {
     const hookResults: Array<Record<string, unknown>> = [];
-    const adapter = new OmniRouteAdapter(defaultConfig, {
-      onRequestCompleted: (_correlationId, result) => {
-        hookResults.push(result as Record<string, unknown>);
+    const adapter = new OmniRouteAdapter(
+      defaultConfig,
+      {
+        onRequestCompleted: (_correlationId, result) => {
+          hookResults.push(result as Record<string, unknown>);
+        },
       },
-    }, async () => okResponse());
+      async () => okResponse(),
+    );
 
     await adapter.generate(makeRequest({ prompt: "THIS_IS_A_SECRET_PROMPT" }));
 
@@ -493,10 +500,7 @@ describe("D3-14: fallbackAllowed semantics tested/documented", () => {
 describe("D3-15: D2 durable state is unaffected by provider failure", () => {
   it("adapter does not import or reference D2 domain types", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      new URL("./omniroute-adapter.ts", import.meta.url),
-      "utf-8",
-    );
+    const source = fs.readFileSync(new URL("./omniroute-adapter.ts", import.meta.url), "utf-8");
     // Vérifier l'absence de dépendance aux domaines D2 (Mission, Plan, Run, Orchestrateur)
     // Les mots courts comme "plan" et "run" peuvent apparaître dans du texte anglais
     // (ex: "explanation") — on vérifie les termes D2 spécifiques uniquement.
@@ -592,7 +596,9 @@ describe("error mapping", () => {
   });
 
   it("maps HTTP 200 with invalid JSON to INVALID_RESPONSE", async () => {
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse("not valid json{{}"));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse("not valid json{{}"),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -611,7 +617,11 @@ describe("config validation", () => {
       expect(url).toBe("http://test/v1/chat/completions");
       return Promise.resolve(okResponse());
     };
-    const adapter = new OmniRouteAdapter({ ...defaultConfig, baseUrl: "http://test/" }, undefined, trackingFetch);
+    const adapter = new OmniRouteAdapter(
+      { ...defaultConfig, baseUrl: "http://test/" },
+      undefined,
+      trackingFetch,
+    );
     await adapter.generate(makeRequest());
   });
 });

@@ -6,13 +6,7 @@ import { isoDateTimeSchema } from "@/core/contracts/common";
 // Worktree status
 // ─────────────────────────────────────
 
-export const worktreeStatusSchema = z.enum([
-  "CREATED",
-  "ACTIVE",
-  "COMMITTED",
-  "DIRTY",
-  "CLEANED",
-]);
+export const worktreeStatusSchema = z.enum(["CREATED", "ACTIVE", "COMMITTED", "DIRTY", "CLEANED"]);
 
 export type WorktreeStatus = z.infer<typeof worktreeStatusSchema>;
 
@@ -26,7 +20,10 @@ export const worktreeSpecSchema = z.object({
   /** Nom de la branche. */
   branch: z.string().min(1),
   /** SHA du commit de base. */
-  baseSha: z.string().length(40).regex(/^[0-9a-f]{40}$/),
+  baseSha: z
+    .string()
+    .length(40)
+    .regex(/^[0-9a-f]{40}$/),
   /** ID de la tâche assignée. */
   taskId: z.string().min(1),
 });

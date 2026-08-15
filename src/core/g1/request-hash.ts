@@ -62,10 +62,7 @@ export function computeRequestHash(input: RequestHashInput): string {
  * Vérifie que deux requestHash correspondent.
  * En cas de divergence → FAIL CLOSED.
  */
-export function verifyRequestHash(
-  expected: string,
-  actual: string,
-): boolean {
+export function verifyRequestHash(expected: string, actual: string): boolean {
   if (expected.length !== 64 || actual.length !== 64) {
     return false;
   }

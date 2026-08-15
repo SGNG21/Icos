@@ -6,20 +6,20 @@
 > **Base SHA** : `700290a`
 > **Branche** : `feat/compliance-1-classification`
 > **Documents sources** : `ICOS_COMPLIANCE_ROADMAP.md` §3, `ICOS_COMPLIANCE_TESTS.md` §3+§5,
->   `docs/decisions/0023-compliance-foundation.md`, `docs/architecture/future/04-lot-sequence.md`,
->   `docs/architecture/future/03-critical-path.md`
+> `docs/decisions/0023-compliance-foundation.md`, `docs/architecture/future/04-lot-sequence.md`,
+> `docs/architecture/future/03-critical-path.md`
 
 ---
 
 ## 1. Scope
 
-| # | Requirement | Source |
-|:---|:---|:---|
-| A | Drizzle schema `@classification C2/C3` markers + CI validation gate | Roadmap §3.1 |
-| B | `dataClassification` obligatoire sur toute Capability publiée | Roadmap §3.2 |
-| C | C3 Capability ne peut atteindre un état utilisable sans retention policy | Roadmap §3.2 |
-| D | Secret scanning CI gate (pattern-matching, pas scanner complet) | Roadmap §3.3 |
-| E | Tenant Foundation — contexte canonique, résolution, scoping, tests | Compliance tests §5 (001, 011) |
+| #   | Requirement                                                              | Source                         |
+| :-- | :----------------------------------------------------------------------- | :----------------------------- |
+| A   | Drizzle schema `@classification C2/C3` markers + CI validation gate      | Roadmap §3.1                   |
+| B   | `dataClassification` obligatoire sur toute Capability publiée            | Roadmap §3.2                   |
+| C   | C3 Capability ne peut atteindre un état utilisable sans retention policy | Roadmap §3.2                   |
+| D   | Secret scanning CI gate (pattern-matching, pas scanner complet)          | Roadmap §3.3                   |
+| E   | Tenant Foundation — contexte canonique, résolution, scoping, tests       | Compliance tests §5 (001, 011) |
 
 ## 2. Non-scope
 
@@ -35,22 +35,24 @@
 
 ## 3. Terminology
 
-| Term | Definition |
-|:---|:---|
-| **DataCategory** | Classification fonctionnelle des données (PUBLIC, INTERNAL, PERSONAL, etc.) |
-| **SensitivityLevel** | Niveau de sensibilité (C0, C1, C2, C3) — distinct de DataCategory |
-| **C2 data** | Données confidentielles (tokens, clés API, secrets d'infrastructure) |
-| **C3 data** | Données personnelles restreintes (email, nom, téléphone, historique) |
-| **TenantContext** | Identité de tenant validée, résolue depuis le contexte authentifié |
-| **CURRENT_SINGLE_TENANT_ID** | = `"default"` — shim C2 à remplacer par TenantContext canonique |
+| Term                         | Definition                                                                  |
+| :--------------------------- | :-------------------------------------------------------------------------- |
+| **DataCategory**             | Classification fonctionnelle des données (PUBLIC, INTERNAL, PERSONAL, etc.) |
+| **SensitivityLevel**         | Niveau de sensibilité (C0, C1, C2, C3) — distinct de DataCategory           |
+| **C2 data**                  | Données confidentielles (tokens, clés API, secrets d'infrastructure)        |
+| **C3 data**                  | Données personnelles restreintes (email, nom, téléphone, historique)        |
+| **TenantContext**            | Identité de tenant validée, résolue depuis le contexte authentifié          |
+| **CURRENT_SINGLE_TENANT_ID** | = `"default"` — shim C2 à remplacer par TenantContext canonique             |
 
 ## 4. DataCategory / SensitivityLevel interaction
 
 C2 a déjà introduit les deux champs optionnels sur la table `skills` :
-- `dataCategory` ∈ {PUBLIC, INTERNAL, PERSONAL, SENSITIVE_PERSONAL, ...}  
+
+- `dataCategory` ∈ {PUBLIC, INTERNAL, PERSONAL, SENSITIVE_PERSONAL, ...}
 - `sensitivityLevel` ∈ {C0, C1, C2, C3}
 
 Les deux sont indépendants mais complémentaires :
+
 - `sensitivityLevel = C3` reste l'indicateur primaire pour les contrôles techniques (retention, chiffrement)
 - `dataCategory` donne le contexte fonctionnel (PERSONAL vs FINANCIAL vs HEALTH)
 
@@ -74,31 +76,33 @@ export const someTable = pgTable("some_table", {
 
 Tables existantes avec données potentiellement C2/C3 (à marquer) :
 
-| Table | Colonnes C2 | Colonnes C3 |
-|:---|:---|:---|
-| `user` (auth-schema) | — | `email`, `name` |
-| `agents` | — | `description` |
-| `human_agent_links` | — | — |
-| `tasks` | — | `title`, `description` |
-| `actions` | — | — |
-| `approvals` | — | `reason` |
-| `audit_entries` | `details` | — |
-| `capabilities` | — | `description` |
-| `skills` | `content_hash` | `name`, `description` |
-| `skill_security_scans` | `metadata` | — |
-| `skill_security_findings` | — | `message` |
-| `skill_evaluations` | `metadata`, `score` | — |
+| Table                     | Colonnes C2         | Colonnes C3            |
+| :------------------------ | :------------------ | :--------------------- |
+| `user` (auth-schema)      | —                   | `email`, `name`        |
+| `agents`                  | —                   | `description`          |
+| `human_agent_links`       | —                   | —                      |
+| `tasks`                   | —                   | `title`, `description` |
+| `actions`                 | —                   | —                      |
+| `approvals`               | —                   | `reason`               |
+| `audit_entries`           | `details`           | —                      |
+| `capabilities`            | —                   | `description`          |
+| `skills`                  | `content_hash`      | `name`, `description`  |
+| `skill_security_scans`    | `metadata`          | —                      |
+| `skill_security_findings` | —                   | `message`              |
+| `skill_evaluations`       | `metadata`, `score` | —                      |
 
 **Note** : le marquage est une annotation pour la revue humaine + CI. Il n'a pas d'effet runtime direct dans COMPLIANCE-1. Les contrôles d'accès effectifs (chiffrement, masquage) sont pour COMPLIANCE-2.
 
 ### 5.3 CI validation
 
 Une script de validation (`scripts/validate-classification-markers.ts`) :
+
 1. Parse les fichiers `src/server/database/schema.ts` et `auth-schema.ts`
 2. Vérifie que toute colonne avec un commentaire `@classification C3` ou `@classification C2` a effectivement le type attendu
 3. Ne bloque pas les colonnes C0/C1 — seul le manque de marquage sur une colonne C2/C3 est détecté comme anomalie potentielle
 
 Ce script est exécuté :
+
 - Par `pnpm compliance:check` (nouvelle commande)
 - Dans la CI, sur les fichiers modifiés par la PR
 - **Ne remplace pas** la gate humaine CT-DOC-05
@@ -159,6 +163,7 @@ Cette ref est portée par la Capability comme champ optionnel, vérifié lors de
 ### 6.4 Migration
 
 Migration additive `0007_compliance_1_classification.sql` :
+
 - `ALTER TABLE capabilities ADD COLUMN sensitivity_level text`
 - `ALTER TABLE capabilities ADD COLUMN data_category text`
 - `ALTER TABLE capabilities ADD COLUMN retention_policy_ref jsonb`
@@ -183,17 +188,17 @@ Un script de validation simple (`scripts/scan-secrets.ts`) qui pattern-matche su
 ```typescript
 // Patterns détectés (fichiers .ts, .tsx, .js, .env*, .json, .yml, .yaml, .sql)
 const SECRET_PATTERNS = [
-  /(['"`])[A-Za-z0-9+/]{40,}\1/,               // token 40+ chars (GitHub, etc.)
-  /sk-[A-Za-z0-9]{20,}/,                        // OpenAI/Supabase-style keys
-  /AKIA[0-9A-Z]{16}/,                           // AWS access key
+  /(['"`])[A-Za-z0-9+/]{40,}\1/, // token 40+ chars (GitHub, etc.)
+  /sk-[A-Za-z0-9]{20,}/, // OpenAI/Supabase-style keys
+  /AKIA[0-9A-Z]{16}/, // AWS access key
   /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/, // Private keys
-  /ghp_[A-Za-z0-9]{36,}/,                       // GitHub PAT
-  /gho_[A-Za-z0-9]{36,}/,                        // GitHub OAuth
-  /ghu_[A-Za-z0-9]{36,}/,                        // GitHub user token
+  /ghp_[A-Za-z0-9]{36,}/, // GitHub PAT
+  /gho_[A-Za-z0-9]{36,}/, // GitHub OAuth
+  /ghu_[A-Za-z0-9]{36,}/, // GitHub user token
 ];
 ```
 
-**Ce n'est pas un scanner de sécurité complet.** Les patterns sont intentionnellement limités pour éviter les faux positifs excessifs. L'outil est un *early-warning CI gate*, pas un remplacement de `git secrets`, `trufflehog` ou d'un SAST.
+**Ce n'est pas un scanner de sécurité complet.** Les patterns sont intentionnellement limités pour éviter les faux positifs excessifs. L'outil est un _early-warning CI gate_, pas un remplacement de `git secrets`, `trufflehog` ou d'un SAST.
 
 ### 7.2 Exclusions
 
@@ -273,15 +278,15 @@ import type { TenantContext, TenantResolution } from "@/core/contracts/tenant";
 export interface TenantResolutionPort {
   /**
    * Résout le TenantContext pour une requête/session donnée.
-   * 
+   *
    * Pour le mode mono-tenant actuel : le tenant est dérivé de la session
    * utilisateur, ou du mode d'exécution (système, migration).
-   * 
+   *
    * @param context - Contexte de résolution (session, headers, mode)
    * @returns TenantContext validé, ou échec (fail-closed)
    */
   resolve(context: TenantResolutionRequest): Promise<TenantResolution>;
-  
+
   /**
    * Vérifie que la ressource appartient bien au tenant courant.
    * @returns true si la ressource est accessible dans le contexte tenant
@@ -314,10 +319,10 @@ import type { TenantResolutionPort, TenantResolutionRequest } from "./ports";
 
 /**
  * Résolveur mono-tenant pour COMPLIANCE-1.
- * 
+ *
  * Tous les utilisateurs authentifiés appartiennent au même tenant unique.
  * Le tenantId est résolu depuis la session auth, pas depuis une input client.
- * 
+ *
  * Migration depuis CURRENT_SINGLE_TENANT_ID :
  * - Les constantes globales sont remplacées par ce résolveur
  * - Le TenantId canonique reste "default" pour la compatibilité avec les
@@ -382,17 +387,17 @@ export class SingleTenantResolver implements TenantResolutionPort {
 
 La revue de sécurité a identifié des **méthodes repository sans tenantId** qui constituent des vecteurs IDOR :
 
-| Méthode | Problème | Correctif |
-|:---|:---|:---|
-| `SkillRepository.getById(id)` | Pas de filtre tenant → tenant B peut lire skill A par ID | Ajouter param `tenantId` + `WHERE tenantId = ? AND id = ?` |
-| `SkillRepository.updateTrustState(id, state)` | Pas de filtre tenant → mise à jour cross-tenant possible | Ajouter param `tenantId` + `WHERE` |
-| `SkillRepository.updateActivationState(id, state)` | Pas de filtre tenant | Ajouter param `tenantId` + `WHERE` |
-| `SkillRepository.delete(id)` | Suppression cross-tenant possible | Ajouter param `tenantId` + `WHERE` |
-| `SkillRepository.updateContent(id, data)` | Pas de filtre tenant ; `tenantId` mis à "" dans l'appel interne | Ajouter param `tenantId` + `WHERE` + ne pas écraser tenantId |
-| `SkillSecurityScanRepository.findValidForHash(skillId, hash)` | Pas de tenantId | Ajouter param `tenantId` + `WHERE` |
-| `SkillSecurityScanRepository.listBySkill(skillId)` | Pas de tenantId échappatoire | Ajouter param `tenantId` + `WHERE` |
-| `SkillEvaluationRepository.findValidForHash(skillId, hash)` | Pas de tenantId | Ajouter param `tenantId` + `WHERE` |
-| `SkillEvaluationRepository.listBySkill(skillId)` | Pas de tenantId | Ajouter param `tenantId` + `WHERE` |
+| Méthode                                                       | Problème                                                        | Correctif                                                    |
+| :------------------------------------------------------------ | :-------------------------------------------------------------- | :----------------------------------------------------------- |
+| `SkillRepository.getById(id)`                                 | Pas de filtre tenant → tenant B peut lire skill A par ID        | Ajouter param `tenantId` + `WHERE tenantId = ? AND id = ?`   |
+| `SkillRepository.updateTrustState(id, state)`                 | Pas de filtre tenant → mise à jour cross-tenant possible        | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillRepository.updateActivationState(id, state)`            | Pas de filtre tenant                                            | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillRepository.delete(id)`                                  | Suppression cross-tenant possible                               | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillRepository.updateContent(id, data)`                     | Pas de filtre tenant ; `tenantId` mis à "" dans l'appel interne | Ajouter param `tenantId` + `WHERE` + ne pas écraser tenantId |
+| `SkillSecurityScanRepository.findValidForHash(skillId, hash)` | Pas de tenantId                                                 | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillSecurityScanRepository.listBySkill(skillId)`            | Pas de tenantId échappatoire                                    | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillEvaluationRepository.findValidForHash(skillId, hash)`   | Pas de tenantId                                                 | Ajouter param `tenantId` + `WHERE`                           |
+| `SkillEvaluationRepository.listBySkill(skillId)`              | Pas de tenantId                                                 | Ajouter param `tenantId` + `WHERE`                           |
 
 #### 8.4.2 Changements de signature
 
@@ -435,8 +440,8 @@ class SkillService {
     if (!skill) return { ok: false, reason: "not_found", ... };
     return { ok: true, data: { skill } };
   }
-  
-  // Même pattern pour transitionTrust, transitionActivation, 
+
+  // Même pattern pour transitionTrust, transitionActivation,
   // updateSkillContent, deleteSkill, recordScan, recordEval
 }
 ```
@@ -507,29 +512,30 @@ tenantResolver: new SingleTenantResolver(),
 
 ## 9. Scenarios mapping
 
-| ID | Scenario | Status | COMPLIANCE-1 action |
-|:---|:---|:---|:---|
-| 001 | Tenant isolation | **IN SCOPE** | TenantContext + scoping + tests TENANT-01..10 |
-| 011 | Cross-tenant IDOR denial | **IN SCOPE** | Validation ownership + audit denial sans fuite |
+| ID  | Scenario                          | Status       | COMPLIANCE-1 action                                                                |
+| :-- | :-------------------------------- | :----------- | :--------------------------------------------------------------------------------- |
+| 001 | Tenant isolation                  | **IN SCOPE** | TenantContext + scoping + tests TENANT-01..10                                      |
+| 011 | Cross-tenant IDOR denial          | **IN SCOPE** | Validation ownership + audit denial sans fuite                                     |
 | 010 | App DB role cannot TRUNCATE audit | **DEFERRED** | Infra PostgreSQL, pas de code applicatif pertinent ici. Documenter comme DEFERRED. |
-| 015 | Observability C3 redaction | **DEFERRED** | Aucun système d'observability actif. DEFERRED vers lot qui l'introduit. |
-| 003 | AUTH_SECRET never memory | **DEFERRED** | Memory n'existe pas encore. DEFERRED vers E1. |
+| 015 | Observability C3 redaction        | **DEFERRED** | Aucun système d'observability actif. DEFERRED vers lot qui l'introduit.            |
+| 003 | AUTH_SECRET never memory          | **DEFERRED** | Memory n'existe pas encore. DEFERRED vers E1.                                      |
 
 ## 10. Compliance tests mapping
 
-| Test | Status | Component |
-|:---|:---|:---|
-| CT-AUTO-01 | **IN SCOPE** | Capability classification validation |
-| CT-AUTO-02 | **IN SCOPE** | C3 + retention policy requirement |
-| CT-AUTO-03 | **IN SCOPE** | Reclassification audit trail |
-| CT-AUTO-06 | **IN SCOPE** | Tenant denial audit |
-| CT-AUTO-08 | **PARTIAL** | Secret scanning couvre une partie ; observability redaction deferred |
-| CT-AUTO-09 | **COVERED BY EXISTING** | Auth déjà requise pour les routes protégées |
-| CT-AUTO-10 | **COVERED BY EXISTING** | Permissions déjà vérifiées par protectRoute |
+| Test       | Status                  | Component                                                            |
+| :--------- | :---------------------- | :------------------------------------------------------------------- |
+| CT-AUTO-01 | **IN SCOPE**            | Capability classification validation                                 |
+| CT-AUTO-02 | **IN SCOPE**            | C3 + retention policy requirement                                    |
+| CT-AUTO-03 | **IN SCOPE**            | Reclassification audit trail                                         |
+| CT-AUTO-06 | **IN SCOPE**            | Tenant denial audit                                                  |
+| CT-AUTO-08 | **PARTIAL**             | Secret scanning couvre une partie ; observability redaction deferred |
+| CT-AUTO-09 | **COVERED BY EXISTING** | Auth déjà requise pour les routes protégées                          |
+| CT-AUTO-10 | **COVERED BY EXISTING** | Permissions déjà vérifiées par protectRoute                          |
 
 ## 11. Migration strategy
 
 Migration additive uniquement :
+
 - `0007_compliance_1_classification.sql` — ajout colonnes capabilities
 
 Aucune migration de données existante modifiée.
@@ -546,14 +552,14 @@ Aucun changement de contrainte sur des données existantes.
 
 ## 13. Failure modes
 
-| Scenario | Behavior |
-|:---|:---|
-| TenantContext non résolu | `{ ok: false, reason: "no_tenant" }` → HTTP 403 |
-| Route tenant-scoped sans resolver | Error lors de l'appel (container mal configuré) |
-| Tentative IDOR | Retourne `not_found` (pas d'info sur l'existence) |
-| C3 capability sans retention | `changeCapabilityStatus` refuse avec `retention_policy_required` |
-| Secret scan trouve un match | CI fail, message listant le fichier:ligne |
-| Erreur de parsing Drizzle | CI fail avec message explicite |
+| Scenario                          | Behavior                                                         |
+| :-------------------------------- | :--------------------------------------------------------------- |
+| TenantContext non résolu          | `{ ok: false, reason: "no_tenant" }` → HTTP 403                  |
+| Route tenant-scoped sans resolver | Error lors de l'appel (container mal configuré)                  |
+| Tentative IDOR                    | Retourne `not_found` (pas d'info sur l'existence)                |
+| C3 capability sans retention      | `changeCapabilityStatus` refuse avec `retention_policy_required` |
+| Secret scan trouve un match       | CI fail, message listant le fichier:ligne                        |
+| Erreur de parsing Drizzle         | CI fail avec message explicite                                   |
 
 ## 14. Concurrency
 
@@ -565,27 +571,27 @@ Aucun changement de contrainte sur des données existantes.
 
 ### Tenant tests
 
-| ID | Description | Verification |
-|:---|:---|:---|
-| TENANT-01 | Tenant A peut accéder à sa ressource tenant-scoped | Créer skill pour tenant A → la retrouver par tenantId |
-| TENANT-02 | Tenant A ne peut pas lire ressource tenant B | Query avec tenant A sur tenantId B → 0 résultats |
-| TENANT-03 | Tenant A ne peut pas modifier ressource tenant B | Update avec tenant A scope → erreur ou 0 modifié |
+| ID        | Description                                            | Verification                                                        |
+| :-------- | :----------------------------------------------------- | :------------------------------------------------------------------ |
+| TENANT-01 | Tenant A peut accéder à sa ressource tenant-scoped     | Créer skill pour tenant A → la retrouver par tenantId               |
+| TENANT-02 | Tenant A ne peut pas lire ressource tenant B           | Query avec tenant A sur tenantId B → 0 résultats                    |
+| TENANT-03 | Tenant A ne peut pas modifier ressource tenant B       | Update avec tenant A scope → erreur ou 0 modifié                    |
 | TENANT-04 | tenantId fourni par client ne remplace pas le contexte | Route reçoit query param tenantId=X → ignoré, utilise contexte auth |
-| TENANT-05 | Ressource inconnue ne fuite pas d'info exploitable | ID inexistant ou autre tenant → même message d'erreur |
-| TENANT-06 | Repository query contient le tenantId canonique | Vérifier la requête SQL exécutée (spy/mock) |
-| TENANT-07 | Pas de tenant → denial | `SingleTenantResolver.resolve({})` → `{ ok: false }` |
-| TENANT-08 | C2 skill API utilise TenantContext | Route skills → résolution tenant, pas CURRENT_SINGLE_TENANT_ID |
-| TENANT-09 | Requêtes concurrentes A/B isolées | Async test avec deux résolutions parallèles |
-| TENANT-10 | Audit denial ne fuite pas le contenu étranger | Vérifier les détails de l'audit entry en cas de denial |
+| TENANT-05 | Ressource inconnue ne fuite pas d'info exploitable     | ID inexistant ou autre tenant → même message d'erreur               |
+| TENANT-06 | Repository query contient le tenantId canonique        | Vérifier la requête SQL exécutée (spy/mock)                         |
+| TENANT-07 | Pas de tenant → denial                                 | `SingleTenantResolver.resolve({})` → `{ ok: false }`                |
+| TENANT-08 | C2 skill API utilise TenantContext                     | Route skills → résolution tenant, pas CURRENT_SINGLE_TENANT_ID      |
+| TENANT-09 | Requêtes concurrentes A/B isolées                      | Async test avec deux résolutions parallèles                         |
+| TENANT-10 | Audit denial ne fuite pas le contenu étranger          | Vérifier les détails de l'audit entry en cas de denial              |
 
 ### Classification tests
 
-| ID | Description |
-|:---|:---|
-| CT-AUTO-01 | Capability C3 sans retention → refusée |
+| ID         | Description                             |
+| :--------- | :-------------------------------------- |
+| CT-AUTO-01 | Capability C3 sans retention → refusée  |
 | CT-AUTO-02 | Capability C3 avec retention → acceptée |
 | CT-AUTO-03 | Schema classification marker validation |
-| CT-AUTO-06 | Tenant denial audit entry |
+| CT-AUTO-06 | Tenant denial audit entry               |
 
 ## 16. Design Review Checklist
 

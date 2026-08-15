@@ -77,11 +77,7 @@ export type ReserveResult =
     }
   | {
       ok: false;
-      code:
-        | "IDEMPOTENCY_CONFLICT"
-        | "ALREADY_COMPLETED"
-        | "GRANT_NOT_AVAILABLE"
-        | "INVALID_STATE";
+      code: "IDEMPOTENCY_CONFLICT" | "ALREADY_COMPLETED" | "GRANT_NOT_AVAILABLE" | "INVALID_STATE";
       message: string;
       replayResult?: unknown;
     };
@@ -288,8 +284,7 @@ export class G1Service {
         return {
           ok: false,
           code: "STALE_EXECUTING",
-          message:
-            "État EXECUTING obsolète → UNKNOWN. Aucun rejeu automatique possible.",
+          message: "État EXECUTING obsolète → UNKNOWN. Aucun rejeu automatique possible.",
         };
       }
       return {
@@ -300,12 +295,9 @@ export class G1Service {
     }
 
     // RESERVED → EXECUTING atomique
-    const started = await this.idempotency.transition(
-      idempotencyKey,
-      "RESERVED",
-      "EXECUTING",
-      { requestHash: entry.requestHash },
-    );
+    const started = await this.idempotency.transition(idempotencyKey, "RESERVED", "EXECUTING", {
+      requestHash: entry.requestHash,
+    });
 
     if (!started) {
       return {
@@ -340,10 +332,7 @@ export class G1Service {
   // durable. Si la transition d'état échoue après le record append,
   // l'état reste EXECUTING (sûr, récupérable).
 
-  async complete(
-    input: CompleteExecutionInput,
-    uow?: G1UnitOfWork,
-  ): Promise<CompleteResult> {
+  async complete(input: CompleteExecutionInput, uow?: G1UnitOfWork): Promise<CompleteResult> {
     const entry = await this.idempotency.findByKey(input.idempotencyKey);
     if (!entry) {
       return {
@@ -353,9 +342,7 @@ export class G1Service {
       };
     }
 
-    const targetState: IdempotencyState = input.isSuccess
-      ? "COMPLETED"
-      : "FAILED_SAFE";
+    const targetState: IdempotencyState = input.isSuccess ? "COMPLETED" : "FAILED_SAFE";
 
     // Vérifier la transition
     try {
@@ -369,11 +356,7 @@ export class G1Service {
     }
 
     // Atomicité : COMPLETED nécessite résultat durable
-    if (
-      targetState === "COMPLETED" &&
-      !input.outputHash &&
-      !input.artifactRefs?.length
-    ) {
+    if (targetState === "COMPLETED" && !input.outputHash && !input.artifactRefs?.length) {
       return {
         ok: false,
         code: "TRANSACTION_FAILED",
@@ -406,10 +389,7 @@ export class G1Service {
         data: {},
       },
       {
-        type:
-          targetState === "COMPLETED"
-            ? "tool.invocation_completed"
-            : "tool.invocation_failed",
+        type: targetState === "COMPLETED" ? "tool.invocation_completed" : "tool.invocation_failed",
         occurredAt: new Date().toISOString(),
         data: {
           outputHash: input.outputHash,
@@ -458,9 +438,7 @@ export class G1Service {
         targetState,
         {
           completedAt: new Date().toISOString(),
-          replayResult: input.isSuccess
-            ? { outputHash: input.outputHash }
-            : undefined,
+          replayResult: input.isSuccess ? { outputHash: input.outputHash } : undefined,
         },
       );
 
@@ -479,9 +457,7 @@ export class G1Service {
       // Audit INSIDE UoW — avant commit pour que le rollback
       // puisse annuler la transition et le record en cas d'échec
       const eventType =
-        targetState === "COMPLETED"
-          ? "tool.invocation_completed"
-          : "tool.invocation_failed";
+        targetState === "COMPLETED" ? "tool.invocation_completed" : "tool.invocation_failed";
 
       await this.audit.append(
         makeAuditEntry(eventType, {
@@ -569,8 +545,7 @@ export class G1Service {
       return {
         ok: false,
         code: "IDEMPOTENCY_CONFLICT",
-        message:
-          "La même clé d'idempotence avec un requestHash différent est un conflit",
+        message: "La même clé d'idempotence avec un requestHash différent est un conflit",
       };
     }
 
@@ -589,8 +564,7 @@ export class G1Service {
       return {
         ok: false,
         code: "INVALID_STATE",
-        message:
-          "FAILED_SAFE : utilisez retry() pour relancer l'exécution",
+        message: "FAILED_SAFE : utilisez retry() pour relancer l'exécution",
       };
     }
 
@@ -599,8 +573,7 @@ export class G1Service {
       return {
         ok: false,
         code: "INVALID_STATE",
-        message:
-          "RESERVED existe déjà : utilisez start() pour continuer ou retry si stale",
+        message: "RESERVED existe déjà : utilisez start() pour continuer ou retry si stale",
       };
     }
 
@@ -609,8 +582,7 @@ export class G1Service {
       return {
         ok: false,
         code: "INVALID_STATE",
-        message:
-          "UNKNOWN : aucune reprise automatique possible. Intervention manuelle requise.",
+        message: "UNKNOWN : aucune reprise automatique possible. Intervention manuelle requise.",
       };
     }
 

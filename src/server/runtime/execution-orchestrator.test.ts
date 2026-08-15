@@ -219,7 +219,11 @@ describe("D4 — ExecutionOrchestrator", () => {
   describe("D4-06: authorization rechecked at execution time", () => {
     it("utilise la politique actuelle, pas une décision antérieure", async () => {
       // D'abord allow
-      policy.nextDecision = { outcome: "allow", reason: "ok", attestedAt: new Date().toISOString() };
+      policy.nextDecision = {
+        outcome: "allow",
+        reason: "ok",
+        attestedAt: new Date().toISOString(),
+      };
       await orchestrator.execute(createDefaultInput());
 
       // Puis deny — la prochaine exécution doit re-vérifier
@@ -241,9 +245,7 @@ describe("D4 — ExecutionOrchestrator", () => {
 
   describe("D4-07: tenant preserved", () => {
     it("le tenantId est conservé dans l'exécution", async () => {
-      const result = await orchestrator.execute(
-        createDefaultInput({ tenantId: "tenant-special" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ tenantId: "tenant-special" }));
 
       expect(result.ok).toBe(true);
       // Le tenant est passé via l'input, pas besoin de vérifier dans le résultat
@@ -276,9 +278,7 @@ describe("D4 — ExecutionOrchestrator", () => {
 
   describe("D4-09/10/11: D3 error mapping", () => {
     it("D4-09: AI success mapped correctly", async () => {
-      const result = await orchestrator.execute(
-        createDefaultInput({ skillKey: "test-skill" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ skillKey: "test-skill" }));
 
       expect(result.ok).toBe(true);
     });
@@ -297,9 +297,7 @@ describe("D4 — ExecutionOrchestrator", () => {
       };
 
       // L'exécution elle-même réussit, l'échec AI est non-bloquant
-      const result = await orchestrator.execute(
-        createDefaultInput({ skillKey: "test-skill" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ skillKey: "test-skill" }));
 
       // L'échec AI est non bloquant en V1
       expect(result.ok).toBe(true);
@@ -318,9 +316,7 @@ describe("D4 — ExecutionOrchestrator", () => {
         fallbackUsed: false,
       };
 
-      const result = await orchestrator.execute(
-        createDefaultInput({ skillKey: "test-skill" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ skillKey: "test-skill" }));
       expect(result.ok).toBe(true); // AI error non-bloquant
     });
 
@@ -337,9 +333,7 @@ describe("D4 — ExecutionOrchestrator", () => {
         fallbackUsed: false,
       };
 
-      const result = await orchestrator.execute(
-        createDefaultInput({ skillKey: "test-skill" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ skillKey: "test-skill" }));
       expect(result.ok).toBe(true); // AI error non-bloquant
     });
 
@@ -356,9 +350,7 @@ describe("D4 — ExecutionOrchestrator", () => {
         fallbackUsed: false,
       };
 
-      const result = await orchestrator.execute(
-        createDefaultInput({ skillKey: "test-skill" }),
-      );
+      const result = await orchestrator.execute(createDefaultInput({ skillKey: "test-skill" }));
       expect(result.ok).toBe(true); // Non-bloquant en V1
     });
   });
@@ -453,9 +445,7 @@ describe("D4-27/28: usage metadata", () => {
 
     const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np);
 
-    const result = await orchestrator.execute(
-      createDefaultInput({ skillKey: "usage-test" }),
-    );
+    const result = await orchestrator.execute(createDefaultInput({ skillKey: "usage-test" }));
 
     expect(result.ok).toBe(true);
     // Les métadonnées d'usage sont optionnelles dans le résultat
@@ -478,9 +468,7 @@ describe("D4.1: CANCELLED vs TIMED_OUT routing", () => {
     const cb = new FakeCredentialBroker();
     const np = new FakeNetworkPolicy();
 
-    const adapters = new Map<string, AgentRuntimeAdapter>([
-      ["local", new HangingAdapter()],
-    ]);
+    const adapters = new Map<string, AgentRuntimeAdapter>([["local", new HangingAdapter()]]);
     const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
 
     const externalController = new AbortController();
@@ -513,9 +501,7 @@ describe("D4.1: CANCELLED vs TIMED_OUT routing", () => {
     const cb = new FakeCredentialBroker();
     const np = new FakeNetworkPolicy();
 
-    const adapters = new Map<string, AgentRuntimeAdapter>([
-      ["local", new HangingAdapter()],
-    ]);
+    const adapters = new Map<string, AgentRuntimeAdapter>([["local", new HangingAdapter()]]);
     const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
 
     const result = await orchestrator.execute(createDefaultInput({ timeoutMs: 50 }));
@@ -538,9 +524,7 @@ describe("D4.1: CANCELLED vs TIMED_OUT routing", () => {
     const cb = new FakeCredentialBroker();
     const np = new FakeNetworkPolicy();
 
-    const adapters = new Map<string, AgentRuntimeAdapter>([
-      ["local", new HangingAdapter()],
-    ]);
+    const adapters = new Map<string, AgentRuntimeAdapter>([["local", new HangingAdapter()]]);
     const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
 
     const externalController = new AbortController();

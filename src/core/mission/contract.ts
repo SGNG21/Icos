@@ -26,11 +26,7 @@ export const missionStatusSchema = z.enum([
 export type MissionStatus = z.infer<typeof missionStatusSchema>;
 
 /** États terminaux : aucune transition possible. */
-export const TERMINAL_STATUSES: readonly MissionStatus[] = [
-  "COMPLETED",
-  "FAILED",
-  "CANCELLED",
-];
+export const TERMINAL_STATUSES: readonly MissionStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
 /** États suspendus (attente d'un événement externe pour reprendre). */
 export const SUSPENDED_STATUSES: readonly MissionStatus[] = [
@@ -166,5 +162,4 @@ export interface SetPlanInput {
  * Résultat d'une opération D2.
  */
 export type MissionResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; reason: string; message: string };
+  { ok: true; data: T } | { ok: false; reason: string; message: string };

@@ -45,11 +45,11 @@ La possession d'une capacité (Capability) seule n'autorise JAMAIS l'exécution.
 
 ## Gestion des approbations V1
 
-| Décision D1 | Opérationnel en V1 | Comportement |
-|---|---|---|
-| ALLOW | OUI | ExecutionGrant peut être émis |
-| DENY | OUI | Aucun ExecutionGrant |
-| REQUIRE_APPROVAL | NON | Fail closed : `identity_verification_required` |
+| Décision D1      | Opérationnel en V1 | Comportement                                   |
+| ---------------- | ------------------ | ---------------------------------------------- |
+| ALLOW            | OUI                | ExecutionGrant peut être émis                  |
+| DENY             | OUI                | Aucun ExecutionGrant                           |
+| REQUIRE_APPROVAL | NON                | Fail closed : `identity_verification_required` |
 
 `REQUIRE_APPROVAL` n'est PAS opérationnel en G1 V1 car `Approval.decidedBy`
 est déclaratif et NON authentifié. Aucun ExecutionGrant sensible ne peut être
@@ -65,6 +65,7 @@ Un ExecutionGrant signifie :
 > "cette invocation précise est actuellement autorisée"
 
 Aucun grant n'est émis pour :
+
 - une décision DENY
 - un REQUIRE_APPROVAL non résolu
 
@@ -123,6 +124,7 @@ Toute divergence dans le requestHash entre deux étapes du cycle de vie
 doit entraîner un échec (FAIL CLOSED).
 
 Le requestHash est lié à :
+
 - IdempotencyState
 - ExecutionGrant
 - ExecutionRecord
@@ -172,6 +174,7 @@ EXECUTING
 ### Ce qui n'existe pas
 
 N'inventez PAS :
+
 - `D4.checkExecutionState()`
 - `D4.mayHaveExecuted()`
 
@@ -182,12 +185,12 @@ l'autorité externe quand elle est supportée.
 
 ### Séparation des responsabilités
 
-| Stockage | Nature | Usage |
-|---|---|---|
-| ExecutionRecord / Audit | Immuable, append-only | Historique |
-| IdempotencyState | Mutable, transactionnel | État opérationnel |
-| Artifact Store | Stockage de résultats | Résultats durables |
-| Business Data Store | Données métier | Données applicatives |
+| Stockage                | Nature                  | Usage                |
+| ----------------------- | ----------------------- | -------------------- |
+| ExecutionRecord / Audit | Immuable, append-only   | Historique           |
+| IdempotencyState        | Mutable, transactionnel | État opérationnel    |
+| Artifact Store          | Stockage de résultats   | Résultats durables   |
+| Business Data Store     | Données métier          | Données applicatives |
 
 ### Événements d'audit
 
@@ -211,11 +214,13 @@ Réutiliser les niveaux canoniques existants :
 ### Data minimization
 
 Ne JAMAIS persister dans l'audit :
+
 - credentials bruts
 - secrets
 - sorties brutes arbitraires d'outils
 
 Préférer les métadonnées / références :
+
 - outcome (succès/échec)
 - errorCode
 - durationMs
@@ -243,6 +248,7 @@ PUIS persister ExecutionRecord (séparément)
 ```
 
 Utilisez une seule UnitOfWork / transaction contenant :
+
 1. résultat/référence durable
 2. ExecutionRecord immuable (append)
 3. transition finale de l'IdempotencyState
@@ -254,13 +260,14 @@ ne déclarez PAS COMPLETED.
 
 Trois issues possibles :
 
-| Issue | Signification |
-|---|---|
-| PASS | Vérification réussie |
-| BLOCK | Violation de sécurité matérielle, non discrétionnaire |
-| ESCALATE | Constat structuré → D1 décide |
+| Issue    | Signification                                         |
+| -------- | ----------------------------------------------------- |
+| PASS     | Vérification réussie                                  |
+| BLOCK    | Violation de sécurité matérielle, non discrétionnaire |
+| ESCALATE | Constat structuré → D1 décide                         |
 
 Les inspecteurs ne sont PAS un second moteur de politique :
+
 - BLOCK : uniquement des violations de sécurité dures (objectives, non
   discrétionnaires)
 - ESCALATE : constats structurés → mappés vers `PolicyRiskSignal` natif D1
@@ -302,14 +309,14 @@ sémantiques de risque / capacité / permission de ToolIdentity.
 
 Canonique main : `618ff19ed367e9c82a54f66c147629f73f0fc7e0`
 
-| Point | Statut |
-|---|---|
-| RuntimeExecutionPort | PASS |
-| ExecuteStepInput | PASS |
-| RuntimeAdapterInput | PASS |
-| ExecutionResult | PASS |
-| G1 → D4 | PASS |
-| D4 → G1 | NONE (interdit par architecture) |
+| Point                | Statut                           |
+| -------------------- | -------------------------------- |
+| RuntimeExecutionPort | PASS                             |
+| ExecuteStepInput     | PASS                             |
+| RuntimeAdapterInput  | PASS                             |
+| ExecutionResult      | PASS                             |
+| G1 → D4              | PASS                             |
+| D4 → G1              | NONE (interdit par architecture) |
 
 Aucune modification architecturale D4 requise.
 

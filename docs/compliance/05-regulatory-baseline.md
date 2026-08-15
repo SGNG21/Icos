@@ -1,8 +1,8 @@
 # Base réglementaire — ICOS
 
-| Statut    | Version |
-|-----------|---------|
-| Projet    | 0.1     |
+| Statut | Version |
+| ------ | ------- |
+| Projet | 0.1     |
 
 ## 1. Objectif
 
@@ -11,13 +11,13 @@ et documenter les obligations qui en découlent pour chaque traitement.
 
 ## 2. Référentiels applicables
 
-| Référentiel                         | Applicabilité                                                                 | Priorité |
-|-------------------------------------|-------------------------------------------------------------------------------|----------|
-| **RGPD (UE) 2016/679**              | Traitement de données personnelles de résidents UE — principal référentiel.   | Haute    |
-| **ePrivacy Directive 2002/58/CE**   | Cookies, communications électroniques, suivi — pertinent si canal web.        | Moyenne — LEGAL_REVIEW_REQUIRED |
-| **AI Act (UE) 2024/1689**           | Classification des systèmes d'IA — pertinent pour décisions automatisées.     | À évaluer |
-| **Loi informatique et libertés**    | Déclinaison nationale du RGPD (France).                                       | Haute    |
-| **NIS2 (UE) 2022/2555**             | Cybersécurité des infrastructures critiques — si ICOS devient critique.       | Veille   |
+| Référentiel                       | Applicabilité                                                               | Priorité                        |
+| --------------------------------- | --------------------------------------------------------------------------- | ------------------------------- |
+| **RGPD (UE) 2016/679**            | Traitement de données personnelles de résidents UE — principal référentiel. | Haute                           |
+| **ePrivacy Directive 2002/58/CE** | Cookies, communications électroniques, suivi — pertinent si canal web.      | Moyenne — LEGAL_REVIEW_REQUIRED |
+| **AI Act (UE) 2024/1689**         | Classification des systèmes d'IA — pertinent pour décisions automatisées.   | À évaluer                       |
+| **Loi informatique et libertés**  | Déclinaison nationale du RGPD (France).                                     | Haute                           |
+| **NIS2 (UE) 2022/2555**           | Cybersécurité des infrastructures critiques — si ICOS devient critique.     | Veille                          |
 
 ### 2.1 Référentiels exclus (à ce stade)
 
@@ -30,13 +30,13 @@ et documenter les obligations qui en découlent pour chaque traitement.
 
 Voir `03-register.md` pour le détail de chaque traitement.
 
-| Traitement | Base légale (RGPD Art. 6) | Obligations clés |
-|---|---|---|
-| Compte utilisateur | 6.1.b (contrat) | Information, accès, rectification, effacement |
-| Logs d'authentification | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, sécurisation |
-| Logs fonctionnels | 6.1.f (intérêt légitime) | Balancement, opposition possible |
-| Métriques comportementales | 6.1.a (consentement) | Consentement explicite, retrait possible |
-| Infra et sécurité (logs système) | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, accès restreint |
+| Traitement                       | Base légale (RGPD Art. 6)          | Obligations clés                              |
+| -------------------------------- | ---------------------------------- | --------------------------------------------- |
+| Compte utilisateur               | 6.1.b (contrat)                    | Information, accès, rectification, effacement |
+| Logs d'authentification          | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, sécurisation      |
+| Logs fonctionnels                | 6.1.f (intérêt légitime)           | Balancement, opposition possible              |
+| Métriques comportementales       | 6.1.a (consentement)               | Consentement explicite, retrait possible      |
+| Infra et sécurité (logs système) | 6.1.c (obligation légale, Art. 32) | Minimisation, durée bornée, accès restreint   |
 
 ## 4. Documents associés
 

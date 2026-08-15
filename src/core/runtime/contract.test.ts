@@ -100,9 +100,7 @@ describe("D4 — executionErrorSchema", () => {
   });
 
   it("rejette un objet sans message", () => {
-    expect(() =>
-      executionErrorSchema.parse({ code: "TIMEOUT" }),
-    ).toThrow();
+    expect(() => executionErrorSchema.parse({ code: "TIMEOUT" })).toThrow();
   });
 });
 

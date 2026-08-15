@@ -4,10 +4,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { MissionContext } from "@/core/context/contract";
 import type { Database } from "@/server/database/client";
 import { uniqueConstraintName } from "@/server/database/errors";
-import {
-  missionContextToRow,
-  rowToMissionContext,
-} from "@/server/database/mappers";
+import { missionContextToRow, rowToMissionContext } from "@/server/database/mappers";
 import { missionContexts } from "@/server/database/schema";
 
 import type {
@@ -29,9 +26,7 @@ import { validateSaveInput } from "../validate-save";
  * Isolation : toute lecture filtre par `tenant_id` ET `mission_id` (défense
  * IDOR). Le « latest » est dérivé de `ORDER BY version DESC LIMIT 1`.
  */
-export class PostgresMissionContextRepository
-  implements MissionContextRepository
-{
+export class PostgresMissionContextRepository implements MissionContextRepository {
   constructor(
     private readonly db: Database | PostgresJsDatabase<Record<string, never>>,
     /** Horloge de persistance injectable (déterminisme des tests). */
@@ -54,9 +49,7 @@ export class PostgresMissionContextRepository
     // INSERT append-only. Une course concurrente sur la même version viole la
     // clé primaire composite → `23505` → conflit explicite.
     try {
-      await this.db
-        .insert(missionContexts)
-        .values(missionContextToRow(context, this.clock()));
+      await this.db.insert(missionContexts).values(missionContextToRow(context, this.clock()));
     } catch (error) {
       if (uniqueConstraintName(error) !== null) {
         return { ok: false, reason: "version_conflict" };
@@ -67,38 +60,22 @@ export class PostgresMissionContextRepository
     return { ok: true, context };
   }
 
-  private async latestVersion(
-    tenantId: string,
-    missionId: string,
-  ): Promise<number | null> {
+  private async latestVersion(tenantId: string, missionId: string): Promise<number | null> {
     const rows = await this.db
       .select({ version: missionContexts.version })
       .from(missionContexts)
-      .where(
-        and(
-          eq(missionContexts.tenantId, tenantId),
-          eq(missionContexts.missionId, missionId),
-        ),
-      )
+      .where(and(eq(missionContexts.tenantId, tenantId), eq(missionContexts.missionId, missionId)))
       .orderBy(desc(missionContexts.version))
       .limit(1);
 
     return rows.length > 0 ? rows[0].version : null;
   }
 
-  async findLatest(
-    tenantId: string,
-    missionId: string,
-  ): Promise<MissionContext | null> {
+  async findLatest(tenantId: string, missionId: string): Promise<MissionContext | null> {
     const rows = await this.db
       .select()
       .from(missionContexts)
-      .where(
-        and(
-          eq(missionContexts.tenantId, tenantId),
-          eq(missionContexts.missionId, missionId),
-        ),
-      )
+      .where(and(eq(missionContexts.tenantId, tenantId), eq(missionContexts.missionId, missionId)))
       .orderBy(desc(missionContexts.version))
       .limit(1);
 

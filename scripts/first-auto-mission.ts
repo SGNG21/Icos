@@ -41,11 +41,7 @@ import { buildMissionContext } from "@/core/context";
 import { resolveSupervisorContext } from "@/core/context/context-supervisor-bridge";
 import type { Worker, WorkerResult, CreateWorkerInput } from "@/core/worker";
 import type { ReviewSpec, ReviewResult, CorrectionSpec, CorrectionResult } from "@/core/review";
-import type {
-  IntegrationSpec,
-  IntegrationResult,
-  GateResult,
-} from "@/core/integration";
+import type { IntegrationSpec, IntegrationResult, GateResult } from "@/core/integration";
 import type { PreviewResult } from "@/core/preview";
 import type { WorktreeSpec, WorktreeResult, WorktreeEntry } from "@/core/worktree";
 
@@ -78,8 +74,7 @@ const NOW = new Date().toISOString();
 // ─────────────────────────────────────────────────
 
 const TENANT_ID = "icos-single-tenant";
-const MISSION_OBJECTIVE =
-  "Ajouter des tests unitaires ciblés pour src/core/mission/lifecycle.ts";
+const MISSION_OBJECTIVE = "Ajouter des tests unitaires ciblés pour src/core/mission/lifecycle.ts";
 const MISSION_DESCRIPTION =
   "Le fichier mission/lifecycle.ts contient la machine d'état canonique de la mission " +
   "mais n'a pas de tests dédiés. Le supervisor/lifecycle.ts analogue a des tests complets. " +
@@ -92,10 +87,7 @@ const MISSION_DESCRIPTION =
 // ─────────────────────────────────────────────────
 
 class FirstAutoWorker implements WorkerManagerPort {
-  private readonly workers = new Map<
-    string,
-    { worker: Worker; promise?: Promise<WorkerResult> }
-  >();
+  private readonly workers = new Map<string, { worker: Worker; promise?: Promise<WorkerResult> }>();
   private readonly policy: D1PolicyService;
 
   constructor() {
@@ -128,9 +120,7 @@ class FirstAutoWorker implements WorkerManagerPort {
     });
 
     if (policyDecision.outcome === "deny") {
-      throw new Error(
-        `Worker refusé par D1 : ${policyDecision.reason}`,
-      );
+      throw new Error(`Worker refusé par D1 : ${policyDecision.reason}`);
     }
 
     const worker: Worker = {
@@ -209,16 +199,11 @@ class FirstAutoWorker implements WorkerManagerPort {
   /**
    * Implémente la tâche : ajoute les tests pour mission/lifecycle.ts.
    */
-  private async implementTask(
-    worktreePath: string,
-    objective: string,
-  ): Promise<WorkerResult> {
+  private async implementTask(worktreePath: string, objective: string): Promise<WorkerResult> {
     const start = Date.now();
 
     // Déterminer où travailler : worktree ou repo racine
-    const repoRoot = worktreePath
-      ? worktreePath
-      : (await this.getRepoRoot());
+    const repoRoot = worktreePath ? worktreePath : await this.getRepoRoot();
 
     console.log(`  [WORKER] repoRoot: ${repoRoot}`);
 
@@ -299,7 +284,8 @@ class FirstAutoWorker implements WorkerManagerPort {
 
       // Vérifie spécifiquement que notre nouveau test n'a pas échoué
       // (le test local-runtime-adapter est non-déterministe et préexistant)
-      const ourTestFailed = allTestOutput.includes("src/core/mission/lifecycle.test.ts") &&
+      const ourTestFailed =
+        allTestOutput.includes("src/core/mission/lifecycle.test.ts") &&
         (allTestOutput.includes("FAIL") || allTestOutput.includes("failed"));
       if (ourTestFailed) {
         return {
@@ -314,16 +300,16 @@ class FirstAutoWorker implements WorkerManagerPort {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
       // Même dans le catch (process exit code ≠ 0), vérifier si notre test a réussi
-      const stderrContent = error instanceof Error && "stderr" in error
-        ? (error as any).stderr ?? ""
-        : "";
-      const stdoutContent = error instanceof Error && "stdout" in error
-        ? (error as any).stdout ?? ""
-        : "";
+      const stderrContent =
+        error instanceof Error && "stderr" in error ? ((error as any).stderr ?? "") : "";
+      const stdoutContent =
+        error instanceof Error && "stdout" in error ? ((error as any).stdout ?? "") : "";
       const combinedOutput = stdoutContent || stderrContent;
 
-      if (combinedOutput.includes("src/core/mission/lifecycle.test.ts") &&
-          (combinedOutput.includes("FAIL") || combinedOutput.includes("failed"))) {
+      if (
+        combinedOutput.includes("src/core/mission/lifecycle.test.ts") &&
+        (combinedOutput.includes("FAIL") || combinedOutput.includes("failed"))
+      ) {
         return {
           outcome: "FAILED",
           artifacts: [],
@@ -382,9 +368,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>`,
 
     console.log(`  [WORKER] git commit done, checking log...`);
     try {
-      const { stdout: logOut } = await exec("git", ["log", "--oneline", "-1"], { cwd: repoRoot, timeout: 5_000 });
+      const { stdout: logOut } = await exec("git", ["log", "--oneline", "-1"], {
+        cwd: repoRoot,
+        timeout: 5_000,
+      });
       console.log(`  [WORKER] last commit: ${logOut.trim()}`);
-    } catch { /* non-bloquant */ }
+    } catch {
+      /* non-bloquant */
+    }
 
     return {
       outcome: "SUCCESS",
@@ -570,9 +561,7 @@ describe("isSuspended", () => {
   // WorkerManagerPort: required methods
   // ─────────────────────────────────────
 
-  async getStatus(
-    workerId: string,
-  ): Promise<{ status: Worker["status"]; worker: Worker | null }> {
+  async getStatus(workerId: string): Promise<{ status: Worker["status"]; worker: Worker | null }> {
     const entry = this.workers.get(workerId);
     if (!entry) return { status: "CANCELLED", worker: null };
     return { status: entry.worker.status, worker: entry.worker };
@@ -585,10 +574,7 @@ describe("isSuspended", () => {
     return entry.promise ?? null;
   }
 
-  async waitForCompletion(
-    workerId: string,
-    _timeoutMs?: number,
-  ): Promise<WorkerResult> {
+  async waitForCompletion(workerId: string, _timeoutMs?: number): Promise<WorkerResult> {
     const entry = this.workers.get(workerId);
     if (!entry) {
       return this.fallbackResult("Worker introuvable");
@@ -657,10 +643,7 @@ class FakeReviewer implements ReviewerManagerPort {
     };
   }
 
-  async ensureIndependentReview(
-    _taskId: string,
-    _reviewerWorkerId: string,
-  ): Promise<boolean> {
+  async ensureIndependentReview(_taskId: string, _reviewerWorkerId: string): Promise<boolean> {
     return true;
   }
 }
@@ -685,11 +668,7 @@ class FakeCorrector implements CorrectionLoopManagerPort {
 // Helpers
 // ─────────────────────────────────────────────────
 
-function makeNode(
-  id: string,
-  deps: string[],
-  description?: string,
-): TaskNode {
+function makeNode(id: string, deps: string[], description?: string): TaskNode {
   return {
     id,
     label: `Task ${id}`,
@@ -724,14 +703,13 @@ function makeDag(
     missionId,
     tenantId,
     status: "CREATED",
-    nodes:
-      nodes ?? {
-        "add-mission-lifecycle-tests": makeNode(
-          "add-mission-lifecycle-tests",
-          [],
-          MISSION_DESCRIPTION,
-        ),
-      },
+    nodes: nodes ?? {
+      "add-mission-lifecycle-tests": makeNode(
+        "add-mission-lifecycle-tests",
+        [],
+        MISSION_DESCRIPTION,
+      ),
+    },
     nodeOrder: [],
     createdAt: NOW,
     updatedAt: NOW,
@@ -833,9 +811,7 @@ async function main(): Promise<void> {
   const missionContext: MissionContext = built.context;
   console.log("  Contexte construit :");
   console.log(`    Objective confirmée : ${missionContext.confirmedObjective}`);
-  console.log(
-    `    Contraintes : ${missionContext.confirmedConstraints.length}`,
-  );
+  console.log(`    Contraintes : ${missionContext.confirmedConstraints.length}`);
   console.log();
 
   // ── Phase 3 : Persistence ──
@@ -908,7 +884,8 @@ async function main(): Promise<void> {
         tenantId: TENANT_ID,
         roles: [PERMISSION_SUPERVISOR_WORKER_EXECUTE],
         authorizationLevel: 2,
-        justification: "FIRST-AUTO-1: Supervisor needs worker execution authority to run DAG tasks in isolated worktree",
+        justification:
+          "FIRST-AUTO-1: Supervisor needs worker execution authority to run DAG tasks in isolated worktree",
       },
     },
   );
@@ -930,11 +907,7 @@ async function main(): Promise<void> {
     },
   };
 
-  const dag = makeDag(
-    "dag-first-auto-1",
-    mission.id,
-    TENANT_ID,
-  );
+  const dag = makeDag("dag-first-auto-1", mission.id, TENANT_ID);
 
   console.log("  DAG créé :", dag.id);
   console.log(`    Nœuds : ${Object.keys(dag.nodes).length}`);
@@ -981,9 +954,7 @@ async function main(): Promise<void> {
 
   if (executeResult.integrationResult) {
     console.log(`    Intégration : ${executeResult.integrationResult.status}`);
-    console.log(
-      `    Commits intégrés : ${executeResult.integrationResult.commitsIntegrated}`,
-    );
+    console.log(`    Commits intégrés : ${executeResult.integrationResult.commitsIntegrated}`);
     if ("finalSha" in executeResult.integrationResult) {
       console.log(
         `    SHA final : ${(executeResult.integrationResult as IntegrationResult & { finalSha?: string }).finalSha ?? "N/A"}`,
@@ -1007,9 +978,7 @@ async function main(): Promise<void> {
 
   // ── Phase 8 : Global Gates ──
   console.log("[PHASE 8] Exécution des GlobalGates...");
-  const repoRoot = (
-    await exec("git", ["rev-parse", "--show-toplevel"])
-  ).stdout.trim();
+  const repoRoot = (await exec("git", ["rev-parse", "--show-toplevel"])).stdout.trim();
   const gateResults = await globalGates.executeAll(repoRoot);
   let allGatesPassed = true;
   for (const gate of gateResults) {
@@ -1109,7 +1078,8 @@ Ajout de tests unitaires pour \`src/core/mission/lifecycle.ts\`
     "D1 used": "YES" as const,
     "G1 used": "YES" as const,
     "D4 framework respected": "YES" as const,
-    "Worker isolation used": executeResult.status === "SUCCEEDED" ? ("YES" as const) : ("NO" as const),
+    "Worker isolation used":
+      executeResult.status === "SUCCEEDED" ? ("YES" as const) : ("NO" as const),
     "G1 bypass": "NO" as const,
     "D1 bypass": "NO" as const,
     "Self-authorization": "NO" as const,
@@ -1165,21 +1135,11 @@ Ajout de tests unitaires pour \`src/core/mission/lifecycle.ts\`
   console.log(
     `Mission → Supervisor: ${executeResult.status === "SUCCEEDED" ? "PASS" : executeResult.status === "PARTIAL" ? "PARTIAL" : "FAIL"}`,
   );
-  console.log(
-    `Supervisor → TaskDag: PASS`,
-  );
-  console.log(
-    `TaskDag → Worker Manager: PASS`,
-  );
-  console.log(
-    `Worker Manager → Worker: PASS`,
-  );
-  console.log(
-    `Worker Manager → D1: PASS`,
-  );
-  console.log(
-    `Worker → repository: PASS`,
-  );
+  console.log(`Supervisor → TaskDag: PASS`);
+  console.log(`TaskDag → Worker Manager: PASS`);
+  console.log(`Worker Manager → Worker: PASS`);
+  console.log(`Worker Manager → D1: PASS`);
+  console.log(`Worker → repository: PASS`);
   console.log();
 
   console.log(`GLOBAL GATES`);
@@ -1204,18 +1164,15 @@ Ajout de tests unitaires pour \`src/core/mission/lifecycle.ts\`
   console.log(`- NONE`);
   console.log();
 
-  console.log(`FIRST_AUTONOMOUS_REPO_WORKFLOW: ${
-    executeResult.status === "SUCCEEDED" ? "PASS" : "FAIL"
-  }`);
-  console.log(`READY_FOR_NEXT_AUTONOMOUS_MISSION: ${
-    executeResult.status === "SUCCEEDED" ? "YES" : "NO"
-  }`);
+  console.log(
+    `FIRST_AUTONOMOUS_REPO_WORKFLOW: ${executeResult.status === "SUCCEEDED" ? "PASS" : "FAIL"}`,
+  );
+  console.log(
+    `READY_FOR_NEXT_AUTONOMOUS_MISSION: ${executeResult.status === "SUCCEEDED" ? "YES" : "NO"}`,
+  );
   console.log();
 
-  if (
-    executeResult.status === "SUCCEEDED" ||
-    executeResult.status === "PARTIAL"
-  ) {
+  if (executeResult.status === "SUCCEEDED" || executeResult.status === "PARTIAL") {
     console.log("FINAL STATUS: FIRST_AUTO_1_COMPLETE");
   } else {
     console.log("FINAL STATUS: FIRST_AUTO_1_BLOCKED");

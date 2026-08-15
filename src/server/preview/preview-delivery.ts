@@ -16,9 +16,7 @@ import type { PreviewDeliveryPort } from "./ports";
  * - EXTERNAL_IRREVERSIBLE_ACTIONS = forbidden
  */
 export class PreviewDelivery implements PreviewDeliveryPort {
-  constructor(
-    private readonly config: PreviewConfig = {},
-  ) {}
+  constructor(private readonly config: PreviewConfig = {}) {}
 
   async deliver(integrationSha: string, integrationBranch: string): Promise<PreviewResult> {
     const start = Date.now();
@@ -29,7 +27,8 @@ export class PreviewDelivery implements PreviewDeliveryPort {
         status: "LOCAL_RESULT_READY",
         integrationSha,
         integrationBranch,
-        summary: `Résultat d'intégration disponible localement sur la branche "${integrationBranch}" (SHA: ${integrationSha.slice(0, 12)}). ` +
+        summary:
+          `Résultat d'intégration disponible localement sur la branche "${integrationBranch}" (SHA: ${integrationSha.slice(0, 12)}). ` +
           "Le déploiement preview externe nécessite une autorisation explicite.",
         durationMs: Date.now() - start,
         completedAt: new Date().toISOString(),

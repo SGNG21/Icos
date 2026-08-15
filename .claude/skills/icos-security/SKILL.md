@@ -21,7 +21,7 @@ contournable, audit immuable sans donnée sensible.
 - Gestion de secrets, variables d'environnement, jetons, cookies.
 - Vérification CSRF / origine pour une mutation.
 
-**Ne doit PAS s'activer quand** la question porte uniquement sur *comment*
+**Ne doit PAS s'activer quand** la question porte uniquement sur _comment_
 la donnée est stockée ou rendue atomique sans dimension autorisation/audit
 (→ `icos-postgresql`), ou sur le substrat d'exécution d'un processus long
 sans question de permission nouvelle (→ `icos-workflows-temporal`).

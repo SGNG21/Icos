@@ -11,7 +11,7 @@
 Le Master Plan décrit une cible ambitieuse (§4, §7, §16 : Mission → plan → agents → skills →
 exécution → vérification → approbation → livraison → audit → mémoire). Le code réel, au 23 juillet
 2026, est beaucoup plus étroit — et c'est une bonne nouvelle : chaque brique existante est petite,
-testée, et gouvernée par des invariants stricts qu'il faut *étendre*, jamais contourner.
+testée, et gouvernée par des invariants stricts qu'il faut _étendre_, jamais contourner.
 
 ### 1.1 Modèle de domaine réel
 
@@ -34,7 +34,7 @@ AuditEntry (id, eventType, actorType, actorLabel, taskId?, actionId?, details JS
 
 **Il n'existe aujourd'hui ni `Mission`, ni `Run`, ni `Plan`, ni `Skill`, ni `Memory`.** Le domaine est
 un graphe plat Task → Action → Approval → Audit. C'est la référence structurante de tout ce
-document : chaque lot futur doit dire explicitement comment il *étend* ce graphe, jamais comment il
+document : chaque lot futur doit dire explicitement comment il _étend_ ce graphe, jamais comment il
 le remplace.
 
 ### 1.2 Le Policy Engine existe déjà — en miniature
@@ -85,16 +85,16 @@ construire. Ce document propose une trajectoire concrète pour les phases **C à
 lots implémentables (voir [05-lot-catalogue.md](./05-lot-catalogue.md)), séquencés par dépendance
 réelle (voir [02-dependency-graph.md](./02-dependency-graph.md)) et non par numérotation arbitraire.
 
-| Écart | État réel | Cible Master Plan |
-|---|---|---|
-| Unité de travail métier | `Task` isolée | `Mission` → `Plan` → `Task[]` avec délégation, dépendances |
-| Registre de compétences | Aucun | `Skill` versionné, sourcé, quarantainé, attribué (§9) |
-| Mémoire | Aucune (contexte reconstruit à chaque appel) | 5+ types de mémoire séparés, avec provenance et expiration (§11) |
-| Orchestrateur | Absent — les Route Handlers appellent directement les use cases | Décomposition, sélection agents/skills, plan, reprise (§7.2) |
-| Politique de risque | 3 niveaux (read_only/reversible/sensitive) | 5 niveaux (0-4, §5), avec interdiction explicite d'auto-élévation |
-| Routage modèle | Aucun (pas encore de génération IA en boucle) | Control Plane ICOS pilotant OmniRoute, infrastructure durable multi-provider (§13) |
-| Canaux | Cockpit web uniquement | web/desktop/terminal/mobile/voix + Twilio (§12) |
-| Intégrations | Aucune active | GitHub, Gmail, Calendar, Drive, n8n, Dolibarr, CMS (§14) |
+| Écart                   | État réel                                                       | Cible Master Plan                                                                  |
+| ----------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Unité de travail métier | `Task` isolée                                                   | `Mission` → `Plan` → `Task[]` avec délégation, dépendances                         |
+| Registre de compétences | Aucun                                                           | `Skill` versionné, sourcé, quarantainé, attribué (§9)                              |
+| Mémoire                 | Aucune (contexte reconstruit à chaque appel)                    | 5+ types de mémoire séparés, avec provenance et expiration (§11)                   |
+| Orchestrateur           | Absent — les Route Handlers appellent directement les use cases | Décomposition, sélection agents/skills, plan, reprise (§7.2)                       |
+| Politique de risque     | 3 niveaux (read_only/reversible/sensitive)                      | 5 niveaux (0-4, §5), avec interdiction explicite d'auto-élévation                  |
+| Routage modèle          | Aucun (pas encore de génération IA en boucle)                   | Control Plane ICOS pilotant OmniRoute, infrastructure durable multi-provider (§13) |
+| Canaux                  | Cockpit web uniquement                                          | web/desktop/terminal/mobile/voix + Twilio (§12)                                    |
+| Intégrations            | Aucune active                                                   | GitHub, Gmail, Calendar, Drive, n8n, Dolibarr, CMS (§14)                           |
 
 ## 3. Couches cibles — mappées sur le code réel
 
@@ -158,14 +158,14 @@ composant", `docs/architecture/overview.md`).
 Chaque capability externe passe par un port abstrait ICOS et un adapter isolé. Le domaine ne connaît
 jamais l'implémentation sous-jacente.
 
-| Port | Adapter | Runtime externe | Obligatoire pour M1 ? |
-|---|---|---|---|
-| `AiGatewayPort` | `OmniRouteAdapter` | OmniRoute | Oui |
-| `MemoryPort` | `PostgresMemoryAdapter`, `Mem0Adapter` (future) | Postgres + Mem0 | Oui (Postgres); Mem0 = DEFER |
-| `BrowserPort` | `BrowserUseAdapter` | Browser Use | Non — E2+ |
-| `DevelopmentGateway` | `OpenHandsAdapter` | OpenHands | Non — E3+ |
-| `SandboxPort` | `DockerSandboxAdapter`, `E2BSandboxAdapter` | Docker / E2B | Non — E4+ |
-| `ObservabilityPort` | `LangfuseAdapter` | Langfuse | Non — E5+ |
+| Port                 | Adapter                                         | Runtime externe | Obligatoire pour M1 ?        |
+| -------------------- | ----------------------------------------------- | --------------- | ---------------------------- |
+| `AiGatewayPort`      | `OmniRouteAdapter`                              | OmniRoute       | Oui                          |
+| `MemoryPort`         | `PostgresMemoryAdapter`, `Mem0Adapter` (future) | Postgres + Mem0 | Oui (Postgres); Mem0 = DEFER |
+| `BrowserPort`        | `BrowserUseAdapter`                             | Browser Use     | Non — E2+                    |
+| `DevelopmentGateway` | `OpenHandsAdapter`                              | OpenHands       | Non — E3+                    |
+| `SandboxPort`        | `DockerSandboxAdapter`, `E2BSandboxAdapter`     | Docker / E2B    | Non — E4+                    |
+| `ObservabilityPort`  | `LangfuseAdapter`                               | Langfuse        | Non — E5+                    |
 
 **Règle** : ICOS construit les ports, adapte les runtimes, et garde la policy. Les runtimes
 externes exécutent. Aucun runtime ne devient la source de vérité métier.
@@ -202,18 +202,18 @@ effet externe.
 
 ## 6. Sommaire des livrables
 
-| # | Document | Contenu |
-|---|---|---|
-| 1 | [01-overview.md](./01-overview.md) | Ce document |
-| 2 | [02-dependency-graph.md](./02-dependency-graph.md) | Graphe de dépendances entre composants futurs |
-| 3 | [03-critical-path.md](./03-critical-path.md) | Chemin critique et parallélisation |
-| 4 | [04-lot-sequence.md](./04-lot-sequence.md) | Séquence de lots recommandée |
-| 5 | [05-lot-catalogue.md](./05-lot-catalogue.md) | Catalogue détaillé des lots futurs |
-| 6 | [06-adr-backlog.md](./06-adr-backlog.md) | Backlog d'ADR |
-| 7 | [07-reuse-mapping.md](./07-reuse-mapping.md) | Cartographie de réutilisation Holding IA + OpenJarvis |
-| 8 | [08-technology-timeline.md](./08-technology-timeline.md) | Calendrier d'introduction technologique |
-| 9 | [09-risk-register.md](./09-risk-register.md) | Registre des risques architecturaux |
-| 10 | [10-behavioral-tests.md](./10-behavioral-tests.md) | Catalogue de tests comportementaux |
-| 11 | [11-first-autonomous-icos.md](./11-first-autonomous-icos.md) | Jalon premier ICOS autonome |
-| 12 | [12-parallelization.md](./12-parallelization.md) | Opportunités de parallélisation |
-| — | [00-executive-summary.md](./00-executive-summary.md) | Synthèse exécutive (dernier document produit) |
+| #   | Document                                                     | Contenu                                               |
+| --- | ------------------------------------------------------------ | ----------------------------------------------------- |
+| 1   | [01-overview.md](./01-overview.md)                           | Ce document                                           |
+| 2   | [02-dependency-graph.md](./02-dependency-graph.md)           | Graphe de dépendances entre composants futurs         |
+| 3   | [03-critical-path.md](./03-critical-path.md)                 | Chemin critique et parallélisation                    |
+| 4   | [04-lot-sequence.md](./04-lot-sequence.md)                   | Séquence de lots recommandée                          |
+| 5   | [05-lot-catalogue.md](./05-lot-catalogue.md)                 | Catalogue détaillé des lots futurs                    |
+| 6   | [06-adr-backlog.md](./06-adr-backlog.md)                     | Backlog d'ADR                                         |
+| 7   | [07-reuse-mapping.md](./07-reuse-mapping.md)                 | Cartographie de réutilisation Holding IA + OpenJarvis |
+| 8   | [08-technology-timeline.md](./08-technology-timeline.md)     | Calendrier d'introduction technologique               |
+| 9   | [09-risk-register.md](./09-risk-register.md)                 | Registre des risques architecturaux                   |
+| 10  | [10-behavioral-tests.md](./10-behavioral-tests.md)           | Catalogue de tests comportementaux                    |
+| 11  | [11-first-autonomous-icos.md](./11-first-autonomous-icos.md) | Jalon premier ICOS autonome                           |
+| 12  | [12-parallelization.md](./12-parallelization.md)             | Opportunités de parallélisation                       |
+| —   | [00-executive-summary.md](./00-executive-summary.md)         | Synthèse exécutive (dernier document produit)         |

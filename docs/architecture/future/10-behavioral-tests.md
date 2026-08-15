@@ -7,6 +7,7 @@
 ## Convention
 
 Chaque scénario suit le format :
+
 - **Contexte** : état du système avant le test.
 - **Entrée** : instruction utilisateur, événement ou appel.
 - **Attendu** : comportement vérifiable.
@@ -209,29 +210,29 @@ Chaque scénario suit le format :
 
 ## Résumé des couvertures
 
-| # | Scénario | Source | Lot | Type |
-|---:|---|---|---:|---|
-| 1 | Préparation sans envoi | CAS 1 | D4 | Exécution gouvernée |
-| 2 | Envoi gouverné | CAS 2 + MP §21 | G1, D1 | Approbation |
-| 3 | Reprise après interruption | CAS 3 + MP §21 | D4, D2 | Persistance |
-| 4 | Double invocation (timeout) | CAS 4 | G1 | Idempotence |
-| 5 | Double invocation (webhooks) | CAS 5 | G1 | Idempotence |
-| 6 | Approbation expirée | CAS 6 | D1, D4 | Expiration |
-| 7 | Annulation après approbation | CAS 7 | D4, D2 | Cancel |
-| 8 | Conflit mémoire / base | CAS 8 | D1, E1 | Autorité |
-| 9 | Tool non autorisé | CAS 9 | D1, G1 | Policy |
-| 10 | Auto-élévation permissions | CAS 10 | D1 | Sécurité |
-| 11 | Crash en mission | CAS 11 | D4, D2 | Résilience |
-| 12 | Consultation d'état | CAS 12 + MP §21 | D4, D2 | Continuité |
-| 13 | Consigne vague | MP §21 | F1, D4 | Compréhension |
-| 14 | Refus pour risque | MP §21 | D1, D4 | Gouvernance |
-| 15 | Délégation invisible | MP §21 | D4 | Orchestration |
-| 16 | Heartbeat gouverné | Invariant P1 | P1, D1 | Proactivité |
-| 17 | Fallback sans doublon | ADR-0013 | D3, G1, R2 | Fallback |
-| 18 | Fallback refusé (confidentialité) | ADR-0016 | R2, D3 | Confidentialité |
-| 19 | SkillsMP quarantaine | C3 | C3, C2 | Découverte |
-| 20 | Self-improvement sans auto-activation | Q2 | Q2, C2 | Amélioration |
-| 21 | Channel sans logique métier | I1 | I1, I2 | Canal |
-| 22 | Memory corrigible | E1 | E1, E2 | Mémoire |
-| 23 | OmniRoute indisponible | D3 | D3 | Résilience |
-| 24 | Changement modèle sans effet | MP §13 | R1, D3 | ModelRouter |
+|   # | Scénario                              | Source          |        Lot | Type                |
+| --: | ------------------------------------- | --------------- | ---------: | ------------------- |
+|   1 | Préparation sans envoi                | CAS 1           |         D4 | Exécution gouvernée |
+|   2 | Envoi gouverné                        | CAS 2 + MP §21  |     G1, D1 | Approbation         |
+|   3 | Reprise après interruption            | CAS 3 + MP §21  |     D4, D2 | Persistance         |
+|   4 | Double invocation (timeout)           | CAS 4           |         G1 | Idempotence         |
+|   5 | Double invocation (webhooks)          | CAS 5           |         G1 | Idempotence         |
+|   6 | Approbation expirée                   | CAS 6           |     D1, D4 | Expiration          |
+|   7 | Annulation après approbation          | CAS 7           |     D4, D2 | Cancel              |
+|   8 | Conflit mémoire / base                | CAS 8           |     D1, E1 | Autorité            |
+|   9 | Tool non autorisé                     | CAS 9           |     D1, G1 | Policy              |
+|  10 | Auto-élévation permissions            | CAS 10          |         D1 | Sécurité            |
+|  11 | Crash en mission                      | CAS 11          |     D4, D2 | Résilience          |
+|  12 | Consultation d'état                   | CAS 12 + MP §21 |     D4, D2 | Continuité          |
+|  13 | Consigne vague                        | MP §21          |     F1, D4 | Compréhension       |
+|  14 | Refus pour risque                     | MP §21          |     D1, D4 | Gouvernance         |
+|  15 | Délégation invisible                  | MP §21          |         D4 | Orchestration       |
+|  16 | Heartbeat gouverné                    | Invariant P1    |     P1, D1 | Proactivité         |
+|  17 | Fallback sans doublon                 | ADR-0013        | D3, G1, R2 | Fallback            |
+|  18 | Fallback refusé (confidentialité)     | ADR-0016        |     R2, D3 | Confidentialité     |
+|  19 | SkillsMP quarantaine                  | C3              |     C3, C2 | Découverte          |
+|  20 | Self-improvement sans auto-activation | Q2              |     Q2, C2 | Amélioration        |
+|  21 | Channel sans logique métier           | I1              |     I1, I2 | Canal               |
+|  22 | Memory corrigible                     | E1              |     E1, E2 | Mémoire             |
+|  23 | OmniRoute indisponible                | D3              |         D3 | Résilience          |
+|  24 | Changement modèle sans effet          | MP §13          |     R1, D3 | ModelRouter         |

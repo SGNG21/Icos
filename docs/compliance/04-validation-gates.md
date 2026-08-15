@@ -1,8 +1,8 @@
 # Points de validation DPO et gate Compliance — ICOS
 
-| Statut    | Version |
-|-----------|---------|
-| Projet    | 0.1     |
+| Statut | Version |
+| ------ | ------- |
+| Projet | 0.1     |
 
 ## 1. Objectif
 
@@ -107,13 +107,13 @@ propriétaire du projet.
 
 ## 4. Cycle de validation
 
-| Événement                                 | Contrôle requis                  | Délai max     |
-|-------------------------------------------|----------------------------------|---------------|
-| PR avec données C3                        | Gate Compliance (DPO)            | 5 jours ouvrés |
-| Nouveau traitement C3                     | Validation DPO                   | 10 jours ouvrés |
-| Dérogation durée de conservation          | Validation DPO                   | 5 jours ouvrés |
-| Incident C3                               | DPO + juriste si nécessaire      | 72h (notification) |
-| Révision annuelle conformité              | DPO + juriste                    | —             |
+| Événement                        | Contrôle requis             | Délai max          |
+| -------------------------------- | --------------------------- | ------------------ |
+| PR avec données C3               | Gate Compliance (DPO)       | 5 jours ouvrés     |
+| Nouveau traitement C3            | Validation DPO              | 10 jours ouvrés    |
+| Dérogation durée de conservation | Validation DPO              | 5 jours ouvrés     |
+| Incident C3                      | DPO + juriste si nécessaire | 72h (notification) |
+| Révision annuelle conformité     | DPO + juriste               | —                  |
 
 ## 5. Documents associés
 

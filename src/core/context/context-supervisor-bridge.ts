@@ -49,13 +49,13 @@ export type PrecedenceOutcome = "accepted" | "stripped" | "conflict";
 
 /** Raison textuelle expliquant l'application d'une règle. */
 export type PrecedenceRuleLabel =
-  | "mission_supremacy"       // D2 > conversation ; le contexte ne peut contredire la Mission
-  | "provenance_valid"        // Provenance valide, claim accepté
-  | "provenance_untrusted"    // Provenance inconnue ou invalide → strip
-  | "critical_ambiguity"      // Question ouverte critique non résolue → bloquant
-  | "non_critical_ambiguity"  // Ambiguïté non critique → strip (ne bloque pas)
-  | "irrelevant_assumption"   // Hypothèse non étayée → strip (ne bloque pas)
-  | "memory_unresolvable";    // Référence mémoire non résolvable → strip
+  | "mission_supremacy" // D2 > conversation ; le contexte ne peut contredire la Mission
+  | "provenance_valid" // Provenance valide, claim accepté
+  | "provenance_untrusted" // Provenance inconnue ou invalide → strip
+  | "critical_ambiguity" // Question ouverte critique non résolue → bloquant
+  | "non_critical_ambiguity" // Ambiguïté non critique → strip (ne bloque pas)
+  | "irrelevant_assumption" // Hypothèse non étayée → strip (ne bloque pas)
+  | "memory_unresolvable"; // Référence mémoire non résolvable → strip
 
 /** Enregistrement de précédence : décision + règle appliquée. */
 export interface PrecedenceRecord {
@@ -69,14 +69,13 @@ export interface PrecedenceRecord {
 // ─────────────────────────────────────
 
 export type BridgeRefusalCode =
-  | "no_context"              // Aucun MissionContext disponible
-  | "schema_validation"       // DTO invalide (autorité, structure brisée)
-  | "precedence_conflict"     // Contexte contredit la Mission canonique
-  | "critical_ambiguity";     // Question ouverte critique non résolue
+  | "no_context" // Aucun MissionContext disponible
+  | "schema_validation" // DTO invalide (autorité, structure brisée)
+  | "precedence_conflict" // Contexte contredit la Mission canonique
+  | "critical_ambiguity"; // Question ouverte critique non résolue
 
 export type BridgeResult =
-  | { ok: true; envelope: SupervisorEnrichedContext }
-  | { ok: false; reason: BridgeRefusalCode };
+  { ok: true; envelope: SupervisorEnrichedContext } | { ok: false; reason: BridgeRefusalCode };
 
 // ─────────────────────────────────────
 // Contexte enrichi pour le Supervisor
@@ -130,12 +129,64 @@ export interface SupervisorEnrichedContext {
  */
 /** Mots vides français/anglais exclus de la comparaison de précédence. */
 const STOPWORDS = new Set([
-  "le", "la", "les", "de", "du", "des", "un", "une", "et", "ou", "en",
-  "au", "aux", "par", "pour", "sur", "dans", "avec", "est", "sont",
-  "ce", "cet", "cette", "ces", "qui", "que", "dont", "où", "pas",
-  "ne", "n", "à", "a", "the", "a", "an", "in", "on", "at", "to",
-  "for", "of", "and", "or", "is", "are", "it", "its", "be", "by",
-  "as", "was", "were", "has", "have", "been", "not", "no",
+  "le",
+  "la",
+  "les",
+  "de",
+  "du",
+  "des",
+  "un",
+  "une",
+  "et",
+  "ou",
+  "en",
+  "au",
+  "aux",
+  "par",
+  "pour",
+  "sur",
+  "dans",
+  "avec",
+  "est",
+  "sont",
+  "ce",
+  "cet",
+  "cette",
+  "ces",
+  "qui",
+  "que",
+  "dont",
+  "où",
+  "pas",
+  "ne",
+  "n",
+  "à",
+  "a",
+  "the",
+  "a",
+  "an",
+  "in",
+  "on",
+  "at",
+  "to",
+  "for",
+  "of",
+  "and",
+  "or",
+  "is",
+  "are",
+  "it",
+  "its",
+  "be",
+  "by",
+  "as",
+  "was",
+  "were",
+  "has",
+  "have",
+  "been",
+  "not",
+  "no",
 ]);
 
 export function checkMissionSupremacy(
@@ -189,9 +240,7 @@ const CRITICAL_PATTERNS = [
   /permission/i,
 ];
 
-export function classifyQuestionAmbiguity(
-  statement: string,
-): PrecedenceRecord {
+export function classifyQuestionAmbiguity(statement: string): PrecedenceRecord {
   const isCritical = CRITICAL_PATTERNS.some((p) => p.test(statement));
   return {
     statement,
@@ -244,10 +293,7 @@ export function checkProvenanceTrust(
  * @param mission - Mission D2 optionnelle (pour la règle mission_supremacy)
  * @returns BridgeResult — ok:true avec l'enveloppe, ou ok:false avec le code de refus
  */
-export function resolveSupervisorContext(
-  context: MissionContext,
-  mission?: Mission,
-): BridgeResult {
+export function resolveSupervisorContext(context: MissionContext, mission?: Mission): BridgeResult {
   // ── Étape 1 : Projection vers le DTO Supervisor ──
   const dto = toSupervisorContextInput(context);
 
@@ -276,9 +322,7 @@ export function resolveSupervisorContext(
 
   // 3a — Mission supremacy : contexte objectif vs D2 userRequest
   if (mission) {
-    recordIfNotAccepted(
-      checkMissionSupremacy(context.confirmedObjective, mission.userRequest),
-    );
+    recordIfNotAccepted(checkMissionSupremacy(context.confirmedObjective, mission.userRequest));
   }
 
   // 3b — Questions ouvertes : classer comme critique ou non
@@ -300,9 +344,7 @@ export function resolveSupervisorContext(
   if (hasCriticalFailure) {
     const criticalRecord = records.find((r) => r.outcome === "conflict");
     const reason =
-      criticalRecord?.rule === "mission_supremacy"
-        ? "precedence_conflict"
-        : "critical_ambiguity";
+      criticalRecord?.rule === "mission_supremacy" ? "precedence_conflict" : "critical_ambiguity";
     return { ok: false, reason };
   }
 

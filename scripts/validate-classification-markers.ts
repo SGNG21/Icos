@@ -33,10 +33,7 @@ function getModifiedFiles(): string[] {
 }
 
 /** Schémas Drizzle connus qui doivent être vérifiés */
-const SCHEMA_FILES = [
-  "src/server/database/schema.ts",
-  "src/server/database/auth-schema.ts",
-];
+const SCHEMA_FILES = ["src/server/database/schema.ts", "src/server/database/auth-schema.ts"];
 
 /** Colonnes Drizzle connues pour contenir des données C2/C3 sans marquage */
 const C2_C3_COLUMNS = [

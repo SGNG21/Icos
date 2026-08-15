@@ -32,7 +32,10 @@ export type IdempotencyKey = z.infer<typeof idempotencyKeySchema>;
  * INVARIANT : Toute divergence entre deux requestHash du même cycle de
  * vie → FAIL CLOSED (IDEMPOTENCY_CONFLICT).
  */
-export const requestHashSchema = z.string().length(64).regex(/^[a-f0-9]{64}$/);
+export const requestHashSchema = z
+  .string()
+  .length(64)
+  .regex(/^[a-f0-9]{64}$/);
 export type RequestHash = z.infer<typeof requestHashSchema>;
 
 // ─────────────────────────────────────
@@ -148,9 +151,9 @@ export type ExecutionGrant = z.infer<typeof executionGrantSchema>;
 // ─────────────────────────────────────
 
 export const grantConsumptionStatusSchema = z.enum([
-  "AVAILABLE",  // Non consommé, dans sa fenêtre de validité
-  "CONSUMED",   // Déjà utilisé (single-use)
-  "EXPIRED",    // expiresAt dépassé sans consommation
+  "AVAILABLE", // Non consommé, dans sa fenêtre de validité
+  "CONSUMED", // Déjà utilisé (single-use)
+  "EXPIRED", // expiresAt dépassé sans consommation
 ]);
 
 export type GrantConsumptionStatus = z.infer<typeof grantConsumptionStatusSchema>;

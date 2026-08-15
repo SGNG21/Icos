@@ -15,7 +15,11 @@ import type {
 } from "@/server/repositories/skill-ports";
 import type { SkillUnitOfWork } from "@/server/uow/ports";
 import type { Evaluation, SecurityScan } from "@/core/contracts/skill";
-import { isTrustTransitionAllowed, isActivationTransitionAllowed, isContentMutable } from "@/core/skills/lifecycle";
+import {
+  isTrustTransitionAllowed,
+  isActivationTransitionAllowed,
+  isContentMutable,
+} from "@/core/skills/lifecycle";
 import { computeSkillHash } from "@/core/skills/hash";
 
 export type SkillServiceResult<T> =
@@ -44,7 +48,10 @@ export class SkillService {
    * trustState = untrusted, activationState = inactive.
    */
   async importSkill(input: {
-    skill: Omit<Skill, "id" | "trustState" | "activationState" | "contentHash" | "createdAt" | "updatedAt">;
+    skill: Omit<
+      Skill,
+      "id" | "trustState" | "activationState" | "contentHash" | "createdAt" | "updatedAt"
+    >;
     actor: ActorInfo;
   }): Promise<SkillServiceResult<{ skill: Skill }>> {
     const now = new Date().toISOString();
@@ -90,7 +97,10 @@ export class SkillService {
    * trustState et activationState sont initialisés par le service.
    */
   async createSkill(input: {
-    skill: Omit<Skill, "id" | "trustState" | "activationState" | "contentHash" | "createdAt" | "updatedAt">;
+    skill: Omit<
+      Skill,
+      "id" | "trustState" | "activationState" | "contentHash" | "createdAt" | "updatedAt"
+    >;
     actor: ActorInfo;
   }): Promise<SkillServiceResult<{ skill: Skill }>> {
     const now = new Date().toISOString();
@@ -135,7 +145,11 @@ export class SkillService {
     isHumanOnly: boolean,
   ): Promise<SkillServiceResult<{ skill: Skill }>> {
     if (isHumanOnly && actor.actorKind !== "human") {
-      return { ok: false, reason: "human_only", message: "Cette transition nécessite un acteur humain" };
+      return {
+        ok: false,
+        reason: "human_only",
+        message: "Cette transition nécessite un acteur humain",
+      };
     }
 
     const parsed = trustStateSchema.safeParse(targetTrustState);
@@ -150,7 +164,11 @@ export class SkillService {
     }
 
     if (!isTrustTransitionAllowed(skill.trustState, to)) {
-      return { ok: false, reason: "invalid_transition", message: `Transition ${skill.trustState} → ${to} non autorisée` };
+      return {
+        ok: false,
+        reason: "invalid_transition",
+        message: `Transition ${skill.trustState} → ${to} non autorisée`,
+      };
     }
 
     // Si rejected, vérifier le cross-invariant
@@ -184,7 +202,11 @@ export class SkillService {
   /**
    * Transition vers rejected — atomique avec revoked.
    */
-  private async rejectSkill(id: string, skill: Skill, actor: ActorInfo): Promise<SkillServiceResult<{ skill: Skill }>> {
+  private async rejectSkill(
+    id: string,
+    skill: Skill,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ skill: Skill }>> {
     const now = new Date().toISOString();
 
     const trustAudit: AuditEntry = {
@@ -226,7 +248,10 @@ export class SkillService {
     return { ok: true, data: { skill: result.data.skill } };
   }
 
-  async quarantineSkill(id: string, actor: ActorInfo): Promise<SkillServiceResult<{ skill: Skill }>> {
+  async quarantineSkill(
+    id: string,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ skill: Skill }>> {
     return this.transitionTrust(id, "quarantined", actor, false);
   }
 
@@ -238,7 +263,10 @@ export class SkillService {
     return this.transitionTrust(id, "approved", actor, true);
   }
 
-  async rejectSkillAction(id: string, actor: ActorInfo): Promise<SkillServiceResult<{ skill: Skill }>> {
+  async rejectSkillAction(
+    id: string,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ skill: Skill }>> {
     return this.transitionTrust(id, "rejected", actor, false);
   }
 
@@ -253,7 +281,11 @@ export class SkillService {
     isHumanOnly: boolean,
   ): Promise<SkillServiceResult<{ skill: Skill; deactivatedVersionId?: string | null }>> {
     if (isHumanOnly && actor.actorKind !== "human") {
-      return { ok: false, reason: "human_only", message: "Cette transition nécessite un acteur humain" };
+      return {
+        ok: false,
+        reason: "human_only",
+        message: "Cette transition nécessite un acteur humain",
+      };
     }
 
     const parsed = activationStateSchema.safeParse(targetActivationState);
@@ -268,12 +300,20 @@ export class SkillService {
     }
 
     if (!isActivationTransitionAllowed(skill.activationState, to)) {
-      return { ok: false, reason: "invalid_transition", message: `Transition ${skill.activationState} → ${to} non autorisée` };
+      return {
+        ok: false,
+        reason: "invalid_transition",
+        message: `Transition ${skill.activationState} → ${to} non autorisée`,
+      };
     }
 
     // Vérifier cross-invariant : active ⇒ approved
     if (to === "active" && skill.trustState !== "approved") {
-      return { ok: false, reason: "trust_not_approved", message: "Impossible d'activer un skill dont trustState n'est pas approved" };
+      return {
+        ok: false,
+        reason: "trust_not_approved",
+        message: "Impossible d'activer un skill dont trustState n'est pas approved",
+      };
     }
 
     const now = new Date().toISOString();
@@ -340,7 +380,10 @@ export class SkillService {
     return { ok: true, data: { skill: updated } };
   }
 
-  async activateSkill(id: string, actor: ActorInfo): Promise<SkillServiceResult<{ skill: Skill; deactivatedVersionId?: string | null }>> {
+  async activateSkill(
+    id: string,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ skill: Skill; deactivatedVersionId?: string | null }>> {
     return this.transitionActivation(id, "active", actor, true);
   }
 
@@ -348,7 +391,10 @@ export class SkillService {
     return this.transitionActivation(id, "suspended", actor, true);
   }
 
-  async reactivateSkill(id: string, actor: ActorInfo): Promise<SkillServiceResult<{ skill: Skill }>> {
+  async reactivateSkill(
+    id: string,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ skill: Skill }>> {
     return this.transitionActivation(id, "active", actor, true);
   }
 
@@ -362,7 +408,16 @@ export class SkillService {
 
   async updateSkillContent(
     id: string,
-    data: Omit<Skill, "id" | "tenantId" | "trustState" | "activationState" | "contentHash" | "createdAt" | "updatedAt">,
+    data: Omit<
+      Skill,
+      | "id"
+      | "tenantId"
+      | "trustState"
+      | "activationState"
+      | "contentHash"
+      | "createdAt"
+      | "updatedAt"
+    >,
     actor: ActorInfo,
   ): Promise<SkillServiceResult<{ skill: Skill }>> {
     const skill = await this.skills.getById(id);
@@ -371,7 +426,11 @@ export class SkillService {
     }
 
     if (!isContentMutable(skill.trustState)) {
-      return { ok: false, reason: "immutable_version", message: `Contenu immutable dans l'état ${skill.trustState}. Créez une nouvelle version.` };
+      return {
+        ok: false,
+        reason: "immutable_version",
+        message: `Contenu immutable dans l'état ${skill.trustState}. Créez une nouvelle version.`,
+      };
     }
 
     const now = new Date().toISOString();
@@ -386,7 +445,10 @@ export class SkillService {
     };
 
     const newHash = computeSkillHash(updatedPartial);
-    const finalUpdated = await this.skills.updateContent(id, { ...updatedPartial, contentHash: newHash });
+    const finalUpdated = await this.skills.updateContent(id, {
+      ...updatedPartial,
+      contentHash: newHash,
+    });
 
     if (!finalUpdated) {
       return { ok: false, reason: "update_failed", message: "Échec de mise à jour du contenu" };
@@ -485,18 +547,28 @@ export class SkillService {
     return { ok: true, data: { skill } };
   }
 
-  async listSkills(tenantId: string, filters?: SkillListFilters): Promise<SkillServiceResult<{ skills: Skill[] }>> {
+  async listSkills(
+    tenantId: string,
+    filters?: SkillListFilters,
+  ): Promise<SkillServiceResult<{ skills: Skill[] }>> {
     const result = await this.skills.list(tenantId, filters);
     return { ok: true, data: { skills: result } };
   }
 
-  async deleteSkill(id: string, actor: ActorInfo): Promise<SkillServiceResult<{ deleted: boolean }>> {
+  async deleteSkill(
+    id: string,
+    actor: ActorInfo,
+  ): Promise<SkillServiceResult<{ deleted: boolean }>> {
     const skill = await this.skills.getById(id);
     if (!skill) {
       return { ok: false, reason: "not_found", message: "Skill not found" };
     }
     if (skill.activationState === "active") {
-      return { ok: false, reason: "cannot_delete_active", message: "Impossible de supprimer un skill actif" };
+      return {
+        ok: false,
+        reason: "cannot_delete_active",
+        message: "Impossible de supprimer un skill actif",
+      };
     }
 
     const deleted = await this.skills.delete(id);

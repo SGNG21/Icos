@@ -230,13 +230,13 @@ implémentation peut changer (Postgres → Postgres+Graphiti) sans que le domain
 
 ### G. Postgres relationnel / FTS / pgvector / Graphiti / Neo4j — quand quoi ?
 
-| Besoin | Solution | Quand |
-|---|---|---|
-| Vérité métier (Mission, Task, Skill, Approval...) | Postgres relationnel | Toujours, dès le début |
-| Recherche texte dans mémoire/notes | Postgres FTS (`tsvector`) | Phase E, dès l'ouverture de la mémoire |
-| Similarité sémantique (retrieval RAG) | pgvector | Phase E, si le FTS seul ne suffit pas empiriquement |
-| Relations riches entre entités mémorisées | Graphiti (ou équivalent) | Phase H+, seulement si un besoin produit concret l'exige (ex. DigitalOS reliant client↔projet↔décisions) |
-| Graphe de connaissances généraliste séparé (Neo4j dédié) | Neo4j | Non retenu à ce stade — Graphiti peut s'appuyer sur Postgres ou un store dédié ; l'introduction d'un SGBD supplémentaire n'est pas justifiée tant que Graphiti/pgvector suffisent |
+| Besoin                                                   | Solution                  | Quand                                                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vérité métier (Mission, Task, Skill, Approval...)        | Postgres relationnel      | Toujours, dès le début                                                                                                                                                            |
+| Recherche texte dans mémoire/notes                       | Postgres FTS (`tsvector`) | Phase E, dès l'ouverture de la mémoire                                                                                                                                            |
+| Similarité sémantique (retrieval RAG)                    | pgvector                  | Phase E, si le FTS seul ne suffit pas empiriquement                                                                                                                               |
+| Relations riches entre entités mémorisées                | Graphiti (ou équivalent)  | Phase H+, seulement si un besoin produit concret l'exige (ex. DigitalOS reliant client↔projet↔décisions)                                                                          |
+| Graphe de connaissances généraliste séparé (Neo4j dédié) | Neo4j                     | Non retenu à ce stade — Graphiti peut s'appuyer sur Postgres ou un store dédié ; l'introduction d'un SGBD supplémentaire n'est pas justifiée tant que Graphiti/pgvector suffisent |
 
 **Décision** : ne pas introduire Neo4j indépendamment de Graphiti. Si Graphiti est retenu (Phase
 H+), son store interne est un détail d'implémentation du memory-service, pas une nouvelle
@@ -244,15 +244,15 @@ dépendance visible du domaine.
 
 ### H. Données authoritatives vs dérivées
 
-| Authoritative (Postgres, jamais recalculée à partir d'ailleurs) | Dérivée (peut être reconstruite, cache, index) |
-|---|---|
-| Mission, Task, Action, Approval, Audit, Skill (registre), Agent, HumanAgentLink | Index FTS/pgvector sur la mémoire |
-| Décisions du Policy Engine (résultat historisé) | Traces d'exécution technique (EventBus interne) |
-| Historique des versions de skill activées | Résumés de mémoire long-terme (recalculables depuis les sources) |
-| Policies IA métier : criticité, privacy class, qualité minimale, budget, restrictions client/projet, classes de providers et règles métier de fallback | Projections/cache ICOS des catalogues, quotas, health, latence et routing explanations OmniRoute |
-| Business metadata d'abonnement : propriétaire, centre de coût, contrat client, préférence abonnement/crédits/free tier | Provider accounts, credentials/OAuth, catalogues provider/modèle/free-tier, fenêtres de reset et pricing technique — source de vérité OmniRoute |
-| `UsageLedger` métier corrélé Mission/Run/Task et coûts qualifiés (`estimatedListCost`, `providerReportedCost`, `subscriptionIncludedCost`, `incrementalCost`, `savingsEstimate`) | Télémétrie technique brute provider/modèle/compte/tokens/coût/latence/fallback retournée par OmniRoute |
-| Résultats d'evals métier ICOS | Evals de routing/modèle OmniRoute et agrégats techniques |
+| Authoritative (Postgres, jamais recalculée à partir d'ailleurs)                                                                                                                  | Dérivée (peut être reconstruite, cache, index)                                                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mission, Task, Action, Approval, Audit, Skill (registre), Agent, HumanAgentLink                                                                                                  | Index FTS/pgvector sur la mémoire                                                                                                               |
+| Décisions du Policy Engine (résultat historisé)                                                                                                                                  | Traces d'exécution technique (EventBus interne)                                                                                                 |
+| Historique des versions de skill activées                                                                                                                                        | Résumés de mémoire long-terme (recalculables depuis les sources)                                                                                |
+| Policies IA métier : criticité, privacy class, qualité minimale, budget, restrictions client/projet, classes de providers et règles métier de fallback                           | Projections/cache ICOS des catalogues, quotas, health, latence et routing explanations OmniRoute                                                |
+| Business metadata d'abonnement : propriétaire, centre de coût, contrat client, préférence abonnement/crédits/free tier                                                           | Provider accounts, credentials/OAuth, catalogues provider/modèle/free-tier, fenêtres de reset et pricing technique — source de vérité OmniRoute |
+| `UsageLedger` métier corrélé Mission/Run/Task et coûts qualifiés (`estimatedListCost`, `providerReportedCost`, `subscriptionIncludedCost`, `incrementalCost`, `savingsEstimate`) | Télémétrie technique brute provider/modèle/compte/tokens/coût/latence/fallback retournée par OmniRoute                                          |
+| Résultats d'evals métier ICOS                                                                                                                                                    | Evals de routing/modèle OmniRoute et agrégats techniques                                                                                        |
 
 ### I. Temporal — avant ou après le premier orchestrateur ?
 
@@ -271,7 +271,7 @@ rétroactive.** Le Tool/MCP Gateway (Phase G) expose les connecteurs (GitHub, Gm
 lorsque c'est le mode d'intégration natif de l'outil ; pour des appels internes à ICOS-core (ex.
 lecture d'un Task existant), passer par MCP ajouterait une indirection sans bénéfice — ces appels
 restent des appels de méthode directs sur les ports internes. **Règle** : MCP est le protocole
-d'intégration pour tout ce qui est *externe au domaine ICOS*, jamais pour la communication
+d'intégration pour tout ce qui est _externe au domaine ICOS_, jamais pour la communication
 intra-domaine.
 
 ### K. Frontière AI Gateway ICOS / OmniRoute v3.8.49
@@ -281,18 +281,18 @@ ROUTING.** OmniRoute est un runtime externe stratégique, piloté mais non recon
 
 #### Classification explicite des composants
 
-| Composant proposé | Classe | Responsabilité finale |
-|---|---|---|
-| `ProviderRegistry` | **D — pure OmniRoute** pour le registre technique ; **B — overlay ICOS** pour restrictions métier par classe/provider | OmniRoute possède providers, comptes, API keys/OAuth et catalogue. ICOS conserve seulement `omnirouteConnectionId`, ownership, enabled-for-business et restrictions client/projet. |
-| `ModelRegistry` | **D — pure OmniRoute** pour le catalogue ; **C — projection/cache ICOS** si besoin d'UI/réaction | Les modèles et leurs capacités techniques sont synchronisés par OmniRoute. ICOS peut cacher un snapshot daté, jamais en faire une seconde vérité. |
-| `CapabilityRegistry` | **A — authoritative ICOS** pour capabilities métier/skills ; **C** pour capabilities techniques observées | Une tâche exprime `CapabilityRequirement`; le mapping vers modèles est résolu par OmniRoute. |
-| `SubscriptionRegistry` | **B — business overlay ICOS** | Propriétaire, centre de coût, contrat client, préférence abonnement/crédits/free tier. Les comptes, quotas et reset windows restent OmniRoute. |
-| `UsageLedger` | **A — authoritative ICOS** pour la corrélation métier ; télémétrie source **D OmniRoute** | Corrèle Mission/Run/Task au provider/modèle/compte réel et distingue coûts estimés, rapportés, inclus, incrémentaux et économies estimées. |
-| `ModelPolicy` | **B — business overlay ICOS** | Qualité minimale, privacy, criticité, budget, restrictions et fallback métier. |
-| `ModelRouter` | **D — pure OmniRoute** pour le scoring/routage ; son ancien nom côté ICOS disparaît au profit d'`AiRoutingPolicy` | ICOS choisit les contraintes/preset (`quality-first`, `cheap`, `fast`, `coding`, budget strict, fallback on/off) ; OmniRoute choisit route/provider/modèle/compte. |
-| `ModelHealthMonitor` | **D — pure OmniRoute** ; **C — projection ICOS** | OmniRoute mesure health, quota, latency, lockout et circuit state. ICOS peut réagir métier à une projection fraîche. |
-| `EvaluationStore` | **A — authoritative ICOS** pour outcomes métier ; evals techniques **D OmniRoute** | OmniRoute mesure routing/modèle ; ICOS mesure résultat métier correct, conforme et accepté. |
-| `OmniRouteAdapter` | **B — frontière d'infrastructure ICOS** | Implémente `AiGatewayPort`, traduit les contraintes et normalise résultat/télémétrie. |
+| Composant proposé      | Classe                                                                                                                | Responsabilité finale                                                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ProviderRegistry`     | **D — pure OmniRoute** pour le registre technique ; **B — overlay ICOS** pour restrictions métier par classe/provider | OmniRoute possède providers, comptes, API keys/OAuth et catalogue. ICOS conserve seulement `omnirouteConnectionId`, ownership, enabled-for-business et restrictions client/projet. |
+| `ModelRegistry`        | **D — pure OmniRoute** pour le catalogue ; **C — projection/cache ICOS** si besoin d'UI/réaction                      | Les modèles et leurs capacités techniques sont synchronisés par OmniRoute. ICOS peut cacher un snapshot daté, jamais en faire une seconde vérité.                                  |
+| `CapabilityRegistry`   | **A — authoritative ICOS** pour capabilities métier/skills ; **C** pour capabilities techniques observées             | Une tâche exprime `CapabilityRequirement`; le mapping vers modèles est résolu par OmniRoute.                                                                                       |
+| `SubscriptionRegistry` | **B — business overlay ICOS**                                                                                         | Propriétaire, centre de coût, contrat client, préférence abonnement/crédits/free tier. Les comptes, quotas et reset windows restent OmniRoute.                                     |
+| `UsageLedger`          | **A — authoritative ICOS** pour la corrélation métier ; télémétrie source **D OmniRoute**                             | Corrèle Mission/Run/Task au provider/modèle/compte réel et distingue coûts estimés, rapportés, inclus, incrémentaux et économies estimées.                                         |
+| `ModelPolicy`          | **B — business overlay ICOS**                                                                                         | Qualité minimale, privacy, criticité, budget, restrictions et fallback métier.                                                                                                     |
+| `ModelRouter`          | **D — pure OmniRoute** pour le scoring/routage ; son ancien nom côté ICOS disparaît au profit d'`AiRoutingPolicy`     | ICOS choisit les contraintes/preset (`quality-first`, `cheap`, `fast`, `coding`, budget strict, fallback on/off) ; OmniRoute choisit route/provider/modèle/compte.                 |
+| `ModelHealthMonitor`   | **D — pure OmniRoute** ; **C — projection ICOS**                                                                      | OmniRoute mesure health, quota, latency, lockout et circuit state. ICOS peut réagir métier à une projection fraîche.                                                               |
+| `EvaluationStore`      | **A — authoritative ICOS** pour outcomes métier ; evals techniques **D OmniRoute**                                    | OmniRoute mesure routing/modèle ; ICOS mesure résultat métier correct, conforme et accepté.                                                                                        |
+| `OmniRouteAdapter`     | **B — frontière d'infrastructure ICOS**                                                                               | Implémente `AiGatewayPort`, traduit les contraintes et normalise résultat/télémétrie.                                                                                              |
 
 `AiGatewayPort` est l'abstraction propre à ICOS et conserve une remplaçabilité théorique. OmniRoute
 reste néanmoins la cible principale et unique en production prévue. ICOS ne forke pas OmniRoute, ne
@@ -353,24 +353,24 @@ détail d'infrastructure sans impact sur le domaine.
 Les hooks (Master Plan : WHEN) interceptent des transitions métier (ex. avant exécution d'une
 action sensible, après décision d'approbation) — ils s'accrochent sur le Policy Engine et l'Event
 Journal, jamais directement sur les connecteurs externes. Un hook ne doit jamais pouvoir contourner
-`decideExecution` ; il s'exécute *dans* le flux gouverné, pas en parallèle non gouverné.
+`decideExecution` ; il s'exécute _dans_ le flux gouverné, pas en parallèle non gouverné.
 
 ### M. Garanties contre les scénarios de risque
 
-| Risque | Garantie architecturale | Où elle est appliquée |
-|---|---|---|
-| Auto-élévation d'un agent | Interdiction structurelle : aucune API n'autorise un agent à modifier `authorizationLevel`, le sien ou celui d'un autre agent ; seul un humain avec permission `agents.manage` le peut | Policy Engine + permission matrix existante |
-| Outil hors politique | Tout appel passe par le Tool/MCP Gateway qui invoque le Policy Engine avant exécution, jamais après | Tool/MCP Gateway (Phase G) |
-| Double exécution | `idempotencyKey` sur toute action déclenchant un effet externe (leçon Holding IA, voir [07](./07-reuse-mapping.md)) + contrainte unique en base | Action / futur ExecutionRecord |
-| Action tardive après rejet | `Approval.decision = rejected` est terminal (déjà vrai) ; le Tool/MCP Gateway revérifie le statut d'approbation juste avant exécution, jamais seulement au moment de la planification | Policy Engine + Gateway |
-| Mémoire confondue avec vérité | Toute lecture mémoire porte une provenance ; le Policy Engine et le domaine ne lisent jamais la mémoire comme source d'autorisation | Memory/Context Port (Phase E) |
-| Perte d'état sur crash | État de Mission/Task/Action toujours en Postgres avant tout effet externe ; reprise = relecture d'état, pas de mémoire volatile critique | Orchestrateur v1 + Postgres |
-| Mission non stoppable | Statut `cancelled` propagé : une Mission annulée doit interrompre toute Task non terminale associée (extension du pattern déjà existant sur `Task`) | Domaine Mission (Phase D) |
-| Agent choisissant un provider ou accédant à une clé | Aucun port provider exposé ; l'agent fournit des requirements métier à `AiGatewayPort`, OmniRoute résout credentials/provider/modèle/compte | AI business policy + `OmniRouteAdapter` |
-| Fallback incompatible avec la confidentialité | ICOS exprime classes autorisées et fallback métier ; OmniRoute ne route que dans cette enveloppe. Aucun candidat = refus explicite | `AiRoutingPolicy` ICOS + OmniRoute |
-| Double action externe après retry/fallback modèle | Séparation génération/exécution + `ExecutionRecord` et `idempotencyKey` uniques ; le retry modèle ne possède aucune capacité d'effet externe | Orchestrateur + Tool/MCP Gateway |
-| MCP confondu avec permission | MCP transporte l'appel ; Policy/Approval décide s'il est permis. Aucun metadata MCP ne vaut autorisation | Tool/MCP Gateway + Policy Engine |
-| Heartbeat confondu avec autorité | Le heartbeat ne fait que réévaluer et proposer/planifier ; chaque action reste soumise à Policy/Approval | Proactivity Engine |
+| Risque                                              | Garantie architecturale                                                                                                                                                                | Où elle est appliquée                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Auto-élévation d'un agent                           | Interdiction structurelle : aucune API n'autorise un agent à modifier `authorizationLevel`, le sien ou celui d'un autre agent ; seul un humain avec permission `agents.manage` le peut | Policy Engine + permission matrix existante |
+| Outil hors politique                                | Tout appel passe par le Tool/MCP Gateway qui invoque le Policy Engine avant exécution, jamais après                                                                                    | Tool/MCP Gateway (Phase G)                  |
+| Double exécution                                    | `idempotencyKey` sur toute action déclenchant un effet externe (leçon Holding IA, voir [07](./07-reuse-mapping.md)) + contrainte unique en base                                        | Action / futur ExecutionRecord              |
+| Action tardive après rejet                          | `Approval.decision = rejected` est terminal (déjà vrai) ; le Tool/MCP Gateway revérifie le statut d'approbation juste avant exécution, jamais seulement au moment de la planification  | Policy Engine + Gateway                     |
+| Mémoire confondue avec vérité                       | Toute lecture mémoire porte une provenance ; le Policy Engine et le domaine ne lisent jamais la mémoire comme source d'autorisation                                                    | Memory/Context Port (Phase E)               |
+| Perte d'état sur crash                              | État de Mission/Task/Action toujours en Postgres avant tout effet externe ; reprise = relecture d'état, pas de mémoire volatile critique                                               | Orchestrateur v1 + Postgres                 |
+| Mission non stoppable                               | Statut `cancelled` propagé : une Mission annulée doit interrompre toute Task non terminale associée (extension du pattern déjà existant sur `Task`)                                    | Domaine Mission (Phase D)                   |
+| Agent choisissant un provider ou accédant à une clé | Aucun port provider exposé ; l'agent fournit des requirements métier à `AiGatewayPort`, OmniRoute résout credentials/provider/modèle/compte                                            | AI business policy + `OmniRouteAdapter`     |
+| Fallback incompatible avec la confidentialité       | ICOS exprime classes autorisées et fallback métier ; OmniRoute ne route que dans cette enveloppe. Aucun candidat = refus explicite                                                     | `AiRoutingPolicy` ICOS + OmniRoute          |
+| Double action externe après retry/fallback modèle   | Séparation génération/exécution + `ExecutionRecord` et `idempotencyKey` uniques ; le retry modèle ne possède aucune capacité d'effet externe                                           | Orchestrateur + Tool/MCP Gateway            |
+| MCP confondu avec permission                        | MCP transporte l'appel ; Policy/Approval décide s'il est permis. Aucun metadata MCP ne vaut autorisation                                                                               | Tool/MCP Gateway + Policy Engine            |
+| Heartbeat confondu avec autorité                    | Le heartbeat ne fait que réévaluer et proposer/planifier ; chaque action reste soumise à Policy/Approval                                                                               | Proactivity Engine                          |
 
 ## 3. Dépendances OpenJarvis à conserver comme patterns, jamais comme runtime
 
@@ -379,20 +379,20 @@ est une **source comparative de contrats et de tests**, pas un runtime ICOS et p
 stack. La classification détaillée sera portée par [07-reuse-mapping.md](./07-reuse-mapping.md), avec
 les frontières obligatoires suivantes :
 
-| Pattern à auditer | Dépendance/prérequis ICOS | Frontière à ne pas franchir |
-|---|---|---|
-| `SkillManager`, manifests, trust/provenance | Capability Registry → Skill Registry | Une skill n'accorde jamais permission ou autorité |
-| Skill discovery from traces | Traces + `EvaluationStore` → `SkillCandidate` | Succès répétés ≠ auto-installation/activation |
-| `MemoryBackend`, retrieval hybride | Memory/Context Port → FTS, puis pgvector si mesure | Memory ≠ état authoritative |
-| `ProactiveAgent`, heartbeat | Mission/Task/Approval query ports + scheduler simple | Heartbeat ≠ autorité ; Policy/Approval toujours appliqué |
-| `ApprovalStore`, permission memory | Policy/Approval Engine + Event Journal | Une mémoire d'approbation ne remplace pas la décision authoritative/versionnée |
-| Scheduler persistant | Proactivity Engine | Scheduler ≠ Temporal ; aucun remplacement automatique |
-| MCP adapters/providers | Tool/MCP Gateway | MCP ≠ permission model |
-| Model routing | AI Runtime Control Plane → OmniRoute | ICOS pilote OmniRoute ; OpenJarvis n'est ni routeur ni runtime |
-| EventBus + traces | Observabilité technique | EventBus ≠ Event Journal immuable |
-| Evals | `EvaluationStore` + corpus versionné | Score observé ≠ changement automatique de policy |
-| Channel adapters | Phase I : WhatsApp, Telegram, voix | Adapters uniquement ; aucune logique/policy propre au canal |
-| Security scanners/sandbox | Skill review + Tool Gateway | Sandbox renforce la policy, ne la remplace pas |
+| Pattern à auditer                           | Dépendance/prérequis ICOS                            | Frontière à ne pas franchir                                                    |
+| ------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `SkillManager`, manifests, trust/provenance | Capability Registry → Skill Registry                 | Une skill n'accorde jamais permission ou autorité                              |
+| Skill discovery from traces                 | Traces + `EvaluationStore` → `SkillCandidate`        | Succès répétés ≠ auto-installation/activation                                  |
+| `MemoryBackend`, retrieval hybride          | Memory/Context Port → FTS, puis pgvector si mesure   | Memory ≠ état authoritative                                                    |
+| `ProactiveAgent`, heartbeat                 | Mission/Task/Approval query ports + scheduler simple | Heartbeat ≠ autorité ; Policy/Approval toujours appliqué                       |
+| `ApprovalStore`, permission memory          | Policy/Approval Engine + Event Journal               | Une mémoire d'approbation ne remplace pas la décision authoritative/versionnée |
+| Scheduler persistant                        | Proactivity Engine                                   | Scheduler ≠ Temporal ; aucun remplacement automatique                          |
+| MCP adapters/providers                      | Tool/MCP Gateway                                     | MCP ≠ permission model                                                         |
+| Model routing                               | AI Runtime Control Plane → OmniRoute                 | ICOS pilote OmniRoute ; OpenJarvis n'est ni routeur ni runtime                 |
+| EventBus + traces                           | Observabilité technique                              | EventBus ≠ Event Journal immuable                                              |
+| Evals                                       | `EvaluationStore` + corpus versionné                 | Score observé ≠ changement automatique de policy                               |
+| Channel adapters                            | Phase I : WhatsApp, Telegram, voix                   | Adapters uniquement ; aucune logique/policy propre au canal                    |
+| Security scanners/sandbox                   | Skill review + Tool Gateway                          | Sandbox renforce la policy, ne la remplace pas                                 |
 
 Le cycle de self-improvement accepté est strictement gouverné :
 

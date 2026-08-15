@@ -105,7 +105,6 @@ describe("G1 — IdempotencyKey derivation", () => {
       principalId: "agent-1",
       missionId: "mission-1",
       runId: "run-1",
-
     };
     const a = deriveIdempotencyKey(input);
     const b = deriveIdempotencyKey(input);
@@ -118,14 +117,12 @@ describe("G1 — IdempotencyKey derivation", () => {
       principalId: "agent-1",
       missionId: "mission-1",
       runId: "run-1",
-
     });
     const b = deriveIdempotencyKey({
       tenantId: "tenant-b",
       principalId: "agent-1",
       missionId: "mission-1",
       runId: "run-1",
-
     });
     expect(a).not.toBe(b);
   });
@@ -136,7 +133,6 @@ describe("G1 — IdempotencyKey derivation", () => {
       principalId: "agent-1",
       missionId: "mission-1",
       runId: "run-1",
-
     };
     // Un retry technique conserve la même clé
     const ik = deriveIdempotencyKey(input);
@@ -149,7 +145,6 @@ describe("G1 — IdempotencyKey derivation", () => {
       principalId: "p-1",
       missionId: "m-1",
       runId: "r-1",
-
     });
     expect(() => idempotencyKeySchema.parse(ik)).not.toThrow();
   });
@@ -258,65 +253,45 @@ describe("G1 — requestHashSchema", () => {
 describe("G1 — Idempotency state machine", () => {
   describe("transitions autorisées", () => {
     it("RESERVED → EXECUTING", () => {
-      expect(() =>
-        assertIdempotencyTransition("RESERVED", "EXECUTING"),
-      ).not.toThrow();
+      expect(() => assertIdempotencyTransition("RESERVED", "EXECUTING")).not.toThrow();
     });
 
     it("EXECUTING → COMPLETED", () => {
-      expect(() =>
-        assertIdempotencyTransition("EXECUTING", "COMPLETED"),
-      ).not.toThrow();
+      expect(() => assertIdempotencyTransition("EXECUTING", "COMPLETED")).not.toThrow();
     });
 
     it("EXECUTING → FAILED_SAFE", () => {
-      expect(() =>
-        assertIdempotencyTransition("EXECUTING", "FAILED_SAFE"),
-      ).not.toThrow();
+      expect(() => assertIdempotencyTransition("EXECUTING", "FAILED_SAFE")).not.toThrow();
     });
 
     it("EXECUTING → UNKNOWN", () => {
-      expect(() =>
-        assertIdempotencyTransition("EXECUTING", "UNKNOWN"),
-      ).not.toThrow();
+      expect(() => assertIdempotencyTransition("EXECUTING", "UNKNOWN")).not.toThrow();
     });
 
     it("FAILED_SAFE → RESERVED (retry)", () => {
-      expect(() =>
-        assertIdempotencyTransition("FAILED_SAFE", "RESERVED"),
-      ).not.toThrow();
+      expect(() => assertIdempotencyTransition("FAILED_SAFE", "RESERVED")).not.toThrow();
     });
   });
 
   describe("transitions interdites", () => {
     it("RESERVED → COMPLETED direct", () => {
-      expect(() =>
-        assertIdempotencyTransition("RESERVED", "COMPLETED"),
-      ).toThrow();
+      expect(() => assertIdempotencyTransition("RESERVED", "COMPLETED")).toThrow();
     });
 
     it("COMPLETED → EXECUTING", () => {
-      expect(() =>
-        assertIdempotencyTransition("COMPLETED", "EXECUTING"),
-      ).toThrow();
+      expect(() => assertIdempotencyTransition("COMPLETED", "EXECUTING")).toThrow();
     });
 
     it("UNKNOWN → EXECUTING", () => {
-      expect(() =>
-        assertIdempotencyTransition("UNKNOWN", "EXECUTING"),
-      ).toThrow();
+      expect(() => assertIdempotencyTransition("UNKNOWN", "EXECUTING")).toThrow();
     });
 
     it("UNKNOWN → COMPLETED", () => {
-      expect(() =>
-        assertIdempotencyTransition("UNKNOWN", "COMPLETED"),
-      ).toThrow();
+      expect(() => assertIdempotencyTransition("UNKNOWN", "COMPLETED")).toThrow();
     });
 
     it("RESERVED → FAILED_SAFE direct", () => {
-      expect(() =>
-        assertIdempotencyTransition("RESERVED", "FAILED_SAFE"),
-      ).toThrow();
+      expect(() => assertIdempotencyTransition("RESERVED", "FAILED_SAFE")).toThrow();
     });
   });
 

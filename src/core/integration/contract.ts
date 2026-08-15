@@ -64,14 +64,16 @@ export const integrationSpecSchema = z.object({
   /** DAG source. */
   dagId: z.string().min(1),
   /** Commits à intégrer dans l'ordre topologique. */
-  commits: z.array(
-    z.object({
-      taskId: z.string().min(1),
-      commitSha: z.string().min(1),
-      branch: z.string().min(1),
-      worktreePath: z.string().min(1),
-    }),
-  ).min(1),
+  commits: z
+    .array(
+      z.object({
+        taskId: z.string().min(1),
+        commitSha: z.string().min(1),
+        branch: z.string().min(1),
+        worktreePath: z.string().min(1),
+      }),
+    )
+    .min(1),
   /** Branche d'intégration. */
   integrationBranch: z.string().min(1).default("integration/candidate"),
   /** SHA de base (point de départ de l'intégration). */

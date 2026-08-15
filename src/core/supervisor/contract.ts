@@ -17,11 +17,7 @@ export const dagStatusSchema = z.enum([
 
 export type DagStatus = z.infer<typeof dagStatusSchema>;
 
-export const TERMINAL_DAG_STATUSES: readonly DagStatus[] = [
-  "COMPLETED",
-  "FAILED",
-  "CANCELLED",
-];
+export const TERMINAL_DAG_STATUSES: readonly DagStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
 // ─────────────────────────────────────
 // Task Node Status — per-node state machine
@@ -73,9 +69,7 @@ export const TERMINAL_NODE_STATUSES: readonly TaskNodeStatus[] = [
   "BLOCKED",
 ];
 
-export const SUSPENDED_NODE_STATUSES: readonly TaskNodeStatus[] = [
-  "WAITING_FOR_HUMAN",
-];
+export const SUSPENDED_NODE_STATUSES: readonly TaskNodeStatus[] = ["WAITING_FOR_HUMAN"];
 
 // ─────────────────────────────────────
 // Worker assignment

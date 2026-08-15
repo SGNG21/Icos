@@ -1,16 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-import {
-  type IdempotencyEntry,
-  type IdempotencyKey,
-  type IdempotencyState,
-} from "@/core/g1";
+import { type IdempotencyEntry, type IdempotencyKey, type IdempotencyState } from "@/core/g1";
 import type { Database } from "@/server/database/client";
-import {
-  idempotencyEntryToRow,
-  rowToIdempotencyEntry,
-} from "@/server/database/mappers";
+import { idempotencyEntryToRow, rowToIdempotencyEntry } from "@/server/database/mappers";
 import { idempotencyEntries } from "@/server/database/schema";
 import type { IdempotencyStore } from "@/server/g1/ports";
 
@@ -41,9 +34,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
   ): Promise<IdempotencyEntry | null> {
     const now = new Date();
     const isTerminal =
-      targetState === "COMPLETED" ||
-      targetState === "FAILED_SAFE" ||
-      targetState === "UNKNOWN";
+      targetState === "COMPLETED" || targetState === "FAILED_SAFE" || targetState === "UNKNOWN";
 
     const rows = await this.db
       .update(idempotencyEntries)

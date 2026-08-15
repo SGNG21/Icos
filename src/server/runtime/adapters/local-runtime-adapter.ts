@@ -346,9 +346,7 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
    *
    * @returns Le chemin canonique validé, ou null si invalide.
    */
-  private async validateWorkspace(
-    input: RuntimeAdapterInput,
-  ): Promise<string | null> {
+  private async validateWorkspace(input: RuntimeAdapterInput): Promise<string | null> {
     if (this.workspaceManager) {
       try {
         const expectedWorkspace = path.join(
@@ -380,9 +378,7 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
    * variables autorisées depuis process.env, surchargées par les
    * variables explicites (ex: credentials résolus).
    */
-  private buildChildEnv(
-    extraEnv?: Record<string, string>,
-  ): Record<string, string> {
+  private buildChildEnv(extraEnv?: Record<string, string>): Record<string, string> {
     const env: Record<string, string> = {};
     for (const key of this.allowedEnvVars) {
       if (process.env[key] !== undefined) {
@@ -403,9 +399,7 @@ export class LocalRuntimeAdapter implements AgentRuntimeAdapter {
    * Comportement de simulation pour rétrocompatibilité.
    * Utilisé quand input.command n'est pas fourni.
    */
-  private async simulateSuccess(
-    input: RuntimeAdapterInput,
-  ): Promise<RuntimeAdapterResult> {
+  private async simulateSuccess(input: RuntimeAdapterInput): Promise<RuntimeAdapterResult> {
     const outputDir = path.join(input.workspacePath, "output");
     await mkdir(outputDir, { recursive: true });
 

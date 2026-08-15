@@ -28,7 +28,10 @@ export async function PATCH(
     const { targetActivationState } = body;
 
     if (!targetActivationState) {
-      return json({ error: "invalid_input", message: "targetActivationState is required" }, { status: 400 });
+      return json(
+        { error: "invalid_input", message: "targetActivationState is required" },
+        { status: 400 },
+      );
     }
 
     let result;
@@ -52,11 +55,15 @@ export async function PATCH(
         });
         break;
       default:
-        return json({ error: "invalid_input", message: "Invalid targetActivationState" }, { status: 400 });
+        return json(
+          { error: "invalid_input", message: "Invalid targetActivationState" },
+          { status: 400 },
+        );
     }
 
     if (!result.ok) {
-      const httpCode = result.reason === "not_found" ? 404 : result.reason === "human_only" ? 403 : 400;
+      const httpCode =
+        result.reason === "not_found" ? 404 : result.reason === "human_only" ? 403 : 400;
       return json({ error: result.reason, message: result.message }, { status: httpCode });
     }
 

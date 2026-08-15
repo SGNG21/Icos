@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type {
-  AiGenerationResult,
-  AiRoutingRequestWithSignal,
-} from "@/core/ai";
+import type { AiGenerationResult, AiRoutingRequestWithSignal } from "@/core/ai";
 import type {
   ExecutionErrorCode,
   ExecutionResult,
@@ -22,11 +19,7 @@ import type { AgentRuntimeAdapter } from "./adapters/runtime-adapter";
 import { LocalRuntimeAdapter } from "./adapters/local-runtime-adapter";
 import { ArtifactCollector } from "./artifact-collector";
 import { createExecutionError, mapAiErrorToExecutionError } from "./errors";
-import type {
-  CredentialBrokerPort,
-  NetworkDecision,
-  NetworkPolicyPort,
-} from "./ports";
+import type { CredentialBrokerPort, NetworkDecision, NetworkPolicyPort } from "./ports";
 import { WorkspaceManager } from "./workspace-manager";
 
 /**
@@ -116,7 +109,10 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
     const policyDecision = await this.recheckPolicy(input);
 
     if (policyDecision.outcome === "deny") {
-      return this.fail("POLICY_DENIED", `Politique D1 refuse l'exécution: ${policyDecision.reason}`);
+      return this.fail(
+        "POLICY_DENIED",
+        `Politique D1 refuse l'exécution: ${policyDecision.reason}`,
+      );
     }
     if (policyDecision.outcome === "require_approval") {
       return this.fail(
@@ -133,10 +129,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
     // ── Phase 3 : Workspace ──
     let workspacePath: string;
     try {
-      workspacePath = await this.workspaceManager.createWorkspace(
-        input.tenantId,
-        input.runId,
-      );
+      workspacePath = await this.workspaceManager.createWorkspace(input.tenantId, input.runId);
       this._state!.workspacePath = workspacePath;
     } catch (error) {
       return this.fail(
@@ -323,12 +316,9 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
         ...this._state,
         status: target,
         updatedAt: now,
-        completedAt:
-          ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "LOST"].includes(
-            target,
-          )
-            ? now
-            : this._state.completedAt,
+        completedAt: ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "LOST"].includes(target)
+          ? now
+          : this._state.completedAt,
       };
     }
 
@@ -345,9 +335,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
   ): Promise<ExecutionOutcome> {
     // Collecter les artefacts
     const artifacts = this._state?.workspacePath
-      ? await this.artifactCollector.collectFromWorkspace(
-          this._state.workspacePath,
-        )
+      ? await this.artifactCollector.collectFromWorkspace(this._state.workspacePath)
       : [];
 
     // Tenter une génération AI si c'est une étape AI
@@ -400,9 +388,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
   ): Promise<ExecutionOutcome> {
     // Collecter les artefacts avant l'échec
     const artifacts = this._state?.workspacePath
-      ? await this.artifactCollector
-          .collectFromWorkspace(this._state.workspacePath)
-          .catch(() => [])
+      ? await this.artifactCollector.collectFromWorkspace(this._state.workspacePath).catch(() => [])
       : [];
 
     // Mapper le code d'erreur D4
@@ -428,9 +414,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
 
   private async handleTimeout(input: ExecuteStepInput): Promise<ExecutionOutcome> {
     const artifacts = this._state?.workspacePath
-      ? await this.artifactCollector
-          .collectFromWorkspace(this._state.workspacePath)
-          .catch(() => [])
+      ? await this.artifactCollector.collectFromWorkspace(this._state.workspacePath).catch(() => [])
       : [];
 
     this.transitionTo("TIMED_OUT");
@@ -440,11 +424,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
       result: {
         ok: false,
         state: "TIMED_OUT",
-        error: createExecutionError(
-          "TIMEOUT",
-          `Exécution dépassée (${input.timeoutMs}ms)`,
-          false,
-        ),
+        error: createExecutionError("TIMEOUT", `Exécution dépassée (${input.timeoutMs}ms)`, false),
         latencyMs: Date.now() - this.startedAt,
         artifacts,
       },
@@ -453,9 +433,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
 
   private async handleCancellation(input: ExecuteStepInput): Promise<ExecutionOutcome> {
     const artifacts = this._state?.workspacePath
-      ? await this.artifactCollector
-          .collectFromWorkspace(this._state.workspacePath)
-          .catch(() => [])
+      ? await this.artifactCollector.collectFromWorkspace(this._state.workspacePath).catch(() => [])
       : [];
 
     this.transitionTo("CANCELLED");
@@ -472,10 +450,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
     };
   }
 
-  private async fail(
-    code: ExecutionErrorCode,
-    message: string,
-  ): Promise<ExecutionOutcome> {
+  private async fail(code: ExecutionErrorCode, message: string): Promise<ExecutionOutcome> {
     if (this._state) {
       // Tenter collecte artefacts avant échec
       const artifacts = this._state.workspacePath
@@ -519,9 +494,7 @@ export class ExecutionOrchestrator implements RuntimeExecutionPort {
   // AI Gateway (D3 intégration)
   // ─────────────────────────────────────
 
-  private async callAiGateway(
-    input: ExecuteStepInput,
-  ): Promise<AiGenerationResult> {
+  private async callAiGateway(input: ExecuteStepInput): Promise<AiGenerationResult> {
     const aiRequest: AiRoutingRequestWithSignal = {
       prompt: input.stepDescription,
       tenantId: input.tenantId,

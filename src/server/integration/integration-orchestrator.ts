@@ -50,7 +50,7 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
       await mkdir(integrationDir, { recursive: true });
 
       // 2. Créer la branche d'intégration
-      const baseSha = spec.baseSha ?? await this.git(["rev-parse", "HEAD"]);
+      const baseSha = spec.baseSha ?? (await this.git(["rev-parse", "HEAD"]));
       await this.createIntegrationBranch(branchName, baseSha);
 
       // 3. Appliquer les commits dans l'ordre
@@ -139,7 +139,12 @@ export class IntegrationOrchestrator implements IntegrationOrchestratorPort {
 
     // Appliquer le commit avec cherry-pick
     await this.git(["cherry-pick", "--no-commit", commitSha]);
-    await this.git(["commit", "--allow-empty", "-m", `integration: merge ${commitSha.slice(0, 8)}`]);
+    await this.git([
+      "commit",
+      "--allow-empty",
+      "-m",
+      `integration: merge ${commitSha.slice(0, 8)}`,
+    ]);
   }
 
   private parseConflictFiles(): string[] {

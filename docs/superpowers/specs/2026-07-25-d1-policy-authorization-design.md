@@ -20,6 +20,7 @@ contextuelles (tenant + classification + capability + risque + action + resource
 dispersées dans chaque route handler ou absentes.
 
 **Exemples de décisions impossibles aujourd'hui :**
+
 - « User X dans tenant A peut-il lire une Capability C2 ? »
 - « Agent Y peut-il exécuter une action sensitive sur une resource C3 sans politique de rétention ? »
 - « Cette requête cross-tenant est-elle autorisée ? »
@@ -112,7 +113,7 @@ AuditEntry
 type PolicyDenialCode =
   | "unauthenticated"
   | "no_tenant"
-  | "forbidden"          // permission manquante
+  | "forbidden" // permission manquante
   | "classification_too_high"
   | "retention_policy_required"
   | "insufficient_authorization"

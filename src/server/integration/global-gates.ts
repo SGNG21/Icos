@@ -40,15 +40,11 @@ export class GlobalGates implements GlobalGatesPort {
     const start = Date.now();
 
     try {
-      const { stdout, stderr } = await exec(
-        "pnpm",
-        [gate],
-        {
-          cwd: workspacePath,
-          timeout: this.timeoutMs,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
+      const { stdout, stderr } = await exec("pnpm", [gate], {
+        cwd: workspacePath,
+        timeout: this.timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+      });
 
       const passed = stderr.length === 0 || !stderr.toLowerCase().includes("error");
 
@@ -75,15 +71,11 @@ export class GlobalGates implements GlobalGatesPort {
     const start = Date.now();
 
     try {
-      const { stdout, stderr } = await exec(
-        "git",
-        ["diff", "--check"],
-        {
-          cwd: workspacePath,
-          timeout: 30_000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
+      const { stdout, stderr } = await exec("git", ["diff", "--check"], {
+        cwd: workspacePath,
+        timeout: 30_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
 
       const passed = stdout.length === 0 && stderr.length === 0;
 

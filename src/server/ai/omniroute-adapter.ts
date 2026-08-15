@@ -147,7 +147,14 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
     // Vérifier le signal d'annulation avant d'appeler fetch
     if (req.abortSignal?.aborted === true) {
-      return this.makeError("CANCELLED", "Requête annulée avant envoi", false, false, Date.now() - startTime, req.correlationId);
+      return this.makeError(
+        "CANCELLED",
+        "Requête annulée avant envoi",
+        false,
+        false,
+        Date.now() - startTime,
+        req.correlationId,
+      );
     }
 
     this.hooks?.onRequestStarted?.(req.correlationId, req.intent);
@@ -200,18 +207,36 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
       // L'AbortSignal a été déclenché
       if (error instanceof DOMException && error.name === "AbortError") {
-        const errResult = this.makeError("CANCELLED", "Requête annulée", false, false, latencyMs, req.correlationId);
+        const errResult = this.makeError(
+          "CANCELLED",
+          "Requête annulée",
+          false,
+          false,
+          latencyMs,
+          req.correlationId,
+        );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "CANCELLED",
+          success: false,
+          latencyMs,
+          errorCode: "CANCELLED",
         });
         return errResult;
       }
 
       // Timeout (AbortSignal.timeout)
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        const errResult = this.makeError("TIMEOUT", "Délai d'attente dépassé", true, true, latencyMs, req.correlationId);
+        const errResult = this.makeError(
+          "TIMEOUT",
+          "Délai d'attente dépassé",
+          true,
+          true,
+          latencyMs,
+          req.correlationId,
+        );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "TIMEOUT",
+          success: false,
+          latencyMs,
+          errorCode: "TIMEOUT",
         });
         return errResult;
       }
@@ -227,7 +252,9 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
           req.correlationId,
         );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "PROVIDER_UNAVAILABLE",
+          success: false,
+          latencyMs,
+          errorCode: "PROVIDER_UNAVAILABLE",
         });
         return errResult;
       }
@@ -243,16 +270,27 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
           req.correlationId,
         );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "INVALID_RESPONSE",
+          success: false,
+          latencyMs,
+          errorCode: "INVALID_RESPONSE",
         });
         return errResult;
       }
 
       // Erreur inconnue → fail-closed
       const message = error instanceof Error ? error.message : "Erreur interne inconnue";
-      const errResult = this.makeError("INTERNAL_ERROR", message, false, false, latencyMs, req.correlationId);
+      const errResult = this.makeError(
+        "INTERNAL_ERROR",
+        message,
+        false,
+        false,
+        latencyMs,
+        req.correlationId,
+      );
       this.hooks?.onRequestCompleted?.(req.correlationId, {
-        success: false, latencyMs, errorCode: "INTERNAL_ERROR",
+        success: false,
+        latencyMs,
+        errorCode: "INTERNAL_ERROR",
       });
       return errResult;
     }

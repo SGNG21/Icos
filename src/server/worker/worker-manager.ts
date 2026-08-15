@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  ExecutionResult,
-  ExecuteStepInput,
-  RuntimeAdapterInput,
-} from "@/core/runtime";
+import type { ExecutionResult, ExecuteStepInput, RuntimeAdapterInput } from "@/core/runtime";
 import type { Worker, WorkerResult, WorkerStatus, CreateWorkerInput } from "@/core/worker";
 import { isWorkerTransitionAllowed, isWorkerTerminal } from "@/core/worker";
 import type { RuntimeExecutionPort } from "@/server/runtime/ports";
@@ -363,12 +359,18 @@ export class WorkerManager implements WorkerManagerPort {
 
   private mapStatus(outcome: string): WorkerStatus {
     switch (outcome) {
-      case "SUCCESS": return "SUCCEEDED";
-      case "FAILED": return "FAILED";
-      case "BLOCKED": return "FAILED";
-      case "NEEDS_REVIEW": return "SUCCEEDED";
-      case "NEEDS_HUMAN": return "FAILED";
-      default: return "FAILED";
+      case "SUCCESS":
+        return "SUCCEEDED";
+      case "FAILED":
+        return "FAILED";
+      case "BLOCKED":
+        return "FAILED";
+      case "NEEDS_REVIEW":
+        return "SUCCEEDED";
+      case "NEEDS_HUMAN":
+        return "FAILED";
+      default:
+        return "FAILED";
     }
   }
 

@@ -32,12 +32,12 @@ du code applicatif, qui sert de cadre pour toutes les décisions futures touchan
 
 Une classification formelle (voir `docs/compliance/01-classification.md`) distingue :
 
-| Niveau | Classe | Exemples | Contrôles minimaux |
-|---|---|---|---|
-| C0 | Publique | Documentation publique, données agrégées non nominatives | Aucun |
-| C1 | Interne | Logs techniques non personnels, code source, ADR, plans | Accès contrôlé par rôle ICOS |
-| C2 | Confidentiel | Identifiants techniques (API keys, tokens), secrets, accès infra | Chiffrement at-rest, accès restreint, jamais dans les logs |
-| C3 | Restreint | Données personnelles (email, nom, téléphone, préférences, historique) | Chiffrement at-rest + in-transit, accès nominatif, audit renforcé, retention bornée |
+| Niveau | Classe       | Exemples                                                              | Contrôles minimaux                                                                  |
+| ------ | ------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| C0     | Publique     | Documentation publique, données agrégées non nominatives              | Aucun                                                                               |
+| C1     | Interne      | Logs techniques non personnels, code source, ADR, plans               | Accès contrôlé par rôle ICOS                                                        |
+| C2     | Confidentiel | Identifiants techniques (API keys, tokens), secrets, accès infra      | Chiffrement at-rest, accès restreint, jamais dans les logs                          |
+| C3     | Restreint    | Données personnelles (email, nom, téléphone, préférences, historique) | Chiffrement at-rest + in-transit, accès nominatif, audit renforcé, retention bornée |
 
 La classification est déclarée par **politique de donnée** attachée à chaque entité, jamais par
 inférence. Elle détermine le niveau de retention, de chiffrement et d'accès requis.
@@ -112,16 +112,16 @@ Le périmètre réglementaire initial couvre :
 
 Les documents suivants sont créés dans `docs/compliance/` :
 
-| Document | Rôle |
-|---|---|
-| `01-classification.md` | Taxonomie des données (C0–C3) |
-| `02-retention.md` | Politique de rétention gouvernée (invariant 14) |
-| `03-register.md` | Registre initial des traitements (Art. 30 RGPD) |
-| `04-validation-gates.md` | Gate Compliance en PR et points de validation DPO |
-| `05-regulatory-baseline.md` | Périmètre réglementaire et obligations applicables |
-| `06-privacy-architecture.md` | Principes et décisions d'architecture vie privée |
-| `ICOS_COMPLIANCE_TESTS.md` | Plan de vérification de conformité |
-| `ICOS_COMPLIANCE_ROADMAP.md` | Roadmap COMPLIANCE-0/1/2/3 |
+| Document                     | Rôle                                               |
+| ---------------------------- | -------------------------------------------------- |
+| `01-classification.md`       | Taxonomie des données (C0–C3)                      |
+| `02-retention.md`            | Politique de rétention gouvernée (invariant 14)    |
+| `03-register.md`             | Registre initial des traitements (Art. 30 RGPD)    |
+| `04-validation-gates.md`     | Gate Compliance en PR et points de validation DPO  |
+| `05-regulatory-baseline.md`  | Périmètre réglementaire et obligations applicables |
+| `06-privacy-architecture.md` | Principes et décisions d'architecture vie privée   |
+| `ICOS_COMPLIANCE_TESTS.md`   | Plan de vérification de conformité                 |
+| `ICOS_COMPLIANCE_ROADMAP.md` | Roadmap COMPLIANCE-0/1/2/3                         |
 
 ## Conséquences
 

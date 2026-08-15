@@ -160,31 +160,31 @@ adapter isolé.
 
 ## Classification BUILD / REUSE / ADAPT / DEFER / DISCARD
 
-| Component | Classification | Raison |
-|---|---|---|
-| Mission / Run / Task | **BUILD** | Domaine cœur ICOS, aucun équivalent externe le couvre |
-| Capability / Skill Registry | **BUILD** | Gouvernance de confiance, provenance, versioning, hard gates |
-| Policy / Approval Engine | **BUILD** | Autorité unique de décision, fail-closed, jamais externalisée |
-| Event Journal (`audit_entries`) | **BUILD** | Source de vérité de l'audit, append-only SQL |
-| Business Memory (PostgreSQL) | **BUILD** | Truth métier authoritative, source de toute décision |
-| Orchestrateur | **BUILD** | Sélection agent/skill, décomposition, reprise, arrêt |
-| Tool/MCP Gateway | **BUILD** | Point d'entrée unique pour tous les effets externes |
-| ExecutionRecord + Idempotency | **BUILD** | Garantie fondamentale contre double exécution |
-| OmniRoute | **REUSE** | Infrastructure IA mature, routage multi-provider, credentials, quotas, health, fallback |
-| Mem0 | **REUSE / ADAPT** | Mémoire contextuelle long terme, retrieval sémantique — adapt patterns, pas adopter runtime |
-| Graphiti | **DEFER** | Relations temporelles avancées — seulement si besoin réel démontré (Phase H+) |
-| Browser Use | **REUSE** | Browser automation natif — port abstrait ICOS, permissions ICOS, audit ICOS |
-| OpenHands | **REUSE** | Coding-agent backend — port abstrait ICOS, repo autorisés, merge approval ICOS |
-| E2B | **REUSE** | Sandbox externe isolé — port abstrait ICOS, sélection par risque/coût/confidentialité |
-| Langfuse | **REUSE** | Observabilité IA : tracing, prompts, evals, token/cost — pas la business DB |
-| Agno / OpenAI Agents SDK / Google ADK / Mastra | **ADAPT** | Patterns d'agents, HITL, sessions, workflows — inspirations architecturales |
-| LangGraph | **ADAPT** | Checkpointing, interrupts, durable state — patterns pour workflows ICOS |
-| OpenJarvis | **ADAPT** | Skill lifecycle, provenance, heartbeat, permission memory — patterns, pas runtime |
-| Holding IA | **ADAPT** | Briefs structurés, approval preview, audit timeline — leçons, pas architecture |
-| Temporal | **DEFER** | Seulement si workflows durables > garanties PostgreSQL + scheduler |
-| Neo4j | **DISCARD** | Non retenu ; Graphiti peut s'appuyer sur Postgres |
-| n8n comme orchestrateur | **DISCARD** | Connecteur seulement, jamais cerveau |
-| JarvJS/open-interpreter | **DISCARD** | Runtime non approprié comme cœur ICOS |
+| Component                                      | Classification    | Raison                                                                                      |
+| ---------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------- |
+| Mission / Run / Task                           | **BUILD**         | Domaine cœur ICOS, aucun équivalent externe le couvre                                       |
+| Capability / Skill Registry                    | **BUILD**         | Gouvernance de confiance, provenance, versioning, hard gates                                |
+| Policy / Approval Engine                       | **BUILD**         | Autorité unique de décision, fail-closed, jamais externalisée                               |
+| Event Journal (`audit_entries`)                | **BUILD**         | Source de vérité de l'audit, append-only SQL                                                |
+| Business Memory (PostgreSQL)                   | **BUILD**         | Truth métier authoritative, source de toute décision                                        |
+| Orchestrateur                                  | **BUILD**         | Sélection agent/skill, décomposition, reprise, arrêt                                        |
+| Tool/MCP Gateway                               | **BUILD**         | Point d'entrée unique pour tous les effets externes                                         |
+| ExecutionRecord + Idempotency                  | **BUILD**         | Garantie fondamentale contre double exécution                                               |
+| OmniRoute                                      | **REUSE**         | Infrastructure IA mature, routage multi-provider, credentials, quotas, health, fallback     |
+| Mem0                                           | **REUSE / ADAPT** | Mémoire contextuelle long terme, retrieval sémantique — adapt patterns, pas adopter runtime |
+| Graphiti                                       | **DEFER**         | Relations temporelles avancées — seulement si besoin réel démontré (Phase H+)               |
+| Browser Use                                    | **REUSE**         | Browser automation natif — port abstrait ICOS, permissions ICOS, audit ICOS                 |
+| OpenHands                                      | **REUSE**         | Coding-agent backend — port abstrait ICOS, repo autorisés, merge approval ICOS              |
+| E2B                                            | **REUSE**         | Sandbox externe isolé — port abstrait ICOS, sélection par risque/coût/confidentialité       |
+| Langfuse                                       | **REUSE**         | Observabilité IA : tracing, prompts, evals, token/cost — pas la business DB                 |
+| Agno / OpenAI Agents SDK / Google ADK / Mastra | **ADAPT**         | Patterns d'agents, HITL, sessions, workflows — inspirations architecturales                 |
+| LangGraph                                      | **ADAPT**         | Checkpointing, interrupts, durable state — patterns pour workflows ICOS                     |
+| OpenJarvis                                     | **ADAPT**         | Skill lifecycle, provenance, heartbeat, permission memory — patterns, pas runtime           |
+| Holding IA                                     | **ADAPT**         | Briefs structurés, approval preview, audit timeline — leçons, pas architecture              |
+| Temporal                                       | **DEFER**         | Seulement si workflows durables > garanties PostgreSQL + scheduler                          |
+| Neo4j                                          | **DISCARD**       | Non retenu ; Graphiti peut s'appuyer sur Postgres                                           |
+| n8n comme orchestrateur                        | **DISCARD**       | Connecteur seulement, jamais cerveau                                                        |
+| JarvJS/open-interpreter                        | **DISCARD**       | Runtime non approprié comme cœur ICOS                                                       |
 
 ## Runtimes externes — dépendances non négociables
 

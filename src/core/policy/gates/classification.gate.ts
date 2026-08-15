@@ -35,7 +35,11 @@ export class ClassificationGate implements PolicyGate {
 
     const requiredLevel = MINIMUM_LEVEL_FOR_SENSITIVITY[sensitivity];
     if (requiredLevel === undefined) {
-      return { decision: "deny", code: "classification_too_high", reason: `Niveau '${sensitivity}' inconnu` };
+      return {
+        decision: "deny",
+        code: "classification_too_high",
+        reason: `Niveau '${sensitivity}' inconnu`,
+      };
     }
 
     const actorLevel = request.actor.authorizationLevel ?? 0;

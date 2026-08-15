@@ -35,10 +35,7 @@ const VALID_TRANSITIONS: Record<MissionStatus, readonly MissionStatus[]> = {
 /**
  * Vérifie si une transition est autorisée par la machine d'état.
  */
-export function isTransitionAllowed(
-  from: MissionStatus,
-  to: MissionStatus,
-): boolean {
+export function isTransitionAllowed(from: MissionStatus, to: MissionStatus): boolean {
   const allowed = VALID_TRANSITIONS[from];
   if (!allowed) {
     return false;

@@ -184,7 +184,7 @@
   Preuve de consentement (timestamp, finalité, version du document) ? Retrait (désactivation immédiate
   du traitement) ?
 - **Proposition** : Table dédiée `user_consents(user_id, purpose, version, granted_at, ip_address,
-  user_agent)` — append-only, pas de mise à jour. Le retrait ajoute une ligne `revoked_at`. La
+user_agent)` — append-only, pas de mise à jour. Le retrait ajoute une ligne `revoked_at`. La
   dernière ligne pour chaque `(user_id, purpose)` détermine l'état courant. Aucune donnée sensible
   dans les colonnes (pas d'email, pas de corps de formulaire).
 - **Déclencheur** : COMPLIANCE-2.

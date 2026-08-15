@@ -9,46 +9,46 @@
 
 ## 1. Vue synthétique
 
-| Ordre | Lot proposé | Phase Master Plan | Résultat principal | Dépendances |
-|---:|---|---|---|---|
-| transverse | CMP-0 — Compliance Foundation | Transverse | Classification, rétention, registre, gate | Aucune ; prérequis doc. pour 2B-2 |
-| transverse | CMP-1 — Automated Compliance Checks | Transverse | Marquage des schémas, CI classification | CMP-0, C1 |
-| transverse | CMP-2 — Technical Controls | Transverse | Chiffrement C3, purge auto, consentement | CMP-1, D1 |
-| transverse | CMP-3 — Full RGPD & AI Act | Transverse | DPIA, mentions, sous-traitance, DPO | CMP-2, F1, G1 |
-| 0 | Lot 2B-2 — User-Agent Administration | B | Liens humain↔agent gouvernés | En cours ailleurs ; CMP-0 requis |
-| 1 | C1 — Capability Registry | C | Vocabulaire versionné `Capability` | 2B-2 non strict pour le stockage, requis avant usage orchestré |
-| 2 | C2 — Skill Registry & Trust Lifecycle | C | Skills avec provenance, trust, états et activation humaine | C1 |
-| 3 | D1 — Policy/Approval Engine v2 | D | Risque 0-4, policy versionnée, preview, décision CAS | Fondations existantes, C1, CMP-1 (hard gate) |
-| parallèle après C2 | C3 — SkillsMP Discovery (read-only) | C | Import de candidats en quarantaine, jamais activation directe | C2 ; non bloquant pour D1-D4 |
-| 4 | D2 — Mission, Plan, Run & Event Journal | D | État durable et stoppable de l'orchestration | D1 |
-| 5 | D3 — AI Gateway / OmniRoute Business Layer | D | AiGatewayPort + contraintes métier + adapter + corrélation usage | C1, D1, D2 |
-| 6 | D4 — Orchestrateur v1 | D | Mission → plan → agents/skills → résultats, sans effet externe direct | C2, D1-D3 |
-| 8 | Q1 — Behavioral/Eval Harness | D/F | Tests de comportement et évaluations versionnées | D4 |
-| 9 | E1 — Memory/Context Port + provenance | E | Mémoire non-authoritative, corrigeable et scoped | D2 |
-| 10 | E2 — Ingestion + PostgreSQL FTS | E | Retrieval lexical avec chunks/provenance | E1 |
-| 11 | F1 — Contract Conversationnel v1 | F | Intention, clarification minimale, continuité | D4, E1 recommandé |
-| 12 | G1 — Tool/MCP Gateway + ExecutionRecord | G | Policy/approval/idempotence juste avant effet | D1, D2, D4 |
-| gate | Connector compliance gate | G | Vérification de conformité avant premier envoi de données C2+ vers un connecteur réel | G1 |
-| 13 | G2 — Premier connecteur métier | G | Une intégration réelle, désactivée par défaut | G1, connector compliance gate |
-| 14 | M1 — Premier ICOS semi-autonome | D-G | Scénario Dupont bout en bout | Q1, F1, G2 |
-| 15 | R1 — AI Business Routing Policy & Usage | G | Overlay abonnement/budget + UsageLedger métier + AiRoutingPolicy | D3 + usage réel |
-| 16 | R2 — OmniRoute Operational Projections | G | Exploitation health/quota/latence/explanations d'OmniRoute | R1 |
-| 17 | P1 — Proactivity Engine + Heartbeat | E/F | Réévaluation périodique gouvernée | D2, D4, D1 |
-| 18 | S1 — Persistent Scheduler | E/F | Déclenchements durables simples | P1 |
-| 19 | Q2 — Skill Discovery from Traces | K préparatoire | `SkillCandidate` → evidence → eval → review → approval | Q1, traces, C2 |
-| 20 | R3 — Eval-based Model Routing | K préparatoire | Routage fondé sur qualité observée | R2, Q1, EvaluationStore |
-| 21 | E3 — Hybrid Retrieval (pgvector si justifié) | E | Retrieval lexical+sémantique mesuré | E2 + benchmark |
-| 22 | H1+ — DigitalOS/Polivia vertical slices | H | Pipelines métier par tranches | M1 |
-| 23 | I1 — Channel Adapter Contract | I | Commandes/résultats canal-agnostiques | F1, G1 |
-| 24 | I2+ — WhatsApp/Telegram adapters | I | Canaux sans logique d'autorité propre | I1 |
-| 25 | J1 — Voice Adapter | J | Voix comme adapter seulement | I1, consentement/retention ADR |
-| 26 | K1 — Advanced Autonomy | K | Auto-amélioration gouvernée, jamais auto-permission | Q2, R3, P1 |
-| 27 | E2 — Browser Capability | E | BrowserPort + BrowserUseAdapter + risk/action classification | M1, policy étendue |
-| 28 | E3 — Development Capability | E | DevelopmentGateway + OpenHandsAdapter + repo/guardrails | M1, D4, policy étendue |
-| 29 | E4 — Sandbox Capability | E | SandboxPort + Docker/E2B adapters + sélection risque/coût | M1, policy étendue |
-| 30 | E5 — Observability IA | E | ObservabilityPort + LangfuseAdapter + tracing/evals token/cost | M1, traces techniques |
-| conditionnel | T1 — Temporal Durable Workflows | H+ | Sagas/reprises longues si besoin démontré | D2, S1 insuffisant empiriquement |
-| conditionnel | E4 — Knowledge Graph | H+ | Relations riches si retrieval relationnel requis | E3 insuffisant empiriquement |
+|              Ordre | Lot proposé                                  | Phase Master Plan | Résultat principal                                                                    | Dépendances                                                    |
+| -----------------: | -------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+|         transverse | CMP-0 — Compliance Foundation                | Transverse        | Classification, rétention, registre, gate                                             | Aucune ; prérequis doc. pour 2B-2                              |
+|         transverse | CMP-1 — Automated Compliance Checks          | Transverse        | Marquage des schémas, CI classification                                               | CMP-0, C1                                                      |
+|         transverse | CMP-2 — Technical Controls                   | Transverse        | Chiffrement C3, purge auto, consentement                                              | CMP-1, D1                                                      |
+|         transverse | CMP-3 — Full RGPD & AI Act                   | Transverse        | DPIA, mentions, sous-traitance, DPO                                                   | CMP-2, F1, G1                                                  |
+|                  0 | Lot 2B-2 — User-Agent Administration         | B                 | Liens humain↔agent gouvernés                                                          | En cours ailleurs ; CMP-0 requis                               |
+|                  1 | C1 — Capability Registry                     | C                 | Vocabulaire versionné `Capability`                                                    | 2B-2 non strict pour le stockage, requis avant usage orchestré |
+|                  2 | C2 — Skill Registry & Trust Lifecycle        | C                 | Skills avec provenance, trust, états et activation humaine                            | C1                                                             |
+|                  3 | D1 — Policy/Approval Engine v2               | D                 | Risque 0-4, policy versionnée, preview, décision CAS                                  | Fondations existantes, C1, CMP-1 (hard gate)                   |
+| parallèle après C2 | C3 — SkillsMP Discovery (read-only)          | C                 | Import de candidats en quarantaine, jamais activation directe                         | C2 ; non bloquant pour D1-D4                                   |
+|                  4 | D2 — Mission, Plan, Run & Event Journal      | D                 | État durable et stoppable de l'orchestration                                          | D1                                                             |
+|                  5 | D3 — AI Gateway / OmniRoute Business Layer   | D                 | AiGatewayPort + contraintes métier + adapter + corrélation usage                      | C1, D1, D2                                                     |
+|                  6 | D4 — Orchestrateur v1                        | D                 | Mission → plan → agents/skills → résultats, sans effet externe direct                 | C2, D1-D3                                                      |
+|                  8 | Q1 — Behavioral/Eval Harness                 | D/F               | Tests de comportement et évaluations versionnées                                      | D4                                                             |
+|                  9 | E1 — Memory/Context Port + provenance        | E                 | Mémoire non-authoritative, corrigeable et scoped                                      | D2                                                             |
+|                 10 | E2 — Ingestion + PostgreSQL FTS              | E                 | Retrieval lexical avec chunks/provenance                                              | E1                                                             |
+|                 11 | F1 — Contract Conversationnel v1             | F                 | Intention, clarification minimale, continuité                                         | D4, E1 recommandé                                              |
+|                 12 | G1 — Tool/MCP Gateway + ExecutionRecord      | G                 | Policy/approval/idempotence juste avant effet                                         | D1, D2, D4                                                     |
+|               gate | Connector compliance gate                    | G                 | Vérification de conformité avant premier envoi de données C2+ vers un connecteur réel | G1                                                             |
+|                 13 | G2 — Premier connecteur métier               | G                 | Une intégration réelle, désactivée par défaut                                         | G1, connector compliance gate                                  |
+|                 14 | M1 — Premier ICOS semi-autonome              | D-G               | Scénario Dupont bout en bout                                                          | Q1, F1, G2                                                     |
+|                 15 | R1 — AI Business Routing Policy & Usage      | G                 | Overlay abonnement/budget + UsageLedger métier + AiRoutingPolicy                      | D3 + usage réel                                                |
+|                 16 | R2 — OmniRoute Operational Projections       | G                 | Exploitation health/quota/latence/explanations d'OmniRoute                            | R1                                                             |
+|                 17 | P1 — Proactivity Engine + Heartbeat          | E/F               | Réévaluation périodique gouvernée                                                     | D2, D4, D1                                                     |
+|                 18 | S1 — Persistent Scheduler                    | E/F               | Déclenchements durables simples                                                       | P1                                                             |
+|                 19 | Q2 — Skill Discovery from Traces             | K préparatoire    | `SkillCandidate` → evidence → eval → review → approval                                | Q1, traces, C2                                                 |
+|                 20 | R3 — Eval-based Model Routing                | K préparatoire    | Routage fondé sur qualité observée                                                    | R2, Q1, EvaluationStore                                        |
+|                 21 | E3 — Hybrid Retrieval (pgvector si justifié) | E                 | Retrieval lexical+sémantique mesuré                                                   | E2 + benchmark                                                 |
+|                 22 | H1+ — DigitalOS/Polivia vertical slices      | H                 | Pipelines métier par tranches                                                         | M1                                                             |
+|                 23 | I1 — Channel Adapter Contract                | I                 | Commandes/résultats canal-agnostiques                                                 | F1, G1                                                         |
+|                 24 | I2+ — WhatsApp/Telegram adapters             | I                 | Canaux sans logique d'autorité propre                                                 | I1                                                             |
+|                 25 | J1 — Voice Adapter                           | J                 | Voix comme adapter seulement                                                          | I1, consentement/retention ADR                                 |
+|                 26 | K1 — Advanced Autonomy                       | K                 | Auto-amélioration gouvernée, jamais auto-permission                                   | Q2, R3, P1                                                     |
+|                 27 | E2 — Browser Capability                      | E                 | BrowserPort + BrowserUseAdapter + risk/action classification                          | M1, policy étendue                                             |
+|                 28 | E3 — Development Capability                  | E                 | DevelopmentGateway + OpenHandsAdapter + repo/guardrails                               | M1, D4, policy étendue                                         |
+|                 29 | E4 — Sandbox Capability                      | E                 | SandboxPort + Docker/E2B adapters + sélection risque/coût                             | M1, policy étendue                                             |
+|                 30 | E5 — Observability IA                        | E                 | ObservabilityPort + LangfuseAdapter + tracing/evals token/cost                        | M1, traces techniques                                          |
+|       conditionnel | T1 — Temporal Durable Workflows              | H+                | Sagas/reprises longues si besoin démontré                                             | D2, S1 insuffisant empiriquement                               |
+|       conditionnel | E4 — Knowledge Graph                         | H+                | Relations riches si retrieval relationnel requis                                      | E3 insuffisant empiriquement                                   |
 
 ## 2. Placement précis de l'AI Runtime
 
@@ -201,6 +201,7 @@ C1 ──→ C2 ──→ COMPLIANCE-0 ──→ COMPLIANCE-1 ──→ D1 ─�
 ```
 
 **Règles :**
+
 - COMPLIANCE-0 est prérequis documentaire pour tout lot manipulant des données C2/C3.
 - COMPLIANCE-1 est un **hard gate** avant D1 : le Policy Engine ne peut être livré sans vérifications automatisées.
 - COMPLIANCE-2 est requis avant Phase E (Mémoire) et Phase G (Intégrations).

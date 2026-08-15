@@ -1,4 +1,10 @@
-import type { TaskDag, TaskNode, TaskNodeStatus, DagStatus, CreateDagInput } from "@/core/supervisor";
+import type {
+  TaskDag,
+  TaskNode,
+  TaskNodeStatus,
+  DagStatus,
+  CreateDagInput,
+} from "@/core/supervisor";
 import { computeReadyNodes, isNodeTransitionAllowed } from "@/core/supervisor";
 import type { SupervisorRepository } from "../ports";
 
@@ -42,9 +48,7 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
   }
 
   async findDagsByMissionId(missionId: string): Promise<TaskDag[]> {
-    return Array.from(this.dags.values()).filter(
-      (d) => d.missionId === missionId,
-    );
+    return Array.from(this.dags.values()).filter((d) => d.missionId === missionId);
   }
 
   async findActiveDags(): Promise<TaskDag[]> {
@@ -53,11 +57,7 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
     );
   }
 
-  async updateDagStatus(
-    dagId: string,
-    status: DagStatus,
-    error?: string,
-  ): Promise<TaskDag | null> {
+  async updateDagStatus(dagId: string, status: DagStatus, error?: string): Promise<TaskDag | null> {
     const dag = this.dags.get(dagId);
     if (!dag) return null;
 
@@ -123,9 +123,7 @@ export class InMemorySupervisorRepository implements SupervisorRepository {
       status,
       updatedAt: now,
       startedAt:
-        status === "ASSIGNED" || status === "RUNNING"
-          ? node.startedAt ?? now
-          : node.startedAt,
+        status === "ASSIGNED" || status === "RUNNING" ? (node.startedAt ?? now) : node.startedAt,
       completedAt:
         status === "SUCCEEDED" || status === "FAILED" || status === "CANCELLED"
           ? now

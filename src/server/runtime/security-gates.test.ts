@@ -137,30 +137,26 @@ describe("SEC-D4-03: workspace cannot escape root via ../", () => {
 
   it("../ simple est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "../etc/passwd")).rejects.toThrow(WorkspaceError);
   });
 
   it("../ profond est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "a/b/c/../../../../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "a/b/c/../../../../etc/passwd")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("../ depuis un sous-répertoire est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "output/../../../etc/shadow"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "output/../../../etc/shadow")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("chemin absolu hors workspace est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "/etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "/etc/passwd")).rejects.toThrow(WorkspaceError);
   });
 });
 
@@ -189,9 +185,7 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(outsideFile, "data");
     await symlink(outsideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, symPath),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, symPath)).rejects.toThrow(WorkspaceError);
   });
 
   it("symlink dans sous-répertoire pointant vers l'extérieur est refusé", async () => {
@@ -205,9 +199,9 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(outsideFile, "data");
     await symlink(outsideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, "deep/nested/up.lnk"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "deep/nested/up.lnk")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("symlink pointant dans le workspace est accepté", async () => {
@@ -218,9 +212,7 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(insideFile, "data");
     await symlink(insideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, symPath),
-    ).resolves.toBe(symPath);
+    await expect(wm.validatePathInWorkspace(ws, symPath)).resolves.toBe(symPath);
   });
 });
 
@@ -330,9 +322,7 @@ describe("SEC-D4-08: TOCTOU-sensitive hash mismatch denies execution", () => {
 
     // Si le chemin est modifié après validation, la nouvelle validation échoue
     // (simule un changement entre validation et utilisation)
-    await expect(
-      wm.validatePathInWorkspace(ws, "../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "../etc/passwd")).rejects.toThrow(WorkspaceError);
 
     await rm(testRoot, { recursive: true, force: true }).catch(() => {});
   });
@@ -356,15 +346,11 @@ describe("SEC-D4-09: cleanup cannot delete outside owned workspace", () => {
   });
 
   it("refuse de nettoyer un chemin hors du root", async () => {
-    await expect(
-      wm.releaseWorkspace("/tmp/../usr"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.releaseWorkspace("/tmp/../usr")).rejects.toThrow(WorkspaceError);
   });
 
   it("refuse de nettoyer le root lui-même", async () => {
-    await expect(
-      wm.releaseWorkspace(testRoot),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.releaseWorkspace(testRoot)).rejects.toThrow(WorkspaceError);
   });
 
   it("un fichier créé hors du root n'est pas supprimé par erreur", async () => {
@@ -390,11 +376,7 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
   it("les erreurs D4 ne contiennent pas de credentials", async () => {
     // Simuler une erreur qui pourrait contenir des données sensibles
     // L'erreur est déjà sanitizée par D4 avant d'être retournée
-    const error = createExecutionError(
-      "PROCESS_ERROR",
-      "Erreur générique",
-      false,
-    );
+    const error = createExecutionError("PROCESS_ERROR", "Erreur générique", false);
 
     // Vérifier que les patterns de credentials ne sont pas présents
     const credentialPatterns = [
@@ -402,7 +384,7 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
       /passwd\s*=/i,
       /api[_\-]?key\s*=/i,
       /sk-[a-zA-Z0-9]{10,}/, // OpenAI-style keys
-      /AKIA[A-Z0-9]{16}/,    // AWS access keys
+      /AKIA[A-Z0-9]{16}/, // AWS access keys
     ];
 
     for (const pattern of credentialPatterns) {

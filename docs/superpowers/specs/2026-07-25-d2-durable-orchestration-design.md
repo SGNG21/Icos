@@ -13,6 +13,7 @@ ICOS n'a actuellement aucun moteur d'orchestration durable. Les opérations
 indépendants sans mission portable.
 
 Aucune mission ne peut survivre à :
+
 - un redémarrage serveur
 - un échec provider
 - une exhaustion de contexte
@@ -124,13 +125,13 @@ CANCELLED → (terminal)
 interface Mission {
   id: string;
   tenantId: string;
-  userRequest: string;           // requête utilisateur originale
+  userRequest: string; // requête utilisateur originale
   status: MissionStatus;
-  plan?: Plan;                   // plan validé
-  runs: Run[];                   // exécutions
-  error?: string;                // raison d'échec
-  currentRunId?: string;         // run actif
-  approvedBy?: string;           // userId qui a approuvé
+  plan?: Plan; // plan validé
+  runs: Run[]; // exécutions
+  error?: string; // raison d'échec
+  currentRunId?: string; // run actif
+  approvedBy?: string; // userId qui a approuvé
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -148,7 +149,7 @@ interface Step {
   agentId?: string;
   skillKey?: string;
   toolRef?: string;
-  dependsOn: string[];           // step IDs prérequis
+  dependsOn: string[]; // step IDs prérequis
   status: "pending" | "in_progress" | "completed" | "failed" | "skipped";
   result?: StepResult;
 }
@@ -179,7 +180,7 @@ interface MissionRepository {
   update(mission: Mission): Promise<Mission>;
   findById(id: string): Promise<Mission | null>;
   findByStatus(status: MissionStatus): Promise<Mission[]>;
-  findActive(): Promise<Mission[]>;      // missions non terminales
+  findActive(): Promise<Mission[]>; // missions non terminales
 }
 
 interface MissionUnitOfWork {

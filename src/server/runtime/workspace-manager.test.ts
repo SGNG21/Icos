@@ -29,14 +29,16 @@ describe("D4 — WorkspaceManager", () => {
       expect(ws).toContain("run-abc");
 
       // Le répertoire doit exister
-      await expect(readFile(ws, "utf-8").catch((e) => e.code))
-        .resolves.not.toBe("ENOENT");
+      await expect(readFile(ws, "utf-8").catch((e) => e.code)).resolves.not.toBe("ENOENT");
     });
 
     it("crée les répertoires parent si nécessaire", async () => {
       const ws = await manager.createWorkspace("deep", "nested");
       const exists = await import("node:fs").then((fs) =>
-        fs.promises.stat(ws).then(() => true).catch(() => false),
+        fs.promises
+          .stat(ws)
+          .then(() => true)
+          .catch(() => false),
       );
       expect(exists).toBe(true);
     });
@@ -57,17 +59,17 @@ describe("D4 — WorkspaceManager", () => {
     it("refuse un chemin avec ../ sortant du workspace", async () => {
       const ws = await manager.createWorkspace("tenant-1", "run-1");
 
-      await expect(
-        manager.validatePathInWorkspace(ws, "../../../etc/passwd"),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.validatePathInWorkspace(ws, "../../../etc/passwd")).rejects.toThrow(
+        WorkspaceError,
+      );
     });
 
     it("refuse un chemin absolu hors du workspace", async () => {
       const ws = await manager.createWorkspace("tenant-1", "run-1");
 
-      await expect(
-        manager.validatePathInWorkspace(ws, "/etc/passwd"),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.validatePathInWorkspace(ws, "/etc/passwd")).rejects.toThrow(
+        WorkspaceError,
+      );
     });
 
     it("accepte un chemin relatif dans le workspace", async () => {
@@ -90,9 +92,9 @@ describe("D4 — WorkspaceManager", () => {
     it("refuse une traversée avec ../ dans un chemin valide", async () => {
       const ws = await manager.createWorkspace("tenant-1", "run-1");
 
-      await expect(
-        manager.validatePathInWorkspace(ws, "output/../../etc/passwd"),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.validatePathInWorkspace(ws, "output/../../etc/passwd")).rejects.toThrow(
+        WorkspaceError,
+      );
     });
   });
 
@@ -109,9 +111,9 @@ describe("D4 — WorkspaceManager", () => {
       await writeFile(outsideTarget, "sensitive data");
       await symlink(outsideTarget, symlinkPath);
 
-      await expect(
-        manager.validatePathInWorkspace(ws, symlinkPath),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.validatePathInWorkspace(ws, symlinkPath)).rejects.toThrow(
+        WorkspaceError,
+      );
     });
 
     it("accepte un symlink pointant dans le workspace", async () => {
@@ -138,9 +140,9 @@ describe("D4 — WorkspaceManager", () => {
       await writeFile(outsideTarget, "secret");
       await symlink(outsideTarget, symlinkPath);
 
-      await expect(
-        manager.validatePathInWorkspace(ws, "subdir/escape.lnk"),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.validatePathInWorkspace(ws, "subdir/escape.lnk")).rejects.toThrow(
+        WorkspaceError,
+      );
     });
   });
 
@@ -160,21 +162,20 @@ describe("D4 — WorkspaceManager", () => {
 
       // Le workspace n'existe plus
       const exists = await import("node:fs").then((fs) =>
-        fs.promises.stat(ws).then(() => true).catch(() => false),
+        fs.promises
+          .stat(ws)
+          .then(() => true)
+          .catch(() => false),
       );
       expect(exists).toBe(false);
     });
 
     it("refuse de nettoyer un chemin hors du root", async () => {
-      await expect(
-        manager.releaseWorkspace("/tmp/../etc"),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.releaseWorkspace("/tmp/../etc")).rejects.toThrow(WorkspaceError);
     });
 
     it("refuse de nettoyer le root lui-même", async () => {
-      await expect(
-        manager.releaseWorkspace(testRoot),
-      ).rejects.toThrow(WorkspaceError);
+      await expect(manager.releaseWorkspace(testRoot)).rejects.toThrow(WorkspaceError);
     });
 
     it("nettoie un sous-espace sans affecter les autres", async () => {
@@ -185,13 +186,19 @@ describe("D4 — WorkspaceManager", () => {
 
       // ws1 n'existe plus
       const ws1Exists = await import("node:fs").then((fs) =>
-        fs.promises.stat(ws1).then(() => true).catch(() => false),
+        fs.promises
+          .stat(ws1)
+          .then(() => true)
+          .catch(() => false),
       );
       expect(ws1Exists).toBe(false);
 
       // ws2 existe toujours
       const ws2Exists = await import("node:fs").then((fs) =>
-        fs.promises.stat(ws2).then(() => true).catch(() => false),
+        fs.promises
+          .stat(ws2)
+          .then(() => true)
+          .catch(() => false),
       );
       expect(ws2Exists).toBe(true);
     });
@@ -201,9 +208,7 @@ describe("D4 — WorkspaceManager", () => {
       await rm(ws, { recursive: true, force: true });
 
       // release ne doit pas throw si le workspace a déjà été nettoyé
-      await expect(
-        manager.releaseWorkspace(ws),
-      ).resolves.toBeUndefined();
+      await expect(manager.releaseWorkspace(ws)).resolves.toBeUndefined();
     });
   });
 

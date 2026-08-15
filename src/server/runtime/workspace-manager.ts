@@ -36,10 +36,12 @@ export class WorkspaceManager {
   public readonly workspaceRoot: string;
 
   constructor(workspaceRoot?: string) {
-    this.workspaceRoot = workspaceRoot ?? path.join(
-      // Selon la plateforme, utiliser un répertoire adapté
-      process.env.ICOS_WORKSPACE_ROOT ?? path.join(osTmpDir(), "icos", "workspaces"),
-    );
+    this.workspaceRoot =
+      workspaceRoot ??
+      path.join(
+        // Selon la plateforme, utiliser un répertoire adapté
+        process.env.ICOS_WORKSPACE_ROOT ?? path.join(osTmpDir(), "icos", "workspaces"),
+      );
   }
 
   /**
@@ -87,10 +89,7 @@ export class WorkspaceManager {
    * @returns Le chemin canonique résolu
    * @throws WorkspaceError si le chemin n'est pas sûr
    */
-  async validatePathInWorkspace(
-    workspacePath: string,
-    targetPath: string,
-  ): Promise<string> {
+  async validatePathInWorkspace(workspacePath: string, targetPath: string): Promise<string> {
     // Résoudre le workspace en chemin canonique
     let resolvedWorkspace: string;
     try {
@@ -112,8 +111,10 @@ export class WorkspaceManager {
 
     // Vérifier que le chemin normalisé commence par le workspace
     // (cela détecte les `../` qui sortent du workspace)
-    if (!normalizedTarget.startsWith(resolvedWorkspace + path.sep) &&
-        normalizedTarget !== resolvedWorkspace) {
+    if (
+      !normalizedTarget.startsWith(resolvedWorkspace + path.sep) &&
+      normalizedTarget !== resolvedWorkspace
+    ) {
       throw new WorkspaceError(
         `Path traversal detecté: ${targetPath} sort du workspace`,
         "TRAVERSAL_DENIED",
@@ -163,10 +164,7 @@ export class WorkspaceManager {
 
       // Ne jamais supprimer le root lui-même
       if (resolvedWorkspace === resolvedRoot) {
-        throw new WorkspaceError(
-          "Refus de supprimer le root workspace",
-          "CLEANUP_ROOT_DENIED",
-        );
+        throw new WorkspaceError("Refus de supprimer le root workspace", "CLEANUP_ROOT_DENIED");
       }
 
       await rm(resolvedWorkspace, { recursive: true, force: true });
@@ -212,10 +210,7 @@ function sanitizePathComponent(component: string): string {
  * - Aucun composant n'est un symlink pointant hors du workspace
  * - Le chemin final résolu est dans le workspace
  */
-async function checkPathComponents(
-  targetPath: string,
-  workspacePath: string,
-): Promise<void> {
+async function checkPathComponents(targetPath: string, workspacePath: string): Promise<void> {
   const resolved = path.resolve(targetPath);
   const parts = resolved.replace(workspacePath, "").split(path.sep).filter(Boolean);
 
@@ -225,9 +220,7 @@ async function checkPathComponents(
     current = path.join(current, part);
 
     try {
-      const stats = await import("node:fs").then((fs) =>
-        fs.promises.lstat(current),
-      );
+      const stats = await import("node:fs").then((fs) => fs.promises.lstat(current));
 
       if (stats.isSymbolicLink()) {
         const linkTarget = await readlink(current);

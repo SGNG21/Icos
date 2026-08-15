@@ -18,7 +18,7 @@
   pour déclarer ce qu'une skill, un agent ou un connecteur peut faire.
 - **Raison** : Sans capability explicite et gouvernée, la sélection d'une skill ou d'un agent par
   l'Orchestrateur est une heuristique sans fondement contrôlable — ce qui violerait l'invariant
-  "aucune skill n'a autorité sur les permissions". La Capability est le *contrat public* de toute
+  "aucune skill n'a autorité sur les permissions". La Capability est le _contrat public_ de toute
   compétence ICOS.
 - **Prérequis** : fondations (Phase A, terminée). Le Lot 2B-2 n'est pas un prérequis strict pour
   créer le registre mais C1 ne pourra être utilisé par l'Orchestrateur tant que 2B-2 n'a pas posé
@@ -51,8 +51,8 @@
   - Index unique sur `name`, index sur `status`, `category`.
 - **Événements** : `capability.created`, `capability.updated`, `capability.status_changed`,
   `capability.retired` (append-only sur `audit_entries` après extension du check constraint).
-- **Permissions / politiques** : une capability ne requiert pas d'approbation pour sa *création*
-  (elle décrit, n'agit pas), mais son statut `active` et sa *rétractation* nécessitent une action
+- **Permissions / politiques** : une capability ne requiert pas d'approbation pour sa _création_
+  (elle décrit, n'agit pas), mais son statut `active` et sa _rétractation_ nécessitent une action
   humaine (permission `capabilities.manage`). L'extension ultérieure de `PERMISSIONS` dans la matrice
   de rôle est attendue.
 - **Tests** :
@@ -65,7 +65,7 @@
   - L'introduction de `inputSchema` prématurément complexe ajoute une dépendance JSON Schema sans
     valeur immédiate — une première version simpliste (description libre) est recommandée.
 - **Notes Holding IA** : REUSE — Holding IA n'avait pas de registre de capabilities mais auditait les
-  compétences agent par classification ad-hoc. Utile pour la *checklist de revue* de proposition.
+  compétences agent par classification ad-hoc. Utile pour la _checklist de revue_ de proposition.
 - **Notes OpenJarvis** : REUSE — OpenJarvis a un pattern de `capability-validation` à inspecter pour
   ses parseurs de signature et son système de compatibilité. ADAPT — adapter la validation côté
   serveur plutôt que client, sans attribution automatique de permissions.
@@ -131,7 +131,7 @@
   - La quarantaine ne remplace pas une revue de sécurité humaine ; l'automatisation des evals
     (Phase Q) peut assister mais pas décider.
 - **Notes Holding IA** : REUSE — Holding IA classifiait les agents par rôle mais sans provenance de
-  compétence. Le pattern de *declaredSkills vs actualSkills* est utile : comparer la skill
+  compétence. Le pattern de _declaredSkills vs actualSkills_ est utile : comparer la skill
   déclarée (registre) à la skill réellement invoquée (traces).
 - **Notes OpenJarvis** : REUSE — OpenJarvis SkillManager a des patterns concrets pour le manifeste,
   la découverte et le trust (tiers 1-3, attestation, revue). REBUILD — la logique ICOS est plus
@@ -242,11 +242,11 @@
   - La transition du check constraint SQL doit être additive (laisser cohabiter l'ancienne
     contrainte via CHECK OR).
 - **Notes Holding IA** : REUSE — le `riskLevelMap` sur les actions. ADAPT — les "approval lifecycles"
-    de Holding IA avec preview/semaine. Conserver l'immutabilité de la décision rejected du code ICOS.
+  de Holding IA avec preview/semaine. Conserver l'immutabilité de la décision rejected du code ICOS.
 - **Notes OpenJarvis** : ADAPT — `ApprovalStore` d'OpenJarvis et permission memory sont utiles
-    comme patterns pour la persistance des décisions mais ne remplacent pas la version immuable
-    dans le journal d'audit ICOS. DISCARD — toute auto-approbation ou permission memory qui
-    court-circuiterait la décision souveraine.
+  comme patterns pour la persistance des décisions mais ne remplacent pas la version immuable
+  dans le journal d'audit ICOS. DISCARD — toute auto-approbation ou permission memory qui
+  court-circuiterait la décision souveraine.
 - **Dev skills recommandées** : Zod (schemas existants), Vitest, Drizzle.
 - **Definition of Done** :
   - `PolicyEnginePort` + implé utilisant l'existant comme base.
@@ -305,8 +305,8 @@
 - **Notes Holding IA** : ADAPT — le pattern de "brief structuré" avec slots est utile pour le Plan.
   REUSE — l'audit de mission timeline dans Holding IA.
 - **Notes OpenJarvis** : REUSE — la décomposition traces/EventBus est un pattern pour lier les Runs
-    aux événements techniques sans polluer l'Event Journal. DISCARD — toute exécution asynchrone
-    non auditable dans le journal métier.
+  aux événements techniques sans polluer l'Event Journal. DISCARD — toute exécution asynchrone
+  non auditable dans le journal métier.
 - **Dev skills recommandées** : Drizzle, Vitest, transactions PostgreSQL.
 - **Definition of Done** :
   - Mission/Plan/Run entités avec statuts et invariants.
@@ -482,7 +482,7 @@
   `ResponseEnvelope`, `FactQualification` (fait vérifié, inférence, hypothèse, proposition, action
   préparée/exécutée/bloquée).
 - **Ports / interfaces** : `ConversationPort.handle(turn)`, `IntentResolverPort.resolve(turn,
-  context)`, `ResponsePresenterPort.present(result, detailLevel)` ; aucune dépendance à un canal.
+context)`, `ResponsePresenterPort.present(result, detailLevel)` ; aucune dépendance à un canal.
 - **Base** : conversations/tours si non couverts par l'auth existante ; référence à Mission et
   classification de chaque assertion ; pas de copie des secrets ni du state métier.
 - **Événements** : `conversation.turn.received`, `intent.resolved`, `clarification.requested`,
@@ -666,7 +666,7 @@
   (pause mission, alerte budget, refuser une classe, demander validation). Les projections sont
   dérivées, expirantes et jamais authoritative.
 - **Ports / interfaces** : `OmniRouteOperationsPort.readModels/readHealth/readQuotas/readMetrics/
-  explainRoute`; management séparé dans `OmniRouteManagementPort` et soumis à Policy/permissions.
+explainRoute`; management séparé dans `OmniRouteManagementPort` et soumis à Policy/permissions.
   Pas de `ModelHealthMonitor`, `FallbackPlanner` ou `CircuitState` ICOS.
 - **Base** : cache/projections TTL optionnels et cursors de sync ; OmniRoute reste source. Pas de
   tables de health/quota prétendant faire autorité.

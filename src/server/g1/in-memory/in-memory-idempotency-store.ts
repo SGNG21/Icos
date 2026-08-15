@@ -1,8 +1,4 @@
-import {
-  type IdempotencyEntry,
-  type IdempotencyKey,
-  type IdempotencyState,
-} from "@/core/g1";
+import { type IdempotencyEntry, type IdempotencyKey, type IdempotencyState } from "@/core/g1";
 import type { IdempotencyStore } from "@/server/g1/ports";
 
 /**
@@ -65,16 +61,12 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     }
   }
 
-  async findByKey(
-    idempotencyKey: IdempotencyKey,
-  ): Promise<IdempotencyEntry | null> {
+  async findByKey(idempotencyKey: IdempotencyKey): Promise<IdempotencyEntry | null> {
     return this.entries.get(idempotencyKey) ?? null;
   }
 
   async listByTenant(tenantId: string): Promise<IdempotencyEntry[]> {
-    return Array.from(this.entries.values()).filter(
-      (e) => e.tenantId === tenantId,
-    );
+    return Array.from(this.entries.values()).filter((e) => e.tenantId === tenantId);
   }
 
   /** Réinitialise le store pour les tests. */

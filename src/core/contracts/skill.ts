@@ -21,12 +21,7 @@ export type TrustState = z.infer<typeof trustStateSchema>;
 // ActivationState — disponibilité à l'exécution
 // ─────────────────────────────────────
 
-export const activationStateSchema = z.enum([
-  "inactive",
-  "active",
-  "suspended",
-  "revoked",
-]);
+export const activationStateSchema = z.enum(["inactive", "active", "suspended", "revoked"]);
 
 export type ActivationState = z.infer<typeof activationStateSchema>;
 
@@ -44,12 +39,7 @@ export const skillSourceSchema = z.enum([
 
 export type SkillSource = z.infer<typeof skillSourceSchema>;
 
-export const skillWriteOriginSchema = z.enum([
-  "human",
-  "agent",
-  "system",
-  "migration",
-]);
+export const skillWriteOriginSchema = z.enum(["human", "agent", "system", "migration"]);
 
 export type SkillWriteOrigin = z.infer<typeof skillWriteOriginSchema>;
 
@@ -307,7 +297,4 @@ export const CONTENT_MUTABLE_TRUST_STATES: readonly TrustState[] = [
 /**
  * États dans lesquels le contenu du skill est IMMUTABLE.
  */
-export const CONTENT_IMMUTABLE_TRUST_STATES: readonly TrustState[] = [
-  "approved",
-  "rejected",
-];
+export const CONTENT_IMMUTABLE_TRUST_STATES: readonly TrustState[] = ["approved", "rejected"];
