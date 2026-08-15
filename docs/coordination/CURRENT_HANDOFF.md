@@ -1,42 +1,32 @@
 # ICOS — Current Handoff
 
-**Lot actif :** D1 — Policy / Authorization
-**Branch :** feat/d1-policy
-**Worktree :** /Users/coco/icos/.claude/worktrees/feat+d1-policy
-**HEAD :** e1010149dcf2e6d55979c08aed7a95bb79b63d5b (main)
-**PR :** none yet
+**Lot terminé :** D2 — Durable Orchestration (Merged #16, SHA 8cd58c7)
+**Prochain lot :** D3 — AI Gateway / OmniRoute
 
-## État
+**Nouvelle session requise.** Ne pas continuer D3 ici (contexte saturé).
 
-PHASE 1 — INSPECTION en cours. Infrastructure authorization existante analysée. Spec D1 à formaliser.
+## Pour démarrer D3
 
-## Ce qui existe déjà
+1. `git fetch origin`
+2. Créer worktree depuis `origin/main` (8cd58c7)
+3. Branche `feat/d3-omniroute`
+4. Lire `docs/superpowers/specs/` (aucune spec D3)
+5. Lire MASTER EXECUTION PROMPT V2 sections 8-9
+6. PHASE 1 — Inspection
+7. PHASE 2 — Formal spec
 
-- `src/core/authorization/decide.ts` — politique centrale (ALLOW / AWAITING_APPROVAL / REFUSED) basée sur `AuthorizationLevel` + `RiskLevel`
-- `src/server/auth/authorization-service.ts` — vérification permissions + rôle depuis session
-- `src/server/auth/guards.ts` — `requireSession`, `requireRole`, `requirePermission`
-- `src/core/identity/permissions.ts` — matrice hiérarchique rôles→permissions
-- `src/server/auth/cockpit-access.ts` — accès cockpit par rôle
-- TenantContext résolu (COMPLIANCE-1)
-- Classification C0-C3 sur Capabilities
-- C3 retention gate (activation refusée sans retentionPolicyRef)
+## Lots DONE
 
-## Ce que D1 doit ajouter
+1A, 1B, 2A-1, 2B-1a, 2B-1b, 2B-2
+COMPLIANCE-0, COMPLIANCE-1
+C1, C2
+D1 (Policy Engine — 7 gates)
+D2 (Mission Engine — 14 états)
 
-(Contextual authority décidant ALLOW / DENY / REQUIRE_APPROVAL)
+## Priorité D3
 
-- Actor + Tenant + Role + Permission + Capability + Classification + Risque + Action + Resource
-- Decision policy engine (port + implémentation)
-- Policy definition contract
-- Data classification gate (C2/C3 sensitive operations)
-- Tenant IDOR gate
-- Integration avec guards HTTP existants
-- Tests d'intégration
-
-## Prochaine action
-
-Écrire la spec D1 formelle (PHASE 2), puis design review (PHASE 3).
-
-## Bloqueurs
-
-None.
+1. AiGatewayPort (ICOS → OmniRoute)
+2. OmniRoute adapter minimum
+3. Provider routing technique
+4. Séparation ICOS Policy ≠ OmniRoute policy
+5. Shortlist providers validée (Claude, OpenAI, Gemini, NVIDIA, OpenRouter)

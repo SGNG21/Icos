@@ -21,24 +21,24 @@
 | C1 — Capability Registry | DONE | — | — | — | |
 | C2 — Skill Registry & Trust | DONE | #13 | — | — | |
 | **COMPLIANCE-1** | **DONE** | **#14** | **e101014** | feat/compliance-1-classification | Merged 2026-07-25 |
-| **D1 — Policy / Authorization** | **IN PROGRESS** | — | — | feat/d1-policy | En cours |
+| **D1 — Policy / Authorization** | **DONE** | **#15** | **c8cebbe** | feat/d1-policy | Merged 2026-07-25 |
+| **D2 — Durable Orchestration** | **DONE** | **#16** | **8cd58c7** | feat/d2-orchestration | Merged 2026-07-25 |
+| **D3 — AI Gateway / OmniRoute** | **PENDING** | — | — | — | Nouvelle session requise |
 
 ---
 
 ## Current Lot
 
-**D1 — Policy / Authorization**
+**D3 — AI Gateway / OmniRoute**
 
-Branch: `feat/d1-policy`
-Worktree: `/Users/coco/icos/.claude/worktrees/feat+d1-policy`
-Base SHA: `e1010149dcf2e6d55979c08aed7a95bb79b63d5b`
+Branch: `feat/d3-omniroute` (à créer)
+Worktree: à créer dans nouvelle session
+Base SHA: `8cd58c70d5d174f1a071942ec4eb028c73c41a0e`
 
 ### Dependencies
-- 2B-1a/b (Identity + Auth) ✅
-- COMPLIANCE-0 (Classification taxonomy) ✅
-- COMPLIANCE-1 (TenantContext, C0-C3 on Capabilities) ✅
-- C1 (Capability Registry) ✅
-- C2 (Skill Registry) ✅
+- D2 (Mission Engine) ✅
+- D1 (Policy Engine) ✅
+- COMPLIANCE-1 (TenantContext) ✅
 
 ### Blockers
 - None
@@ -47,11 +47,11 @@ Base SHA: `e1010149dcf2e6d55979c08aed7a95bb79b63d5b`
 
 ## Next Lot
 
-After D1:
-D2 — Durable Orchestration
+After D3:
+D4 — Runtime / Agent Execution
 
 ---
 
 ## Current main SHA
 
-`e1010149dcf2e6d55979c08aed7a95bb79b63d5b`
+`8cd58c70d5d174f1a071942ec4eb028c73c41a0e`
