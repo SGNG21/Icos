@@ -41,6 +41,16 @@ export class GlobalGates implements GlobalGatesPort {
    * se propager par défaut. Seul le strict nécessaire au fonctionnement de
    * pnpm/node/git est transmis. NODE_ENV est volontairement exclu
    * (empoisonnement d'environnement démontré sur les gates du dépôt).
+   *
+   * RÉSIDU DOCUMENTÉ NF-5 (Phase 2B) : PATH / PNPM_HOME / COREPACK_HOME /
+   * XDG_* restent transmis — un PARENT compromis pourrait pointer vers des
+   * outillages ou caches empoisonnés (provenance des outils non vérifiée).
+   * Ce résidu exige déjà la compromission de l'environnement de
+   * l'opérateur (pas des workers : ils ne définissent pas l'env parent des
+   * gates). Correctif minimal sans expansion d'architecture indisponible :
+   * épingler PATH est spécifique à l'hôte et casserait les gates ; une
+   * chaîne d'outils hermétique (provenance vérifiée) est une évolution
+   * d'architecture — suivi requis (voir PHASE2B_HARDENING_REPORT, NF-5).
    */
   private static readonly ENV_ALLOWLIST = [
     "PATH",
