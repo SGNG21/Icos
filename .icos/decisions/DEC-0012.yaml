@@ -1,0 +1,49 @@
+decision_id: DEC-0012
+status: PROPOSED
+topic: "Record and remediate the mission_contexts no-RLS contradiction with DEC-0003 (tenant isolation defense-in-depth)"
+authority: APPROVAL
+owner: human-owner
+rationale: >-
+  DEC-0003 (ACCEPTED) mandates tenant isolation as defense-in-depth:
+  application-layer authorization AND PostgreSQL Row-Level Security.
+  The integration candidate's migration drizzle/0009_mission_context.sql
+  creates the tenant-keyed table mission_contexts (primary key
+  tenant_id, mission_id, version) WITHOUT enabling RLS — and no migration
+  in the candidate enables RLS on any table. This is a standing
+  contradiction with DEC-0003. Per Phase 2 directive F7, this record does
+  NOT silently resolve the contradiction: it documents it, states the
+  current risk and compensating controls, and requires a follow-up RLS
+  migration before any production use. Accepting this decision means the
+  owner explicitly accepts the interim risk under the compensating
+  controls below — it does not supersede or weaken DEC-0003.
+reversible: true
+evidence:
+  - "drizzle/0009_mission_context.sql (icos-cockpit-real) — CREATE TABLE mission_contexts, no ENABLE ROW LEVEL SECURITY"
+  - "grep 'ROW LEVEL' drizzle/*.sql -> no matches (no migration enables RLS)"
+  - "docs/icos/audit/CANDIDATE_SECURITY_REVIEW.md"
+supersedes: null
+# ── Extended context (Phase 2 hardening, F7) ─────────────────────────
+proposed_by: "claude-code (RECONCILIATION PHASE 2)"
+proposed_at: "2026-08-15"
+contradiction:
+  accepted_decision: "DEC-0003 — tenant isolation = application authorization + PostgreSQL RLS (defense-in-depth)"
+  observed_state: "mission_contexts (and the candidate schema generally) relies on application-layer tenant scoping only; RLS is not enabled"
+current_risk: >-
+  A bug in the application layer (missing tenant_id filter, mapper error,
+  future repository bypass) or any direct database access would expose
+  cross-tenant mission context payloads (jsonb snapshots of mission state).
+  Single layer of defense instead of the mandated two.
+compensating_controls:
+  - "All mission_contexts access goes through the repository layer, which requires tenant_id in every query (composite primary key starts with tenant_id)"
+  - "DEC-0004: no direct unrestricted agent database access — agents pass through service/policy layers"
+  - "Runtime is local/dev only; no production deployment exists, and production changes require release policy"
+  - "Append-only immutable snapshots: no UPDATE path to corrupt cross-tenant"
+follow_up_required:
+  - "Add an additive migration enabling RLS on mission_contexts (and other tenant-keyed tables) with tenant-scoped policies, before any production use"
+  - "Migration must include rollback/data-safety analysis per the database rule"
+  - "Re-verify DEC-0003 conformity after the migration and update this record's status"
+acceptance_required_from_owner: >-
+  PROPOSED only. The owner must either ACCEPT (explicit interim risk
+  acceptance with the follow-up requirement binding) or REJECT (blocking
+  the candidate until RLS is added). The proposing agent cannot
+  self-accept and has not modified DEC-0003.

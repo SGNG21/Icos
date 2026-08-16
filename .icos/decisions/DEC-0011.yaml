@@ -1,0 +1,39 @@
+decision_id: DEC-0011
+status: PROPOSED
+topic: "Adopt the supervisor/worker autonomous mission architecture (icos-cockpit-real) as the ICOS execution runtime"
+authority: APPROVAL
+owner: human-owner
+rationale: >-
+  The integration candidate feat/cockpit-real-wiring-1 introduces a
+  supervisor architecture (SupervisorService orchestration, WorkerManager
+  gated by the D1 policy engine, worktree-isolated workers, independent
+  review + correction loop, GlobalGates quality gates, IntegrationOrchestrator)
+  that was implemented without a prior ADR/Decision, in violation of the
+  repository rule "architecture changes require ADR/Decision". This record
+  regularizes governance retroactively: it describes the architecture as
+  built and submits it for explicit owner approval. It does NOT approve
+  autonomous external effects (git push / PR creation), which remain gated
+  by a human approval artifact (Phase 2 fix F2), nor production deployment.
+reversible: true
+evidence:
+  - "docs/icos/audit/INTEGRATION_CANDIDATE_REVIEW.md"
+  - "docs/icos/audit/CANDIDATE_SECURITY_REVIEW.md"
+  - "docs/icos/audit/COMMIT_MAP_49.md"
+supersedes: null
+# ── Extended context (Phase 2 hardening, F7) ─────────────────────────
+proposed_by: "claude-code (RECONCILIATION PHASE 2)"
+proposed_at: "2026-08-15"
+architecture_summary:
+  - "SupervisorService: mission DAG planning and task orchestration"
+  - "WorkerManager: worker spawn strictly gated by D1 PolicyDecision — any outcome other than allow (deny, require_approval, unknown, engine unavailable) blocks execution fail-closed (Phase 2 fix F3)"
+  - "Worktree isolation: workers operate only inside their assigned worktree; repo-root fallback removed, path boundaries enforced (Phase 2 fix F4)"
+  - "Review/correction loop: ReviewerWorker + CorrectionWorker are explicit fail-closed V1 stubs — unverified review categories fail, corrections escalate to a human, no rubber-stamp PASS (Phase 2 fix F6)"
+  - "GlobalGates: sequential deterministic quality gates with explicit subprocess env allowlist — parent secrets never propagate (Phase 2 fix F5)"
+  - "External effects (git push, PR creation): fail-closed human approval artifact required (Phase 2 fix F2)"
+constraints:
+  - "No tenant context -> no tenant operation (unchanged)"
+  - "Agents never bypass service/policy layers to production data (DEC-0004, unchanged)"
+  - "Autonomous mission paths remain inert/fail-closed until a real review gate (V2) exists"
+acceptance_required_from_owner: >-
+  This decision is PROPOSED and has no effect until the human owner sets
+  status to ACCEPTED. The proposing agent cannot self-accept.
