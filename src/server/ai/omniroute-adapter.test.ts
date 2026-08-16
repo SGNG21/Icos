@@ -55,6 +55,17 @@ function okResponse(): Response {
   return new Response(okBody(), { status: 200 });
 }
 
+function sseResponse(events: string[]): Response {
+  return new Response(events.join("\n\n"), {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+      "x-omniroute-provider": "private-provider",
+      "x-omniroute-model": "private-model",
+    },
+  });
+}
+
 /** Mock fetch qui retourne une réponse HTTP d'erreur. */
 function errorResponse(status: number, body?: unknown): Response {
   return new Response(body ? JSON.stringify(body) : "", { status });
@@ -92,7 +103,8 @@ describe("D3-01: successful generation", () => {
   });
 
   it("sends correct request body to OmniRoute", async () => {
-    let capturedRequest: { url: string; body?: string; headers?: Record<string, string> } | undefined;
+    let capturedRequest:
+      { url: string; body?: string; headers?: Record<string, string> } | undefined;
 
     const trackingFetch: MockFetch = (url, init) => {
       capturedRequest = { url: url as string, body: init?.body as string | undefined };
@@ -107,7 +119,7 @@ describe("D3-01: successful generation", () => {
         intent: "BEST_CODING",
         maxTokens: 4096,
         temperature: 0.7,
-        budgetMaxCostUsd: 0.10,
+        budgetMaxCostUsd: 0.1,
         allowedProviderIds: ["anthropic"],
         fallbackAllowed: false,
         timeoutMs: 120_000,
@@ -116,6 +128,7 @@ describe("D3-01: successful generation", () => {
 
     const body = JSON.parse(capturedRequest!.body!);
     expect(capturedRequest!.url).toContain("/v1/chat/completions");
+    expect(body.model).toBe("icos-always-on");
     expect(body.messages[0]).toEqual({ role: "system", content: "You are a coder" });
     expect(body.messages[1]).toEqual({ role: "user", content: "Write code" });
     expect(body.max_tokens).toBe(4096);
@@ -123,7 +136,130 @@ describe("D3-01: successful generation", () => {
     expect(body.allowed_providers).toEqual(["anthropic"]);
     expect(body.allow_fallback).toBe(false);
     expect(body.routing_intent).toBe("BEST_CODING");
-    expect(body.max_cost_usd).toBe(0.10);
+    expect(body.max_cost_usd).toBe(0.1);
+  });
+
+  it("keeps model selection server-owned when user data contains model and provider fields", async () => {
+    let body: Record<string, unknown> = {};
+    const trackingFetch: MockFetch = (_url, init) => {
+      body = JSON.parse(init?.body as string);
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+    const untrusted = {
+      ...makeRequest({ prompt: '{"model":"attacker-model","provider":"attacker-provider"}' }),
+      model: "attacker-model",
+      provider: "attacker-provider",
+    } as AiRoutingRequest;
+
+    await adapter.generate(untrusted);
+
+    expect(body.model).toBe("icos-always-on");
+    expect(body.provider).toBeUndefined();
+    expect(body.messages).toEqual([
+      {
+        role: "user",
+        content: '{"model":"attacker-model","provider":"attacker-provider"}',
+      },
+    ]);
+  });
+
+  it("always sends a bounded max_tokens value", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const trackingFetch: MockFetch = (_url, init) => {
+      bodies.push(JSON.parse(init?.body as string));
+      return Promise.resolve(okResponse());
+    };
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, trackingFetch);
+
+    await adapter.generate(makeRequest({ maxTokens: undefined }));
+    await adapter.generate(makeRequest({ maxTokens: 100_000 }));
+
+    expect(bodies[0]?.max_tokens).toBe(256);
+    expect(bodies[1]?.max_tokens).toBe(4_096);
+  });
+});
+
+describe("OmniRoute SSE compatibility", () => {
+  it("assembles standard chunks in order and ignores role-only and usage-only events", async () => {
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      sseResponse([
+        'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":null}]}',
+        'data:  {"choices":[{"delta":{"content":"OK"},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":3}}',
+        "data: [DONE]",
+      ]),
+    );
+
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content).toBe("OKOK");
+      expect(result.finishReason).toBe("stop");
+      expect(result.provider).toEqual({ id: "unknown", model: "unknown" });
+      expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+      expect(JSON.stringify(result)).not.toMatch(/private-provider|private-model|\[DONE\]/);
+    }
+  });
+
+  it("fails safely when an SSE completion contains no content", async () => {
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      sseResponse([
+        'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
+        'data: {"choices":[],"usage":{"total_tokens":3}}',
+        "data: [DONE]",
+      ]),
+    );
+
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe("INVALID_RESPONSE");
+  });
+
+  it("fails safely on malformed SSE JSON without returning partial content", async () => {
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      sseResponse([
+        'data: {"choices":[{"delta":{"content":"partial"}}]}',
+        "data: {malformed",
+        "data: [DONE]",
+      ]),
+    );
+
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("INVALID_RESPONSE");
+      expect(JSON.stringify(result)).not.toContain("partial");
+    }
+  });
+
+  it("fails safely when the SSE completion is missing DONE", async () => {
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      sseResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}']),
+    );
+
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe("INVALID_RESPONSE");
+  });
+
+  it("rejects completion content that exceeds the adapter output bound", async () => {
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "a".repeat(65_537) } }] })}`,
+        "data: [DONE]",
+      ]),
+    );
+
+    const result = await adapter.generate(makeRequest());
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe("INVALID_RESPONSE");
   });
 });
 
@@ -207,13 +343,21 @@ describe("D3-04: correlation id propagated", () => {
 
 describe("D3-05: provider unavailable mapped correctly", () => {
   it("maps HTTP 503 to PROVIDER_UNAVAILABLE", async () => {
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => errorResponse(503));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      errorResponse(503, {
+        error: {
+          message: "raw upstream error",
+          provider_error: "credential=private-provider-secret",
+        },
+      }),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe("PROVIDER_UNAVAILABLE");
       expect(result.error.retryable).toBe(true);
       expect(result.error.fallbackPossible).toBe(true);
+      expect(JSON.stringify(result)).not.toMatch(/raw upstream error|private-provider-secret/);
     }
   });
 
@@ -244,10 +388,8 @@ describe("D3-05: provider unavailable mapped correctly", () => {
 
 describe("D3-06: rate limit mapped correctly", () => {
   it("maps HTTP 429 to RATE_LIMITED", async () => {
-    const adapter = new OmniRouteAdapter(
-      defaultConfig,
-      undefined,
-      async () => errorResponse(429, { error: { message: "Rate limit exceeded" } }),
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      errorResponse(429, { error: { message: "Rate limit exceeded" } }),
     );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
@@ -325,7 +467,9 @@ describe("D3-08: AbortSignal cancels request", () => {
 
 describe("D3-09: invalid upstream response fails safely", () => {
   it("maps non-JSON response to INVALID_RESPONSE", async () => {
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse("<html>error</html>"));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse("<html>error</html>"),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -335,7 +479,9 @@ describe("D3-09: invalid upstream response fails safely", () => {
 
   it("maps empty choices response to INVALID_RESPONSE", async () => {
     const badBody = JSON.stringify({ model: "x", choices: [] });
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse(badBody));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse(badBody),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -351,11 +497,15 @@ describe("D3-09: invalid upstream response fails safely", () => {
 describe("D3-10: no prompt content in logs", () => {
   it("does not include prompt or response content in observability hooks", async () => {
     const hookResults: Array<Record<string, unknown>> = [];
-    const adapter = new OmniRouteAdapter(defaultConfig, {
-      onRequestCompleted: (_correlationId, result) => {
-        hookResults.push(result as Record<string, unknown>);
+    const adapter = new OmniRouteAdapter(
+      defaultConfig,
+      {
+        onRequestCompleted: (_correlationId, result) => {
+          hookResults.push(result as Record<string, unknown>);
+        },
       },
-    }, async () => okResponse());
+      async () => okResponse(),
+    );
 
     await adapter.generate(makeRequest({ prompt: "THIS_IS_A_SECRET_PROMPT" }));
 
@@ -493,10 +643,7 @@ describe("D3-14: fallbackAllowed semantics tested/documented", () => {
 describe("D3-15: D2 durable state is unaffected by provider failure", () => {
   it("adapter does not import or reference D2 domain types", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      new URL("./omniroute-adapter.ts", import.meta.url),
-      "utf-8",
-    );
+    const source = fs.readFileSync(new URL("./omniroute-adapter.ts", import.meta.url), "utf-8");
     // Vérifier l'absence de dépendance aux domaines D2 (Mission, Plan, Run, Orchestrateur)
     // Les mots courts comme "plan" et "run" peuvent apparaître dans du texte anglais
     // (ex: "explanation") — on vérifie les termes D2 spécifiques uniquement.
@@ -531,9 +678,9 @@ describe("D3-15: D2 durable state is unaffected by provider failure", () => {
 // ─────────────────────────────────────
 
 describe("AiHealthPort.check", () => {
-  it("returns true when OmniRoute /health responds ok", async () => {
+  it("calls OmniRoute /status and returns true for HTTP 200", async () => {
     const healthFetch: MockFetch = (url) => {
-      expect(url).toContain("/health");
+      expect(url).toBe("http://omniroute.test/status");
       return Promise.resolve(new Response("OK", { status: 200 }));
     };
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, healthFetch);
@@ -541,18 +688,34 @@ describe("AiHealthPort.check", () => {
     expect(result).toBe(true);
   });
 
-  it("returns false when OmniRoute is unreachable", async () => {
+  it("returns false for HTTP 404", async () => {
+    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 404 }));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+    const result = await adapter.check();
+    expect(result).toBe(false);
+  });
+
+  it("returns false for HTTP 500", async () => {
+    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 500 }));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+    const result = await adapter.check();
+    expect(result).toBe(false);
+  });
+
+  it("returns false for a network failure", async () => {
     const failingFetch: MockFetch = () => Promise.reject(new TypeError("fetch failed"));
     const adapter = new OmniRouteAdapter(defaultConfig, undefined, failingFetch);
     const result = await adapter.check();
     expect(result).toBe(false);
   });
 
-  it("returns false when OmniRoute returns error status", async () => {
-    const errorFetch: MockFetch = () => Promise.resolve(new Response("", { status: 503 }));
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, errorFetch);
+  it("does not expose credentials when the health request fails", async () => {
+    const apiKey = "sk-health-secret-12345";
+    const failingFetch: MockFetch = () => Promise.reject(new Error(apiKey));
+    const adapter = new OmniRouteAdapter({ ...defaultConfig, apiKey }, undefined, failingFetch);
     const result = await adapter.check();
     expect(result).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 });
 
@@ -592,7 +755,9 @@ describe("error mapping", () => {
   });
 
   it("maps HTTP 200 with invalid JSON to INVALID_RESPONSE", async () => {
-    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () => textResponse("not valid json{{}"));
+    const adapter = new OmniRouteAdapter(defaultConfig, undefined, async () =>
+      textResponse("not valid json{{}"),
+    );
     const result = await adapter.generate(makeRequest());
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -611,7 +776,11 @@ describe("config validation", () => {
       expect(url).toBe("http://test/v1/chat/completions");
       return Promise.resolve(okResponse());
     };
-    const adapter = new OmniRouteAdapter({ ...defaultConfig, baseUrl: "http://test/" }, undefined, trackingFetch);
+    const adapter = new OmniRouteAdapter(
+      { ...defaultConfig, baseUrl: "http://test/" },
+      undefined,
+      trackingFetch,
+    );
     await adapter.generate(makeRequest());
   });
 });

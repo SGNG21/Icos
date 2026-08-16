@@ -8,9 +8,9 @@ import type { OmniRouteConfig } from "./omniroute-config";
 // ─────────────────────────────────────
 
 interface OmniRouteChatRequest {
-  model?: string;
+  model: string;
   messages: Array<{ role: string; content: string }>;
-  max_tokens?: number;
+  max_tokens: number;
   temperature?: number;
   /** OmniRoute : fournisseurs autorisés. */
   allowed_providers?: string[];
@@ -45,14 +45,11 @@ interface OmniRouteChatResponse {
   fallback_used?: boolean;
 }
 
-interface OmniRouteErrorResponse {
-  error: {
-    message: string;
-    type?: string;
-    code?: string;
-    provider_error?: string;
-  };
-}
+const OMNIROUTE_SERVER_MODEL = "icos-always-on";
+const OMNIROUTE_DEFAULT_MAX_TOKENS = 256;
+const OMNIROUTE_MAX_TOKENS = 4_096;
+const OMNIROUTE_MAX_RESPONSE_BYTES = 1_048_576;
+const OMNIROUTE_MAX_COMPLETION_LENGTH = 65_536;
 
 // ─────────────────────────────────────
 // Adapter-specific error (to distinguish from generic errors)
@@ -147,7 +144,14 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
     // Vérifier le signal d'annulation avant d'appeler fetch
     if (req.abortSignal?.aborted === true) {
-      return this.makeError("CANCELLED", "Requête annulée avant envoi", false, false, Date.now() - startTime, req.correlationId);
+      return this.makeError(
+        "CANCELLED",
+        "Requête annulée avant envoi",
+        false,
+        false,
+        Date.now() - startTime,
+        req.correlationId,
+      );
     }
 
     this.hooks?.onRequestStarted?.(req.correlationId, req.intent);
@@ -171,8 +175,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
       // HTTP error → map to AiError
       if (!response.ok) {
-        const errBody = await this.tryParseError(response);
-        const result = this.mapHttpError(errBody, response.status, latencyMs, req.correlationId);
+        const result = this.mapHttpError(response.status, latencyMs, req.correlationId);
         this.hooks?.onRequestCompleted?.(req.correlationId, {
           success: false,
           latencyMs: result.latencyMs,
@@ -182,7 +185,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
       }
 
       // Parse body
-      const data = await this.parseJsonResponse(response);
+      const data = await this.parseSuccessResponse(response);
 
       const result = this.mapSuccessResponse(data, latencyMs, req.correlationId);
       this.hooks?.onRequestCompleted?.(req.correlationId, {
@@ -200,18 +203,36 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
       // L'AbortSignal a été déclenché
       if (error instanceof DOMException && error.name === "AbortError") {
-        const errResult = this.makeError("CANCELLED", "Requête annulée", false, false, latencyMs, req.correlationId);
+        const errResult = this.makeError(
+          "CANCELLED",
+          "Requête annulée",
+          false,
+          false,
+          latencyMs,
+          req.correlationId,
+        );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "CANCELLED",
+          success: false,
+          latencyMs,
+          errorCode: "CANCELLED",
         });
         return errResult;
       }
 
       // Timeout (AbortSignal.timeout)
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        const errResult = this.makeError("TIMEOUT", "Délai d'attente dépassé", true, true, latencyMs, req.correlationId);
+        const errResult = this.makeError(
+          "TIMEOUT",
+          "Délai d'attente dépassé",
+          true,
+          true,
+          latencyMs,
+          req.correlationId,
+        );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "TIMEOUT",
+          success: false,
+          latencyMs,
+          errorCode: "TIMEOUT",
         });
         return errResult;
       }
@@ -227,7 +248,9 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
           req.correlationId,
         );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "PROVIDER_UNAVAILABLE",
+          success: false,
+          latencyMs,
+          errorCode: "PROVIDER_UNAVAILABLE",
         });
         return errResult;
       }
@@ -243,16 +266,27 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
           req.correlationId,
         );
         this.hooks?.onRequestCompleted?.(req.correlationId, {
-          success: false, latencyMs, errorCode: "INVALID_RESPONSE",
+          success: false,
+          latencyMs,
+          errorCode: "INVALID_RESPONSE",
         });
         return errResult;
       }
 
       // Erreur inconnue → fail-closed
       const message = error instanceof Error ? error.message : "Erreur interne inconnue";
-      const errResult = this.makeError("INTERNAL_ERROR", message, false, false, latencyMs, req.correlationId);
+      const errResult = this.makeError(
+        "INTERNAL_ERROR",
+        message,
+        false,
+        false,
+        latencyMs,
+        req.correlationId,
+      );
       this.hooks?.onRequestCompleted?.(req.correlationId, {
-        success: false, latencyMs, errorCode: "INTERNAL_ERROR",
+        success: false,
+        latencyMs,
+        errorCode: "INTERNAL_ERROR",
       });
       return errResult;
     }
@@ -264,7 +298,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
 
   async check(): Promise<boolean> {
     try {
-      const response = await this.fetchFn(`${this.baseUrl}/health`, {
+      const response = await this.fetchFn(`${this.baseUrl}/status`, {
         method: "GET",
         signal: AbortSignal.timeout(5_000),
       });
@@ -288,8 +322,9 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
     messages.push({ role: "user", content: request.prompt });
 
     return {
+      model: OMNIROUTE_SERVER_MODEL,
       messages,
-      max_tokens: request.maxTokens,
+      max_tokens: Math.min(request.maxTokens ?? OMNIROUTE_DEFAULT_MAX_TOKENS, OMNIROUTE_MAX_TOKENS),
       temperature: request.temperature,
       allowed_providers: request.allowedProviderIds,
       disallowed_providers: request.disallowedProviderIds,
@@ -358,8 +393,13 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
   // Private: response parsing
   // ─────────────────────────────────────
 
-  private async parseJsonResponse(response: Response): Promise<OmniRouteChatResponse> {
-    const text = await response.text();
+  private async parseSuccessResponse(response: Response): Promise<OmniRouteChatResponse> {
+    const text = await this.readBoundedBody(response);
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType.includes("text/event-stream")) {
+      return this.parseSseResponse(text);
+    }
+
     try {
       return JSON.parse(text) as OmniRouteChatResponse;
     } catch {
@@ -367,13 +407,93 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
     }
   }
 
-  private async tryParseError(response: Response): Promise<OmniRouteErrorResponse | undefined> {
-    try {
-      const text = await response.text();
-      return JSON.parse(text) as OmniRouteErrorResponse;
-    } catch {
-      return undefined;
+  private async readBoundedBody(response: Response): Promise<string> {
+    if (!response.body) {
+      throw new InvalidResponseError("Réponse vide du fournisseur");
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let byteLength = 0;
+    let text = "";
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      byteLength += chunk.value.byteLength;
+      if (byteLength > OMNIROUTE_MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new InvalidResponseError("Réponse du fournisseur trop longue");
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+
+    return text + decoder.decode();
+  }
+
+  private parseSseResponse(text: string): OmniRouteChatResponse {
+    let content = "";
+    let finishReason = "stop";
+    let done = false;
+
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      if (!line.startsWith("data:")) continue;
+
+      const payload = line.slice("data:".length).trimStart();
+      if (payload.trim() === "[DONE]") {
+        done = true;
+        break;
+      }
+
+      let event: unknown;
+      try {
+        event = JSON.parse(payload);
+      } catch {
+        throw new InvalidResponseError("Événement SSE invalide du fournisseur");
+      }
+
+      if (!event || typeof event !== "object") continue;
+      const choices = (event as { choices?: unknown }).choices;
+      if (!Array.isArray(choices)) continue;
+
+      for (const choice of choices) {
+        if (!choice || typeof choice !== "object") continue;
+        const candidate = choice as {
+          delta?: { content?: unknown };
+          finish_reason?: unknown;
+        };
+        if (typeof candidate.delta?.content === "string") {
+          if (content.length + candidate.delta.content.length > OMNIROUTE_MAX_COMPLETION_LENGTH) {
+            throw new InvalidResponseError("Réponse du fournisseur trop longue");
+          }
+          content += candidate.delta.content;
+        }
+        if (typeof candidate.finish_reason === "string") {
+          finishReason = candidate.finish_reason;
+        }
+      }
+    }
+
+    if (!done) {
+      throw new InvalidResponseError("Réponse SSE incomplète du fournisseur");
+    }
+    if (!content) {
+      throw new InvalidResponseError("Réponse SSE vide du fournisseur");
+    }
+
+    return {
+      model: "unknown",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content },
+          finish_reason: finishReason,
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      fallback_used: false,
+    };
   }
 
   // ─────────────────────────────────────
@@ -437,7 +557,6 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
   }
 
   private mapHttpError(
-    parsed: OmniRouteErrorResponse | undefined,
     status: number,
     latencyMs: number,
     correlationId: string,
@@ -446,7 +565,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
       case 429:
         return this.makeError(
           "RATE_LIMITED",
-          parsed?.error?.message ?? "Limite de taux atteinte",
+          "Limite de taux atteinte",
           true,
           true,
           latencyMs,
@@ -455,7 +574,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
       case 403:
         return this.makeError(
           "POLICY_BLOCKED",
-          parsed?.error?.message ?? "Requête bloquée par la politique",
+          "Requête bloquée par la politique",
           false,
           false,
           latencyMs,
@@ -464,7 +583,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
       case 400:
         return this.makeError(
           "UNSUPPORTED_CAPABILITY",
-          parsed?.error?.message ?? "Capacité non supportée",
+          "Capacité non supportée",
           false,
           true,
           latencyMs,
@@ -473,7 +592,7 @@ export class OmniRouteAdapter implements AiGatewayPort, AiHealthPort {
       default:
         return this.makeError(
           status >= 500 ? "PROVIDER_UNAVAILABLE" : "INTERNAL_ERROR",
-          parsed?.error?.message ?? `Erreur HTTP ${status}`,
+          status >= 500 ? "Service de génération indisponible" : "Erreur de génération",
           status >= 500,
           status >= 500,
           latencyMs,

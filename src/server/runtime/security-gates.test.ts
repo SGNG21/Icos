@@ -3,9 +3,11 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ExecuteStepInput } from "@/core/runtime";
+import type { ExecuteStepInput, RuntimeAdapterInput } from "@/core/runtime";
 import { FakeAiGateway } from "@/server/ai/fake-ai-gateway";
 
+import { LocalRuntimeAdapter } from "./adapters/local-runtime-adapter";
+import type { AgentRuntimeAdapter } from "./adapters/runtime-adapter";
 import { ArtifactCollector } from "./artifact-collector";
 import { createExecutionError } from "./errors";
 import { ExecutionOrchestrator } from "./execution-orchestrator";
@@ -40,7 +42,10 @@ function defaultInput(overrides: Partial<ExecuteStepInput> = {}): ExecuteStepInp
   };
 }
 
-async function createOrchestrator(testRoot: string) {
+async function createOrchestrator(
+  testRoot: string,
+  runtimeCommand?: Pick<RuntimeAdapterInput, "command" | "args">,
+) {
   const policy = new AllowPolicy();
   const aiGateway = new FakeAiGateway();
   const wm = new WorkspaceManager(testRoot);
@@ -49,7 +54,17 @@ async function createOrchestrator(testRoot: string) {
   const np = new FakeNetworkPolicy();
   np.allowAll(); // Permettre le réseau pour les tests sécurité
 
-  const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np);
+  const adapters = new Map<string, AgentRuntimeAdapter>();
+  if (runtimeCommand) {
+    const localRuntime = new LocalRuntimeAdapter({ workspaceManager: wm });
+    adapters.set("local", {
+      name: "local",
+      execute: (input, abortSignal) =>
+        localRuntime.execute({ ...input, ...runtimeCommand }, abortSignal),
+    });
+  }
+
+  const orchestrator = new ExecutionOrchestrator(policy, aiGateway, wm, ac, cb, np, adapters);
   return { orchestrator, workspaceManager: wm, credentialBroker: cb, networkPolicy: np, aiGateway };
 }
 
@@ -61,7 +76,7 @@ describe("SEC-D4-01: worker cannot obtain raw stored credentials", () => {
   it("les credentials retournent des références, pas de valeurs brutes", async () => {
     const broker = new FakeCredentialBroker();
     broker.predefinedCredentials = {
-      DB_PASSWORD: "super-secret-123",
+      DB_PASSWORD: "stub",
       API_KEY: "sk-test-abc",
     };
 
@@ -82,7 +97,7 @@ describe("SEC-D4-01: worker cannot obtain raw stored credentials", () => {
       }
       // Les valeurs sont dans environment, mais c'est le runtime
       // qui les injecte — pas le worker qui y accède directement
-      expect(resolution.environment.DB_PASSWORD).toBe("super-secret-123");
+      expect(resolution.environment.DB_PASSWORD).toBe("stub");
     }
   });
 });
@@ -137,30 +152,26 @@ describe("SEC-D4-03: workspace cannot escape root via ../", () => {
 
   it("../ simple est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "../etc/passwd")).rejects.toThrow(WorkspaceError);
   });
 
   it("../ profond est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "a/b/c/../../../../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "a/b/c/../../../../etc/passwd")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("../ depuis un sous-répertoire est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "output/../../../etc/shadow"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "output/../../../etc/shadow")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("chemin absolu hors workspace est refusé", async () => {
     const ws = await wm.createWorkspace("tenant-1", "run-1");
-    await expect(
-      wm.validatePathInWorkspace(ws, "/etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "/etc/passwd")).rejects.toThrow(WorkspaceError);
   });
 });
 
@@ -189,9 +200,7 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(outsideFile, "data");
     await symlink(outsideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, symPath),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, symPath)).rejects.toThrow(WorkspaceError);
   });
 
   it("symlink dans sous-répertoire pointant vers l'extérieur est refusé", async () => {
@@ -205,9 +214,9 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(outsideFile, "data");
     await symlink(outsideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, "deep/nested/up.lnk"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "deep/nested/up.lnk")).rejects.toThrow(
+      WorkspaceError,
+    );
   });
 
   it("symlink pointant dans le workspace est accepté", async () => {
@@ -218,9 +227,7 @@ describe("SEC-D4-04: workspace cannot escape via symlink", () => {
     await writeFile(insideFile, "data");
     await symlink(insideFile, symPath);
 
-    await expect(
-      wm.validatePathInWorkspace(ws, symPath),
-    ).resolves.toBe(symPath);
+    await expect(wm.validatePathInWorkspace(ws, symPath)).resolves.toBe(symPath);
   });
 });
 
@@ -330,9 +337,7 @@ describe("SEC-D4-08: TOCTOU-sensitive hash mismatch denies execution", () => {
 
     // Si le chemin est modifié après validation, la nouvelle validation échoue
     // (simule un changement entre validation et utilisation)
-    await expect(
-      wm.validatePathInWorkspace(ws, "../etc/passwd"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.validatePathInWorkspace(ws, "../etc/passwd")).rejects.toThrow(WorkspaceError);
 
     await rm(testRoot, { recursive: true, force: true }).catch(() => {});
   });
@@ -356,15 +361,11 @@ describe("SEC-D4-09: cleanup cannot delete outside owned workspace", () => {
   });
 
   it("refuse de nettoyer un chemin hors du root", async () => {
-    await expect(
-      wm.releaseWorkspace("/tmp/../usr"),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.releaseWorkspace("/tmp/../usr")).rejects.toThrow(WorkspaceError);
   });
 
   it("refuse de nettoyer le root lui-même", async () => {
-    await expect(
-      wm.releaseWorkspace(testRoot),
-    ).rejects.toThrow(WorkspaceError);
+    await expect(wm.releaseWorkspace(testRoot)).rejects.toThrow(WorkspaceError);
   });
 
   it("un fichier créé hors du root n'est pas supprimé par erreur", async () => {
@@ -390,11 +391,7 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
   it("les erreurs D4 ne contiennent pas de credentials", async () => {
     // Simuler une erreur qui pourrait contenir des données sensibles
     // L'erreur est déjà sanitizée par D4 avant d'être retournée
-    const error = createExecutionError(
-      "PROCESS_ERROR",
-      "Erreur générique",
-      false,
-    );
+    const error = createExecutionError("PROCESS_ERROR", "Erreur générique", false);
 
     // Vérifier que les patterns de credentials ne sont pas présents
     const credentialPatterns = [
@@ -402,7 +399,7 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
       /passwd\s*=/i,
       /api[_\-]?key\s*=/i,
       /sk-[a-zA-Z0-9]{10,}/, // OpenAI-style keys
-      /AKIA[A-Z0-9]{16}/,    // AWS access keys
+      /AKIA[A-Z0-9]{16}/, // AWS access keys
     ];
 
     for (const pattern of credentialPatterns) {
@@ -445,7 +442,10 @@ describe("SEC-D4-10: logs/artifacts cannot expose credential values", () => {
 describe("D4-17: process tree cleanup", () => {
   it("le timeout de l'adaptateur ne bloque pas l'orchestrateur", async () => {
     const testRoot = await mkdtemp("/tmp/d4-sec-clean-");
-    const { orchestrator: orch } = await createOrchestrator(testRoot);
+    const { orchestrator: orch } = await createOrchestrator(testRoot, {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+    });
 
     const result = await orch.execute(defaultInput());
     expect(result.ok).toBe(true);

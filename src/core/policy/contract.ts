@@ -28,9 +28,9 @@ export type PolicyDecision =
   | { outcome: "deny"; reason: string; code: PolicyDenialCode }
   | { outcome: "require_approval"; reason: string; expiresAt: string };
 
-/** Acteur de la requête (humain ou agent). */
+/** Acteur de la requête (humain, agent IA, ou système). */
 export interface PolicyActor {
-  kind: "human" | "agent";
+  kind: "human" | "agent" | "system";
   id: string;
   tenantId: string;
   roles?: readonly string[];

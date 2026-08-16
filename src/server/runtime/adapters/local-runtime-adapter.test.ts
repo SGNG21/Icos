@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -66,6 +66,44 @@ describe("D4.1 — LocalRuntimeAdapter (real subprocess)", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
+  it("D4.1-00a: commande absente → INTERNAL_ERROR sans artefact simulé", async () => {
+    const result = await adapter.execute(createInput({ workspacePath }));
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: "INTERNAL_ERROR",
+      message: "Executable command is required for local runtime execution",
+      retryable: false,
+    });
+    await expect(access(path.join(workspacePath, "output"))).rejects.toThrow();
+  });
+
+  it("D4.1-00b: commande vide → INTERNAL_ERROR sans artefact simulé", async () => {
+    const result = await adapter.execute(createInput({ workspacePath, command: "" }));
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: "INTERNAL_ERROR",
+      message: "Executable command is required for local runtime execution",
+      retryable: false,
+    });
+    await expect(access(path.join(workspacePath, "output"))).rejects.toThrow();
+  });
+
+  it("D4.1-00c: pré-annulation reste CANCELLED avant validation de commande", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await adapter.execute(createInput({ workspacePath }), controller.signal);
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: "CANCELLED",
+      message: "Exécution annulée avant le démarrage",
+      retryable: false,
+    });
+  });
+
   it("D4.1-01: exécute une vraie commande et capture stdout", async () => {
     const result = await adapter.execute(
       createInput({
@@ -82,10 +120,7 @@ describe("D4.1 — LocalRuntimeAdapter (real subprocess)", () => {
       expect(output.stdout).toContain("hello-from-child");
     }
 
-    const stdoutLog = await readFile(
-      path.join(workspacePath, "output", "stdout.log"),
-      "utf-8",
-    );
+    const stdoutLog = await readFile(path.join(workspacePath, "output", "stdout.log"), "utf-8");
     expect(stdoutLog).toContain("hello-from-child");
   });
 

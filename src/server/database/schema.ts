@@ -3,8 +3,10 @@ import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -189,8 +191,14 @@ export const capabilities = pgTable(
       "capabilities_status_check",
       sql`${t.status} in ('proposed','active','deprecated','retired')`,
     ),
-    check("capabilities_sensitivity_level_check", sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
-    check("capabilities_data_category_check", sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`),
+    check(
+      "capabilities_sensitivity_level_check",
+      sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`,
+    ),
+    check(
+      "capabilities_data_category_check",
+      sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`,
+    ),
     index("capabilities_status_idx").on(t.status),
     index("capabilities_sensitivity_level_idx").on(t.sensitivityLevel),
   ],
@@ -254,10 +262,22 @@ export const skills = pgTable(
   },
   (t) => [
     unique("skills_tenant_key_version_unique").on(t.tenantId, t.skillKey, t.version),
-    check("skills_trust_state_check", sql`${t.trustState} in ('untrusted','quarantined','reviewed','approved','rejected')`),
-    check("skills_activation_state_check", sql`${t.activationState} in ('inactive','active','suspended','revoked')`),
-    check("skills_data_category_check", sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`),
-    check("skills_sensitivity_level_check", sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
+    check(
+      "skills_trust_state_check",
+      sql`${t.trustState} in ('untrusted','quarantined','reviewed','approved','rejected')`,
+    ),
+    check(
+      "skills_activation_state_check",
+      sql`${t.activationState} in ('inactive','active','suspended','revoked')`,
+    ),
+    check(
+      "skills_data_category_check",
+      sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`,
+    ),
+    check(
+      "skills_sensitivity_level_check",
+      sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`,
+    ),
     index("skills_trust_state_idx").on(t.trustState),
     index("skills_activation_state_idx").on(t.activationState),
     index("skills_skill_key_idx").on(t.skillKey),
@@ -283,7 +303,10 @@ export const skillSecurityScans = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
-    check("skill_security_scans_status_check", sql`${t.status} in ('running','passed','failed','error')`),
+    check(
+      "skill_security_scans_status_check",
+      sql`${t.status} in ('running','passed','failed','error')`,
+    ),
     index("skill_security_scans_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
   ],
 );
@@ -304,7 +327,10 @@ export const skillSecurityFindings = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
-    check("skill_security_findings_severity_check", sql`${t.severity} in ('low','medium','high','critical')`),
+    check(
+      "skill_security_findings_severity_check",
+      sql`${t.severity} in ('low','medium','high','critical')`,
+    ),
     index("skill_security_findings_scan_idx").on(t.scanId),
   ],
 );
@@ -328,7 +354,10 @@ export const skillEvaluations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
-    check("skill_evaluations_status_check", sql`${t.status} in ('running','passed','failed','error')`),
+    check(
+      "skill_evaluations_status_check",
+      sql`${t.status} in ('running','passed','failed','error')`,
+    ),
     index("skill_evaluations_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
   ],
 );
@@ -386,7 +415,10 @@ export const idempotencyEntries = pgTable(
     replayResult: jsonb("replay_result"),
   },
   (t) => [
-    check("idempotency_state_check", sql`${t.state} in ('RESERVED','EXECUTING','COMPLETED','FAILED_SAFE','UNKNOWN')`),
+    check(
+      "idempotency_state_check",
+      sql`${t.state} in ('RESERVED','EXECUTING','COMPLETED','FAILED_SAFE','UNKNOWN')`,
+    ),
     index("idempotency_entries_tenant_idx").on(t.tenantId),
     index("idempotency_entries_principal_idx").on(t.principalId),
     index("idempotency_entries_state_idx").on(t.state),
@@ -416,10 +448,50 @@ export const executionRecords = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (t) => [
-    check("execution_records_sensitivity_check", sql`${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
+    check(
+      "execution_records_sensitivity_check",
+      sql`${t.sensitivityLevel} in ('C0','C1','C2','C3')`,
+    ),
     index("execution_records_tenant_idx").on(t.tenantId),
     index("execution_records_principal_idx").on(t.principalId),
     index("execution_records_idempotency_key_idx").on(t.idempotencyKey),
     index("execution_records_request_hash_idx").on(t.requestHash),
+  ],
+);
+
+// ─────────────────────────────────────
+// CTX-SUP-1B — MissionContext Persistence + Versioning
+// ─────────────────────────────────────
+
+/**
+ * Snapshots versionnés IMMUABLES du MissionContext (append-only).
+ *
+ * FRONTIÈRES (voir spec CTX-SUP-1 §6.1) :
+ *   Persistance ≠ Authorization ; Stored Context ≠ Approval / ExecutionGrant.
+ * Le `payload` est un MissionContext `.strict()` : il ne peut porter aucun
+ * champ d'autorité (grant, token, approbation, credential).
+ *
+ * La clé primaire composite `(tenant_id, mission_id, version)` EST le verrou
+ * optimiste : deux writers en course sur la même version → une seule réussit,
+ * l'autre reçoit `23505 unique_violation` (concurrence fail-closed, jamais de
+ * last-write-wins). Le « latest » est DÉRIVÉ de `MAX(version)`.
+ */
+export const missionContexts = pgTable(
+  "mission_contexts",
+  {
+    tenantId: text("tenant_id").notNull(),
+    missionId: text("mission_id").notNull(),
+    version: integer("version").notNull(),
+    payload: jsonb("payload").notNull(), // @classification C2
+    builtAt: timestamp("built_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: "mission_contexts_pkey",
+      columns: [t.tenantId, t.missionId, t.version],
+    }),
+    check("mission_contexts_version_check", sql`${t.version} >= 0`),
+    index("mission_contexts_latest_idx").on(t.tenantId, t.missionId, t.version.desc()),
   ],
 );

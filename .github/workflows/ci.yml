@@ -1,0 +1,71 @@
+# INTEGRATION PHASE 3B — Minimal CI gate for pull requests and main.
+#
+# Mirrors the local evidence procedure exactly:
+#   env -u NODE_ENV -u PERSISTENCE pnpm <gate>
+# NODE_ENV / PERSISTENCE are intentionally unset (empoisonnement
+# d'environnement démontré sur les gates du dépôt — voir GlobalGates).
+# GitHub runners do not set them, and no step here introduces them.
+#
+# Versions come from the project's own declarations:
+#   - pnpm  : package.json "packageManager" (pnpm/action-setup reads it)
+#   - node  : .nvmrc (engines: ">=24 <25")
+#
+# This workflow runs quality gates ONLY. No deployment, no publish,
+# no external effect of any kind.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history — secret scan diffs origin/main...HEAD)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node (version from .nvmrc) + pnpm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # Gates run sequentially, one step each, so every check reports
+      # individually. Same order as the local GlobalGates procedure.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Compliance — classification markers
+        run: pnpm compliance:check
+
+      - name: Compliance — secret scan
+        run: pnpm compliance:scan-secrets
