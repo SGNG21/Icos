@@ -1,5 +1,7 @@
 decision_id: DEC-0011
-status: PROPOSED
+status: ACCEPTED
+accepted_by: "Geoffrey Nozza"
+accepted_at: "2026-08-16"
 topic: "Adopt the supervisor/worker autonomous mission architecture (icos-cockpit-real) as the ICOS execution runtime"
 authority: APPROVAL
 owner: human-owner

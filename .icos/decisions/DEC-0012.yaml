@@ -1,5 +1,11 @@
 decision_id: DEC-0012
-status: PROPOSED
+status: ACCEPTED
+accepted_by: "Geoffrey Nozza"
+accepted_at: "2026-08-16"
+acceptance_scope: >-
+  TEMPORARY risk acceptance only. This acceptance does NOT supersede or
+  weaken DEC-0003. The RLS remediation requirements in follow_up_required
+  remain binding and MUST be completed before any production use.
 topic: "Record and remediate the mission_contexts no-RLS contradiction with DEC-0003 (tenant isolation defense-in-depth)"
 authority: APPROVAL
 owner: human-owner
