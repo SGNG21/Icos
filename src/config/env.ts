@@ -27,6 +27,8 @@ const envSchema = z.object({
   N8N_API_KEY: optionalSecret,
   DOLIBARR_BASE_URL: optionalUrl,
   DOLIBARR_API_KEY: optionalSecret,
+  // SkillsMP read-only discovery (optionnel — le provider échoue closed si absent)
+  SKILLSMP_API_KEY: optionalSecret,
 });
 
 export type Env = z.infer<typeof envSchema>;
