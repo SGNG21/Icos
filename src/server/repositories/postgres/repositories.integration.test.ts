@@ -228,6 +228,7 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
       decidedByLabel: "op",
       reason: null,
       decidedAt: new Date(),
+      createdAt: new Date(),
     });
 
     await expect(
@@ -238,6 +239,7 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
         decidedByLabel: "op",
         reason: "trop tard",
         decidedAt: new Date(),
+        createdAt: new Date(),
       }),
     ).rejects.toThrow();
   });
@@ -252,6 +254,7 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
       decidedByLabel: "op",
       reason: null,
       decidedAt: new Date(),
+      createdAt: new Date(),
     });
     expect(await repo.listForAction("action-ap")).toHaveLength(1);
     expect(await repo.listForAction("action-inconnue")).toHaveLength(0);
@@ -265,6 +268,7 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
       eventType: "task.created",
       actor: { kind: "system", id: "icos" },
       details: { note: "x" },
+      createdAt: "2026-07-21T08:00:00.000Z",
     });
     await audit.appendMany([
       {
@@ -273,6 +277,7 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
         eventType: "action.decided",
         actor: { kind: "human", id: "op" },
         details: { decision: "approved" },
+        createdAt: "2026-07-21T08:01:00.000Z",
       },
     ]);
 
@@ -286,7 +291,8 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
         eventType: "task.created",
         actor: { kind: "system", id: "icos" },
         details: { bad: Number.POSITIVE_INFINITY },
-      }),
+        createdAt: "2026-07-21T08:02:00.000Z",
+      })
     ).rejects.toThrow();
   });
 

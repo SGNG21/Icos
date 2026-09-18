@@ -136,6 +136,7 @@ describe("buildHumanAdministrationAudit", () => {
     expect(entry).toEqual({
       id: base.id,
       occurredAt: base.occurredAt,
+      createdAt: base.occurredAt,
       actor: { kind: "human", id: base.actorUserId },
       ...expected,
     });

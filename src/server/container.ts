@@ -13,6 +13,7 @@ import { PostgresHumanUserRepository } from "@/server/repositories/postgres/huma
 import { PostgresRoleRepository } from "@/server/repositories/postgres/role-repository";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { createDatabase } from "@/server/database/client";
+import type { Database } from "@/server/database/client";
 import { PersistenceUnavailableError } from "@/server/database/errors";
 import { agents as agentsTable } from "@/server/database/schema";
 import { InMemoryActionDecisionStore } from "@/server/services/in-memory/action-decision-store";
@@ -30,6 +31,18 @@ import { PostgresAuditRepository } from "@/server/repositories/postgres/audit-re
 import { PostgresCapabilityRepository } from "@/server/repositories/postgres/capability-repository";
 import { PostgresAgentCapabilityRepository } from "@/server/repositories/postgres/agent-capability-repository";
 import { PostgresTaskRepository } from "@/server/repositories/postgres/task-repository";
+import { PostgresTaskExecutionResultRepository } from "@/server/repositories/postgres/task-execution-result-repository";
+import { PostgresMissionRepository } from "@/server/repositories/postgres/mission-repository";
+import { PostgresDispatchAttemptRepository } from "@/server/repositories/postgres/dispatch-attempt-repository";
+import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-durable-memory";
+import { PostgresReviewerService } from "@/server/repositories/postgres/postgres-reviewer-service";
+import { PostgresReviewDecisionRepository } from "@/server/repositories/postgres/review-decision-repository";
+import { PostgresQualityControlRepository } from "@/server/repositories/postgres/quality-control-repository";
+import { PostgresAutonomousMissionRuntimeRepository } from "@/server/repositories/postgres/autonomous-mission-runtime-repository";
+import {
+  PostgresConversationRepository,
+  PostgresMessageRepository,
+} from "@/server/repositories/postgres/ceo-repository";
 import type {
   ActionRepository,
   AgentRepository,
@@ -37,6 +50,7 @@ import type {
   AuditRepository,
   HumanAgentLinkRepository,
   HumanUserAdministrationRepository,
+  TaskExecutionResultRepository,
   TaskRepository,
 } from "@/server/repositories/ports";
 import type {
@@ -62,6 +76,30 @@ import { InMemoryCapabilityUnitOfWork } from "@/server/uow/in-memory-capability-
 import { PostgresCapabilityUnitOfWork } from "@/server/uow/postgres-capability-uow";
 import { SkillService } from "@/server/services/skill-service";
 import { InMemorySkillRepository, InMemorySkillSecurityScanRepository, InMemorySkillEvaluationRepository } from "@/server/services/in-memory/skill-repository";
+import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
+import { InMemoryMissionRepository } from "@/server/services/in-memory/mission-repository";
+import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
+import { TemporalTaskExecutionDispatcher } from "@/server/execution/temporal-task-execution-dispatcher";
+import type { TaskExecutionDispatcher } from "@/server/execution/ports";
+import { InMemoryTaskExecutionResultRepository } from "@/server/services/in-memory/task-execution-result-repository";
+import { InMemoryDurableMemory, type DurableMemory } from "@/core/context/durable-memory";
+import { InMemoryReviewerService } from "@/server/review/in-memory-reviewer-service";
+import type { ReviewerService } from "@/server/review/ports";
+import { createOmniRouteReviewer } from "@/server/review/omniroute-reviewer";
+import type { ReviewDecisionRepository } from "@/server/review/review-decision-repository";
+import { InMemoryReviewDecisionRepository } from "@/server/services/in-memory/review-decision-repository";
+import { InMemoryQualityControlRepository } from "@/server/services/in-memory/quality-control-repository";
+import { InMemoryAutonomousMissionRuntimeRepository } from "@/server/services/in-memory/autonomous-mission-runtime-repository";
+import { InMemoryConversationRepository, InMemoryMessageRepository } from "@/server/services/in-memory/ceo-repository";
+import { ConversationService } from "@/server/services/conversation-service";
+import { CeoApplicationService } from "@/server/services/ceo-service";
+import { MissionService } from "@/server/mission/mission-service";
+import type { MissionRepository } from "@/server/mission/ports";
+import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
+import type { QualityControlRepository } from "@/core/contracts/quality-control";
+import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
+import type { AutonomousMissionPlanner } from "@/server/autonomy/autonomous-mission-runner";
+import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
 import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
 import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
 import { PostgresSkillUnitOfWork } from "@/server/uow/postgres-skill-uow";
@@ -108,6 +146,21 @@ export interface Container {
   operationalAccess?: OperationalAccessService;
   /** Mutations d'administration humaine transactionnelles. */
   humanAdministrationUow?: HumanAdministrationUnitOfWork;
+  mission: MissionRepository;
+  missionService: MissionService;
+  taskExecution: TaskExecutionDispatcher;
+  executionCallbackSecret?: string;
+  executionResults: TaskExecutionResultRepository;
+  durableMemory: DurableMemory;
+  dispatchAttempts: DispatchAttemptRepository;
+  reviewer: ReviewerService;
+  reviewDecisions: ReviewDecisionRepository;
+  qualityControlJobs: QualityControlRepository;
+  autonomousRuntime: AutonomousMissionRuntimeRepository;
+  autonomousPlanner?: AutonomousMissionPlanner;
+  conversationService: ConversationService;
+  ceoService: CeoApplicationService;
+  db?: Database;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
   close: () => Promise<void>;
 }
@@ -148,9 +201,21 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const skillUow = new InMemorySkillUnitOfWork(skills, auditLog);
   const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, new InMemoryAuditRepository(auditLog), skillUow);
 
+  const tasksRepository = new InMemoryTaskRepository(auditLog, tasks);
+  const mission = new InMemoryMissionRepository(tasksRepository);
+  const dispatchAttempts = new InMemoryDispatchAttemptRepository(mission, tasksRepository);
+  const executionResults = new InMemoryTaskExecutionResultRepository(auditLog, tasksRepository);
+  const reviewDecisions = new InMemoryReviewDecisionRepository();
+  const autonomousRuntime = new InMemoryAutonomousMissionRuntimeRepository();
+  const conversationService = new ConversationService(
+    new InMemoryConversationRepository(),
+    new InMemoryMessageRepository(),
+  );
+  const missionService = new MissionService(mission);
+
   return {
     agents: new InMemoryAgentRepository(agents),
-    tasks: new InMemoryTaskRepository(auditLog, tasks),
+    tasks: tasksRepository,
     actions: new InMemoryActionRepository(store),
     approvals: new InMemoryApprovalRepository(store),
     audit: new InMemoryAuditRepository(auditLog),
@@ -165,6 +230,28 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     skillEvaluations,
     skillService,
     skillUow,
+    mission,
+    missionService,
+    taskExecution: new InMemoryTaskExecutionDispatcher(),
+    executionCallbackSecret: undefined,
+    executionResults,
+    durableMemory: new InMemoryDurableMemory(),
+    dispatchAttempts,
+    reviewer: new InMemoryReviewerService(),
+    reviewDecisions,
+    qualityControlJobs: new InMemoryQualityControlRepository(
+      mission,
+      tasksRepository,
+      executionResults,
+      reviewDecisions,
+      dispatchAttempts,
+      autonomousRuntime,
+    ),
+    autonomousRuntime,
+    autonomousPlanner: undefined,
+    conversationService,
+    ceoService: new CeoApplicationService(conversationService, missionService),
+    db: undefined,
     close: async () => {},
   };
 }
@@ -228,6 +315,7 @@ export function composeAdministration(
 export async function buildPostgresContainer(
   url: string,
   authConfig?: AuthConfig,
+  env: Env = loadEnv(),
 ): Promise<Container> {
   const handle = createDatabase(url);
   try {
@@ -257,10 +345,27 @@ export async function buildPostgresContainer(
     audit,
     humanAdministrationUow: new PostgresHumanAdministrationUnitOfWork(handle.db),
   });
+  const tasks = new PostgresTaskRepository(handle.db);
+  const mission = new PostgresMissionRepository(handle.db, tasks);
+  const missionService = new MissionService(mission);
+  const dispatchAttempts = new PostgresDispatchAttemptRepository(handle.db);
+  const executionResults = new PostgresTaskExecutionResultRepository(handle.db);
+  const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
+  const autonomousRuntime = new PostgresAutonomousMissionRuntimeRepository(handle.db);
+  const llmReviewer = createOmniRouteReviewer(env);
+  if (!llmReviewer) {
+    await handle.close().catch(() => {});
+    throw new PersistenceConfigError("Le reviewer OmniRoute est requis pour le backend PostgreSQL.");
+  }
+  const reviewer = new PostgresReviewerService(handle.db, llmReviewer);
+  const conversationService = new ConversationService(
+    new PostgresConversationRepository(handle.db),
+    new PostgresMessageRepository(handle.db),
+  );
 
   return {
     agents,
-    tasks: new PostgresTaskRepository(handle.db),
+    tasks,
     actions: new PostgresActionRepository(handle.db),
     approvals: new PostgresApprovalRepository(handle.db),
     audit,
@@ -280,6 +385,28 @@ export async function buildPostgresContainer(
     authHttp: authentication?.authHttp,
     roles,
     ...administration,
+    mission,
+    missionService,
+    taskExecution: new TemporalTaskExecutionDispatcher(
+      env.TEMPORAL_ADDRESS,
+      env.TEMPORAL_TASK_QUEUE,
+      env.TEMPORAL_WORKFLOW_TYPE,
+      true,
+      undefined,
+      env.TEMPORAL_DISPATCH_TIMEOUT_MS,
+    ),
+    executionCallbackSecret: env.ICOS_EXECUTION_CALLBACK_SECRET,
+    executionResults,
+    durableMemory: new PostgresDurableMemory(handle.db),
+    dispatchAttempts,
+    reviewer,
+    reviewDecisions,
+    qualityControlJobs: new PostgresQualityControlRepository(handle.db),
+    autonomousRuntime,
+    autonomousPlanner: createOmniRouteAutonomousMissionPlanner(env),
+    conversationService,
+    ceoService: new CeoApplicationService(conversationService, missionService),
+    db: handle.db,
     close: handle.close,
   };
 }
@@ -312,7 +439,7 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
       env.BETTER_AUTH_SECRET !== undefined && env.BETTER_AUTH_URL !== undefined
         ? resolveAuthConfig(env)
         : undefined;
-    return buildPostgresContainer(env.DATABASE_URL, authConfig);
+    return buildPostgresContainer(env.DATABASE_URL, authConfig, env);
   }
 
   return buildMemoryContainer(options.seeds);

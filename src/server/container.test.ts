@@ -15,6 +15,16 @@ import { demoAgents } from "@/features/agents/data";
 import { demoTasks } from "@/features/tasks/data";
 
 import { buildMemoryContainer, composeAdministration, composeAuthentication } from "./container";
+import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
+import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
+import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
+import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
+import { InMemoryMissionRepository } from "@/server/services/in-memory/mission-repository";
+import { InMemoryTaskExecutionResultRepository } from "@/server/services/in-memory/task-execution-result-repository";
+import { InMemoryReviewDecisionRepository } from "@/server/services/in-memory/review-decision-repository";
+import { InMemoryQualityControlRepository } from "@/server/services/in-memory/quality-control-repository";
+import { InMemoryAutonomousMissionRuntimeRepository } from "@/server/services/in-memory/autonomous-mission-runtime-repository";
+import { InMemoryDurableMemory } from "@/core/context/durable-memory";
 
 const unusedDatabase = {} as Database;
 const unusedRoles = {} as RoleRepository;
@@ -24,6 +34,43 @@ describe("buildMemoryContainer", () => {
     const container = buildMemoryContainer();
     expect((await container.agents.list()).length).toBe(demoAgents.length);
     expect((await container.actions.list({ approvalStatus: "pending" })).length).toBeGreaterThan(0);
+  });
+
+  it("reconstruit le graphe de services ICOS sur des collaborateurs partagés", async () => {
+    const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
+
+    expect(container.taskExecution).toBeInstanceOf(InMemoryTaskExecutionDispatcher);
+    expect(container.dispatchAttempts).toBeInstanceOf(InMemoryDispatchAttemptRepository);
+    expect(container.executionResults).toBeDefined();
+    expect(container.durableMemory).toBeDefined();
+    expect(container.reviewer).toBeDefined();
+    expect(container.reviewDecisions).toBeDefined();
+    expect(container.qualityControlJobs).toBeDefined();
+    expect(container.autonomousRuntime).toBeDefined();
+    expect(container.conversationService).toBeDefined();
+    expect(container.ceoService).toBeDefined();
+    expect(container.db).toBeUndefined();
+    expect(container.executionCallbackSecret).toBeUndefined();
+    expect(container.mission).toBeInstanceOf(InMemoryMissionRepository);
+    expect(container.tasks).toBeInstanceOf(InMemoryTaskRepository);
+    expect(container.audit).toBeInstanceOf(InMemoryAuditRepository);
+    expect(container.dispatchAttempts).toBeInstanceOf(InMemoryDispatchAttemptRepository);
+    expect(container.executionResults).toBeInstanceOf(InMemoryTaskExecutionResultRepository);
+    expect(container.reviewDecisions).toBeInstanceOf(InMemoryReviewDecisionRepository);
+    expect(container.qualityControlJobs).toBeInstanceOf(InMemoryQualityControlRepository);
+    expect(container.autonomousRuntime).toBeInstanceOf(
+      InMemoryAutonomousMissionRuntimeRepository,
+    );
+    expect(container.durableMemory).toBeInstanceOf(InMemoryDurableMemory);
+
+    const mission = await container.mission.create({
+      title: "Shared task repository",
+      objective: "Prove canonical task sharing",
+      tasks: [{ title: "Recover", dependsOn: [] }],
+    });
+    const [missionTask] = await container.mission.listTasks(mission.id);
+
+    expect(await container.tasks.getById(missionTask.taskId)).not.toBeNull();
   });
 
   it("ne compose aucune capacité PostgreSQL avec le backend mémoire", () => {

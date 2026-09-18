@@ -83,6 +83,7 @@ describe("comparateurs d'ordre", () => {
       eventType: "task.created",
       actor: { kind: "system", id: "icos" },
       details: {},
+      createdAt: occurredAt, // assuming createdAt same as occurredAt for test
     });
     const sorted = [
       e("audit-b", "2026-07-21T10:00:00.000Z"),

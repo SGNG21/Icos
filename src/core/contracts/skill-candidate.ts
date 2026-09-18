@@ -13,9 +13,7 @@ export const candidateVerificationStateSchema = z.enum([
   "failed",
 ]);
 
-export type CandidateVerificationState = z.infer<
-  typeof candidateVerificationStateSchema
->;
+export type CandidateVerificationState = z.infer<typeof candidateVerificationStateSchema>;
 
 /**
  * États de trust du candidat (pre-registry).
@@ -42,9 +40,7 @@ export const candidateSecurityStateSchema = z.enum([
   "error",
 ]);
 
-export type CandidateSecurityState = z.infer<
-  typeof candidateSecurityStateSchema
->;
+export type CandidateSecurityState = z.infer<typeof candidateSecurityStateSchema>;
 
 /**
  * États de compatibilité du candidat (pre-registry).
@@ -57,9 +53,7 @@ export const candidateCompatibilityStateSchema = z.enum([
   "incompatible",
 ]);
 
-export type CandidateCompatibilityState = z.infer<
-  typeof candidateCompatibilityStateSchema
->;
+export type CandidateCompatibilityState = z.infer<typeof candidateCompatibilityStateSchema>;
 
 /**
  * Preuve d'une capacité revendiquée par la source externe.
@@ -70,19 +64,9 @@ export const capabilityClaimEvidenceSchema = z.object({
   capabilityKey: z
     .string()
     .min(3)
-    .regex(
-      /^[a-z0-9][a-z0-9_-]+(\.[a-z0-9][a-z0-9_-]+)*$/,
-      "clé capacité invalide",
-    ),
+    .regex(/^[a-z0-9][a-z0-9_-]+(\.[a-z0-9][a-z0-9_-]+)*$/, "clé capacité invalide"),
   /** Type de preuve : manifest, code, documentation, test, example, other */
-  evidenceType: z.enum([
-    "manifest",
-    "code",
-    "documentation",
-    "test",
-    "example",
-    "other",
-  ]),
+  evidenceType: z.enum(["manifest", "code", "documentation", "test", "example", "other"]),
   /** Description lisible de la preuve */
   description: z.string().min(1),
   /** Confiance 0..1 — 0.5 par défaut si absent */
@@ -91,9 +75,7 @@ export const capabilityClaimEvidenceSchema = z.object({
   sourceRef: z.string().optional(),
 });
 
-export type CapabilityClaimEvidence = z.infer<
-  typeof capabilityClaimEvidenceSchema
->;
+export type CapabilityClaimEvidence = z.infer<typeof capabilityClaimEvidenceSchema>;
 
 /**
  * Indice de compatibilité fourni par la source.
@@ -103,14 +85,7 @@ export const compatibilityHintSchema = z.object({
   /** Ex: "nextjs>=15", "react>=18", "node>=20", "mcp", "langgraph" */
   target: z.string().min(1),
   /** Type d'indice : runtime, framework, protocol, platform, tooling, other */
-  hintType: z.enum([
-    "runtime",
-    "framework",
-    "protocol",
-    "platform",
-    "tooling",
-    "other",
-  ]),
+  hintType: z.enum(["runtime", "framework", "protocol", "platform", "tooling", "other"]),
   /** Description */
   description: z.string().min(1),
   /** Version ou contrainte si applicable */
@@ -210,9 +185,7 @@ export const candidateSearchResultSchema = z.object({
   }),
 });
 
-export type CandidateSearchResult = z.infer<
-  typeof candidateSearchResultSchema
->;
+export type CandidateSearchResult = z.infer<typeof candidateSearchResultSchema>;
 
 /**
  * Codes d'erreur typés pour le provider SkillsMP.
@@ -246,5 +219,9 @@ export class SkillsMpError extends Error {
  * Vérifie si un code d'erreur est retryable.
  */
 export function isSkillsMpErrorRetryable(code: SkillsMpErrorCode): boolean {
-  return code === "SKILLSMP_RATE_LIMITED" || code === "SKILLSMP_UNAVAILABLE" || code === "SKILLSMP_TIMEOUT";
+  return (
+    code === "SKILLSMP_RATE_LIMITED" ||
+    code === "SKILLSMP_UNAVAILABLE" ||
+    code === "SKILLSMP_TIMEOUT"
+  );
 }

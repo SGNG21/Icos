@@ -3,11 +3,7 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import type { Skill, SkillListFilters } from "@/core/contracts/skill";
 import { Database } from "@/server/database/client";
 import { rowToSkill, skillToRow } from "@/server/database/mappers";
-import {
-  skills,
-  skillSecurityScans,
-  skillEvaluations,
-} from "@/server/database/schema";
+import { skills, skillSecurityScans, skillEvaluations } from "@/server/database/schema";
 import type {
   SkillRepository,
   SkillSecurityScanRepository,
@@ -29,11 +25,21 @@ export class PostgresSkillRepository implements SkillRepository {
     return rows.length === 0 ? null : rowToSkill(rows[0]);
   }
 
-  async getByKeyAndVersion(tenantId: string, skillKey: string, version: string): Promise<Skill | null> {
+  async getByKeyAndVersion(
+    tenantId: string,
+    skillKey: string,
+    version: string,
+  ): Promise<Skill | null> {
     const rows = await this.db
       .select()
       .from(skills)
-      .where(and(eq(skills.tenantId, tenantId), eq(skills.skillKey, skillKey), eq(skills.version, version)))
+      .where(
+        and(
+          eq(skills.tenantId, tenantId),
+          eq(skills.skillKey, skillKey),
+          eq(skills.version, version),
+        ),
+      )
       .limit(1);
     return rows.length === 0 ? null : rowToSkill(rows[0]);
   }
@@ -100,7 +106,10 @@ export class PostgresSkillRepository implements SkillRepository {
     return rows.length === 0 ? null : rowToSkill(rows[0]);
   }
 
-  async updateContent(id: string, data: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">): Promise<Skill | null> {
+  async updateContent(
+    id: string,
+    data: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">,
+  ): Promise<Skill | null> {
     const row = skillToRow({ ...data, id, tenantId: "", createdAt: "", updatedAt: "" });
     const rows = await this.db
       .update(skills)
@@ -131,7 +140,11 @@ export class PostgresSkillRepository implements SkillRepository {
     return rows.length === 0 ? null : rowToSkill(rows[0]);
   }
 
-  async deactivateIfActive(tenantId: string, skillKey: string, excludingId: string): Promise<string | null> {
+  async deactivateIfActive(
+    tenantId: string,
+    skillKey: string,
+    excludingId: string,
+  ): Promise<string | null> {
     const rows = await this.db
       .update(skills)
       .set({ activationState: "inactive", updatedAt: new Date() })
@@ -161,7 +174,10 @@ export class PostgresSkillSecurityScanRepository implements SkillSecurityScanRep
   constructor(private readonly db: Database) {}
 
   async create(scan: SecurityScan): Promise<SecurityScan> {
-    const rows = await this.db.insert(skillSecurityScans).values(securityScanToRow(scan)).returning();
+    const rows = await this.db
+      .insert(skillSecurityScans)
+      .values(securityScanToRow(scan))
+      .returning();
     return rowToSecurityScan(rows[0]);
   }
 
@@ -198,7 +214,10 @@ export class PostgresSkillEvaluationRepository implements SkillEvaluationReposit
   constructor(private readonly db: Database) {}
 
   async create(evalRecord: Evaluation): Promise<Evaluation> {
-    const rows = await this.db.insert(skillEvaluations).values(skillEvalToRow(evalRecord)).returning();
+    const rows = await this.db
+      .insert(skillEvaluations)
+      .values(skillEvalToRow(evalRecord))
+      .returning();
     return rowToSkillEval(rows[0]);
   }
 

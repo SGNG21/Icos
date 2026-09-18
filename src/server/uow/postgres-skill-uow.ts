@@ -22,18 +22,18 @@ export class PostgresSkillUnitOfWork implements SkillUnitOfWork {
     actorLabel: string;
     deactivationAudit: AuditEntry;
     activationAudit: AuditEntry;
-  }): Promise<SkillUowResult<{ skill: import("@/core/contracts/skill").Skill; deactivatedVersionId: string | null }>> {
+  }): Promise<
+    SkillUowResult<{
+      skill: import("@/core/contracts/skill").Skill;
+      deactivatedVersionId: string | null;
+    }>
+  > {
     return this.db.transaction(async (tx) => {
       // 1. FOR UPDATE sur les versions du skillKey
       const locked = await tx
         .select()
         .from(skills)
-        .where(
-          and(
-            eq(skills.tenantId, input.tenantId),
-            eq(skills.skillKey, input.skillKey),
-          ),
-        )
+        .where(and(eq(skills.tenantId, input.tenantId), eq(skills.skillKey, input.skillKey)))
         .for("update");
 
       // 2. Désactiver l'ancienne version active

@@ -70,5 +70,6 @@ export async function appendSecurityAudit(
     eventType: input.eventType,
     actor: input.userId ? { kind: "human", id: input.userId } : { kind: "system", id: "icos-auth" },
     details: detailsFor(input),
+    createdAt: new Date().toISOString(),
   });
 }

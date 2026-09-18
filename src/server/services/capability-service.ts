@@ -69,6 +69,7 @@ export class CapabilityService {
       eventType: "capability.created",
       actor: { kind: "human", id: input.actorLabel },
       details: { key: input.key, name: input.name, category: input.category },
+      createdAt: now,
     };
 
     const uowResult = await this.uow.createCapabilityWithAudit({ capability, auditEntry });
@@ -107,6 +108,7 @@ export class CapabilityService {
         from: existing.status,
         to: input.targetStatus,
       },
+      createdAt: now,
     };
 
     const uowResult = await this.uow.changeStatusWithAudit({
@@ -141,6 +143,7 @@ export class CapabilityService {
         capabilityId: input.capabilityId,
         assignedByUserId: input.assignedByUserId,
       },
+      createdAt: now,
     };
 
     return this.uow.grantCapabilityWithAudit({ agentCapability: ac, auditEntry });
@@ -169,6 +172,7 @@ export class CapabilityService {
         agentId: existing.agentId,
         capabilityId: existing.capabilityId,
       },
+      createdAt: now,
     };
 
     return this.uow.revokeCapabilityWithAudit({ id: input.agentCapabilityId, auditEntry });

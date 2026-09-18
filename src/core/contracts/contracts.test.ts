@@ -38,6 +38,7 @@ const validAuditEntry = {
   actor: { kind: "human", id: "geoffrey" },
   actionId: "action-001",
   details: { decision: "approved" },
+  createdAt: "2026-07-21T09:00:00.000Z",
 };
 
 describe("identifiants", () => {

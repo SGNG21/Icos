@@ -49,6 +49,7 @@ function decisionInput(
         actor: { kind: "human", id: "op" },
         actionId: action.id,
         details: { decision: "approved" },
+        createdAt: ISO,
       },
       {
         id: ids.auditB ?? "audit-b",
@@ -57,6 +58,7 @@ function decisionInput(
         actor: { kind: "human", id: "op" },
         actionId: action.id,
         details: { approvalStatus: "approved" },
+        createdAt: ISO,
       },
     ],
   };
@@ -181,6 +183,7 @@ describe.skipIf(!dockerAvailable)("PostgresActionDecisionUnitOfWork (intégratio
       decidedByLabel: "op",
       reason: null,
       decidedAt: new Date(ISO),
+      createdAt: new Date(ISO),
     });
 
     await expect(

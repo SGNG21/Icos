@@ -12,6 +12,7 @@ export const taskStatusSchema = z.enum([
   "queued",
   "awaiting_approval",
   "running",
+  "review_pending",
   "succeeded",
   "failed",
   "cancelled",

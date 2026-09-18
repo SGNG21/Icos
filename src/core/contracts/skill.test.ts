@@ -16,9 +16,19 @@ import {
 
 describe("dataCategorySchema — alignement COMPLIANCE-0", () => {
   const valid = [
-    "PUBLIC", "INTERNAL", "PERSONAL", "SENSITIVE_PERSONAL",
-    "CONFIDENTIAL_CLIENT", "AUTH_SECRET", "FINANCIAL", "LEGAL",
-    "HEALTH", "HR", "CHILD_DATA", "BIOMETRIC", "DERIVED_PROFILE",
+    "PUBLIC",
+    "INTERNAL",
+    "PERSONAL",
+    "SENSITIVE_PERSONAL",
+    "CONFIDENTIAL_CLIENT",
+    "AUTH_SECRET",
+    "FINANCIAL",
+    "LEGAL",
+    "HEALTH",
+    "HR",
+    "CHILD_DATA",
+    "BIOMETRIC",
+    "DERIVED_PROFILE",
   ];
 
   for (const cat of valid) {
@@ -117,12 +127,21 @@ describe("requirements déclaratifs", () => {
   });
 
   it("SkillCredentialRequirement : valide", () => {
-    const req = { requiredCredentialKind: "github_token", purpose: "auth", requiredScope: "repo:read", required: true };
+    const req = {
+      requiredCredentialKind: "github_token",
+      purpose: "auth",
+      requiredScope: "repo:read",
+      required: true,
+    };
     expect(skillCredentialRequirementSchema.safeParse(req).success).toBe(true);
   });
 
   it("SkillDependencyDeclaration : valide", () => {
-    const dep = { dependencySkillKey: "code.review.base", versionConstraint: ">=1.0.0", optional: false };
+    const dep = {
+      dependencySkillKey: "code.review.base",
+      versionConstraint: ">=1.0.0",
+      optional: false,
+    };
     expect(skillDependencyDeclarationSchema.safeParse(dep).success).toBe(true);
   });
 
@@ -174,12 +193,16 @@ describe("skillSchema — entité complète", () => {
     const full = {
       ...validSkill,
       description: "Full skill",
-      scripts: [{ name: "main", language: "typescript", entrypoint: true, content: "console.log('hello')" }],
+      scripts: [
+        { name: "main", language: "typescript", entrypoint: true, content: "console.log('hello')" },
+      ],
       resources: [{ path: "/config.yaml", type: "config" }],
       references: [{ url: "https://example.com/docs", description: "Docs", type: "documentation" }],
       dependencyDeclarations: [{ dependencySkillKey: "base.skill", optional: false }],
       networkRequirements: [{ requiredDomain: "api.example.com", purpose: "data", required: true }],
-      credentialRequirements: [{ requiredCredentialKind: "token", purpose: "auth", requiredScope: "read", required: true }],
+      credentialRequirements: [
+        { requiredCredentialKind: "token", purpose: "auth", requiredScope: "read", required: true },
+      ],
       toolRequirements: [{ requiredTool: "gmail.send", required: true, purpose: "send email" }],
       dataCategory: "PERSONAL",
       sensitivityLevel: "C3",

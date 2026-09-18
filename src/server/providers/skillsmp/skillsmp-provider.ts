@@ -2,12 +2,12 @@ import { z } from "zod";
 
 import type {
   SkillCandidate,
-  SkillsMpError,
   SkillsMpErrorCode,
   CandidateProvenance,
   CapabilityClaimEvidence,
   CompatibilityHint,
 } from "@/core/contracts/skill-candidate";
+import { SkillsMpError } from "@/core/contracts/skill-candidate";
 import {
   buildCandidateProvenanceFromSkillsMp,
   computeCandidateHash,
@@ -199,18 +199,27 @@ function normalizeSkillsMpSkill(
     return null;
   }
 
-  const provenance = buildCandidateProvenanceFromSkillsMp(rawSkill, discoveredAt);
+  const normalizedRawSkill = {
+  id: String(rawSkill.id),
+  githubUrl: rawSkill.githubUrl ?? undefined,
+  skillUrl: rawSkill.skillUrl ?? undefined,
+  updatedAt: rawSkill.updatedAt ?? undefined
+};
+const provenance = buildCandidateProvenanceFromSkillsMp(normalizedRawSkill, discoveredAt);
   const capabilityClaims = extractCapabilityClaimsFromSkillsMp(rawSkill);
   const compatibilityHints = extractCompatibilityHintsFromSkillsMp(rawSkill);
 
-  const candidate: Omit<SkillCandidate, "rawMetadataHash" | "verificationState" | "trustState" | "securityState" | "compatibilityState"> = {
-    candidateId: `cand-skillsmp-${rawSkill.id}`,
+  const candidate: Omit<
+    SkillCandidate,
+    "rawMetadataHash" | "verificationState" | "trustState" | "securityState" | "compatibilityState"
+  > = {
+    candidateId: `cand-skillsmp-${String(rawSkill.id)}`,
     providerId: "skillsmp",
     externalId: String(rawSkill.id),
     name: sanitizeString(rawSkill.name),
     description: rawSkill.description ? sanitizeString(rawSkill.description) : undefined,
-    sourceUrl: sanitizeUrl(rawSkill.skillUrl),
-    sourceRepository: sanitizeUrl(rawSkill.githubUrl),
+    sourceUrl: sanitizeUrl(rawSkill.skillUrl) ?? undefined,
+    sourceRepository: sanitizeUrl(rawSkill.githubUrl) ?? undefined,
     sourceCommitOrVersion: rawSkill.updatedAt ? String(rawSkill.updatedAt) : undefined,
     maintainer: rawSkill.author ? sanitizeString(rawSkill.author) : undefined,
     tags: rawSkill.contentLanguage ? [sanitizeString(rawSkill.contentLanguage)] : [],
@@ -222,7 +231,14 @@ function normalizeSkillsMpSkill(
   // Construire le candidat complet avec hash et états fail-closed
   const fullCandidate: SkillCandidate = {
     ...candidate,
-    rawMetadataHash: computeCandidateHash({ ...candidate, rawMetadataHash: "", verificationState: "verified", trustState: "untrusted", securityState: "pending", compatibilityState: "unknown" }),
+    rawMetadataHash: computeCandidateHash({
+      ...candidate,
+      rawMetadataHash: "",
+      verificationState: "verified",
+      trustState: "untrusted",
+      securityState: "pending",
+      compatibilityState: "unknown",
+    }),
     verificationState: "verified",
     trustState: "untrusted",
     securityState: "pending",
@@ -286,7 +302,11 @@ export class SkillsMpProvider {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw new SkillsMpError(SKILLSMP_ERROR_CODES.TIMEOUT, "Timeout SkillsMP", undefined);
       }
-      throw new SkillsMpError(SKILLSMP_ERROR_CODES.UNAVAILABLE, "Échec de connexion SkillsMP", undefined);
+      throw new SkillsMpError(
+        SKILLSMP_ERROR_CODES.UNAVAILABLE,
+        "Échec de connexion SkillsMP",
+        undefined,
+      );
     } finally {
       clearTimeout(timeoutId);
     }
@@ -299,10 +319,7 @@ export class SkillsMpProvider {
     try {
       body = await response.json();
     } catch {
-      throw new SkillsMpError(
-        SKILLSMP_ERROR_CODES.INVALID_RESPONSE,
-        "Réponse SkillsMP non-JSON",
-      );
+      throw new SkillsMpError(SKILLSMP_ERROR_CODES.INVALID_RESPONSE, "Réponse SkillsMP non-JSON");
     }
 
     // Validation défensive de l'enveloppe

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { Skill } from "@/core/contracts/skill";
 import { computeSkillHash, buildHashPayload } from "./hash";
 
-function makeSkill(overrides?: Partial<Skill>): Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt"> {
+function makeSkill(
+  overrides?: Partial<Skill>,
+): Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt"> {
   return {
     skillKey: "code.review.agent",
     version: "1.0.0",
@@ -80,24 +82,28 @@ describe("computeSkillHash", () => {
   });
 
   it("inclut originalManifest dans le hash s'il est présent", () => {
-    const a = computeSkillHash(makeSkill({
-      provenance: {
-        source: "url",
-        origin: "human",
-        contentHash: "",
-        importedAt: "2026-07-25T08:00:00.000Z",
-        originalManifest: { name: "ext-skill", version: "1.0" },
-      },
-    }));
-    const b = computeSkillHash(makeSkill({
-      provenance: {
-        source: "url",
-        origin: "human",
-        contentHash: "",
-        importedAt: "2026-07-25T08:00:00.000Z",
-        originalManifest: { name: "ext-skill", version: "2.0" },
-      },
-    }));
+    const a = computeSkillHash(
+      makeSkill({
+        provenance: {
+          source: "url",
+          origin: "human",
+          contentHash: "",
+          importedAt: "2026-07-25T08:00:00.000Z",
+          originalManifest: { name: "ext-skill", version: "1.0" },
+        },
+      }),
+    );
+    const b = computeSkillHash(
+      makeSkill({
+        provenance: {
+          source: "url",
+          origin: "human",
+          contentHash: "",
+          importedAt: "2026-07-25T08:00:00.000Z",
+          originalManifest: { name: "ext-skill", version: "2.0" },
+        },
+      }),
+    );
     expect(a).not.toBe(b);
   });
 

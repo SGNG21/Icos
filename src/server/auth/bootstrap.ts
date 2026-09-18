@@ -56,6 +56,7 @@ export async function bootstrapOwner(
       eventType,
       actor: { kind: "system", id: "icos-bootstrap" },
       details, // jamais de mot de passe / hash / token
+      createdAt: now(),
       ...(userId ? { taskId: undefined } : {}),
     });
   };

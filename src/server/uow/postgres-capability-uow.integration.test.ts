@@ -103,6 +103,7 @@ describe.skipIf(!dockerAvailable)("PostgresCapabilityUnitOfWork atomicité", () 
           eventType: "capability.created",
           actor: { kind: "human", id: "admin" },
           details: {},
+          createdAt: ISO,
         },
       });
 
@@ -132,6 +133,7 @@ describe.skipIf(!dockerAvailable)("PostgresCapabilityUnitOfWork atomicité", () 
           eventType: "capability.status_changed",
           actor: { kind: "human", id: "admin" },
           details: { capabilityId: "cap-rb-status", from: "proposed", to: "active" },
+          createdAt: ISO,
         },
       });
 
@@ -171,6 +173,7 @@ describe.skipIf(!dockerAvailable)("PostgresCapabilityUnitOfWork atomicité", () 
             capabilityId: "cap-rb-grant",
             assignedByUserId: "user-1",
           },
+          createdAt: ISO,
         },
       });
 
@@ -211,6 +214,7 @@ describe.skipIf(!dockerAvailable)("PostgresCapabilityUnitOfWork atomicité", () 
             agentId: "agent-uow",
             capabilityId: "cap-rb-revoke",
           },
+          createdAt: ISO,
         },
       });
 

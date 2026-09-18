@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  doublePrecision,
   index,
+  integer,
   jsonb,
   pgTable,
   smallint,
@@ -21,7 +23,7 @@ import { user } from "./auth-schema";
  * - `actions.updated_at` trace les changements de statut (métadonnée, non
  *   surfacée dans le contrat) ;
  * - `Task.actionIds` n'est PAS persisté : la seule source de vérité de la
- *   relation tâche↔actions est `actions.task_id` ; `actionIds` est dérivé en
+ *   tâche↔actions est `actions.task_id` ; `actionIds` est dérivé en
  *   lecture.
  */
 
@@ -85,7 +87,7 @@ export const tasks = pgTable(
   (t) => [
     check(
       "tasks_status_check",
-      sql`${t.status} in ('draft','queued','awaiting_approval','running','succeeded','failed','cancelled')`,
+      sql`${t.status} in ('draft','queued','awaiting_approval','running','review_pending','succeeded','failed','cancelled')`,
     ),
     index("tasks_assigned_agent_idx").on(t.assignedAgentId),
   ],
@@ -130,6 +132,7 @@ export const approvals = pgTable(
     decidedByLabel: text("decided_by_label").notNull(),
     reason: text("reason"),
     decidedAt: timestamp("decided_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
     check("approvals_decision_check", sql`${t.decision} in ('approved','rejected')`),
@@ -149,6 +152,9 @@ export const auditEntries = pgTable(
     actionId: text("action_id").references(() => actions.id, { onDelete: "restrict" }),
     details: jsonb("details").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    missionId: text("mission_id"),
+    performedBy: text("performed_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   },
   (t) => [
     check(
@@ -210,10 +216,6 @@ export const agentCapabilities = pgTable(
   ],
 );
 
-// ─────────────────────────────────────
-// C2 — Skill Registry & Trust Lifecycle
-// ─────────────────────────────────────
-
 export const skills = pgTable(
   "skills",
   {
@@ -248,8 +250,6 @@ export const skills = pgTable(
     unique("skills_tenant_key_version_unique").on(t.tenantId, t.skillKey, t.version),
     check("skills_trust_state_check", sql`${t.trustState} in ('untrusted','quarantined','reviewed','approved','rejected')`),
     check("skills_activation_state_check", sql`${t.activationState} in ('inactive','active','suspended','revoked')`),
-    check("skills_data_category_check", sql`${t.dataCategory} is null or ${t.dataCategory} in ('PUBLIC','INTERNAL','PERSONAL','SENSITIVE_PERSONAL','CONFIDENTIAL_CLIENT','AUTH_SECRET','FINANCIAL','LEGAL','HEALTH','HR','CHILD_DATA','BIOMETRIC','DERIVED_PROFILE')`),
-    check("skills_sensitivity_level_check", sql`${t.sensitivityLevel} is null or ${t.sensitivityLevel} in ('C0','C1','C2','C3')`),
     index("skills_trust_state_idx").on(t.trustState),
     index("skills_activation_state_idx").on(t.activationState),
     index("skills_skill_key_idx").on(t.skillKey),
@@ -322,5 +322,459 @@ export const skillEvaluations = pgTable(
   (t) => [
     check("skill_evaluations_status_check", sql`${t.status} in ('running','passed','failed','error')`),
     index("skill_evaluations_skill_hash_idx").on(t.skillId, t.evaluatedContentHash),
+  ],
+);
+
+export const checkpoints = pgTable(
+  "checkpoints",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("mission_id").notNull(),
+    state: jsonb("state").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    label: text("label"),
+  },
+  (t) => [
+    index("checkpoints_mission_id_idx").on(t.missionId),
+    index("checkpoints_created_at_idx").on(t.createdAt),
+  ],
+);
+
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(),
+    title: text("title"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("conversations_updated_at_idx").on(t.updatedAt)],
+);
+
+export const missionTasks = pgTable(
+  "mission_tasks",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    dependsOn: jsonb("depends_on").default([]).notNull(),
+    status: text("status").notNull(),
+    workerKind: text("worker_kind"),
+    capability: text("capability"),
+    taskId: text("task_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check(
+      "mission_tasks_status_check",
+      sql`${t.status} in ('draft','queued','awaiting_approval','running','review_pending','succeeded','failed','cancelled','blocked','superseded')`,
+    ),
+    index("mission_tasks_mission_idx").on(t.missionId),
+    index("mission_tasks_status_idx").on(t.status),
+  ],
+);
+
+export const handoffPackages = pgTable(
+  "handoff_packages",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("mission_id").notNull(),
+    fromAgent: text("from_agent").notNull(),
+    toAgent: text("to_agent").notNull(),
+    timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
+    reason: text("reason").notNull(),
+    instructions: text("instructions"),
+    missionContext: jsonb("mission_context").notNull(),
+    workingMemorySlice: jsonb("working_memory_slice"),
+    durableRefs: jsonb("durable_refs").notNull(),
+  },
+  (t) => [
+    index("handoff_packages_mission_id_idx").on(t.missionId),
+    index("handoff_packages_from_agent_idx").on(t.fromAgent),
+    index("handoff_packages_to_agent_idx").on(t.toAgent),
+  ],
+);
+
+export const missions = pgTable(
+  "missions",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    objective: text("objective").notNull(),
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    userId: text("user_id").notNull().default("00000000-0000-0000-0000-000000000000"),
+  },
+  (t) => [
+    check(
+      "missions_status_check",
+      sql`${t.status} in ('draft','planning','ready','running','blocked','awaiting_approval','succeeded','failed','cancelled')`,
+    ),
+    index("missions_status_idx").on(t.status),
+  ],
+);
+
+export const decisions = pgTable(
+  "decisions",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("missionId").notNull(),
+    taskId: text("taskId").notNull(),
+    decision: text("decision").notNull(),
+    reviewerKind: text("reviewerKind").notNull(),
+    severity: text("severity").notNull(),
+    reasons: text("reasons").array().notNull(),
+    requestedChanges: jsonb("requestedChanges"),
+    evidenceRefs: text("evidenceRefs").array(),
+    findingRefs: text("findingRefs").array(),
+    policyRefs: text("policyRefs").array(),
+    providerMetadata: jsonb("providerMetadata"),
+    confidence: doublePrecision("confidence"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
+    humanOverridden: boolean("humanOverridden").notNull().default(false),
+    overriddenBy: text("overriddenBy"),
+    workflowId: text("workflowId").notNull(),
+  },
+  (t) => [
+    index("decisions_missionId_idx").on(t.missionId),
+    index("decisions_taskId_idx").on(t.taskId),
+    unique("decisions_workflowId_unique").on(t.workflowId),
+    check("decisions_reviewerKind_check", sql`${t.reviewerKind} in ('deterministic','llm')`),
+    check("decisions_severity_check", sql`${t.severity} in ('info','warning','critical')`),
+    check("decisions_decision_check", sql`${t.decision} in ('APPROVE','REQUEST_CHANGES','RETRY','REPLAN','BLOCK','ESCALATE_TO_HUMAN')`),
+  ],
+);
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: text("id").primaryKey(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check("messages_role_check", sql`${t.role} in ('user','assistant','system')`),
+    index("messages_conversation_idx").on(t.conversationId),
+    index("messages_created_at_idx").on(t.createdAt),
+  ],
+);
+
+export const learnedPatterns = pgTable(
+  "learned_patterns",
+  {
+    id: text("id").primaryKey(),
+    capability: text("capability"),
+    workerKind: text("worker_kind"),
+    signature: text("signature").notNull(),
+    description: text("description"),
+    outcome: text("outcome").notNull(),
+    observations: jsonb("observations").notNull(),
+    confidence: doublePrecision("confidence").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("learned_patterns_capability_idx").on(t.capability),
+    index("learned_patterns_worker_kind_idx").on(t.workerKind),
+    index("learned_patterns_confidence_idx").on(t.confidence),
+  ],
+);
+
+export const contextItems = pgTable(
+  "context_items",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("mission_id").notNull(),
+    scope: text("scope").notNull(),
+    type: text("type").notNull(),
+    summary: text("summary").notNull(),
+    contentReference: text("content_reference"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    priority: integer("priority").notNull(),
+    tokenEstimate: integer("token_estimate").notNull(),
+  },
+  (t) => [
+    index("context_items_mission_id_idx").on(t.missionId),
+    index("context_items_scope_idx").on(t.scope),
+    index("context_items_type_idx").on(t.type),
+  ],
+);
+
+
+export const autonomousMissionRuntime = pgTable(
+  "autonomous_mission_runtime",
+  {
+    missionId: text("mission_id")
+      .primaryKey()
+      .references(() => missions.id, {
+        onDelete: "cascade",
+      }),
+
+    state: text("state").notNull(),
+
+    startedAt: timestamp("started_at", {
+      withTimezone: true,
+    }).notNull(),
+
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+    }).notNull(),
+
+    lastHeartbeatAt: timestamp(
+      "last_heartbeat_at",
+      {
+        withTimezone: true,
+      },
+    ).notNull(),
+
+    lastProgressAt: timestamp(
+      "last_progress_at",
+      {
+        withTimezone: true,
+      },
+    ).notNull(),
+
+    cycleCount: integer("cycle_count")
+      .notNull(),
+
+    replanCount: integer("replan_count")
+      .notNull(),
+
+    stagnationCount: integer(
+      "stagnation_count",
+    ).notNull(),
+
+    maxCycles: integer("max_cycles")
+      .notNull(),
+
+    maxReplans: integer("max_replans")
+      .notNull(),
+
+    maxRuntimeMs: integer(
+      "max_runtime_ms",
+    ).notNull(),
+
+    maxStagnationCycles: integer(
+      "max_stagnation_cycles",
+    ).notNull(),
+
+    lastFingerprint: text(
+      "last_fingerprint",
+    ),
+
+    lastReason: text("last_reason"),
+
+    ownerToken: text("owner_token"),
+
+    leaseUntil: timestamp(
+      "lease_until",
+      {
+        withTimezone: true,
+      },
+    ),
+  },
+  (t) => [
+    check(
+      "autonomous_mission_runtime_state_check",
+      sql`${t.state} in (
+        'running',
+        'waiting',
+        'replanning',
+        'succeeded',
+        'failed',
+        'blocked',
+        'cancelled',
+        'escalated'
+      )`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_cycle_count_check",
+      sql`${t.cycleCount} >= 0`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_replan_count_check",
+      sql`${t.replanCount} >= 0`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_stagnation_count_check",
+      sql`${t.stagnationCount} >= 0`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_max_cycles_check",
+      sql`${t.maxCycles} >= 1`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_max_replans_check",
+      sql`${t.maxReplans} >= 0`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_max_runtime_ms_check",
+      sql`${t.maxRuntimeMs} >= 1`,
+    ),
+
+    check(
+      "autonomous_mission_runtime_max_stagnation_check",
+      sql`${t.maxStagnationCycles} >= 1`,
+    ),
+
+    index(
+      "autonomous_mission_runtime_state_idx",
+    ).on(t.state),
+
+    index(
+      "autonomous_mission_runtime_heartbeat_idx",
+    ).on(t.lastHeartbeatAt),
+
+    index(
+      "autonomous_mission_runtime_lease_idx",
+    ).on(t.leaseUntil),
+  ],
+);
+
+export const dispatchAttempts = pgTable(
+  "dispatch_attempts",
+  {
+    id: text("id").primaryKey(),
+    missionId: text("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+    missionTaskId: text("mission_task_id")
+      .notNull()
+      .references(() => missionTasks.id, { onDelete: "cascade" }),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "restrict" }),
+    attempt: integer("attempt").notNull(),
+    workflowId: text("workflow_id").notNull(),
+    prompt: text("prompt").notNull(),
+    workerKind: text("worker_kind"),
+    capability: text("capability"),
+    state: text("state").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    claimToken: text("claim_token"),
+    claimUntil: timestamp("claim_until", { withTimezone: true }),
+  },
+  (t) => [
+    unique("dispatch_attempts_workflow_id_unique").on(t.workflowId),
+    unique("dispatch_attempts_mission_task_attempt_unique").on(
+      t.missionTaskId,
+      t.attempt,
+    ),
+    check(
+      "dispatch_attempts_attempt_check",
+      sql`${t.attempt} >= 1`,
+    ),
+    check(
+      "dispatch_attempts_state_check",
+      sql`${t.state} in ('prepared','dispatched','completed','failed')`,
+    ),
+    index("dispatch_attempts_mission_idx").on(t.missionId),
+    index("dispatch_attempts_state_idx").on(t.state),
+  ],
+);
+
+export const taskExecutionResults = pgTable(
+  "task_execution_results",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "restrict" }),
+    workflowId: text("workflow_id").notNull(),
+    outcome: text("outcome").notNull(),
+    workerKind: text("worker_kind"),
+    capability: text("capability"),
+    digitalosExecutionId: text("digitalos_execution_id"),
+    result: text("result"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+    observations: jsonb("observations"),
+    confidence: doublePrecision("confidence"),
+    artifacts: jsonb("artifacts"),
+    evidence: jsonb("evidence"),
+    findings: jsonb("findings"),
+  },
+  (t) => [
+    unique("task_execution_results_workflow_id_unique").on(t.workflowId),
+    check("task_execution_results_outcome_check", sql`${t.outcome} in ('success','failure')`),
+    check(
+      "task_execution_results_worker_kind_check",
+      sql`${t.workerKind} is null or ${t.workerKind} in ('hermes','openhands','digitalos','other','agent')`,
+    ),
+    check(
+      "task_execution_results_error_consistency_check",
+      sql`((${t.outcome} = 'failure' and ${t.errorCode} is not null and ${t.errorMessage} is not null) or (${t.outcome} = 'success' and ${t.errorCode} is null and ${t.errorMessage} is null))`,
+    ),
+    check(
+      "task_execution_results_error_code_check",
+      sql`${t.errorCode} is null or ${t.errorCode} in ('WORKER_FAILED','WORKER_TIMEOUT','WORKER_UNAVAILABLE','INVALID_RESULT','UNKNOWN_EFFECT','CANCELLED','INTERNAL_ERROR')`,
+    ),
+    index("task_execution_results_task_idx").on(t.taskId),
+  ],
+);
+
+export const qualityControlJobs = pgTable(
+  "quality_control_jobs",
+  {
+    workflowId: text("workflow_id").primaryKey(),
+    executionResultId: text("execution_result_id")
+      .notNull()
+      .references(() => taskExecutionResults.id, { onDelete: "restrict" }),
+    missionId: text("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+    missionTaskId: text("mission_task_id")
+      .notNull()
+      .references(() => missionTasks.id, { onDelete: "cascade" }),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "restrict" }),
+    executionAttempt: integer("execution_attempt").notNull(),
+    reviewAttemptCount: integer("review_attempt_count").notNull().default(0),
+    state: text("state").notNull(),
+    reviewDecisionId: text("review_decision_id").references(() => decisions.id, {
+      onDelete: "restrict",
+    }),
+    action: text("action"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    claimToken: text("claim_token"),
+    claimUntil: timestamp("claim_until", { withTimezone: true }),
+    lastError: text("last_error"),
+  },
+  (t) => [
+    unique("quality_control_jobs_execution_result_unique").on(t.executionResultId),
+    check("quality_control_jobs_execution_attempt_check", sql`${t.executionAttempt} >= 1`),
+    check("quality_control_jobs_review_attempt_check", sql`${t.reviewAttemptCount} >= 0`),
+    check(
+      "quality_control_jobs_state_check",
+      sql`${t.state} in ('review_pending','reviewing','decision_ready','action_applied','escalated')`,
+    ),
+    check(
+      "quality_control_jobs_action_check",
+      sql`${t.action} is null or ${t.action} in ('ACCEPT','CORRECT','RETRY','REPLAN','ESCALATE')`,
+    ),
+    index("quality_control_jobs_pending_idx").on(t.state, t.claimUntil, t.createdAt),
+    index("quality_control_jobs_mission_idx").on(t.missionId),
   ],
 );

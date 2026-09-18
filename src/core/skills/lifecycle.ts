@@ -35,10 +35,7 @@ const allowedActivationTransitions: Record<ActivationState, readonly ActivationS
  * Vérifie si la transition ActivationState `from → to` est autorisée.
  * `revoked` est terminal : aucune transition sortante.
  */
-export function isActivationTransitionAllowed(
-  from: ActivationState,
-  to: ActivationState,
-): boolean {
+export function isActivationTransitionAllowed(from: ActivationState, to: ActivationState): boolean {
   return (allowedActivationTransitions[from] ?? []).includes(to);
 }
 
@@ -75,7 +72,10 @@ export function resolveActivationOnReject(): ActivationState {
 // Content mutability
 // ─────────────────────────────────────
 
-import { CONTENT_IMMUTABLE_TRUST_STATES, CONTENT_MUTABLE_TRUST_STATES } from "@/core/contracts/skill";
+import {
+  CONTENT_IMMUTABLE_TRUST_STATES,
+  CONTENT_MUTABLE_TRUST_STATES,
+} from "@/core/contracts/skill";
 
 /**
  * Vrai si le contenu du skill peut être modifié dans cet état de trust.

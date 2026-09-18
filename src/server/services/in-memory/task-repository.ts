@@ -91,6 +91,7 @@ export class InMemoryTaskRepository implements TaskRepository {
         : { kind: "system", id: "icos" },
       taskId: parsed.data.id,
       details: { title: parsed.data.title, status: parsed.data.status },
+      createdAt: now,
     };
 
     try {
@@ -124,6 +125,7 @@ export class InMemoryTaskRepository implements TaskRepository {
         : { kind: "system", id: "icos" },
       taskId: current.id,
       details: { from: current.status, to },
+      createdAt: result.task.updatedAt,
     };
 
     try {
@@ -134,6 +136,18 @@ export class InMemoryTaskRepository implements TaskRepository {
 
     this.tasks[index] = result.task;
     return { ok: true, task: structuredClone(result.task) };
+  }
+
+  // MutableTaskStore implementation for use by InMemoryTaskExecutionResultRepository
+  find(taskId: string): Task | undefined {
+    return this.tasks.find((t) => t.id === taskId);
+  }
+
+  replace(task: Task): void {
+    const index = this.tasks.findIndex((t) => t.id === task.id);
+    if (index !== -1) {
+      this.tasks[index] = task;
+    }
   }
 }
 

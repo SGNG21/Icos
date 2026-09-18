@@ -61,7 +61,11 @@ export class InMemorySkillUnitOfWork implements SkillUnitOfWork {
     // Mettre à jour activationState
     const activationUpdated = await this.skills.updateActivationState(input.id, "revoked");
     if (!activationUpdated) {
-      return { ok: false, reason: "skill_not_found", message: "Skill not found for activation update" };
+      return {
+        ok: false,
+        reason: "skill_not_found",
+        message: "Skill not found for activation update",
+      };
     }
 
     // Audit

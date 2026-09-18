@@ -64,6 +64,7 @@ export async function POST(
 
     return json({ approval: result.approval, action: result.action, execution: result.execution });
   } catch (error) {
+    console.error("Unhandled error in decision route:", error);
     return toErrorResponse(error);
   }
 }

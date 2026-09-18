@@ -6,10 +6,10 @@ CREATE TABLE "actions" (
 	"risk" text NOT NULL,
 	"requires_human_approval" boolean NOT NULL,
 	"approval_status" text NOT NULL,
-	"created_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone NOT NULL DEFAULT now(),
 	"updated_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "actions_risk_check" CHECK ("actions"."risk" in ('read_only','reversible','sensitive')),
-	CONSTRAINT "actions_approval_status_check" CHECK ("actions"."approval_status" in ('not_required','pending','approved','rejected'))
+	CONSTRAINT "actions_risk_check" CHECK (("actions"."risk" in ('read_only','reversible','sensitive'))),
+	CONSTRAINT "actions_approval_status_check" CHECK (("actions"."approval_status" in ('not_required','pending','approved','rejected')))
 );
 --> statement-breakpoint
 CREATE TABLE "agents" (
@@ -19,19 +19,20 @@ CREATE TABLE "agents" (
 	"status" text NOT NULL,
 	"authorization_level" smallint NOT NULL,
 	"description" text NOT NULL,
-	CONSTRAINT "agents_status_check" CHECK ("agents"."status" in ('available','standby','offline')),
-	CONSTRAINT "agents_auth_level_check" CHECK ("agents"."authorization_level" between 0 and 3)
+	CONSTRAINT "agents_status_check" CHECK (("agents"."status" in ('available','standby','offline'))),
+	CONSTRAINT "agents_auth_level_check" CHECK (("agents"."authorization_level" between 0 and 3))
 );
 --> statement-breakpoint
 CREATE TABLE "approvals" (
 	"id" text PRIMARY KEY NOT NULL,
 	"action_id" text NOT NULL,
 	"decision" text NOT NULL,
-	"decided_by_label" text NOT NULL,
+	"decided_by" text NOT NULL,
 	"reason" text,
 	"decided_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone NOT NULL DEFAULT now(),
 	CONSTRAINT "approvals_action_id_unique" UNIQUE("action_id"),
-	CONSTRAINT "approvals_decision_check" CHECK ("approvals"."decision" in ('approved','rejected'))
+	CONSTRAINT "approvals_decision_check" CHECK (("approvals"."decision" in ('approved','rejected')))
 );
 --> statement-breakpoint
 CREATE TABLE "audit_entries" (
@@ -43,8 +44,8 @@ CREATE TABLE "audit_entries" (
 	"action_id" text,
 	"details" jsonb NOT NULL,
 	"occurred_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "audit_event_type_check" CHECK ("audit_entries"."event_type" in ('task.created','task.transitioned','approval.recorded','action.decided')),
-	CONSTRAINT "audit_actor_type_check" CHECK ("audit_entries"."actor_type" in ('agent','human','system'))
+	CONSTRAINT "audit_event_type_check" CHECK (("audit_entries"."event_type" in ('task.created','task.transitioned','approval.recorded','action.decided'))),
+	CONSTRAINT "audit_actor_type_check" CHECK (("audit_entries"."actor_type" in ('agent','human','system')))
 );
 --> statement-breakpoint
 CREATE TABLE "tasks" (
@@ -53,9 +54,9 @@ CREATE TABLE "tasks" (
 	"description" text,
 	"status" text NOT NULL,
 	"assigned_agent_id" text,
-	"created_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone NOT NULL DEFAULT now(),
 	"updated_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "tasks_status_check" CHECK ("tasks"."status" in ('draft','queued','awaiting_approval','running','succeeded','failed','cancelled'))
+	CONSTRAINT "tasks_status_check" CHECK (("tasks"."status" in ('draft','queued','awaiting_approval','running','succeeded','failed','cancelled')))
 );
 --> statement-breakpoint
 ALTER TABLE "actions" ADD CONSTRAINT "actions_initiated_by_agent_id_agents_id_fk" FOREIGN KEY ("initiated_by_agent_id") REFERENCES "public"."agents"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

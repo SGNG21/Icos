@@ -50,6 +50,132 @@
       "when": 1785000000000,
       "tag": "0006_skill_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785100000000,
+      "tag": "0007_task_execution_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785200000000,
+      "tag": "0008_tiny_serpent_society",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785300000000,
+      "tag": "0009_nostalgic_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785400000000,
+      "tag": "0010_checkpoints",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785500000000,
+      "tag": "0011_durable_memory_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0012_add_userid_to_missions",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785900000000,
+      "tag": "0016_add_mission_id_and_performed_by_to_audit_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786000000000,
+      "tag": "0017_set_defaults_on_missions",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786100000000,
+      "tag": "0018_add_created_at_to_audit_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786200000000,
+      "tag": "0019_add_requested_at_to_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786300000000,
+      "tag": "0020_review_decisions_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786310000000,
+      "tag": "0021_n2_schema_parity",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789302675232,
+      "tag": "0022_dispatch_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789317864852,
+      "tag": "0023_mission_task_blocked_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789318537767,
+      "tag": "0024_dispatch_recovery_claim_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789319231192,
+      "tag": "0025_autonomous_mission_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789321622948,
+      "tag": "0026_autonomous_runtime_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789423200000,
+      "tag": "0027_quality_control_jobs",
+      "breakpoints": true
     }
   ]
 }

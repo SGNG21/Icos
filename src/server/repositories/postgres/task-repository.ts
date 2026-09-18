@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 
-import { taskSchema, type AuditEntry, type Task, type TaskStatus } from "@/core/contracts";
+import type { AuditEntry, Task, TaskStatus } from "@/core/contracts";
 import { transitionTask as transitionLifecycle } from "@/core/tasks/lifecycle";
 import type { Database } from "@/server/database/client";
 import { auditToRow, rowToTask, taskToRow } from "@/server/database/mappers";
 import { actions, auditEntries, tasks } from "@/server/database/schema";
+import { prepareTaskCreation } from "@/server/repositories/task-creation";
 import type {
   AgentScope,
   CreateTaskInput,
@@ -126,40 +127,23 @@ export class PostgresTaskRepository implements TaskRepository {
   }
 
   async create(input: CreateTaskInput): Promise<CreateTaskResult> {
-    const now = new Date().toISOString();
-    const candidate: Task = {
-      id: `task-${randomUUID()}`,
-      title: input.title,
-      description: input.description,
-      assignedAgentId: input.assignedAgentId,
-      status: "draft",
-      actionIds: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+    const prepared = prepareTaskCreation(input);
 
-    const parsed = taskSchema.safeParse(candidate);
-    if (!parsed.success) {
-      return { ok: false, reason: "invalid_input", message: parsed.error.message };
+    if (!prepared.ok) {
+      return prepared;
     }
 
-    const auditEntry: AuditEntry = {
-      id: `audit-${randomUUID()}`,
-      occurredAt: now,
-      eventType: "task.created",
-      actor: input.assignedAgentId
-        ? { kind: "agent", id: input.assignedAgentId }
-        : { kind: "system", id: "icos" },
-      taskId: parsed.data.id,
-      details: { title: parsed.data.title, status: parsed.data.status },
-    };
-
     await this.db.transaction(async (tx) => {
-      await tx.insert(tasks).values(taskToRow(parsed.data));
-      await tx.insert(auditEntries).values(auditToRow(auditEntry));
+      await tx.insert(tasks).values(taskToRow(prepared.task));
+      await tx
+        .insert(auditEntries)
+        .values(auditToRow(prepared.auditEntry));
     });
 
-    return { ok: true, task: parsed.data };
+    return {
+      ok: true,
+      task: prepared.task,
+    };
   }
 
   async transition(taskId: string, to: TaskStatus): Promise<TransitionTaskResult> {
@@ -183,16 +167,40 @@ export class PostgresTaskRepository implements TaskRepository {
         : { kind: "system", id: "icos" },
       taskId: current.id,
       details: { from: current.status, to },
+      createdAt: result.task.updatedAt,
     };
 
-    await this.db.transaction(async (tx) => {
-      await tx
-        .update(tasks)
-        .set({ status: result.task.status, updatedAt: new Date(result.task.updatedAt) })
-        .where(eq(tasks.id, taskId));
-      await tx.insert(auditEntries).values(auditToRow(auditEntry));
-    });
+    try {
+      await this.db.transaction(async (tx) => {
+        const updated = await tx
+          .update(tasks)
+          .set({ status: result.task.status, updatedAt: new Date(result.task.updatedAt) })
+          .where(
+            and(
+              eq(tasks.id, taskId),
+              eq(tasks.status, current.status)
+            )
+          )
+          .returning();
 
-    return { ok: true, task: result.task };
+        if (updated.length === 0) {
+          throw new Error(`task ${taskId} has been updated concurrently`);
+        }
+
+        await tx.insert(auditEntries).values(auditToRow(auditEntry));
+      });
+
+      return { ok: true, task: result.task };
+    } catch (err: any) {
+      if (err instanceof Error && err.message === `task ${taskId} has been updated concurrently`) {
+        return {
+          ok: false,
+          reason: "invalid_transition",
+          from: current.status,
+          to: to,
+        };
+      }
+      throw err;
+    }
   }
 }

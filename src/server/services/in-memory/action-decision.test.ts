@@ -43,6 +43,7 @@ function auditFor(action: AgentAction): AuditEntry[] {
       actor: { kind: "human", id: "Opérateur (simulé)" },
       actionId: action.id,
       details: { decision: "approved" },
+      createdAt: "2026-07-21T10:00:00.000Z",
     },
     {
       id: "audit-b",
@@ -51,6 +52,7 @@ function auditFor(action: AgentAction): AuditEntry[] {
       actor: { kind: "human", id: "Opérateur (simulé)" },
       actionId: action.id,
       details: { approvalStatus: "approved" },
+      createdAt: "2026-07-21T10:00:00.000Z",
     },
   ];
 }
@@ -59,7 +61,6 @@ describe("InMemoryActionDecisionStore (lecture)", () => {
   it("filtre par statut d'approbation et isole ses résultats", async () => {
     const store = new InMemoryActionDecisionStore(demoActions);
     const actions = new InMemoryActionRepository(store);
-
     const pending = await actions.list({ approvalStatus: "pending" });
     expect(pending.length).toBeGreaterThan(0);
 

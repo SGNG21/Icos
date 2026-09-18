@@ -163,6 +163,7 @@ describe("CapabilityService", () => {
           eventType: "capability.status_changed",
           actor: { kind: "human", id: "admin" },
           details: { capabilityId: created.data.id, from: "proposed", to: "deprecated" },
+          createdAt: new Date().toISOString(),
         },
       });
       expect(result.ok).toBe(false);
@@ -317,6 +318,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "capability.created",
           actor: { kind: "human", id: "admin" },
           details: {},
+          createdAt: new Date().toISOString(),
         },
       });
 
@@ -352,6 +354,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "capability.created",
           actor: { kind: "human", id: "admin" },
           details: {},
+          createdAt: new Date().toISOString(),
         },
       });
       expect(created.ok).toBe(true);
@@ -372,6 +375,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "capability.status_changed",
           actor: { kind: "human", id: "admin" },
           details: { capabilityId: "cap-status-rollback", from: "proposed", to: "active" },
+          createdAt: new Date().toISOString(),
         },
       });
 
@@ -408,6 +412,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "capability.created",
           actor: { kind: "human", id: "admin" },
           details: {},
+          createdAt: new Date().toISOString(),
         },
       });
       expect(created.ok).toBe(true);
@@ -431,6 +436,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "agent_capability.granted",
           actor: { kind: "human", id: "admin" },
           details: { agentId: "agent-1", capabilityId: "cap-grant-rb", assignedByUserId: "user-1" },
+          createdAt: new Date().toISOString(),
         },
       });
 
@@ -465,6 +471,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
           eventType: "capability.created",
           actor: { kind: "human", id: "admin" },
           details: {},
+          createdAt: new Date().toISOString(),
         },
       });
       expect(created.ok).toBe(true);
@@ -487,6 +494,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
             capabilityId: "cap-revoke-rb",
             assignedByUserId: "user-1",
           },
+          createdAt: new Date().toISOString(),
         },
       });
       expect(granted.ok).toBe(true);
@@ -508,6 +516,7 @@ describe("InMemoryCapabilityUnitOfWork atomicité", () => {
             agentId: "agent-1",
             capabilityId: "cap-revoke-rb",
           },
+          createdAt: new Date().toISOString(),
         },
       });
 

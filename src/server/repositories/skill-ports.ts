@@ -14,8 +14,15 @@ export interface SkillRepository {
   create(skill: Skill): Promise<Skill>;
   updateTrustState(id: string, trustState: string): Promise<Skill | null>;
   updateActivationState(id: string, activationState: string): Promise<Skill | null>;
-  updateContent(id: string, skill: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">): Promise<Skill | null>;
-  deactivateIfActive(tenantId: string, skillKey: string, excludingId: string): Promise<string | null>;
+  updateContent(
+    id: string,
+    skill: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">,
+  ): Promise<Skill | null>;
+  deactivateIfActive(
+    tenantId: string,
+    skillKey: string,
+    excludingId: string,
+  ): Promise<string | null>;
   delete(id: string): Promise<boolean>;
 }
 

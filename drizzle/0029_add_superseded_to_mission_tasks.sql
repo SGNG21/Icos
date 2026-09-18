@@ -1,0 +1,2 @@
+alter table "mission_tasks" drop constraint "mission_tasks_status_check";
+alter table "mission_tasks" add constraint "mission_tasks_status_check" check (status in ('draft','queued','awaiting_approval','running','review_pending','succeeded','failed','cancelled','blocked','superseded'));

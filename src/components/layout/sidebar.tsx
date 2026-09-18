@@ -6,6 +6,7 @@ const navigation = [
   { label: "Agents", anchor: "agents" },
   { label: "Tâches", anchor: "tasks" },
   { label: "Approbations", anchor: "approvals" },
+  { label: "Control Room", href: "/control-room" },
 ];
 
 export function Sidebar({ showAdministration = false }: { showAdministration?: boolean }) {
@@ -23,11 +24,18 @@ export function Sidebar({ showAdministration = false }: { showAdministration?: b
         <p className="nav-label">Pilotage</p>
         <ul>
           {navigation.map((item, index) => (
-            <li key={item.anchor}>
-              <a className={index === 0 ? "active" : undefined} href={`#${item.anchor}`}>
-                <span className="nav-glyph" aria-hidden="true" />
-                {item.label}
-              </a>
+            <li key={item.anchor ?? item.href}>
+              {item.href ? (
+                <a className={index === 0 ? "active" : undefined} href={item.href}>
+                  <span className="nav-glyph" aria-hidden="true" />
+                  {item.label}
+                </a>
+              ) : (
+                <a className={index === 0 ? "active" : undefined} href={`#${item.anchor}`}>
+                  <span className="nav-glyph" aria-hidden="true" />
+                  {item.label}
+                </a>
+              )}
             </li>
           ))}
           {showAdministration && (

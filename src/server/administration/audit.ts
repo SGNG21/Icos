@@ -54,6 +54,7 @@ export function buildHumanAdministrationAudit(input: HumanAdministrationAuditInp
       kind: "human" as const,
       id: input.actorUserId,
     },
+    createdAt: input.occurredAt,
   };
 
   switch (input.eventType) {

@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type { SkillCandidate, CapabilityClaimEvidence, CompatibilityHint, CandidateProvenance } from "@/core/contracts/skill-candidate";
+import type {
+  SkillCandidate,
+  CapabilityClaimEvidence,
+  CompatibilityHint,
+  CandidateProvenance,
+} from "@/core/contracts/skill-candidate";
 
 /**
  * Sérialisation canonique déterministe pour le hash de métadonnées candidat.
@@ -62,13 +67,15 @@ export function buildCandidateHashPayload(candidate: SkillCandidate): Record<str
     sourceCommitOrVersion: candidate.sourceCommitOrVersion ?? null,
     maintainer: candidate.maintainer ?? null,
     tags: sortByKey(candidate.tags ?? [], (t) => t),
-    capabilityClaims: sortByKey(candidate.capabilityClaims ?? [], (c) => c.capabilityKey).map((c) => ({
-      capabilityKey: c.capabilityKey,
-      evidenceType: c.evidenceType,
-      description: c.description,
-      confidence: c.confidence ?? 0.5,
-      sourceRef: c.sourceRef ?? null,
-    })),
+    capabilityClaims: sortByKey(candidate.capabilityClaims ?? [], (c) => c.capabilityKey).map(
+      (c) => ({
+        capabilityKey: c.capabilityKey,
+        evidenceType: c.evidenceType,
+        description: c.description,
+        confidence: c.confidence ?? 0.5,
+        sourceRef: c.sourceRef ?? null,
+      }),
+    ),
     compatibilityHints: sortByKey(candidate.compatibilityHints ?? [], (h) => h.target).map((h) => ({
       target: h.target,
       hintType: h.hintType,
@@ -262,8 +269,8 @@ export function buildCandidateProvenanceFromSkillsMp(
   return {
     providerId: "skillsmp",
     externalId: String(skill.id),
-    discoveryUrl: skill.skillUrl ? sanitizeUrl(skill.skillUrl) ?? undefined : undefined,
-    sourceRepository: skill.githubUrl ? sanitizeUrl(skill.githubUrl) ?? undefined : undefined,
+    discoveryUrl: skill.skillUrl ? (sanitizeUrl(skill.skillUrl) ?? undefined) : undefined,
+    sourceRepository: skill.githubUrl ? (sanitizeUrl(skill.githubUrl) ?? undefined) : undefined,
     sourceCommitOrVersion: skill.updatedAt ? String(skill.updatedAt) : undefined,
     maintainer: undefined,
     discoveredAt,

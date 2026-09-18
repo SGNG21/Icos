@@ -5,6 +5,7 @@ import { idSchema, isoDateTimeSchema, jsonValueSchema } from "./common";
 export const auditEventTypeSchema = z.enum([
   "task.created",
   "task.transitioned",
+  "task.execution.completed",
   "approval.recorded",
   "action.decided",
   // Identité & sécurité (Lots 2B-1a et 2B-1b).
@@ -56,6 +57,7 @@ export const auditEntrySchema = z.object({
   taskId: idSchema.optional(),
   actionId: idSchema.optional(),
   details: z.record(z.string(), jsonValueSchema),
+  createdAt: isoDateTimeSchema,
 });
 
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

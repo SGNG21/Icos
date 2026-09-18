@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   candidateCompatibilityStateSchema,
   candidateProvenanceSchema,
+  candidateSecurityStateSchema,
   candidateTrustStateSchema,
   candidateVerificationStateSchema,
   capabilityClaimEvidenceSchema,
@@ -42,8 +43,12 @@ describe("skill-candidate contracts", () => {
     it("candidateCompatibilityStateSchema accepte les valeurs attendues", () => {
       expect(candidateCompatibilityStateSchema.safeParse("unknown").success).toBe(true);
       expect(candidateCompatibilityStateSchema.safeParse("compatible").success).toBe(true);
-      expect(candidateCompatibilityStateSchema.safeParse("compatible_with_adapter").success).toBe(true);
-      expect(candidateCompatibilityStateSchema.safeParse("compatible_with_limits").success).toBe(true);
+      expect(candidateCompatibilityStateSchema.safeParse("compatible_with_adapter").success).toBe(
+        true,
+      );
+      expect(candidateCompatibilityStateSchema.safeParse("compatible_with_limits").success).toBe(
+        true,
+      );
       expect(candidateCompatibilityStateSchema.safeParse("incompatible").success).toBe(true);
     });
 
@@ -225,7 +230,7 @@ describe("skill-candidate contracts", () => {
 
     it("exige candidateId, providerId, externalId, name", () => {
       for (const field of ["candidateId", "providerId", "externalId", "name"]) {
-        const { [field]: _, ...rest } = baseCandidate;
+        const { [field]: _, ...rest } = baseCandidate as Record<string, unknown>;
         const result = skillCandidateSchema.safeParse(rest);
         expect(result.success).toBe(false);
       }

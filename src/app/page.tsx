@@ -69,16 +69,6 @@ export default async function Home() {
               <span className="badge">Session locale</span>
             </div>
 
-            <div className="empty-conversation">
-              <div className="orbit-mark" aria-hidden="true">
-                <span>i</span>
-              </div>
-              <h3>Prêt à recevoir une instruction</h3>
-              <p>
-                Le moteur d’exécution n’est pas encore actif. Vous pouvez préparer une commande,
-                mais aucune action externe ne sera lancée.
-              </p>
-            </div>
             <CommandComposer />
           </section>
 

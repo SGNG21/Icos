@@ -64,7 +64,9 @@ function sortByKey<T>(arr: T[], keyFn: (item: T) => string): T[] {
  * - provenance (sauf originalManifest)
  * - securityScans, findings, evaluations
  */
-export function buildHashPayload(skill: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">): Record<string, unknown> {
+export function buildHashPayload(
+  skill: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">,
+): Record<string, unknown> {
   return {
     skillKey: skill.skillKey,
     version: skill.version,
@@ -75,9 +77,18 @@ export function buildHashPayload(skill: Omit<Skill, "id" | "tenantId" | "created
     scripts: sortByKey(skill.scripts ?? [], (s) => s.name),
     resources: sortByKey(skill.resources ?? [], (r) => r.path),
     references: sortByKey(skill.references ?? [], (r) => r.url),
-    dependencyDeclarations: sortByKey(skill.dependencyDeclarations ?? [], (d) => d.dependencySkillKey),
-    networkRequirements: sortByKey(skill.networkRequirements ?? [], (n) => `${n.requiredDomain}:${n.purpose}`),
-    credentialRequirements: sortByKey(skill.credentialRequirements ?? [], (c) => c.requiredCredentialKind),
+    dependencyDeclarations: sortByKey(
+      skill.dependencyDeclarations ?? [],
+      (d) => d.dependencySkillKey,
+    ),
+    networkRequirements: sortByKey(
+      skill.networkRequirements ?? [],
+      (n) => `${n.requiredDomain}:${n.purpose}`,
+    ),
+    credentialRequirements: sortByKey(
+      skill.credentialRequirements ?? [],
+      (c) => c.requiredCredentialKind,
+    ),
     executionIsolationRequirement: skill.executionIsolationRequirement ?? null,
     toolRequirements: sortByKey(skill.toolRequirements ?? [], (t) => t.requiredTool),
     inputSchema: skill.inputSchema ?? null,

@@ -11,6 +11,11 @@ const optionalUrl = z.preprocess(emptyAsUndefined, z.url().optional());
 
 const persistenceSchema = z.preprocess(emptyAsUndefined, z.enum(["memory", "postgres"]).optional());
 
+const optionalPositiveInteger = z.preprocess(
+  emptyAsUndefined,
+  z.coerce.number().int().positive().optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PERSISTENCE: persistenceSchema,
@@ -29,6 +34,21 @@ const envSchema = z.object({
   DOLIBARR_API_KEY: optionalSecret,
   // SkillsMP read-only discovery (optionnel — le provider échoue closed si absent)
   SKILLSMP_API_KEY: optionalSecret,
+  // DigitalOS facade path (optional)
+  DIGITALOS_FACADE_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
+  ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
+  AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
+  TEMPORAL_ADDRESS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  TEMPORAL_TASK_QUEUE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  TEMPORAL_WORKFLOW_TYPE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  TEMPORAL_DISPATCH_TIMEOUT_MS: optionalPositiveInteger,
+  // OmniRoute configuration
+  OMNIROUTE_BASE_URL: optionalUrl,
+  OMNIROUTE_API_KEY: optionalSecret,
+  ICOS_PLANNER_MODEL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  ICOS_PLANNER_TIMEOUT_MS: optionalPositiveInteger,
+  ICOS_REVIEWER_MODEL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  ICOS_REVIEWER_TIMEOUT_MS: optionalPositiveInteger,
 });
 
 export type Env = z.infer<typeof envSchema>;

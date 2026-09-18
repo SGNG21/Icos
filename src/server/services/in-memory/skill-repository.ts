@@ -1,5 +1,9 @@
 import type { Skill } from "@/core/contracts/skill";
-import type { SkillRepository, SkillSecurityScanRepository, SkillEvaluationRepository } from "@/server/repositories/skill-ports";
+import type {
+  SkillRepository,
+  SkillSecurityScanRepository,
+  SkillEvaluationRepository,
+} from "@/server/repositories/skill-ports";
 import type { Evaluation, SecurityScan, SkillListFilters } from "@/core/contracts/skill";
 import { skillSchema } from "@/core/contracts/skill";
 
@@ -14,7 +18,11 @@ export class InMemorySkillRepository implements SkillRepository {
     return this._skills.get(id) ?? null;
   }
 
-  async getByKeyAndVersion(tenantId: string, skillKey: string, version: string): Promise<Skill | null> {
+  async getByKeyAndVersion(
+    tenantId: string,
+    skillKey: string,
+    version: string,
+  ): Promise<Skill | null> {
     for (const skill of this._skills.values()) {
       if (skill.tenantId === tenantId && skill.skillKey === skillKey && skill.version === version) {
         return skill;
@@ -25,7 +33,11 @@ export class InMemorySkillRepository implements SkillRepository {
 
   async getActiveVersion(tenantId: string, skillKey: string): Promise<Skill | null> {
     for (const skill of this._skills.values()) {
-      if (skill.tenantId === tenantId && skill.skillKey === skillKey && skill.activationState === "active") {
+      if (
+        skill.tenantId === tenantId &&
+        skill.skillKey === skillKey &&
+        skill.activationState === "active"
+      ) {
         return skill;
       }
     }
@@ -60,7 +72,11 @@ export class InMemorySkillRepository implements SkillRepository {
   async updateTrustState(id: string, trustState: string): Promise<Skill | null> {
     const skill = this._skills.get(id);
     if (!skill) return null;
-    const updated = { ...skill, trustState: trustState as Skill["trustState"], updatedAt: new Date().toISOString() };
+    const updated = {
+      ...skill,
+      trustState: trustState as Skill["trustState"],
+      updatedAt: new Date().toISOString(),
+    };
     const parsed = skillSchema.parse(updated);
     this._skills.set(id, parsed);
     return parsed;
@@ -69,13 +85,20 @@ export class InMemorySkillRepository implements SkillRepository {
   async updateActivationState(id: string, activationState: string): Promise<Skill | null> {
     const skill = this._skills.get(id);
     if (!skill) return null;
-    const updated = { ...skill, activationState: activationState as Skill["activationState"], updatedAt: new Date().toISOString() };
+    const updated = {
+      ...skill,
+      activationState: activationState as Skill["activationState"],
+      updatedAt: new Date().toISOString(),
+    };
     const parsed = skillSchema.parse(updated);
     this._skills.set(id, parsed);
     return parsed;
   }
 
-  async updateContent(id: string, data: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">): Promise<Skill | null> {
+  async updateContent(
+    id: string,
+    data: Omit<Skill, "id" | "tenantId" | "createdAt" | "updatedAt">,
+  ): Promise<Skill | null> {
     const existing = this._skills.get(id);
     if (!existing) return null;
     const updated = {
@@ -88,10 +111,23 @@ export class InMemorySkillRepository implements SkillRepository {
     return parsed;
   }
 
-  async deactivateIfActive(tenantId: string, skillKey: string, excludingId: string): Promise<string | null> {
+  async deactivateIfActive(
+    tenantId: string,
+    skillKey: string,
+    excludingId: string,
+  ): Promise<string | null> {
     for (const skill of this._skills.values()) {
-      if (skill.tenantId === tenantId && skill.skillKey === skillKey && skill.activationState === "active" && skill.id !== excludingId) {
-        const updated = { ...skill, activationState: "inactive" as const, updatedAt: new Date().toISOString() };
+      if (
+        skill.tenantId === tenantId &&
+        skill.skillKey === skillKey &&
+        skill.activationState === "active" &&
+        skill.id !== excludingId
+      ) {
+        const updated = {
+          ...skill,
+          activationState: "inactive" as const,
+          updatedAt: new Date().toISOString(),
+        };
         this._skills.set(skill.id, skillSchema.parse(updated));
         return skill.id;
       }
@@ -118,7 +154,11 @@ export class InMemorySkillSecurityScanRepository implements SkillSecurityScanRep
 
   async findValidForHash(skillId: string, contentHash: string): Promise<SecurityScan | null> {
     for (const scan of this._scans.values()) {
-      if (scan.skillId === skillId && scan.evaluatedContentHash === contentHash && scan.status === "passed") {
+      if (
+        scan.skillId === skillId &&
+        scan.evaluatedContentHash === contentHash &&
+        scan.status === "passed"
+      ) {
         return scan;
       }
     }
@@ -146,7 +186,11 @@ export class InMemorySkillEvaluationRepository implements SkillEvaluationReposit
 
   async findValidForHash(skillId: string, contentHash: string): Promise<Evaluation | null> {
     for (const evalRecord of this._evals.values()) {
-      if (evalRecord.skillId === skillId && evalRecord.evaluatedContentHash === contentHash && evalRecord.status === "passed") {
+      if (
+        evalRecord.skillId === skillId &&
+        evalRecord.evaluatedContentHash === contentHash &&
+        evalRecord.status === "passed"
+      ) {
         return evalRecord;
       }
     }

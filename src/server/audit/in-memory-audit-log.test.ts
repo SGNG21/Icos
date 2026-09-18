@@ -12,6 +12,7 @@ function makeEntry(overrides: Partial<AuditEntry> = {}): AuditEntry {
     actor: { kind: "system", id: "icos" },
     taskId: "task-001",
     details: { title: "Tâche" },
+    createdAt: "2026-07-21T09:00:00.000Z",
     ...overrides,
   };
 }

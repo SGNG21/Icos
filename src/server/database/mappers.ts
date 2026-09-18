@@ -10,18 +10,28 @@ import {
   securityScanSchema,
   skillSchema,
   taskSchema,
-  type Agent,
-  type AgentAction,
-  type AgentCapability,
-  type Approval,
-  type AuditEntry,
-  type Capability,
-  type Evaluation,
-  type SecurityFinding,
-  type SecurityScan,
-  type Skill,
-  type Task,
+  taskExecutionResultSchema,
 } from "@/core/contracts";
+import { MissionTaskSchema } from "@/core/mission/contracts";
+
+import type {
+  Agent,
+  AgentAction,
+  AgentCapability,
+  Approval,
+  AuditEntry,
+  Capability,
+  Evaluation,
+  SecurityFinding,
+  SecurityScan,
+  Skill,
+  Task,
+  ReviewDecisionRecord,
+  TaskExecutionResult,
+} from "@/core/contracts";
+import type { MissionTask } from "@/core/mission/contracts";
+import { reviewDecisionRecordSchema } from "@/core/contracts/review";
+import type { decisions } from "./schema";
 
 import { RepositoryMappingError } from "./errors";
 import type {
@@ -36,6 +46,8 @@ import type {
   skillSecurityFindings,
   skillEvaluations,
   tasks,
+  missionTasks,
+  taskExecutionResults,
 } from "./schema";
 
 type AgentRow = typeof agents.$inferSelect;
@@ -53,6 +65,12 @@ type ApprovalInsert = typeof approvals.$inferInsert;
 type AuditInsert = typeof auditEntries.$inferInsert;
 type CapabilityInsert = typeof capabilities.$inferInsert;
 type AgentCapabilityInsert = typeof agentCapabilities.$inferInsert;
+type DecisionRow = typeof decisions.$inferSelect;
+type DecisionInsert = typeof decisions.$inferInsert;
+type MissionTaskRow = typeof missionTasks.$inferSelect;
+type MissionTaskInsert = typeof missionTasks.$inferInsert;
+type TaskExecutionResultRow = typeof taskExecutionResults.$inferSelect;
+type TaskExecutionResultInsert = typeof taskExecutionResults.$inferInsert;
 
 const iso = (value: Date): string => value.toISOString();
 
@@ -132,6 +150,7 @@ export function rowToAuditEntry(row: AuditRow): AuditEntry {
     taskId: row.taskId ?? undefined,
     actionId: row.actionId ?? undefined,
     details: row.details,
+    createdAt: iso(row.createdAt),
   });
   if (!parsed.success) {
     throw new RepositoryMappingError("audit_entries", parsed.error.message);
@@ -180,17 +199,18 @@ export function actionToRow(action: AgentAction): ActionInsert {
 }
 
 export function approvalToRow(approval: Approval): ApprovalInsert {
-  return {
-    id: approval.id,
-    actionId: approval.actionId,
-    decision: approval.decision,
-    decidedByLabel: approval.decidedBy,
-    reason: approval.reason ?? null,
-    decidedAt: new Date(approval.decidedAt),
-  };
+ return {
+   id: approval.id,
+   actionId: approval.actionId,
+   decision: approval.decision,
+   decidedByLabel: approval.decidedBy,
+   reason: approval.reason ?? null,
+   decidedAt: new Date(approval.decidedAt),
+    createdAt: new Date(),
+ };
 }
 
-export function auditToRow(entry: AuditEntry): AuditInsert {
+export function auditToRow(entry: AuditEntry): Required<AuditInsert> {
   return {
     id: entry.id,
     eventType: entry.eventType,
@@ -198,8 +218,153 @@ export function auditToRow(entry: AuditEntry): AuditInsert {
     actorLabel: entry.actor.id,
     taskId: entry.taskId ?? null,
     actionId: entry.actionId ?? null,
+    missionId: null,
+    performedBy: null,
     details: entry.details,
     occurredAt: new Date(entry.occurredAt),
+    createdAt: new Date(entry.createdAt),
+  };
+}
+
+// --- Decisions ---
+
+export function rowToReviewDecision(row: DecisionRow): ReviewDecisionRecord {
+  const parsed = reviewDecisionRecordSchema.safeParse({
+    id: row.id,
+    missionId: row.missionId,
+    taskId: row.taskId,
+    workflowId: row.workflowId,
+    decision: row.decision,
+    reviewerKind: row.reviewerKind,
+    severity: row.severity,
+    reasons: row.reasons,
+    requestedChanges: row.requestedChanges ?? undefined,
+    evidenceRefs: row.evidenceRefs ?? undefined,
+    findingRefs: row.findingRefs ?? undefined,
+    policyRefs: row.policyRefs ?? undefined,
+    providerMetadata: row.providerMetadata ?? undefined,
+    confidence: row.confidence ?? undefined,
+    createdAt: iso(row.createdAt),
+    humanOverridden: row.humanOverridden,
+    overriddenBy: row.overriddenBy ?? undefined,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("decisions", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function reviewDecisionToRow(decision: ReviewDecisionRecord): DecisionInsert {
+  return {
+    id: decision.id,
+    missionId: decision.missionId,
+    taskId: decision.taskId,
+    workflowId: decision.workflowId,
+    decision: decision.decision,
+    reviewerKind: decision.reviewerKind,
+    severity: decision.severity,
+    reasons: decision.reasons,
+    requestedChanges: decision.requestedChanges,
+    evidenceRefs: decision.evidenceRefs,
+    findingRefs: decision.findingRefs,
+    policyRefs: decision.policyRefs,
+    providerMetadata: decision.providerMetadata,
+    confidence: decision.confidence,
+    createdAt: new Date(decision.createdAt),
+    humanOverridden: decision.humanOverridden,
+    overriddenBy: decision.overriddenBy,
+  };
+}
+
+// --- MissionTask mapping ---
+
+export function rowToMissionTask(row: MissionTaskRow): MissionTask {
+  const parsed = MissionTaskSchema.safeParse({
+    id: row.id,
+    missionId: row.missionId,
+    title: row.title,
+    description: row.description ?? undefined,
+    dependsOn: row.dependsOn,
+    status: row.status,
+    workerKind: row.workerKind ?? undefined,
+    capability: row.capability ?? undefined,
+    taskId: row.taskId,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("mission_tasks", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function missionTaskToRow(task: MissionTask): MissionTaskInsert {
+  return {
+    id: task.id,
+    missionId: task.missionId,
+    title: task.title,
+    description: task.description ?? null,
+    dependsOn: task.dependsOn,
+    status: task.status,
+    workerKind: task.workerKind ?? null,
+    capability: task.capability ?? null,
+    taskId: task.taskId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
+
+// --- TaskExecutionResult mapping ---
+export function rowToTaskExecutionResult(row: TaskExecutionResultRow): TaskExecutionResult {
+  const parsed = taskExecutionResultSchema.safeParse({
+    id: row.id,
+    taskId: row.taskId,
+    workflowId: row.workflowId,
+    outcome: row.outcome,
+    workerKind: row.workerKind ?? undefined,
+    capability: row.capability ?? undefined,
+    digitalosExecutionId: row.digitalosExecutionId ?? undefined,
+    result: row.result ?? undefined,
+    error:
+      row.errorCode || row.errorMessage
+        ? {
+            code: row.errorCode ?? "INTERNAL_ERROR",
+            message: row.errorMessage ?? "Unknown error",
+          }
+        : undefined,
+    startedAt: row.startedAt ? iso(row.startedAt) : undefined,
+    completedAt: iso(row.completedAt),
+    recordedAt: iso(row.recordedAt),
+    artifacts: row.artifacts ?? undefined,
+    evidence: row.evidence ?? undefined,
+    findings: row.findings ?? undefined,
+    observations: row.observations ?? undefined,
+    confidence: row.confidence ?? undefined,
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("task_execution_results", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function taskExecutionResultToRow(result: TaskExecutionResult): TaskExecutionResultInsert {
+  return {
+    id: result.id,
+    taskId: result.taskId,
+    workflowId: result.workflowId,
+    outcome: result.outcome,
+    workerKind: result.workerKind ?? null,
+    capability: result.capability ?? null,
+    digitalosExecutionId: result.digitalosExecutionId ?? null,
+    result: result.result ?? null,
+    errorCode: result.error?.code ?? null,
+    errorMessage: result.error?.message ?? null,
+    startedAt: result.startedAt ? new Date(result.startedAt) : null,
+    completedAt: new Date(result.completedAt),
+    recordedAt: new Date(result.recordedAt),
+    artifacts: result.artifacts ?? null,
+    evidence: result.evidence ?? null,
+    findings: result.findings ?? null,
+    observations: result.observations ?? null,
+    confidence: result.confidence ?? null,
   };
 }
 

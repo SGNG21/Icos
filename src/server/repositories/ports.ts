@@ -1,15 +1,23 @@
 import type {
-  Agent,
-  AgentAction,
-  Approval,
-  ApprovalStatus,
-  AuditEntry,
-  Task,
-  TaskStatus,
+ Agent,
+ AgentAction,
+ Approval,
+ ApprovalStatus,
+ AuditEntry,
+ Task,
+ TaskStatus,
+ TaskExecutionResult,
+ RecordTaskExecutionResultInput,
+ RecordTaskExecutionResultOutcome,
+} from "@/core/contracts";
+export type {
+  RecordTaskExecutionResultInput,
+  RecordTaskExecutionResultOutcome,
 } from "@/core/contracts";
 import type { HumanAgentLink, Role, UserStatus } from "@/core/identity";
 import type { TransitionResult } from "@/core/tasks/lifecycle";
 import type { AuditQuery } from "@/server/audit/in-memory-audit-log";
+
 
 /**
  * Ports d'accès aux entités (repositories). Toutes les opérations sont
@@ -102,3 +110,12 @@ export interface AuditRepository {
   list(): Promise<AuditEntry[]>;
   query(filter: AuditQuery): Promise<AuditEntry[]>;
 }
+
+export interface TaskExecutionResultRepository {
+  getByTaskId(taskId: string): Promise<TaskExecutionResult | null>;
+  getByWorkflowId(workflowId: string): Promise<TaskExecutionResult | null>;
+  listByTaskIds(taskIds: readonly string[]): Promise<TaskExecutionResult[]>;
+  record(input: RecordTaskExecutionResultInput): Promise<RecordTaskExecutionResultOutcome>;
+}
+
+export type { DurableMemory } from "@/core/context/durable-memory";
