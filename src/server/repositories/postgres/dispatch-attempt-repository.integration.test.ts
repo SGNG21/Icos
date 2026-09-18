@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
@@ -5,7 +6,7 @@ import { createDatabase } from "@/server/database/client";
 import { dispatchAttempts, missionTasks, missions, tasks } from "@/server/database/schema";
 import { PostgresDispatchAttemptRepository } from "@/server/repositories/postgres/dispatch-attempt-repository";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 describe("PostgresDispatchAttemptRepository N2.3", () => {
   const handle = createDatabase(DATABASE_URL);

@@ -397,3 +397,86 @@ describe("QualityControlService", () => {
     expect(current.replanCount).toBe(0);
   });
 });
+
+describe("QualityControlService — reviewer outage semantics (Phase 6.1)", () => {
+  it("three consecutive reviewer timeouts leave the review unavailable and never fail the successful execution", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const f = await fixture();
+      const workflowId = `icos-task-${f.missionTask.taskId}`;
+      await recordAndRegister(f, workflowId);
+      vi.mocked(f.reviewer.review).mockRejectedValue(new DOMException("timeout", "TimeoutError"));
+
+      for (let i = 0; i < 3; i++) {
+        await expect(f.qualityControl.processPending(f.mission.id)).rejects.toThrow("timeout");
+      }
+      // Fourth pass: budget exhausted -> unavailable, NOT escalated/failed.
+      await f.qualityControl.processPending(f.mission.id);
+
+      const job = await f.qualityJobs.getByWorkflowId(workflowId);
+      expect(job?.state).toBe("review_unavailable");
+      expect(job?.lastError).toBe("QUALITY_CONTROL_REVIEW_UNAVAILABLE");
+      // worker execution state: untouched success
+      expect((await f.executionResults.getByWorkflowId(workflowId))?.outcome).toBe("success");
+      // task orchestration state: still waiting for a review, never failed
+      expect((await f.missions.getMissionTaskById(f.missionTask.id))?.status).toBe("review_pending");
+      expect((await f.tasks.getById(f.missionTask.taskId))?.status).toBe("review_pending");
+      // no decision was invented
+      expect(await f.reviewDecisions.getByWorkflowId(workflowId)).toBeNull();
+
+      // Still cooling down: nothing is retried.
+      const callsBefore = vi.mocked(f.reviewer.review).mock.calls.length;
+      await f.qualityControl.processPending(f.mission.id);
+      expect(vi.mocked(f.reviewer.review).mock.calls.length).toBe(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers the unavailable review with a fresh budget once the reviewer is back", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const f = await fixture();
+      const workflowId = `icos-task-${f.missionTask.taskId}`;
+      await recordAndRegister(f, workflowId);
+      vi.mocked(f.reviewer.review).mockRejectedValue(new Error("reviewer down"));
+      for (let i = 0; i < 3; i++) {
+        await expect(f.qualityControl.processPending(f.mission.id)).rejects.toThrow();
+      }
+      await f.qualityControl.processPending(f.mission.id);
+      expect((await f.qualityJobs.getByWorkflowId(workflowId))?.state).toBe("review_unavailable");
+
+      vi.setSystemTime(Date.now() + 60 * 60_000);
+      vi.mocked(f.reviewer.review).mockReset().mockImplementation(async (input) => ({
+        id: "review-recovered",
+        missionId: input.mission.id,
+        taskId: input.task.id,
+        workflowId: input.executionResult.workflowId,
+        decision: "APPROVE",
+        reviewerKind: "llm",
+        severity: "info",
+        reasons: ["ok"],
+        createdAt: new Date().toISOString(),
+        humanOverridden: false,
+      }));
+
+      await f.qualityControl.processPending(f.mission.id);
+      expect((await f.qualityJobs.getByWorkflowId(workflowId))?.state).toBe("action_applied");
+      expect((await f.tasks.getById(f.missionTask.taskId))?.status).toBe("succeeded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists a pending wake-up together with the applied action, until it is completed", async () => {
+    const f = await fixture();
+    const workflowId = `icos-task-${f.missionTask.taskId}`;
+    await recordAndRegister(f, workflowId);
+    await f.qualityControl.processPending(f.mission.id);
+
+    expect(await f.qualityJobs.listWakeupMissionIds()).toEqual([f.mission.id]);
+    expect(await f.qualityJobs.listPendingWakeups(f.mission.id)).toEqual([workflowId]);
+    await f.qualityJobs.completeWakeups([workflowId]);
+    expect(await f.qualityJobs.listWakeupMissionIds()).toEqual([]);
+  });
+});

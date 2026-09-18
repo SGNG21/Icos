@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
@@ -15,7 +16,7 @@ import { PostgresTaskRepository } from "@/server/repositories/postgres/task-repo
 import { markTaskRunning } from "./mark-task-running";
 
 const DATABASE_URL =
-  "postgres://coco@localhost:5432/icos_n23_probe";
+  TEST_DATABASE_URL;
 
 describe("markTaskRunning integration with PostgreSQL", () => {
   const db = createDatabase(DATABASE_URL);

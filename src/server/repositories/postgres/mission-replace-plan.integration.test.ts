@@ -1,10 +1,11 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
 import { loadEnv } from "@/config/env";
 import { buildPostgresContainer, type Container } from "@/server/container";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 describe("PostgreSQL mission graph replacement", () => {
   let container: Container;

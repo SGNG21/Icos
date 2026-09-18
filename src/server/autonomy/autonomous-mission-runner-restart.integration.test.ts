@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sql } from "drizzle-orm";
@@ -22,7 +23,7 @@ import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-swe
 
 import type { AutonomousMissionRunnerResult } from "@/server/autonomy/autonomous-mission-runner";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 class ManualLeaseRenewalTimer {
   private nowMs = 0;

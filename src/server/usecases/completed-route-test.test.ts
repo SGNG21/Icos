@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import { POST } from "@/app/api/internal/executions/completed/route";
@@ -43,7 +44,7 @@ describe("Completed callback route - isolate HTTP 400 branch", () => {
     }
 
     process.env.PERSISTENCE = "postgres";
-    process.env.DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
     process.env.OMNIROUTE_BASE_URL = "http://dummy";
     process.env.OMNIROUTE_API_KEY = "dummy";
     process.env.ICOS_REVIEWER_MODEL = "test-model";

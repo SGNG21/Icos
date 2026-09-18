@@ -1,0 +1,52 @@
+import { MockActivityEnvironment } from '@temporalio/testing';
+import assert from 'assert';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'mocha';
+import * as activities from '../activities';
+
+// Faux binaire `hermes` : sort en code 0 (comme le vrai) et écrit le statut
+// structuré dans --usage-file selon HERMES_FAKE_MODE.
+const FAKE = `#!/bin/sh
+while [ $# -gt 0 ]; do [ "$1" = "--usage-file" ] && f="$2"; shift; done
+if [ "$HERMES_FAKE_MODE" = "provider-failure" ]; then
+  echo "API call failed after 3 retries: Stream ended before producing a non-ping SSE event"
+  [ -n "$f" ] && printf '{"completed":false,"failed":true}' > "$f"
+elif [ "$HERMES_FAKE_MODE" = "no-usage" ]; then
+  echo "some text"
+else
+  echo "ICOS_PHASE6_LIVE_OK"
+  [ -n "$f" ] && printf '{"completed":true,"failed":false,"model":"fake/model"}' > "$f"
+fi
+exit 0
+`;
+
+describe('greet activity with hermes exit-0 failures', () => {
+  const oldPath = process.env.PATH;
+  before(() => {
+    const dir = mkdtempSync(join(tmpdir(), 'fake-hermes-'));
+    writeFileSync(join(dir, 'hermes'), FAKE);
+    chmodSync(join(dir, 'hermes'), 0o755);
+    process.env.PATH = `${dir}:${oldPath}`;
+  });
+  after(() => {
+    process.env.PATH = oldPath;
+    delete process.env.HERMES_FAKE_MODE;
+  });
+
+  it('returns the text of a real completed run', async () => {
+    process.env.HERMES_FAKE_MODE = 'ok';
+    assert.strictEqual(await new MockActivityEnvironment().run(activities.greet, 'p'), 'ICOS_PHASE6_LIVE_OK');
+  });
+
+  it('throws (never a success) when hermes exits 0 with provider error text', async () => {
+    process.env.HERMES_FAKE_MODE = 'provider-failure';
+    await assert.rejects(new MockActivityEnvironment().run(activities.greet, 'p'), /Stream ended/);
+  });
+
+  it('throws when hermes provides no structured status', async () => {
+    process.env.HERMES_FAKE_MODE = 'no-usage';
+    await assert.rejects(new MockActivityEnvironment().run(activities.greet, 'p'), /no structured status/);
+  });
+});

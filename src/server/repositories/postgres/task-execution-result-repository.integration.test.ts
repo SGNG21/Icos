@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 
@@ -10,7 +11,7 @@ import {
 } from "@/server/database/schema";
 import { PostgresTaskExecutionResultRepository } from "./task-execution-result-repository";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 const PREFIX = "proof-task-execution-result";
 const TASK_ID = `${PREFIX}-task`;
 const WORKFLOW_ID = `${PREFIX}-workflow`;

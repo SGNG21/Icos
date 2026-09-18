@@ -176,6 +176,20 @@
       "when": 1789423200000,
       "tag": "0027_quality_control_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789500000000,
+      "tag": "0028_schema_parity_superseded",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0029_qc_review_unavailable_wakeup_outbox",
+      "breakpoints": true
     }
   ]
 }

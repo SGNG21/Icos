@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { describe, expect, it } from "vitest";
 
 import { loadEnv } from "@/config/env";
@@ -5,7 +6,7 @@ import { buildPostgresContainer } from "@/server/container";
 import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
 import { TemporalTaskExecutionDispatcher } from "@/server/execution/temporal-task-execution-dispatcher";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 describe("production task execution composition", () => {
   it("selects the real Temporal dispatcher for PostgreSQL production", async () => {

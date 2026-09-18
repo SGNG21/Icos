@@ -1,0 +1,150 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { classifyHermesRun } from './hermes-run';
+import { resolveCallbackSecret } from './icos-config';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Contexte d'exécution partagé entre le workflow et les activités.
+ * Corrèle un run avec la Task ICOS et le workflow durable Temporal.
+ */
+export interface ExecutionContext {
+  taskId: string;
+  workflowId: string;
+}
+
+/**
+ * Exécute le prompt via Hermes/OmniRoute et retourne le résultat texte.
+ * Cette activité reste identique à l'existant : le prompt vient d'ICOS.
+ */
+export async function greet(prompt: string): Promise<string> {
+  // Échec contrôlé pour la validation E2E du chemin d'erreur : provoque un
+  // échec RÉEL du worker (l'activité lève), sans simuler le retour ICOS.
+  if (prompt.includes('E2E_FORCE_FAILURE')) {
+    throw new Error('échec contrôlé du worker (E2E_FORCE_FAILURE)');
+  }
+
+  // Hermes sort en code 0 même quand le provider échoue (texte d'erreur sur
+  // stdout) : le succès est décidé sur le statut STRUCTURÉ de --usage-file.
+  const dir = await mkdtemp(join(tmpdir(), 'icos-hermes-'));
+  const usageFile = join(dir, 'usage.json');
+  try {
+    const { stdout } = await execFileAsync('hermes', ['-z', prompt, '--usage-file', usageFile], {
+      timeout: 100_000,
+      maxBuffer: 1024 * 1024,
+    });
+    let usage: unknown;
+    try {
+      usage = JSON.parse(await readFile(usageFile, 'utf8'));
+    } catch {
+      usage = undefined; // fail-closed : statut absent/illisible = échec
+    }
+    const run = classifyHermesRun(stdout, usage);
+    if (!run.ok) {
+      throw new Error(run.message);
+    }
+    return run.result;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// ─────────────────────────────────────
+// Callbacks Temporal → ICOS
+// ─────────────────────────────────────
+
+const ICOS_BASE_URL = process.env.ICOS_BASE_URL ?? 'http://localhost:3000';
+const CALLBACK_HEADER = 'x-icos-callback-secret';
+
+async function postJson(path: string, body: unknown): Promise<void> {
+  // Résolu à CHAQUE appel : une rotation de secret ne nécessite pas de
+  // redémarrer le worker, et l'ordre de démarrage n'a plus d'importance.
+  const secret = resolveCallbackSecret();
+  if (!secret) {
+    throw new Error('ICOS_EXECUTION_CALLBACK_SECRET manquant');
+  }
+  const response = await fetch(`${ICOS_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      [CALLBACK_HEADER]: secret,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    // Message court, sans corps sensible : Temporal retentera l'activité.
+    throw new Error(`callback ${path} → HTTP ${response.status}`);
+  }
+}
+
+/**
+ * Signale à ICOS le démarrage réel du travail (idempotent côté ICOS).
+ * Un échec réseau est propagé : Temporal retentera l'activité selon sa
+ * politique de retry native (pas de retry maison).
+ */
+export async function reportStarted(ctx: ExecutionContext): Promise<void> {
+  await postJson('/api/internal/executions/started', {
+    taskId: ctx.taskId,
+    workflowId: ctx.workflowId,
+    startedAt: new Date().toISOString(),
+  });
+}
+
+export interface CompletionSuccessInput {
+  ctx: ExecutionContext;
+  workerKind: 'hermes';
+  result: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface CompletionFailureInput {
+  ctx: ExecutionContext;
+  workerKind: 'hermes';
+  errorCode:
+    | 'WORKER_FAILED'
+    | 'WORKER_TIMEOUT'
+    | 'WORKER_UNAVAILABLE'
+    | 'INVALID_RESULT'
+    | 'INTERNAL_ERROR';
+  errorMessage: string;
+  startedAt?: string;
+  completedAt: string;
+}
+
+/**
+ * Ferme la boucle sur SUCCÈS : ICOS persistera la preuve et fera passer la
+ * task à `succeeded`. Idempotent côté ICOS via `workflowId`.
+ */
+export async function reportSuccess(input: CompletionSuccessInput): Promise<void> {
+  await postJson('/api/internal/executions/completed', {
+    taskId: input.ctx.taskId,
+    workflowId: input.ctx.workflowId,
+    outcome: 'success',
+    workerKind: input.workerKind,
+    result: input.result,
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+  });
+}
+
+/**
+ * Ferme la boucle sur ÉCHEC : ICOS persistera l'erreur normalisée et fera
+ * passer la task à `failed`. Aucun `succeeded` implicite possible côté ICOS.
+ */
+export async function reportFailure(input: CompletionFailureInput): Promise<void> {
+  await postJson('/api/internal/executions/completed', {
+    taskId: input.ctx.taskId,
+    workflowId: input.ctx.workflowId,
+    outcome: 'failure',
+    workerKind: input.workerKind,
+    error: { code: input.errorCode, message: input.errorMessage },
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+  });
+}

@@ -7,6 +7,8 @@ export type QualityJobState =
   | "review_pending"
   | "reviewing"
   | "decision_ready"
+  /** Reviewer outage after the review budget: recoverable, never fails the worker result. */
+  | "review_unavailable"
   | "action_applied"
   | "escalated";
 
@@ -26,6 +28,12 @@ export interface QualityControlJob {
   claimToken?: string;
   claimUntil?: Date;
   lastError?: string;
+  /**
+   * Durable outbox flag, set atomically with the applied action (or
+   * escalation): the mission still has to be woken up. Cleared by
+   * `completeWakeups` once the wake-up effectively happened.
+   */
+  wakeupPending?: boolean;
 }
 
 export interface RegisterQualityControlInput {
@@ -63,6 +71,16 @@ export interface QualityControlRepository {
   ): Promise<{ job: QualityControlJob; dispatchAcquired: boolean }>;
   releaseForRetry(workflowId: string, ownerToken: string, errorCode: string): Promise<void>;
   escalateOwned(workflowId: string, ownerToken: string, reason: string): Promise<void>;
+  /** Review budget exhausted by reviewer failures: park the job (recoverable after `cooldownMs`). */
+  markReviewUnavailable(
+    workflowId: string,
+    ownerToken: string,
+    reason: string,
+    cooldownMs: number,
+  ): Promise<void>;
+  listWakeupMissionIds(limit?: number): Promise<string[]>;
+  listPendingWakeups(missionId: string): Promise<string[]>;
+  completeWakeups(workflowIds: string[]): Promise<void>;
   recoverUnregistered(missionId?: string): Promise<number>;
   listRecoverableMissionIds(limit?: number): Promise<string[]>;
   getByWorkflowId(workflowId: string): Promise<QualityControlJob | null>;

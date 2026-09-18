@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
 import { createContainer, type Container } from "@/server/container";
@@ -24,7 +25,7 @@ describe("AuditEntry mapper and PostgresAuditRepository round-trip with PostgreS
     }
 
     process.env.PERSISTENCE = "postgres";
-    process.env.DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
     // Required for OmniRoute reviewer in PostgreSQL mode
     process.env.OMNIROUTE_BASE_URL = "http://localhost:4000";
     process.env.OMNIROUTE_API_KEY = "test-key";

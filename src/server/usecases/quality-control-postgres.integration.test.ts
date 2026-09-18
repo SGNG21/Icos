@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 
@@ -7,9 +8,11 @@ import { buildPostgresContainer, type Container } from "@/server/container";
 import { PostgresQualityControlRepository } from "@/server/repositories/postgres/quality-control-repository";
 import type { ReviewerService } from "@/server/review/ports";
 
+import { QualityControlRecoverySweeper } from "@/server/autonomy/quality-control-recovery-sweeper";
+
 import { QualityControlService } from "./quality-control-service";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 function reviewer(decision: ReviewDecisionRecord["decision"]): ReviewerService {
   return {
@@ -195,5 +198,70 @@ describe("PostgreSQL durable quality control", () => {
       WHERE mission_task_id = ${f.missionTask.id} AND attempt = 2
     `);
     expect((rows[0] as { count: number }).count).toBe(1);
+  });
+
+  it("crash-gap: the wake-up outbox is persisted with the applied action and resumed once after a restart", async () => {
+    const f = await seed("APPROVE");
+    await f.service.registerExecution({
+      missionId: f.mission.id,
+      missionTaskId: f.missionTask.id,
+      taskId: f.missionTask.taskId,
+      workflowId: f.workflowId,
+    });
+    await f.service.processPending(f.mission.id); // action applied, then "the process dies" before waking
+
+    const restarted = new PostgresQualityControlRepository(container.db!);
+    expect((await restarted.getByWorkflowId(f.workflowId))?.state).toBe("action_applied");
+    expect(await restarted.listWakeupMissionIds()).toEqual([f.mission.id]);
+
+    const wake = vi.fn().mockResolvedValue(null);
+    const sweeper = new QualityControlRecoverySweeper(f.service, restarted, wake);
+    await sweeper.sweep();
+    await sweeper.sweep();
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith(f.mission.id);
+    expect(await restarted.listWakeupMissionIds()).toEqual([]);
+  });
+
+  it("three reviewer failures park the review as unavailable without failing the task, then recover", async () => {
+    const f = await seed("APPROVE");
+    const failing: ReviewerService = { review: vi.fn().mockRejectedValue(new Error("reviewer down")) };
+    const down = new QualityControlService({
+      missions: container.mission,
+      tasks: container.tasks,
+      executionResults: container.executionResults,
+      reviewer: failing,
+      reviewDecisions: container.reviewDecisions,
+      dispatchAttempts: container.dispatchAttempts,
+      qualityJobs: f.qualityJobs,
+    });
+    await down.registerExecution({
+      missionId: f.mission.id,
+      missionTaskId: f.missionTask.id,
+      taskId: f.missionTask.taskId,
+      workflowId: f.workflowId,
+    });
+    const taskStatusBefore = (await container.tasks.getById(f.missionTask.taskId))?.status;
+    for (let i = 0; i < 3; i++) await expect(down.processPending(f.mission.id)).rejects.toThrow();
+    await down.processPending(f.mission.id);
+
+    const parked = await f.qualityJobs.getByWorkflowId(f.workflowId);
+    expect(parked).toMatchObject({
+      state: "review_unavailable",
+      lastError: "QUALITY_CONTROL_REVIEW_UNAVAILABLE",
+      wakeupPending: false,
+    });
+    expect((await container.tasks.getById(f.missionTask.taskId))?.status).toBe(taskStatusBefore);
+    expect(taskStatusBefore).not.toBe("failed");
+    expect((await container.mission.getMissionTaskById(f.missionTask.id))?.status).toBe("review_pending");
+    expect((await container.executionResults.getByWorkflowId(f.workflowId))?.outcome).toBe("success");
+
+    // Cool-down elapsed + reviewer back => fresh budget, accepted.
+    await container.db!.execute(
+      sql`UPDATE quality_control_jobs SET claim_until = now() - interval '1 second' WHERE workflow_id = ${f.workflowId}`,
+    );
+    await f.service.recover(f.mission.id);
+    expect((await container.tasks.getById(f.missionTask.taskId))?.status).toBe("succeeded");
+    expect((await f.qualityJobs.getByWorkflowId(f.workflowId))?.state).toBe("action_applied");
   });
 });

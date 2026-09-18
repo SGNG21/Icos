@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import {
   afterEach,
   describe,
@@ -19,7 +20,7 @@ import { recordMissionTaskExecution } from "@/server/usecases/record-mission-tas
 import type { MissionTask } from "@/core/mission/contracts";
 
 const DATABASE_URL =
-  "postgres://coco@localhost:5432/icos_n23_probe";
+  TEST_DATABASE_URL;
 
 // buildPostgresContainer constructs PostgresReviewerService at instantiation
 // time: these values only satisfy its configuration-time dependencies.

@@ -86,7 +86,9 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       .filter(
         (candidate) =>
           candidate.missionId === missionId &&
-          (candidate.state === "review_pending" || candidate.state === "decision_ready") &&
+          (candidate.state === "review_pending" ||
+            candidate.state === "review_unavailable" ||
+            candidate.state === "decision_ready") &&
           (!candidate.claimUntil || candidate.claimUntil.getTime() <= now),
       )
       .sort(
@@ -99,9 +101,17 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
 
     const claimed: QualityControlJob = {
       ...job,
-      state: job.state === "review_pending" ? "reviewing" : job.state,
+      state:
+        job.state === "review_pending" || job.state === "review_unavailable"
+          ? "reviewing"
+          : job.state,
+      // A recovered unavailable review gets a fresh review budget.
       reviewAttemptCount:
-        job.state === "review_pending" ? job.reviewAttemptCount + 1 : job.reviewAttemptCount,
+        job.state === "review_unavailable"
+          ? 1
+          : job.state === "review_pending"
+            ? job.reviewAttemptCount + 1
+            : job.reviewAttemptCount,
       claimToken: ownerToken,
       claimUntil: new Date(now + leaseMs),
       updatedAt: new Date(now),
@@ -156,7 +166,15 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       forceEscalate?: boolean;
     },
   ): Promise<{ job: QualityControlJob; dispatchAcquired: boolean }> {
-    return this.inActionCriticalSection(() => this.applyActionLocked(workflowId, ownerToken, input));
+    return this.inActionCriticalSection(async () => {
+      const wasDecisionReady = this.jobs.get(workflowId)?.state === "decision_ready";
+      const result = await this.applyActionLocked(workflowId, ownerToken, input);
+      if (!wasDecisionReady) return result;
+      // Outbox flag set in the same critical section as the state change.
+      const flagged = { ...this.jobs.get(workflowId)!, wakeupPending: true };
+      this.jobs.set(workflowId, flagged);
+      return { ...result, job: clone(flagged) };
+    });
   }
 
   private async applyActionLocked(
@@ -314,8 +332,47 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       claimToken: undefined,
       claimUntil: undefined,
       lastError: reason,
+      wakeupPending: true,
       updatedAt: new Date(),
     });
+  }
+
+  async markReviewUnavailable(
+    workflowId: string,
+    ownerToken: string,
+    reason: string,
+    cooldownMs: number,
+  ): Promise<void> {
+    const job = this.requireOwned(workflowId, ownerToken);
+    this.jobs.set(workflowId, {
+      ...job,
+      state: "review_unavailable",
+      claimToken: undefined,
+      claimUntil: new Date(Date.now() + cooldownMs),
+      lastError: reason,
+      updatedAt: new Date(),
+    });
+  }
+
+  async listWakeupMissionIds(limit = 100): Promise<string[]> {
+    return [
+      ...new Set(
+        [...this.jobs.values()].filter((job) => job.wakeupPending).map((job) => job.missionId),
+      ),
+    ].slice(0, limit);
+  }
+
+  async listPendingWakeups(missionId: string): Promise<string[]> {
+    return [...this.jobs.values()]
+      .filter((job) => job.missionId === missionId && job.wakeupPending)
+      .map((job) => job.workflowId);
+  }
+
+  async completeWakeups(workflowIds: string[]): Promise<void> {
+    for (const id of workflowIds) {
+      const job = this.jobs.get(id);
+      if (job) this.jobs.set(id, { ...job, wakeupPending: false });
+    }
   }
 
   async recoverUnregistered(missionId?: string): Promise<number> {

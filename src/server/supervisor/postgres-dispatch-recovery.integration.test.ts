@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import {
   afterAll,
   beforeAll,
@@ -27,7 +28,7 @@ import type {
 } from "@/server/execution/ports";
 
 const DATABASE_URL =
-  "postgres://coco@localhost:5432/icos_n23_probe";
+  TEST_DATABASE_URL;
 
 describe("N2.3 PostgreSQL crash/restart dispatch recovery", () => {
   const handleA = createDatabase(DATABASE_URL);

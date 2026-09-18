@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { Container } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
@@ -38,7 +39,7 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
     // Set environment to use postgres
     process.env.PERSISTENCE = "postgres";
     // Phase 4 database safety: only the authorized disposable probe is used.
-    process.env.DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
     process.env.OMNIROUTE_BASE_URL = "http://127.0.0.1:65535";
     process.env.OMNIROUTE_API_KEY = "phase-4-e2e-test-key";
     process.env.ICOS_REVIEWER_MODEL = "phase-4-e2e-reviewer";

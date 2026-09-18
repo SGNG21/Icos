@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sql } from "drizzle-orm";
@@ -17,7 +18,7 @@ import { createDatabase } from "@/server/database/client";
 import { missions } from "@/server/database/schema";
 import { PostgresAutonomousMissionRuntimeRepository } from "@/server/repositories/postgres/autonomous-mission-runtime-repository";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 class ManualSchedulerTimer implements AutonomyRecoverySchedulerTimer {
   private nowMs = 0;

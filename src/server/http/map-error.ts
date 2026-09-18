@@ -27,5 +27,10 @@ export function toErrorResponse(error: unknown): Response {
       { "retry-after": "1" },
     );
   }
+  // Diagnosability: the client only gets a generic message, the server keeps
+  // the error name and a bounded message (never the stack, never the payload).
+  const name = error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[api] unexpected error ${name}: ${message.slice(0, 300)}`);
   return apiError("internal_error", "erreur interne");
 }

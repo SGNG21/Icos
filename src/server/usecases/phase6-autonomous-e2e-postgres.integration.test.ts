@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
@@ -40,7 +41,7 @@ import type {
  *
  * Authorized disposable database only: icos_n23_probe.
  */
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 
 class RecordingDispatcher implements TaskExecutionDispatcher {
   readonly dispatches: { workflowId: string; taskId: string; prompt: string }[] = [];

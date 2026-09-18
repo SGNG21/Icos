@@ -37,6 +37,7 @@ function mapJob(row: typeof qualityControlJobs.$inferSelect): QualityControlJob 
     claimToken: row.claimToken ?? undefined,
     claimUntil: row.claimUntil ?? undefined,
     lastError: row.lastError ?? undefined,
+    wakeupPending: row.wakeupPending,
   };
 }
 
@@ -131,7 +132,11 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .where(
           and(
             eq(qualityControlJobs.missionId, missionId),
-            inArray(qualityControlJobs.state, ["review_pending", "decision_ready"]),
+            inArray(qualityControlJobs.state, [
+              "review_pending",
+              "review_unavailable",
+              "decision_ready",
+            ]),
             or(
               isNull(qualityControlJobs.claimUntil),
               lte(qualityControlJobs.claimUntil, sql`now()`),
@@ -145,8 +150,9 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       return tx
         .update(qualityControlJobs)
         .set({
-          state: sql`case when ${qualityControlJobs.state} = 'review_pending' then 'reviewing' else ${qualityControlJobs.state} end`,
-          reviewAttemptCount: sql`${qualityControlJobs.reviewAttemptCount} + case when ${qualityControlJobs.state} = 'review_pending' then 1 else 0 end`,
+          state: sql`case when ${qualityControlJobs.state} in ('review_pending','review_unavailable') then 'reviewing' else ${qualityControlJobs.state} end`,
+          // A recovered unavailable review gets a fresh review budget.
+          reviewAttemptCount: sql`case when ${qualityControlJobs.state} = 'review_unavailable' then 1 when ${qualityControlJobs.state} = 'review_pending' then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
           claimToken: ownerToken,
           claimUntil: sql`now() + (${leaseMs} * interval '1 millisecond')`,
           updatedAt: sql`now()`,
@@ -358,6 +364,8 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           lastError: input.forceEscalate
             ? (input.replanReason ?? "QUALITY_CONTROL_BUDGET_EXHAUSTED")
             : null,
+          // Durable outbox: same transaction as the applied action.
+          wakeupPending: true,
           updatedAt: sql`now()`,
         })
         .where(eq(qualityControlJobs.workflowId, workflowId))
@@ -406,10 +414,64 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           claimToken: null,
           claimUntil: null,
           lastError: reason,
+          wakeupPending: true,
           updatedAt: sql`now()`,
         })
         .where(eq(qualityControlJobs.workflowId, workflowId));
     });
+  }
+
+  async markReviewUnavailable(
+    workflowId: string,
+    ownerToken: string,
+    reason: string,
+    cooldownMs: number,
+  ): Promise<void> {
+    if (!Number.isFinite(cooldownMs) || cooldownMs < 0) {
+      throw new Error("QUALITY_CONTROL_INVALID_COOLDOWN");
+    }
+    await this.db.transaction(async (tx) => {
+      await this.lockOwned(tx, workflowId, ownerToken);
+      // Only the QC job changes: the worker result and task state stay as is.
+      await tx
+        .update(qualityControlJobs)
+        .set({
+          state: "review_unavailable",
+          claimToken: null,
+          claimUntil: sql`now() + (${cooldownMs} * interval '1 millisecond')`,
+          lastError: reason,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(qualityControlJobs.workflowId, workflowId));
+    });
+  }
+
+  async listWakeupMissionIds(limit = 100): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ missionId: qualityControlJobs.missionId })
+      .from(qualityControlJobs)
+      .where(eq(qualityControlJobs.wakeupPending, true))
+      .orderBy(asc(qualityControlJobs.missionId))
+      .limit(limit);
+    return rows.map((row) => row.missionId);
+  }
+
+  async listPendingWakeups(missionId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ workflowId: qualityControlJobs.workflowId })
+      .from(qualityControlJobs)
+      .where(
+        and(eq(qualityControlJobs.missionId, missionId), eq(qualityControlJobs.wakeupPending, true)),
+      );
+    return rows.map((row) => row.workflowId);
+  }
+
+  async completeWakeups(workflowIds: string[]): Promise<void> {
+    if (workflowIds.length === 0) return;
+    await this.db
+      .update(qualityControlJobs)
+      .set({ wakeupPending: false })
+      .where(inArray(qualityControlJobs.workflowId, workflowIds));
   }
 
   async recoverUnregistered(missionId?: string): Promise<number> {
@@ -473,7 +535,12 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       .from(qualityControlJobs)
       .where(
         and(
-          inArray(qualityControlJobs.state, ["review_pending", "reviewing", "decision_ready"]),
+          inArray(qualityControlJobs.state, [
+            "review_pending",
+            "reviewing",
+            "decision_ready",
+            "review_unavailable",
+          ]),
           or(isNull(qualityControlJobs.claimUntil), lte(qualityControlJobs.claimUntil, sql`now()`)),
         ),
       )
@@ -496,6 +563,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       "review_pending",
       "reviewing",
       "decision_ready",
+      "review_unavailable",
     ]);
     const rows = await this.db
       .select()

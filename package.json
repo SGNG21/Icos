@@ -16,11 +16,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration": "tsx scripts/test-db-setup.ts && vitest run --config vitest.integration.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
-    "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test",
+    "test:db:setup": "tsx scripts/test-db-setup.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",

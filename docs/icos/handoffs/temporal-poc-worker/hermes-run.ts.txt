@@ -1,0 +1,31 @@
+/**
+ * Classification d'un run `hermes -z` à partir du statut STRUCTURÉ écrit par
+ * `--usage-file` (`completed` / `failed`). Hermes sort en code 0 et imprime le
+ * texte d'erreur du provider sur stdout quand un appel échoue : le contenu de
+ * stdout ne doit JAMAIS servir à décider du succès (aucune liste de chaînes).
+ * Fail-closed : sans statut structuré explicite `completed === true` et
+ * `failed === false`, le run est un échec.
+ */
+export type HermesRunClassification =
+  | { ok: true; result: string; model?: string }
+  | { ok: false; code: 'WORKER_FAILED' | 'INVALID_RESULT'; message: string };
+
+const MAX_MESSAGE = 300;
+
+export function classifyHermesRun(stdout: string, usage: unknown): HermesRunClassification {
+  const text = stdout.trim();
+  const u = usage && typeof usage === 'object' ? (usage as Record<string, unknown>) : undefined;
+
+  if (!u || u.completed !== true || u.failed !== false) {
+    const detail = text ? text.slice(0, MAX_MESSAGE) : 'no output';
+    return {
+      ok: false,
+      code: 'WORKER_FAILED',
+      message: u ? `hermes run failed: ${detail}` : `hermes returned no structured status: ${detail}`,
+    };
+  }
+  if (!text) {
+    return { ok: false, code: 'INVALID_RESULT', message: 'hermes completed with an empty result' };
+  }
+  return { ok: true, result: text, model: typeof u.model === 'string' ? u.model : undefined };
+}

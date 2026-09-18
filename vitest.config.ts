@@ -11,15 +11,14 @@ export default defineConfig({
     coverage: {
       reporter: ["text", "json", "html"],
     },
-    include: [
-      "src/**/*.test.ts",
-    ],
-    // Les tests PostgreSQL de supervision partagent la base jetable
-    // icos_n23_probe : exécutés en parallèle, leurs TRUNCATE/DELETE se
-    // marchent dessus (FK audit_entries_task_id). Séquence obligatoire.
+    include: ["src/**/*.test.ts"],
+    // Les tests PostgreSQL partagent une base de test jetable (`icos_test`,
+    // voir src/server/database/test-database-guard.ts) : séquence obligatoire.
+    // Jamais la base live (icos_n23_probe) : `createDatabase` refuse toute base
+    // non « test » sous Vitest.
     fileParallelism: false,
-    // Les tests d'intégration PostgreSQL (Docker/Testcontainers) sont exécutés
-    // séparément via `pnpm test:integration`.
-    // exclude: [...configDefaults.exclude, "**/*.integration.test.ts"],
+    // Les tests d'intégration PostgreSQL (TRUNCATE/DELETE) sont exécutés
+    // séparément via `pnpm test:integration`, jamais par `pnpm test`.
+    exclude: [...configDefaults.exclude, "**/*.integration.test.ts"],
   },
 });

@@ -45,12 +45,6 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
       return { workflowId };
     }
 
-    console.log("[LocalTaskExecutionDispatcher] dispatch called with:", {
-      taskId,
-      prompt,
-      workerKind,
-      capability,
-    });
 
     let outcome: ExecutionOutcome = "success";
     let output: string | undefined;
@@ -82,14 +76,6 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
 
     const completedAt = new Date().toISOString();
 
-    console.log("[LocalTaskExecutionDispatcher] About to call recordTaskExecution with:", {
-      taskId,
-      workflowId,
-      outcome,
-      output,
-      error,
-      completedAt,
-    });
 
     // Record the execution result (this also transitions the task status atomically via recordTaskExecution)
     await recordTaskExecution(
@@ -115,7 +101,6 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
     // Mark the workflowId as executed (whether it was provided or generated).
     this.executedWorkflowIds.add(workflowId);
 
-    console.log("[LocalTaskExecutionDispatcher] recordTaskExecution called");
 
     return { workflowId };
   }

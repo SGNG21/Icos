@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import { createContainer, type Container } from "@/server/container";
@@ -50,7 +51,7 @@ beforeEach(async () => {
 
     process.env.PERSISTENCE = "postgres";
 
-    process.env.DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
 
     // Set dummy environment variables for OmniRoute reviewer to allow PostgreSQL container creation
             process.env.OMNIROUTE_BASE_URL = "http://dummy";

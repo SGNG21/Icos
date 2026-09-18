@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import {
   afterAll,
   beforeAll,
@@ -14,7 +15,7 @@ import {
 } from "@/server/container";
 
 const DATABASE_URL =
-  "postgres://coco@localhost:5432/icos_n23_probe";
+  TEST_DATABASE_URL;
 
 // buildPostgresContainer constructs PostgresReviewerService even though
 // this test only exercises MissionRepository.create().

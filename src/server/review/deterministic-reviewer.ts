@@ -26,15 +26,6 @@ export class DeterministicReviewer {
    * Retourne une décision bloquante si applicable, sinon null pour continuer vers LLM.
    */
   apply(input: ReviewInput): DeterministicReviewResult {
-    console.log("DeterministicReviewer.apply input:", {
-      outcome: input.executionResult.outcome,
-      findings: this.getAllFindings(input),
-      evidence: this.getAllEvidence(input),
-      missionTask: input.missionTask,
-      capability: input.missionTask?.capability,
-      executionResultType: typeof input.executionResult,
-      executionResult: input.executionResult,
-    });
     const { executionResult, missionTask } = input;
     const findings = this.getAllFindings(input);
     const evidence = this.getAllEvidence(input);
@@ -49,7 +40,6 @@ export class DeterministicReviewer {
         executionResult.error?.code === "WORKER_TIMEOUT" ||
         executionResult.error?.code === "WORKER_UNAVAILABLE" ||
         executionResult.error?.code === "UNKNOWN_EFFECT";
-      console.log(`Returning ${retryable ? "RETRY" : "BLOCK"} due to failure`);
       return this.createBlockingDecision(
         input,
         retryable ? "RETRY" : "BLOCK",
@@ -64,7 +54,6 @@ export class DeterministicReviewer {
     );
     if (hasQaBlocked) {
       hardReasons.push("QA gate blocked");
-      console.log("Returning BLOCK due to QA blocked");
       return this.createBlockingDecision(input, "BLOCK", hardReasons, "critical");
     }
 
@@ -72,7 +61,6 @@ export class DeterministicReviewer {
     // RÈGLE 4: High-risk ambiguous action → ESCALATE_TO_HUMAN
     if (this.isHighRiskAmbiguousAction(missionTask)) {
       hardReasons.push("High-risk ambiguous action requires human review");
-      console.log("Returning ESCALATE_TO_HUMAN due to high-risk ambiguous action");
       return this.createBlockingDecision(input, "ESCALATE_TO_HUMAN", hardReasons, "critical");
     }
 
@@ -80,14 +68,12 @@ export class DeterministicReviewer {
     const hasSuspiciousContent = this.detectPromptInjection(evidence, executionResult.result);
     if (hasSuspiciousContent) {
       hardReasons.push("Potential prompt injection detected in evidence/result");
-      console.log("Returning ESCALATE_TO_HUMAN due to prompt injection");
       return this.createBlockingDecision(input, "ESCALATE_TO_HUMAN", hardReasons, "critical");
     }
 
     // RÈGLE 9.5: Auto-approve check (based on evidence) -> if we have sufficient evidence for auto-approve then APPROVE
     const autoApproveDecision = this.checkForAutoApprove(input);
     if (autoApproveDecision) {
-      console.log("Returning APPROVE from auto-approve check");
       return autoApproveDecision;
     }
 
@@ -99,7 +85,6 @@ export class DeterministicReviewer {
       hardReasons.push(
         `Unrepairable block findings: ${unrepairableBlocks.map((f) => f.check).join(", ")}`,
       );
-      console.log("Returning BLOCK due to unrepairable blocks");
       return this.createBlockingDecision(input, "BLOCK", hardReasons, "critical");
     }
 
@@ -108,18 +93,10 @@ export class DeterministicReviewer {
       (f) =>
         f.severity === "BLOCK" && (f.repairability === "auto" || f.repairability === "content"),
     );
-    console.log(
-      "All findings:",
-      JSON.stringify(findings, (_, value) =>
-        typeof value === "object" && value !== null ? JSON.stringify(value) : value,
-      ),
-    );
-    console.log("Repairable blocks found:", repairableBlocks);
     if (repairableBlocks.length > 0) {
       hardReasons.push(
         `Repairable block findings: ${repairableBlocks.map((f) => f.check).join(", ")}`,
       );
-      console.log("Returning REQUEST_CHANGES due to repairable blocks");
       return this.createBlockingDecision(input, "REQUEST_CHANGES", hardReasons, "warning");
     }
 
@@ -129,22 +106,17 @@ export class DeterministicReviewer {
       (!executionResult.result || executionResult.result.trim().length === 0)
     ) {
       hardReasons.push("Success outcome with empty result");
-      console.log("Returning REQUEST_CHANGES due to empty result");
       return this.createBlockingDecision(input, "REQUEST_CHANGES", hardReasons, "warning");
     }
 
     // RÈGLE 9: Invalid required evidence for capability → REQUEST_CHANGES
-    console.log("About to check invalid required evidence");
     const invalidEvidence = this.getInvalidRequiredEvidence(input);
-    console.log("Invalid evidence:", invalidEvidence);
     if (invalidEvidence.length > 0) {
       hardReasons.push(`Invalid evidence: ${invalidEvidence.join(", ")}`);
-      console.log("Returning REQUEST_CHANGES due to invalid evidence");
       return this.createBlockingDecision(input, "REQUEST_CHANGES", hardReasons, "warning");
     }
 
     // Aucune règle dure déclenchée → continuer vers LLM
-    console.log("Returning null (proceed to LLM)");
     return {
       blockingDecision: null,
       hardReasons: [],
@@ -157,17 +129,11 @@ export class DeterministicReviewer {
    * Returns a blocking decision with APPROVE if sufficient, otherwise null.
    */
   private checkForAutoApprove(input: ReviewInput): DeterministicReviewResult | null {
-    console.log("checkForAutoApprove called with input:", {
-      outcome: input.executionResult.outcome,
-      findings: this.getAllFindings(input),
-      evidence: this.getAllEvidence(input),
-    });
     const { executionResult, findings } = input;
     const evidence = this.getAllEvidence(input);
 
     // Only consider auto-approve for success outcome
     if (executionResult.outcome !== "success") {
-      console.log("checkForAutoApprove: outcome not success");
       return null;
     }
 
@@ -176,19 +142,16 @@ export class DeterministicReviewer {
       (f) => f.severity === "PASS" || f.severity === "WARN",
     );
     if (!findingsArePassOrWarn) {
-      console.log("checkForAutoApprove: findings contain non-PASS/WARN");
       return null;
     }
 
     // Check that result is non-empty
     if (!executionResult.result || executionResult.result.trim().length === 0) {
-      console.log("checkForAutoApprove: result empty");
       return null;
     }
 
     // Check for valid preview evidence
     if (this.isValidWebsitePreviewEvidence(evidence)) {
-      console.log("checkForAutoApprove: valid preview evidence");
       return this.createBlockingDecision(
         input,
         "APPROVE",
@@ -199,7 +162,6 @@ export class DeterministicReviewer {
 
     // Check for valid website.qa evidence
     if (this.isValidWebsiteQaEvidence(evidence)) {
-      console.log("checkForAutoApprove: valid website.qa evidence");
       return this.createBlockingDecision(
         input,
         "APPROVE",
@@ -210,7 +172,6 @@ export class DeterministicReviewer {
       );
     }
 
-    console.log("checkForAutoApprove: no sufficient evidence");
     return null;
   }
 
@@ -223,21 +184,15 @@ export class DeterministicReviewer {
    *     { severity: string, category: string, message: string }
    */
   private isValidWebsiteQaEvidence(evidence: readonly Evidence[]): boolean {
-    console.log("isValidWebsiteQaEvidence called with evidence:", evidence);
     const gateReportEvidence = evidence.find((e) => e.type === "gate-report");
     const qaFindingsEvidence = evidence.find((e) => e.type === "qa-findings");
     if (!gateReportEvidence || !qaFindingsEvidence) {
-      console.log("isValidWebsiteQaEvidence: missing gate-report or qa-findings evidence");
       return false;
     }
 
     const gateReportContent = this.getEvidenceContent(gateReportEvidence);
     const qaFindingsContent = this.getEvidenceContent(qaFindingsEvidence);
     if (gateReportContent === null || qaFindingsContent === null) {
-      console.log("isValidWebsiteQaEvidence: missing content in evidence", {
-        gateReportContent,
-        qaFindingsContent,
-      });
       return false;
     }
 
@@ -246,13 +201,10 @@ export class DeterministicReviewer {
     try {
       gateReportObj = JSON.parse(gateReportContent);
       qaFindingsArr = JSON.parse(qaFindingsContent);
-    } catch (e) {
-      console.log("isValidWebsiteQaEvidence: JSON parse error", e);
+    } catch {
       return false;
     }
 
-    console.log("isValidWebsiteQaEvidence: parsed gateReportObj:", gateReportObj);
-    console.log("isValidWebsiteQaEvidence: parsed qaFindingsArr:", qaFindingsArr);
 
     // Validate gate-report object
     if (
@@ -264,7 +216,6 @@ export class DeterministicReviewer {
       !("overall" in gateReportObj) ||
       typeof gateReportObj.overall !== "string"
     ) {
-      console.log("isValidWebsiteQaEvidence: invalid gate-report object");
       return false;
     }
 
@@ -278,14 +229,12 @@ export class DeterministicReviewer {
         typeof gate.passed !== "boolean" ||
         typeof gate.severity !== "string"
       ) {
-        console.log("isValidWebsiteQaEvidence: invalid gate", gate);
         return false;
       }
     }
 
     // Validate qa-findings array
     if (!Array.isArray(qaFindingsArr)) {
-      console.log("isValidWebsiteQaEvidence: qa-findings is not an array");
       return false;
     }
 
@@ -298,12 +247,10 @@ export class DeterministicReviewer {
         typeof finding.category !== "string" ||
         typeof finding.message !== "string"
       ) {
-        console.log("isValidWebsiteQaEvidence: invalid finding", finding);
         return false;
       }
     }
 
-    console.log("isValidWebsiteQaEvidence: returning true");
     return true;
   }
 
@@ -316,21 +263,15 @@ export class DeterministicReviewer {
    *     { path: string, status: number }
    */
   private isValidWebsitePreviewEvidence(evidence: readonly Evidence[]): boolean {
-    console.log("isValidWebsitePreviewEvidence called with evidence:", evidence);
     const previewMetadataEvidence = evidence.find((e) => e.type === "preview-metadata");
     const previewRoutesEvidence = evidence.find((e) => e.type === "preview-routes");
     if (!previewMetadataEvidence || !previewRoutesEvidence) {
-      console.log("isValidWebsitePreviewEvidence: missing preview metadata or routes evidence");
       return false;
     }
 
     const previewMetadataContent = this.getEvidenceContent(previewMetadataEvidence);
     const previewRoutesContent = this.getEvidenceContent(previewRoutesEvidence);
     if (previewMetadataContent === null || previewRoutesContent === null) {
-      console.log("isValidWebsitePreviewEvidence: missing content in evidence", {
-        previewMetadataContent,
-        previewRoutesContent,
-      });
       return false;
     }
 
@@ -339,13 +280,10 @@ export class DeterministicReviewer {
     try {
       previewMetadataObj = JSON.parse(previewMetadataContent);
       previewRoutesArr = JSON.parse(previewRoutesContent);
-    } catch (e) {
-      console.log("isValidWebsitePreviewEvidence: JSON parse error", e);
+    } catch {
       return false;
     }
 
-    console.log("isValidWebsitePreviewEvidence: parsed previewMetadataObj:", previewMetadataObj);
-    console.log("isValidWebsitePreviewEvidence: parsed previewRoutesArr:", previewRoutesArr);
 
     // Validate preview-metadata object
     if (
@@ -357,10 +295,6 @@ export class DeterministicReviewer {
       typeof previewMetadataObj.ready !== "boolean" ||
       !Array.isArray(previewMetadataObj.pages)
     ) {
-      console.log(
-        "isValidWebsitePreviewEvidence: invalid preview metadata object",
-        previewMetadataObj,
-      );
       return false;
     }
 
@@ -373,14 +307,12 @@ export class DeterministicReviewer {
         typeof page.path !== "string" ||
         typeof page.status !== "number"
       ) {
-        console.log("isValidWebsitePreviewEvidence: invalid page", page);
         return false;
       }
     }
 
     // Validate preview-routes array
     if (!Array.isArray(previewRoutesArr)) {
-      console.log("isValidWebsitePreviewEvidence: preview routes is not an array");
       return false;
     }
 
@@ -392,12 +324,10 @@ export class DeterministicReviewer {
         typeof route.path !== "string" ||
         typeof route.status !== "number"
       ) {
-        console.log("isValidWebsitePreviewEvidence: invalid route", route);
         return false;
       }
     }
 
-    console.log("isValidWebsitePreviewEvidence: returning true");
     return true;
   }
 
@@ -425,36 +355,28 @@ export class DeterministicReviewer {
    * If all required evidence types are present but invalid, we return the list of required evidence types.
    */
   private getInvalidRequiredEvidence(input: ReviewInput): string[] {
-    console.log("getInvalidRequiredEvidence called with capability:", input.missionTask.capability);
     const capability = input.missionTask.capability;
     const required = this.getRequiredEvidenceTypes(capability);
     if (required.length === 0) {
-      console.log("No required evidence types for capability:", capability);
       return [];
     }
     const evidence = this.getAllEvidence(input);
     const presentTypes = evidence.map((e) => e.type);
-    console.log("Present evidence types:", presentTypes);
     const missing = required.filter((type) => !presentTypes.includes(type));
     if (missing.length > 0) {
-      console.log("Missing evidence types (blocking):", missing);
       return missing; // missing evidence -> block (REQUEST_CHANGES)
     }
     // All required types are present, now check if they are valid together
     let isValid = false;
     if (capability === "website.qa") {
       isValid = this.isValidWebsiteQaEvidence(evidence);
-      console.log("isValidWebsiteQaEvidence result:", isValid);
     } else if (capability === "website.preview") {
       isValid = this.isValidWebsitePreviewEvidence(evidence);
-      console.log("isValidWebsitePreviewEvidence result:", isValid);
     }
     // For other capabilities, we assume valid if types are present (we could add more validations later)
     if (!isValid) {
-      console.log("Evidence is invalid, returning all required types as invalid");
       return required; // treat all as invalid
     }
-    console.log("Evidence is valid, returning empty array");
     return [];
   }
 

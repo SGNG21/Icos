@@ -761,6 +761,7 @@ export const qualityControlJobs = pgTable(
     claimToken: text("claim_token"),
     claimUntil: timestamp("claim_until", { withTimezone: true }),
     lastError: text("last_error"),
+    wakeupPending: boolean("wakeup_pending").notNull().default(false),
   },
   (t) => [
     unique("quality_control_jobs_execution_result_unique").on(t.executionResultId),
@@ -768,7 +769,7 @@ export const qualityControlJobs = pgTable(
     check("quality_control_jobs_review_attempt_check", sql`${t.reviewAttemptCount} >= 0`),
     check(
       "quality_control_jobs_state_check",
-      sql`${t.state} in ('review_pending','reviewing','decision_ready','action_applied','escalated')`,
+      sql`${t.state} in ('review_pending','reviewing','decision_ready','review_unavailable','action_applied','escalated')`,
     ),
     check(
       "quality_control_jobs_action_check",
@@ -776,5 +777,6 @@ export const qualityControlJobs = pgTable(
     ),
     index("quality_control_jobs_pending_idx").on(t.state, t.claimUntil, t.createdAt),
     index("quality_control_jobs_mission_idx").on(t.missionId),
+    index("quality_control_jobs_wakeup_idx").on(t.missionId).where(sql`${t.wakeupPending}`),
   ],
 );

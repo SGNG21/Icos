@@ -14,6 +14,8 @@ import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 
 const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
+/** Cool-down before a review parked as unavailable is retried with a fresh budget. */
+export const REVIEW_UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
 export const MAX_REVIEW_ATTEMPTS = 3;
 export const MAX_CORRECTION_ATTEMPTS = 2;
 export const MAX_EXECUTION_RETRIES = 2;
@@ -28,6 +30,7 @@ export interface QualityControlServiceDeps {
   qualityJobs: QualityControlRepository;
   assertOwned?: (missionId: string, signal?: AbortSignal) => Promise<void>;
   dispatchPrepared?: DispatchPreparedQualityAttempt;
+  reviewUnavailableCooldownMs?: number;
 }
 
 export interface RegisterExecutionInput {
@@ -101,10 +104,13 @@ export class QualityControlService {
           if (job.reviewAttemptCount > MAX_REVIEW_ATTEMPTS) {
             const existing = await this.deps.reviewDecisions.getByWorkflowId(job.workflowId);
             if (!existing) {
-              await this.deps.qualityJobs.escalateOwned(
+              // Reviewer outage, not a worker failure: park the review (worker
+              // result and task state are left untouched) and retry later.
+              await this.deps.qualityJobs.markReviewUnavailable(
                 job.workflowId,
                 ownerToken,
-                "QUALITY_CONTROL_REVIEW_BUDGET_EXHAUSTED",
+                "QUALITY_CONTROL_REVIEW_UNAVAILABLE",
+                this.deps.reviewUnavailableCooldownMs ?? REVIEW_UNAVAILABLE_COOLDOWN_MS,
               );
               continue;
             }

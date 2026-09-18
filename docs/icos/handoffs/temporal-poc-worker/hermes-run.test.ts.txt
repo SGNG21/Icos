@@ -1,0 +1,41 @@
+import assert from 'assert';
+import { describe, it } from 'mocha';
+import { classifyHermesRun } from '../hermes-run';
+
+const ok = { completed: true, failed: false, model: 'm', api_calls: 1 };
+
+describe('classifyHermesRun', () => {
+  it('accepts a completed run and returns the trimmed text and model', () => {
+    const r = classifyHermesRun('ICOS_PHASE6_LIVE_OK\n', ok);
+    assert.deepStrictEqual(r, { ok: true, result: 'ICOS_PHASE6_LIVE_OK', model: 'm' });
+  });
+
+  it('rejects exit-0 provider failure text when Hermes reports failed=true', () => {
+    const r = classifyHermesRun(
+      'API call failed after 3 retries: Stream ended before producing a non-ping SSE event',
+      { completed: false, failed: true },
+    );
+    assert.strictEqual(r.ok, false);
+    if (!r.ok) {
+      assert.strictEqual(r.code, 'WORKER_FAILED');
+      assert.match(r.message, /Stream ended/);
+    }
+  });
+
+  it('never trusts stdout wording: a normal answer that mentions "failed" stays a success', () => {
+    const r = classifyHermesRun('The build failed after 3 retries, here is the fix', ok);
+    assert.strictEqual(r.ok, true);
+  });
+
+  it('fails closed without a structured status', () => {
+    for (const usage of [undefined, null, 'x', {}, { completed: true }, { failed: false }]) {
+      assert.strictEqual(classifyHermesRun('text', usage).ok, false, JSON.stringify(usage));
+    }
+  });
+
+  it('rejects a completed run with an empty result', () => {
+    const r = classifyHermesRun('  \n', ok);
+    assert.strictEqual(r.ok, false);
+    if (!r.ok) assert.strictEqual(r.code, 'INVALID_RESULT');
+  });
+});

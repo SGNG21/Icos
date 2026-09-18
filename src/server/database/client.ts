@@ -2,6 +2,7 @@ import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
 import * as schema from "./schema";
+import { assertSafeTestDatabaseUrl } from "./test-database-guard";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 
@@ -26,6 +27,8 @@ export interface CreateDatabaseOptions {
  * instancié que lorsque `PERSISTENCE=postgres`.
  */
 export function createDatabase(url: string, options: CreateDatabaseOptions = {}): DatabaseHandle {
+  // Fail closed : aucun test ne peut viser une base non explicitement « test ».
+  if (process.env.VITEST) assertSafeTestDatabaseUrl(url);
   const sql = postgres(url, {
     max: options.max ?? 10,
     idle_timeout: 20,

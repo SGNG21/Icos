@@ -31,7 +31,7 @@ describe("container postgres — chemins d'erreur (sans Docker)", () => {
 
   it("route → 503 persistence_unavailable si la base est injoignable (aucun fallback)", async () => {
     process.env.PERSISTENCE = "postgres";
-    process.env.DATABASE_URL = "postgres://icos:icos@127.0.0.1:1/icos";
+    process.env.DATABASE_URL = "postgres://icos:icos@127.0.0.1:1/icos_test";
     await resetContainer();
 
     const response = await getAgents(new Request("http://localhost/api/agents"));

@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadEnv } from "@/config/env";
@@ -17,7 +18,7 @@ import { PostgresAutonomousMissionRuntimeRepository } from "@/server/repositorie
 import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-durable-memory";
 import { PersistenceUnavailableError } from "@/server/database/errors";
 
-const DATABASE_URL = "postgres://coco@localhost:5432/icos_n23_probe";
+const DATABASE_URL = TEST_DATABASE_URL;
 const env = loadEnv({
   NODE_ENV: "test",
   PERSISTENCE: "postgres",
@@ -74,7 +75,7 @@ describe("PostgreSQL container composition", () => {
         env: loadEnv({
           NODE_ENV: "test",
           PERSISTENCE: "postgres",
-          DATABASE_URL: "postgres://coco@127.0.0.1:1/icos_n23_probe",
+          DATABASE_URL: "postgres://coco@127.0.0.1:1/icos_test",
           OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
           OMNIROUTE_API_KEY: "container-composition-test-key",
           ICOS_REVIEWER_MODEL: "container-composition-test-model",

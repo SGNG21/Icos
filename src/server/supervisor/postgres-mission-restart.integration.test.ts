@@ -1,3 +1,4 @@
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import {
   afterEach,
   describe,
@@ -18,7 +19,7 @@ import { recordTaskExecution } from "@/server/usecases/record-task-execution";
 import { recordMissionTaskExecution } from "@/server/usecases/record-mission-task-execution";
 
 const DATABASE_URL =
-  "postgres://coco@localhost:5432/icos_n23_probe";
+  TEST_DATABASE_URL;
 
 // buildPostgresContainer eagerly constructs PostgresReviewerService.
 // This N2.4 test injects InMemoryReviewerService for actual review,
