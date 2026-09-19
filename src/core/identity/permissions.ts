@@ -8,6 +8,7 @@ import type { Role } from "./roles";
 export const PERMISSIONS = [
   "cockpit.read",
   "tasks.write", // création + transition
+  "missions.write", // création de missions via goals
   "approvals.decide", // décisions / approbations
   "audit.read.limited",
   "audit.read.full",

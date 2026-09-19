@@ -98,6 +98,8 @@ import { InMemoryConversationRepository, InMemoryMessageRepository } from "@/ser
 import { ConversationService } from "@/server/services/conversation-service";
 import { CeoApplicationService } from "@/server/services/ceo-service";
 import { MissionService } from "@/server/mission/mission-service";
+import { GoalNormalizer } from "./services/goal-normalizer";
+import { GoalPlanner } from "./services/goal-planner";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
@@ -130,6 +132,9 @@ export interface Container {
   skillEvaluations?: SkillEvaluationRepository;
   skillService?: SkillService;
   skillUow?: SkillUnitOfWork;
+  /** Goal intake services */
+  goalNormalizer?: GoalNormalizer;
+  goalPlanner?: GoalPlanner;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -220,6 +225,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     new InMemoryMessageRepository(),
   );
   const missionService = new MissionService(mission);
+
+  // Goal intake services
+  const goalNormalizer = new GoalNormalizer();
+  const goalPlanner = new GoalPlanner();
 
   return {
     agents: new InMemoryAgentRepository(agents),
