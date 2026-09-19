@@ -1,3 +1,4 @@
+import { isMissionInScope, resolveOperationalScope } from "@/server/administration/mission-scope";
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 import { readJson } from "@/server/http/respond";
@@ -36,6 +37,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     // Fetch current mission to validate status
     const mission = await container.mission.findById(id);
     if (!mission) {
+      return NextResponse.json({ error: "Mission not found" }, { status: 404 });
+    }
+
+    // Operational scope (same model as the action decision route): an out-of-scope mission
+    // is indistinguishable from an unknown one (404) and is checked BEFORE its state.
+    const scope = await resolveOperationalScope(container, access.session);
+    if (!(await isMissionInScope(container, mission.id, scope))) {
       return NextResponse.json({ error: "Mission not found" }, { status: 404 });
     }
 
