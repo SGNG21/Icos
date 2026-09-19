@@ -4,27 +4,32 @@ import type { TaskExecutionDispatcher } from './ports';
 import type { TaskExecutionDispatchInput, TaskExecutionDispatchResult } from './ports';
 import type { ExecutionOutcome, ExecutionError } from '@/core/contracts';
 import { recordTaskExecution } from '@/server/usecases/record-task-execution';
+import type { DurableMemory } from '@/core/context/durable-memory';
+import type { MissionRepository } from '@/server/mission/ports';
+import type { TaskExecutionResultRepository, TaskRepository } from '@/server/repositories/ports';
+import type { SupervisorService } from '@/server/supervisor/supervisor-service';
 
 // Mock the recordTaskExecution function
 vi.mock('@/server/usecases/record-task-execution');
 
 describe('LocalTaskExecutionDispatcher', () => {
   let dispatcher: LocalTaskExecutionDispatcher;
+  // Distinct empty stand-ins: recordTaskExecution is mocked, only identity matters.
   const mockedDependencies = {
-    tasks: {},
-    executionResults: {},
-    supervisor: {},
-    missions: {},
-    durableMemory: {},
+    tasks: {} as TaskRepository,
+    executionResults: {} as TaskExecutionResultRepository,
+    supervisor: {} as SupervisorService,
+    missions: {} as MissionRepository,
+    durableMemory: {} as DurableMemory,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     dispatcher = new LocalTaskExecutionDispatcher(
-      mockedDependencies.tasks,
       mockedDependencies.executionResults,
-      mockedDependencies.supervisor,
       mockedDependencies.missions,
+      mockedDependencies.tasks,
+      mockedDependencies.supervisor,
       mockedDependencies.durableMemory,
     );
   });

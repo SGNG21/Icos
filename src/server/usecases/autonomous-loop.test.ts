@@ -124,7 +124,7 @@ describe("Autonomous loop with real agent (local dispatcher) using memory contai
     expect(mission).not.toBeNull();
     const missionId = mission.id;
     // Get the mission tasks to get their actual IDs
-    let tasks = await missionRepository.listTasks(missionId);
+    const tasks = await missionRepository.listTasks(missionId);
     expect(tasks).toHaveLength(1);
     const taskA = tasks.find((t) => t.title === "Write a test file");
     expect(taskA).not.toBeNull();

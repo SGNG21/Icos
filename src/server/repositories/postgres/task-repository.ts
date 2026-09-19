@@ -191,7 +191,7 @@ export class PostgresTaskRepository implements TaskRepository {
       });
 
       return { ok: true, task: result.task };
-    } catch (err: any) {
+    } catch (err) {
       if (err instanceof Error && err.message === `task ${taskId} has been updated concurrently`) {
         return {
           ok: false,

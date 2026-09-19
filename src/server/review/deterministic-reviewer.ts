@@ -196,8 +196,8 @@ export class DeterministicReviewer {
       return false;
     }
 
-    let gateReportObj: any;
-    let qaFindingsArr: any[];
+    let gateReportObj: Record<string, unknown>;
+    let qaFindingsArr: unknown[];
     try {
       gateReportObj = JSON.parse(gateReportContent);
       qaFindingsArr = JSON.parse(qaFindingsContent);
@@ -238,7 +238,7 @@ export class DeterministicReviewer {
       return false;
     }
 
-    for (const finding of qaFindingsArr) {
+    for (const finding of qaFindingsArr as Record<string, unknown>[]) {
       if (
         typeof finding !== "object" ||
         finding === null ||
@@ -275,8 +275,8 @@ export class DeterministicReviewer {
       return false;
     }
 
-    let previewMetadataObj: any;
-    let previewRoutesArr: any[];
+    let previewMetadataObj: Record<string, unknown>;
+    let previewRoutesArr: unknown[];
     try {
       previewMetadataObj = JSON.parse(previewMetadataContent);
       previewRoutesArr = JSON.parse(previewRoutesContent);
@@ -316,7 +316,7 @@ export class DeterministicReviewer {
       return false;
     }
 
-    for (const route of previewRoutesArr) {
+    for (const route of previewRoutesArr as Record<string, unknown>[]) {
       if (
         typeof route !== "object" ||
         route === null ||

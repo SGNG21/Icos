@@ -3,10 +3,14 @@ import type { ConversationService } from "@/server/services/conversation-service
 import type { MissionService } from "@/server/mission/mission-service";
 import { OmniRouteCeoClient } from "@/server/services/omniroute-ceo-client";
 
+/** Cerveau IA du CEO : injectable pour les tests, OmniRoute par défaut. */
+export type CeoBrain = Pick<OmniRouteCeoClient, "answer">;
+
 export class CeoApplicationService {
   constructor(
     private readonly conversationService: ConversationService,
     private readonly missionService: MissionService,
+    private readonly createBrain: () => CeoBrain = () => new OmniRouteCeoClient(),
   ) {}
 
   async handleUserMessage(
@@ -78,7 +82,7 @@ export class CeoApplicationService {
       await this.conversationService.getMessages(conversationId);
 
     try {
-      const client = new OmniRouteCeoClient();
+      const client = this.createBrain();
       const response = await client.answer(history);
 
       await this.conversationService.addMessage(

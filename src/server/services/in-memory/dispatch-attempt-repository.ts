@@ -51,9 +51,16 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       if (
         existing.missionId !== input.missionId ||
         existing.taskId !== input.taskId ||
-        existing.workflowId !== input.workflowId ||
-        existing.state !== "prepared"
+        existing.workflowId !== input.workflowId
       ) {
+        throw new Error(`DISPATCH_ATTEMPT_CONFLICT: ${input.missionTaskId}/${input.attempt}`);
+      }
+      // Same logical dispatch already progressed by a concurrent supervisor:
+      // converge idempotently, own nothing, and leave task state untouched.
+      if (existing.state === "dispatched" || existing.state === "completed") {
+        return { attempt: existing, acquired: false };
+      }
+      if (existing.state !== "prepared") {
         throw new Error(`DISPATCH_ATTEMPT_CONFLICT: ${input.missionTaskId}/${input.attempt}`);
       }
     }

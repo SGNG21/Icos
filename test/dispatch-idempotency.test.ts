@@ -137,7 +137,7 @@ describe("Dispatch idempotency and restart safety", () => {
     const missionId = mission.id;
 
     // Get the mission tasks to get their actual IDs
-    let taskList = await missionRepository.listTasks(missionId);
+    const taskList = await missionRepository.listTasks(missionId);
     expect(taskList).toHaveLength(1);
     const taskA = taskList.find((t) => t.title === "Write a test file");
     expect(taskA).not.toBeNull();
@@ -227,7 +227,7 @@ describe("Dispatch idempotency and restart safety", () => {
     const missionId = mission.id;
 
     // Get the mission tasks
-    let taskList = await missionRepository.listTasks(missionId);
+    const taskList = await missionRepository.listTasks(missionId);
     expect(taskList).toHaveLength(1);
     const taskB = taskList.find((t) => t.title === "Write a test file");
     expect(taskB).not.toBeNull();
@@ -329,7 +329,7 @@ describe("Dispatch idempotency and restart safety", () => {
     const missionId = mission.id;
 
     // Get the mission tasks
-    let taskList = await missionRepository.listTasks(missionId);
+    const taskList = await missionRepository.listTasks(missionId);
     expect(taskList).toHaveLength(1);
     const taskC = taskList.find((t) => t.title === "Write a test file");
     expect(taskC).not.toBeNull();

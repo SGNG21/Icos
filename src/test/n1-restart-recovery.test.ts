@@ -4,6 +4,8 @@ import { recordMissionTaskExecution } from '@/server/usecases/record-mission-tas
 
 import { SupervisorService } from '@/server/supervisor/supervisor-service';
 
+import { InMemoryDispatchAttemptRepository } from '@/server/services/in-memory/dispatch-attempt-repository';
+
 import type { MissionRepository } from "@/server/mission/ports";
 
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -593,6 +595,10 @@ describe('SupervisorService - CORRECTION RESTART', () => {
       throw new Error('Expected task.taskId to be defined');
     }
 
+    // Corrections must go through the durable dispatch ledger (fail-closed since
+    // N2.6): it is the durable state shared by both "processes" below.
+    const dispatchAttempts = new InMemoryDispatchAttemptRepository(missionRepository, taskRepository);
+
     const canonicalTaskId = task.taskId;
     const initialWorkflowId = `icos-task-${canonicalTaskId}`;
     const correctionWorkflowId =
@@ -603,8 +609,20 @@ describe('SupervisorService - CORRECTION RESTART', () => {
       id: canonicalTaskId,
       title: task.title,
       description: task.description,
-      status: 'running',
+      status: 'draft',
     } as Task);
+
+    // The original attempt was prepared and dispatched by the first supervisor.
+    const original = await dispatchAttempts.prepare({
+      missionId: mission.id,
+      missionTaskId: task.id,
+      taskId: canonicalTaskId,
+      attempt: 1,
+      workflowId: initialWorkflowId,
+      prompt: task.description ?? task.title,
+    });
+    await dispatchAttempts.markDispatched(original.attempt.id);
+    await taskRepository.transition(canonicalTaskId, 'running');
 
     // The execution result must exist before mission-level review.
     await executionResultRepo.record({
@@ -616,6 +634,8 @@ describe('SupervisorService - CORRECTION RESTART', () => {
       completedAt: new Date().toISOString(),
       recordedAt: new Date().toISOString(),
     });
+    // Recording a result moves the canonical task to review_pending (real repository behavior).
+    await taskRepository.transition(canonicalTaskId, 'review_pending');
 
     vi.spyOn(reviewerService, 'review').mockResolvedValue({
       id: `review-${canonicalTaskId}`,
@@ -648,6 +668,7 @@ describe('SupervisorService - CORRECTION RESTART', () => {
         supervisor: processA,
         durableMemory,
         taskExecution: taskDispatcher,
+        dispatchAttempts,
       },
       {
         missionId: mission.id,
@@ -691,6 +712,7 @@ describe('SupervisorService - CORRECTION RESTART', () => {
         supervisor: processB,
         durableMemory,
         taskExecution: taskDispatcher,
+        dispatchAttempts,
       },
       {
         missionId: mission.id,

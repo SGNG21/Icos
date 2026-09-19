@@ -319,7 +319,6 @@ describe("recordTaskExecution — hygiène des données", () => {
         taskId,
         workflowId: `icos-task-${taskId}`,
         outcome: "failure",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         error: { code: "MY_SECRET_TOKEN" as any, message: "leak?" },
         completedAt: "2026-08-18T12:00:00.000Z",
       },

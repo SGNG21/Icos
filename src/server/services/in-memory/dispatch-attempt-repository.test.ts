@@ -147,4 +147,26 @@ describe("InMemoryDispatchAttemptRepository.prepare", () => {
     expect((await f.tasks.getById(f.missionTask.taskId))?.status).toBe("queued");
     expect((await f.missions.getMissionTaskById(f.missionTask.id))?.status).toBe("queued");
   });
+
+  it("converges idempotently on an attempt already dispatched by a concurrent supervisor", async () => {
+    const f = await fixture();
+    const winner = await f.repository.prepare(f.input);
+    await f.repository.markDispatched(winner.attempt.id);
+    await f.missions.updateMissionTaskStatus(f.input.missionId, f.input.missionTaskId, "running");
+
+    const loser = await f.repository.prepare(f.input);
+
+    expect(loser.acquired).toBe(false);
+    expect(loser.attempt).toMatchObject({ id: winner.attempt.id, state: "dispatched" });
+    expect((await f.missions.getMissionTaskById(f.input.missionTaskId))?.status).toBe("running");
+  });
+
+  it("still rejects the same attempt with a foreign workflowId", async () => {
+    const f = await fixture();
+    const winner = await f.repository.prepare(f.input);
+    await f.repository.markDispatched(winner.attempt.id);
+    await expect(
+      f.repository.prepare({ ...f.input, workflowId: "icos-task-other" }),
+    ).rejects.toThrow("DISPATCH_ATTEMPT_CONFLICT");
+  });
 });

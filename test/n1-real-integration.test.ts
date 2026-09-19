@@ -169,7 +169,7 @@ describe("N1 Real Integration Tests", () => {
       const missionId = mission.id;
 
       // Get the mission tasks to get their actual IDs
-      let taskList = await missionRepo.listTasks(missionId);
+      const taskList = await missionRepo.listTasks(missionId);
       expect(taskList).toHaveLength(1);
       const task = taskList.find((t) => t.title === "Do something");
       expect(task).not.toBeNull();

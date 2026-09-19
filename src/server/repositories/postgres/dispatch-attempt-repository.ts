@@ -129,6 +129,13 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         throw new Error(`DISPATCH_ATTEMPT_CONFLICT: ${input.missionTaskId}/${input.attempt}`);
       }
 
+      // A concurrent Supervisor already progressed this exact logical dispatch
+      // (same task and workflowId): converge on it idempotently. It owns nothing
+      // (acquired=false) and must not reassert queued state over a running task.
+      if (!acquired && (attempt.state === "dispatched" || attempt.state === "completed")) {
+        return { attempt: mapRow(attempt), acquired: false };
+      }
+
       if (attempt.state !== "prepared") {
         throw new Error(`DISPATCH_ATTEMPT_CONFLICT: ${input.missionTaskId}/${input.attempt}`);
       }

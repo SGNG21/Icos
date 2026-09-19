@@ -5,6 +5,10 @@ import type {
 } from "./ports";
 import { recordTaskExecution } from "@/server/usecases/record-task-execution";
 import type { ExecutionOutcome, ExecutionError } from "@/core/contracts";
+import type { DurableMemory } from "@/core/context/durable-memory";
+import type { MissionRepository } from "@/server/mission/ports";
+import type { TaskExecutionResultRepository, TaskRepository } from "@/server/repositories/ports";
+import type { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 
@@ -23,11 +27,11 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
   private readonly executedWorkflowIds = new Set<string>();
 
   constructor(
-    private readonly executionResults: any, // TaskExecutionResultRepository
-    private readonly missions: any, // MissionRepository
-    private readonly tasks: any, // TaskRepository
-    private readonly supervisor: any, // SupervisorService
-    private readonly durableMemory: any, // DurableMemory
+    private readonly executionResults: TaskExecutionResultRepository,
+    private readonly missions: MissionRepository,
+    private readonly tasks: TaskRepository,
+    private readonly supervisor: SupervisorService,
+    private readonly durableMemory: DurableMemory,
   ) {}
 
   async dispatch(input: TaskExecutionDispatchInput): Promise<TaskExecutionDispatchResult> {
@@ -68,9 +72,9 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
         // Default: treat as echo
         output = `Echo: ${prompt}`;
       }
-    } catch (err: any) {
+    } catch (err) {
       outcome = "failure";
-      error = { code: "WORKER_FAILED", message: err.message ?? String(err) };
+      error = { code: "WORKER_FAILED", message: err instanceof Error ? err.message : String(err) };
       output = undefined;
     }
 

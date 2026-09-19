@@ -46,16 +46,9 @@ describe("PostgresTaskExecutionResultRepository strict idempotence", () => {
   let repository: PostgresTaskExecutionResultRepository;
 
   async function removeFixtures(): Promise<void> {
-    await handle.db.execute(sql`SET session_replication_role = replica`);
-    try {
-      await handle.db.delete(auditEntries).where(eq(auditEntries.taskId, TASK_ID));
-      await handle.db
-        .delete(taskExecutionResults)
-        .where(eq(taskExecutionResults.workflowId, WORKFLOW_ID));
-      await handle.db.delete(tasks).where(eq(tasks.id, TASK_ID));
-    } finally {
-      await handle.db.execute(sql`SET session_replication_role = origin`);
-    }
+    // Test database only. TRUNCATE ... CASCADE (which also clears the tasks' audit
+    // entries): never disable triggers, never DELETE from append-only tables.
+    await handle.db.execute(sql`TRUNCATE TABLE tasks RESTART IDENTITY CASCADE`);
   }
 
   beforeAll(async () => {

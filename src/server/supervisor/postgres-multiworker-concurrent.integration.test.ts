@@ -165,7 +165,7 @@ describe("N2.6 PostgreSQL multi-worker concurrency across restarts", () => {
         ],
       });
 
-      let tasks = await processA.mission.listTasks(mission.id);
+      const tasks = await processA.mission.listTasks(mission.id);
       expect(tasks).toHaveLength(10);
 
       // Debug: print tasks to see workerKind and capability

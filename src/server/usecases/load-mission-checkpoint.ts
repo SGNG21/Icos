@@ -94,7 +94,7 @@ export async function loadMissionCheckpoint(
   };
 
   // Restore tasks (MissionTask objects)
-  const tasks: MissionTask[] = tasksState.map((t: any) => {
+  const tasks: MissionTask[] = tasksState.map((t: (typeof tasksState)[number]) => {
     const checkpointStatus = t.status as MissionTask["status"];
     const currentTask = currentTaskById.get(t.id);
 

@@ -24,6 +24,11 @@ import {
   taskExecutionResults,
 } from "@/server/database/schema";
 
+/** JSON columns may come back already parsed or as a string depending on the driver path. */
+function jsonAs<T>(value: unknown): T {
+  return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
 export class PostgresDurableMemory implements DurableMemory {
   constructor(private db: Database) {}
 
@@ -158,31 +163,21 @@ export class PostgresDurableMemory implements DurableMemory {
       decision: row.decision as DecisionRecord["decision"],
       reviewerKind: row.reviewerKind as DecisionRecord["reviewerKind"],
       severity: row.severity as DecisionRecord["severity"],
-      reasons: typeof row.reasons === "string" ? JSON.parse(row.reasons) : (row.reasons as any[]),
+      reasons: jsonAs(row.reasons),
       requestedChanges: row.requestedChanges
-        ? typeof row.requestedChanges === "string"
-          ? JSON.parse(row.requestedChanges)
-          : (row.requestedChanges as any)
+        ? jsonAs(row.requestedChanges)
         : undefined,
       evidenceRefs: row.evidenceRefs
-        ? typeof row.evidenceRefs === "string"
-          ? JSON.parse(row.evidenceRefs)
-          : (row.evidenceRefs as any[])
+        ? jsonAs(row.evidenceRefs)
         : [],
       findingRefs: row.findingRefs
-        ? typeof row.findingRefs === "string"
-          ? JSON.parse(row.findingRefs)
-          : (row.findingRefs as any[])
+        ? jsonAs(row.findingRefs)
         : [],
       policyRefs: row.policyRefs
-        ? typeof row.policyRefs === "string"
-          ? JSON.parse(row.policyRefs)
-          : (row.policyRefs as any[])
+        ? jsonAs(row.policyRefs)
         : [],
       providerMetadata: row.providerMetadata
-        ? typeof row.providerMetadata === "string"
-          ? JSON.parse(row.providerMetadata)
-          : (row.providerMetadata as any)
+        ? jsonAs(row.providerMetadata)
         : undefined,
       confidence: row.confidence ?? undefined,
       createdAt: row.createdAt.toISOString(),
@@ -235,16 +230,15 @@ export class PostgresDurableMemory implements DurableMemory {
     }
 
     return res.map((row) => {
-      const obs =
-        typeof row.observations === "string"
-          ? JSON.parse(row.observations)
-          : (row.observations as any);
+      const obs = jsonAs<Pick<LearnedPattern, "observations" | "occurrenceCount" | "lastSeenAt">>(
+        row.observations,
+      );
       return {
         id: row.id,
         name: "",
         description: row.description,
         signature:
-          typeof row.signature === "string" ? JSON.parse(row.signature) : (row.signature as any),
+          jsonAs(row.signature),
         observations: obs.observations,
         occurrenceCount: obs.occurrenceCount,
         lastSeenAt: obs.lastSeenAt,
@@ -288,18 +282,12 @@ export class PostgresDurableMemory implements DurableMemory {
       reason: row.reason,
       instructions: row.instructions ?? undefined,
       missionContext:
-        typeof row.missionContext === "string"
-          ? JSON.parse(row.missionContext)
-          : (row.missionContext as any),
+        jsonAs(row.missionContext),
       workingMemorySlice: row.workingMemorySlice
-        ? typeof row.workingMemorySlice === "string"
-          ? JSON.parse(row.workingMemorySlice)
-          : (row.workingMemorySlice as any)
+        ? jsonAs(row.workingMemorySlice)
         : undefined,
       durableRefs: row.durableRefs
-        ? typeof row.durableRefs === "string"
-          ? JSON.parse(row.durableRefs)
-          : (row.durableRefs as any)
+        ? jsonAs(row.durableRefs)
         : {},
     } as HandoffPackage;
   }
@@ -319,7 +307,7 @@ export class PostgresDurableMemory implements DurableMemory {
   }
 
   async queryContextItems(query: ContextQuery): Promise<ContextItem[]> {
-    let res = await this.db
+    const res = await this.db
       .select()
       .from(contextItems)
       .orderBy(desc(contextItems.createdAt))
@@ -431,25 +419,17 @@ export class PostgresDurableMemory implements DurableMemory {
         completedAt: row.completedAt.toISOString(),
         recordedAt: row.recordedAt.toISOString(),
         observations: row.observations
-          ? typeof row.observations === "string"
-            ? JSON.parse(row.observations)
-            : (row.observations as any)
+          ? jsonAs(row.observations)
           : undefined,
         confidence: row.confidence ?? undefined,
         artifacts: row.artifacts
-          ? typeof row.artifacts === "string"
-            ? JSON.parse(row.artifacts)
-            : (row.artifacts as any)
+          ? jsonAs(row.artifacts)
           : undefined,
         evidence: row.evidence
-          ? typeof row.evidence === "string"
-            ? JSON.parse(row.evidence)
-            : (row.evidence as any)
+          ? jsonAs(row.evidence)
           : undefined,
         findings: row.findings
-          ? typeof row.findings === "string"
-            ? JSON.parse(row.findings)
-            : (row.findings as any)
+          ? jsonAs(row.findings)
           : undefined,
       };
     });

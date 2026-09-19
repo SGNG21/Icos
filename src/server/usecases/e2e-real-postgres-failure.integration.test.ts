@@ -27,9 +27,13 @@ import { missionTasks } from "@/server/database/schema";
 
 import { eq } from "drizzle-orm";
 
+const COMPLETED_AT = "2026-09-16T10:00:00.000Z";
+
 describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () => {
 
   let container: Container | null = null;
+
+  let realFetch: typeof fetch = global.fetch;
 
   let supervisor: SupervisorService | null = null;
 
@@ -66,6 +70,7 @@ beforeEach(async () => {
                 choices: [{ message: { content: JSON.stringify({ decision: "APPROVE", reasons: ["test"] }) } }]
               })
             }) as any;
+            realFetch = global.fetch;
             global.fetch = fetchMock;
 
             container = await import("@/server/container").then(({ createContainer }) => createContainer());
@@ -78,35 +83,11 @@ beforeEach(async () => {
 
     taskExecutionResultRepository = container.executionResults;
 
-    // Clear the database by disabling triggers (to allow delete on append-only tables) and deleting in any order
-
-    const { missions, taskExecutionResults, tasks, auditEntries, actions, decisions } =
-
-      await import("@/server/database/schema");
-
+    // Test database only (createDatabase refuses anything else): TRUNCATE CASCADE,
+    // never DELETE on append-only tables and never disabling triggers.
     const db = container.db;
-
     if (!db) throw new Error("container.db is undefined for a postgres-backed container");
-
-    await db.execute(sql`SET session_replication_role = replica;`);
-
-    // Delete in the correct order: audit_entries, task_execution_results, actions, mission_tasks, decisions, missions, tasks
-
-    await db.delete(auditEntries);
-
-    await db.delete(taskExecutionResults);
-
-    await db.delete(actions);
-
-    await db.delete(missionTasks);
-
-    await db.delete(decisions);
-
-    await db.delete(missions);
-
-    await db.delete(tasks);
-
-    await db.execute(sql`SET session_replication_role = origin;`);
+    await db.execute(sql.raw("TRUNCATE TABLE missions, tasks, actions, decisions RESTART IDENTITY CASCADE"));
 
     // Get the dispatcher and mock its dispatch method to return a deterministic workflowId
 
@@ -133,38 +114,12 @@ beforeEach(async () => {
   });
 
   afterEach(async () => {
-
-    // Clear the database again to ensure no leftover data
-
-    const { missions, taskExecutionResults, tasks, auditEntries, actions, decisions } =
-
-      await import("@/server/database/schema");
-
+    // Test database only: TRUNCATE CASCADE, never DELETE on append-only tables.
     const db = container?.db;
-
     if (db) {
-
-      await db.execute(sql`SET session_replication_role = replica;`);
-
-      // Delete in the correct order: audit_entries, task_execution_results, actions, mission_tasks, decisions, missions, tasks
-
-      await db.delete(auditEntries);
-
-      await db.delete(taskExecutionResults);
-
-      await db.delete(actions);
-
-      await db.delete(missionTasks);
-
-      await db.delete(decisions);
-
-      await db.delete(missions);
-
-      await db.delete(tasks);
-
-      await db.execute(sql`SET session_replication_role = origin;`);
-
+      await db.execute(sql.raw("TRUNCATE TABLE missions, tasks, actions, decisions RESTART IDENTITY CASCADE"));
     }
+    global.fetch = realFetch;
 
     if (container) {
 
@@ -637,7 +592,7 @@ beforeEach(async () => {
 
         result: "Task A completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -716,7 +671,7 @@ beforeEach(async () => {
 
         result: "Task B completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -795,7 +750,7 @@ beforeEach(async () => {
 
         result: "Task C completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -880,9 +835,9 @@ beforeEach(async () => {
 
         outcome: "success",
 
-        result: "Task A completed (replay)",
+        result: "Task A completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -949,9 +904,9 @@ beforeEach(async () => {
 
         outcome: "success",
 
-        result: "Task B completed (replay)",
+        result: "Task B completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -987,9 +942,9 @@ beforeEach(async () => {
 
         outcome: "success",
 
-        result: "Task B completed (replay)",
+        result: "Task B completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 
@@ -1020,9 +975,9 @@ beforeEach(async () => {
 
         outcome: "success",
 
-        result: "Task C completed (replay)",
+        result: "Task C completed",
 
-        completedAt: new Date().toISOString(),
+        completedAt: COMPLETED_AT,
 
       }
 

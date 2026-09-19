@@ -41,24 +41,13 @@ describe("AuditEntry mapper and PostgresAuditRepository round-trip with PostgreS
 
     auditRepo = new PostgresAuditRepository(db);
 
-    // Remove only this test's identified fixtures.
-    await db.execute(sql`SET session_replication_role = replica;`);
-    await db
-      .delete(auditEntries)
-      .where(inArray(auditEntries.id, ["audit-entry-test-1", "audit-entry-test-2"]));
-    await db.delete(tasks).where(eq(tasks.id, "task-test-123"));
-    await db.execute(sql`SET session_replication_role = origin;`);
+    // Test database only: TRUNCATE CASCADE (never disable triggers or DELETE audit rows).
+    await db.execute(sql`TRUNCATE TABLE tasks RESTART IDENTITY CASCADE`);
   });
 
   afterEach(async () => {
     if (db) {
-      // Remove only this test's identified fixtures after each test.
-      await db.execute(sql`SET session_replication_role = replica;`);
-      await db
-        .delete(auditEntries)
-        .where(inArray(auditEntries.id, ["audit-entry-test-1", "audit-entry-test-2"]));
-      await db.delete(tasks).where(eq(tasks.id, "task-test-123"));
-      await db.execute(sql`SET session_replication_role = origin;`);
+      await db.execute(sql`TRUNCATE TABLE tasks RESTART IDENTITY CASCADE`);
     }
     if (container) {
       await container.close();

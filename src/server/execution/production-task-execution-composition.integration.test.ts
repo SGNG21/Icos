@@ -26,6 +26,7 @@ describe("production task execution composition", () => {
       TEMPORAL_WORKFLOW_TYPE: "runIcosTask",
       OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
       OMNIROUTE_API_KEY: "phase-4-test-key",
+      ICOS_REVIEWER_MODEL: "phase-4-reviewer",
     });
     let container;
 
@@ -51,5 +52,19 @@ describe("production task execution composition", () => {
         process.env.ICOS_REVIEWER_MODEL = previousReviewerModel;
       }
     }
+  });
+
+  it("fails closed when the OmniRoute reviewer is not configured for PostgreSQL", async () => {
+    const env = loadEnv({
+      NODE_ENV: "production",
+      PERSISTENCE: "postgres",
+      DATABASE_URL,
+      OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
+      OMNIROUTE_API_KEY: "phase-4-test-key",
+      // no ICOS_REVIEWER_MODEL
+    });
+    await expect(buildPostgresContainer(DATABASE_URL, undefined, env)).rejects.toThrow(
+      "Le reviewer OmniRoute est requis pour le backend PostgreSQL.",
+    );
   });
 });

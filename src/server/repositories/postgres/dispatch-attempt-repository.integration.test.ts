@@ -122,6 +122,56 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
     expect(stored?.dispatchedAt).toBeInstanceOf(Date);
   });
 
+  it("a losing concurrent prepare converges on the already dispatched attempt without touching task state", async () => {
+    const repo = new PostgresDispatchAttemptRepository(handle.db);
+    const input = {
+      missionId: "mission-a",
+      missionTaskId: "mission-task-a",
+      taskId: "task-a",
+      attempt: 1,
+      workflowId: "icos-task-task-a",
+      prompt: "A",
+    };
+    const winner = await repo.prepare(input);
+    expect(winner.acquired).toBe(true);
+    await repo.markDispatched(winner.attempt.id);
+    // The winner's worker has started: state must not be pushed back to queued.
+    await handle.db.update(missionTasks).set({ status: "running" }).where(sql`id = 'mission-task-a'`);
+    await handle.db.update(tasks).set({ status: "running" }).where(sql`id = 'task-a'`);
+
+    const loser = await repo.prepare(input);
+
+    expect(loser.acquired).toBe(false);
+    expect(loser.attempt).toMatchObject({ id: winner.attempt.id, state: "dispatched" });
+    const [mt] = await handle.db.select().from(missionTasks).where(sql`id = 'mission-task-a'`);
+    const [t] = await handle.db.select().from(tasks).where(sql`id = 'task-a'`);
+    expect(mt.status).toBe("running");
+    expect(t.status).toBe("running");
+  });
+
+  it("also converges on a completed attempt, but still rejects a foreign workflowId", async () => {
+    const repo = new PostgresDispatchAttemptRepository(handle.db);
+    const input = {
+      missionId: "mission-a",
+      missionTaskId: "mission-task-a",
+      taskId: "task-a",
+      attempt: 1,
+      workflowId: "icos-task-task-a",
+      prompt: "A",
+    };
+    const winner = await repo.prepare(input);
+    await repo.markDispatched(winner.attempt.id);
+    await repo.markCompletedByWorkflowId(input.workflowId);
+
+    expect(await repo.prepare(input)).toMatchObject({
+      acquired: false,
+      attempt: { state: "completed" },
+    });
+    await expect(repo.prepare({ ...input, workflowId: "icos-task-other" })).rejects.toThrow(
+      "DISPATCH_ATTEMPT_CONFLICT",
+    );
+  });
+
   it("rend dispatched/completed idempotents et refuse les workflows inconnus", async () => {
     const repo = new PostgresDispatchAttemptRepository(handle.db);
     const prepared = await repo.prepare({

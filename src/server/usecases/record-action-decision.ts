@@ -5,7 +5,6 @@ import type {
   AgentAction,
   Approval,
   AuditEntry,
-  Agent,
   Task,
 } from "@/core/contracts";
 import { decideExecution, type ExecutionDecision } from "@/core/authorization/decide";
@@ -38,107 +37,109 @@ export type RecordActionDecisionResult =
       message: string;
     };
 
+/**
+ * Orchestration d'une décision humaine sur une action, dans l'ordre imposé :
+ * l'agent initiateur est résolu et toutes les références sont vérifiées AVANT
+ * toute mutation. L'écriture (approbation + action + audit) est confiée à
+ * l'unité de travail transactionnelle. `decideExecution` est appelé en dernier,
+ * avec l'action mise à jour et l'agent RÉSOLU côté serveur — jamais un agent ou
+ * un niveau fourni par l'appelant.
+ */
 export async function recordActionDecision(
   deps: RecordActionDecisionDeps,
-  { actionId, command }: { actionId: string; command: ActionDecisionCommand }
+  input: { actionId: string; command: ActionDecisionCommand },
 ): Promise<RecordActionDecisionResult> {
-  const {
-    actions,
-    agents,
-    tasks,
-    uow,
-    now = () => new Date().toISOString(),
-    newId = (prefix: string) => `${prefix}-${Math.random()}`,
-  } = deps;
+  const now = deps.now ?? (() => new Date().toISOString());
+  const newId = deps.newId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
+  const { actionId, command } = input;
 
-  // 1. Get the action
-  const action = await actions.getById(actionId);
+  // 2. charger l'action
+  const action = await deps.actions.getById(actionId);
   if (!action) {
-    return { ok: false, reason: "action_not_found", message: "action not found" };
+    return { ok: false, reason: "action_not_found", message: `action introuvable : ${actionId}` };
   }
 
-  // 2. Check if already decided
-  if (action.approvalStatus !== "pending") {
-    return { ok: false, reason: "already_decided", message: "action already decided" };
+  // 3. vérifier son état : une décision définitive ne peut pas être rejouée
+  if (action.approvalStatus === "approved" || action.approvalStatus === "rejected") {
+    return {
+      ok: false,
+      reason: "already_decided",
+      message: `l'action ${actionId} a déjà reçu une décision définitive`,
+    };
   }
 
-  // 3. Get the initiator agent
-  const initiator = await agents.getById(action.initiatedByAgentId);
-  if (!initiator) {
-    return { ok: false, reason: "agent_not_found", message: "agent not found" };
+  // 4. résoudre l'agent depuis l'action, AVANT toute mutation
+  const agent = await deps.agents.getById(action.initiatedByAgentId);
+  if (!agent) {
+    return {
+      ok: false,
+      reason: "agent_not_found",
+      message: `agent initiateur introuvable : ${action.initiatedByAgentId}`,
+    };
   }
 
-  // 4. Check task consistency if taskId exists
-  if (action.taskId) {
-    const task = await tasks.getById(action.taskId);
-    if (!task) {
-      return { ok: false, reason: "inconsistent_reference", message: "task not found" };
+  // 5. vérifier les références liées (cohérence bidirectionnelle action ↔ tâche)
+  if (action.taskId !== undefined) {
+    const task = await deps.tasks.getById(action.taskId);
+    if (!task || !task.actionIds.includes(action.id)) {
+      return {
+        ok: false,
+        reason: "inconsistent_reference",
+        message: `incohérence action ↔ tâche pour ${action.id}`,
+      };
     }
-    if (!task.actionIds.includes(action.id)) {
-      return { ok: false, reason: "inconsistent_reference", message: "action not in task" };
-    }
   }
 
-  // 5. Create approval
-  const approvalId = newId("approval");
-  const timestamp = now();
+  // 6. préparer la décision (approbation, action mise à jour, entrées d'audit)
+  const at = now();
+  const nextStatus = command.decision === "approved" ? "approved" : "rejected";
+  const updatedAction: AgentAction = { ...action, approvalStatus: nextStatus };
+
   const approval: Approval = {
-    id: approvalId,
+    id: newId("approval"),
     actionId: action.id,
-    decision: command.decision,
     decidedBy: command.decidedByLabel,
-    reason: command.reason ?? undefined,
-    decidedAt: timestamp,
+    decision: command.decision,
+    reason: command.reason,
+    decidedAt: at,
   };
 
-  // Update the action's approvalStatus to the decision
-  action.approvalStatus = command.decision;
-
-  // 6. Create audit entries
-  const auditEntries: readonly AuditEntry[] = [
+  const auditEntries: AuditEntry[] = [
     {
       id: newId("audit"),
+      occurredAt: at,
+      createdAt: at,
       eventType: "approval.recorded",
-      actor: { kind: "agent", id: initiator.id },
-      taskId: action.taskId ?? undefined,
+      actor: { kind: "human", id: command.decidedByLabel },
       actionId: action.id,
-      details: {},
-      occurredAt: timestamp,
-      createdAt: timestamp,
+      taskId: action.taskId,
+      details: { decision: command.decision, reason: command.reason ?? null },
     },
     {
       id: newId("audit"),
+      occurredAt: at,
+      createdAt: at,
       eventType: "action.decided",
-      actor: { kind: "agent", id: initiator.id },
-      taskId: action.taskId ?? undefined,
+      actor: { kind: "human", id: command.decidedByLabel },
       actionId: action.id,
-      details: command.reason
-        ? { decision: command.decision, reason: command.reason }
-        : { decision: command.decision },
-      occurredAt: timestamp,
-      createdAt: timestamp,
+      taskId: action.taskId,
+      details: { previousStatus: action.approvalStatus, approvalStatus: nextStatus },
     },
   ];
 
-  // 7. Commit via uow
-  const uowResult = await uow.commitDecision({ approval, action, auditEntries });
-  if (!uowResult.ok) {
-    // Map the uow error to our result
-    let reason: "action_not_found" | "already_decided" | "audit_failed" = "audit_failed";
-    switch (uowResult.reason) {
-      case "action_not_found":
-        reason = "action_not_found";
-        break;
-      case "already_decided":
-        reason = "already_decided";
-        break;
-      default:
-        reason = "audit_failed";
-    }
-    return { ok: false, reason, message: uowResult.message };
+  // 7. appliquer la transaction simulée
+  const committed = await deps.uow.commitDecision({
+    approval,
+    action: updatedAction,
+    auditEntries,
+  });
+  if (!committed.ok) {
+    return { ok: false, reason: committed.reason, message: committed.message };
   }
 
-  // 8. Return the uow result with execution decision
-  const execution = decideExecution(action, initiator);
-  return { ok: true, approval, action, execution };
+  // 8. décision d'exécution avec l'action à jour et l'agent résolu
+  const execution = decideExecution(committed.action, agent);
+
+  // 9. résultat métier
+  return { ok: true, approval: committed.approval, action: committed.action, execution };
 }

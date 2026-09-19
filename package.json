@@ -21,7 +21,8 @@
     "db:migrate": "drizzle-kit migrate",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test",
-    "test:db:setup": "tsx scripts/test-db-setup.ts"
+    "test:db:setup": "tsx scripts/test-db-setup.ts",
+    "db:verify-ledger": "tsx scripts/verify-migration-ledger.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",
