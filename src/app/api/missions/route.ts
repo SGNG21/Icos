@@ -1,3 +1,4 @@
+import { isMissionInScope, resolveOperationalScope } from "@/server/administration/mission-scope";
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 import { type NextRequest, NextResponse } from "next/server";
@@ -71,6 +72,10 @@ export async function GET(request: NextRequest) {
     });
     if (!access.ok) return access.response;
 
+    // Operational scope (same model as the tasks list): only the missions the caller is
+    // allowed to see are ever read into the response. Fail closed on any scope problem.
+    const scope = await resolveOperationalScope(container, access.session);
+
     // Fetch all missions
     const missions = await container.mission.list();
     if (!missions) {
@@ -97,6 +102,7 @@ export async function GET(request: NextRequest) {
     for (const mission of missions) {
       // Fetch tasks for this mission
       const tasks = await container.mission.listTasks(mission.id);
+      if (!(await isMissionInScope(container, mission.id, scope, tasks))) continue;
 
       // Compute progression
       const progression = computeProgression(tasks);

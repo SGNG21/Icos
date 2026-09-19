@@ -1,4 +1,5 @@
 import { hasPermission } from "@/core/identity";
+import { isMissionInScope, resolveOperationalScope } from "@/server/administration/mission-scope";
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 import { type NextRequest, NextResponse } from "next/server";
@@ -26,6 +27,14 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     const mission = await missionService.getMission(params.id);
 
     if (!mission) {
+      return NextResponse.json({ error: "Mission not found" }, { status: 404 });
+    }
+
+    // Operational scope (same model as the approval route and the tasks routes): an
+    // out-of-scope mission is indistinguishable from an unknown one (404) and nothing else
+    // (tasks, progression, audit) is read for it.
+    const scope = await resolveOperationalScope(container, access.session);
+    if (!(await isMissionInScope(container, mission.id, scope))) {
       return NextResponse.json({ error: "Mission not found" }, { status: 404 });
     }
 

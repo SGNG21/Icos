@@ -32,9 +32,11 @@ export async function isMissionInScope(
   deps: { mission: Pick<MissionRepository, "listTasks">; tasks: Pick<TaskRepository, "getByIdForScope"> },
   missionId: string,
   scope: AgentScope,
+  /** Already loaded MissionTasks of `missionId` (avoids a second read in list views). */
+  missionTasks?: readonly { taskId: string }[],
 ): Promise<boolean> {
   if (scope.kind === "global") return true;
-  for (const missionTask of await deps.mission.listTasks(missionId)) {
+  for (const missionTask of missionTasks ?? (await deps.mission.listTasks(missionId))) {
     if (!(await deps.tasks.getByIdForScope(missionTask.taskId, scope))) return false;
   }
   return true;
