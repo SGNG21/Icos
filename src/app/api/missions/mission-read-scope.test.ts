@@ -99,13 +99,13 @@ describe("GET /api/missions — operational scope", () => {
     const f = await fixture({ role: "viewer", linked: ["agent-a"] });
     const response = await list();
     expect(response.status).toBe(200);
-    expect(await listedIds(response)).toEqual([f.a.id, f.open.id, f.empty.id].sort());
+    expect(await listedIds(response)).toEqual([f.a.id, f.open.id].sort());
   });
 
   it("does not leak any metadata of out-of-scope missions (id, title, objective, counts)", async () => {
     const f = await fixture({ role: "viewer", linked: ["agent-a"] });
     const text = JSON.stringify(await (await list()).json());
-    for (const hidden of [f.b, f.mixed]) {
+    for (const hidden of [f.b, f.mixed, f.empty]) {
       expect(text).not.toContain(hidden.id);
       expect(text).not.toContain(hidden.title);
       expect(text).not.toContain(hidden.objective);
@@ -114,12 +114,12 @@ describe("GET /api/missions — operational scope", () => {
 
   it("a viewer linked to agent B sees the mirror image", async () => {
     const f = await fixture({ role: "viewer", linked: ["agent-b"] });
-    expect(await listedIds(await list())).toEqual([f.b.id, f.open.id, f.empty.id].sort());
+    expect(await listedIds(await list())).toEqual([f.b.id, f.open.id].sort());
   });
 
   it("a viewer with no linked agent only sees unassigned and empty missions", async () => {
     const f = await fixture({ role: "viewer", linked: [] });
-    expect(await listedIds(await list())).toEqual([f.open.id, f.empty.id].sort());
+    expect(await listedIds(await list())).toEqual([f.open.id].sort());
   });
 
   it.each(["admin", "owner"] as const)(
@@ -134,7 +134,7 @@ describe("GET /api/missions — operational scope", () => {
 
   it("fails closed without an OperationalAccessService: minimum scope", async () => {
     const f = await fixture({ role: "viewer" });
-    expect(await listedIds(await list())).toEqual([f.open.id, f.empty.id].sort());
+    expect(await listedIds(await list())).toEqual([f.open.id].sort());
   });
 
   it("fails closed on an invalid scope shape", async () => {
@@ -142,7 +142,7 @@ describe("GET /api/missions — operational scope", () => {
       role: "viewer",
       operationalAccess: { resolveScope: async () => ({ kind: "everything" }) },
     });
-    expect(await listedIds(await list())).toEqual([f.open.id, f.empty.id].sort());
+    expect(await listedIds(await list())).toEqual([f.open.id].sort());
   });
 
   it("fails closed (500, no missions) when the scope cannot be resolved", async () => {
@@ -186,8 +186,9 @@ describe("GET /api/missions/[id] — operational scope", () => {
     expect(denied.status).toBe(404);
     expect(await denied.clone().json()).toEqual(await unknown.json());
     const text = await denied.text();
-    for (const secret of [b.id, "Bravo", b.objective, "Bravo-T0"])
+    for (const secret of [b.id, "Bravo", b.objective, "Bravo-T0"]) {
       expect(text).not.toContain(secret);
+    }
     expect(auditList).not.toHaveBeenCalled();
   });
 
@@ -206,44 +207,51 @@ describe("GET /api/missions/[id] — operational scope", () => {
     },
   );
 
-  it("fails closed without a scope service, on an invalid scope, and on a resolution error (no data)", async () => {
-    const none = await install({ role: "viewer" });
-    const b1 = await none.mission("Bravo", ["agent-b"]);
-    expect((await detail(b1.id)).status).toBe(404);
+  it(
+    "fails closed without a scope service, on an invalid scope, and on a resolution error (no data)",
+    async () => {
+      const none = await install({ role: "viewer" });
+      const b1 = await none.mission("Bravo", ["agent-b"]);
+      expect((await detail(b1.id)).status).toBe(404);
 
-    const invalid = await install({
-      role: "viewer",
-      operationalAccess: { resolveScope: async () => null },
-    });
-    const b2 = await invalid.mission("Bravo", ["agent-b"]);
-    expect((await detail(b2.id)).status).toBe(404);
+      const invalid = await install({
+        role: "viewer",
+        operationalAccess: { resolveScope: async () => null },
+      });
+      const b2 = await invalid.mission("Bravo", ["agent-b"]);
+      expect((await detail(b2.id)).status).toBe(404);
 
-    const broken = await install({
-      role: "viewer",
-      operationalAccess: {
-        resolveScope: async () => {
-          throw new Error("links unavailable");
+      const broken = await install({
+        role: "viewer",
+        operationalAccess: {
+          resolveScope: async () => {
+            throw new Error("links unavailable");
+          },
         },
-      },
-    });
-    const m = await broken.mission("Open", [null]);
-    const response = await detail(m.id);
-    expect(response.status).toBe(500);
-    expect(JSON.stringify(await response.json())).not.toContain("Open");
-  });
+      });
+      const m = await broken.mission("Open", [null]);
+      const response = await detail(m.id);
+      expect(response.status).toBe(500);
+      expect(JSON.stringify(await response.json())).not.toContain("Open");
+    },
+  );
 
   it("keeps audit.read.full for the detailed timeline inside the scope", async () => {
     const viewer = await install({ role: "viewer", linked: ["agent-a"] });
     const a = await viewer.mission("Alpha", ["agent-a"]);
     const auditList = vi.spyOn(viewer.container.audit, "list");
-    expect(((await (await detail(a.id)).json()) as { timeline: unknown[] }).timeline).toEqual([]);
+    expect(
+      (((await (await detail(a.id)).json()) as { timeline: unknown[] }).timeline)
+    ).toEqual([]);
     expect(auditList).not.toHaveBeenCalled();
 
     const operator = await install({ role: "operator", linked: ["agent-a"] });
     const a2 = await operator.mission("Alpha", ["agent-a"]);
     const operatorAudit = vi.spyOn(operator.container.audit, "list");
     expect(
-      Array.isArray(((await (await detail(a2.id)).json()) as { timeline: unknown[] }).timeline),
+      Array.isArray(
+        (((await (await detail(a2.id)).json()) as { timeline: unknown[] }).timeline),
+      ),
     ).toBe(true);
     expect(operatorAudit).toHaveBeenCalledTimes(1);
   });

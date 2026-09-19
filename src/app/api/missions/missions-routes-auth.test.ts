@@ -36,7 +36,12 @@ async function install(access: Access, opts: { awaitingApproval?: boolean } = {}
   };
   const base = buildMemoryContainer();
   const container: Container = { ...base, auth };
-  const mission = await container.mission.create({ title: "M", objective: "O", tasks: [] });
+  // Create mission with at least one unassigned task so it's visible under restricted scope
+  const mission = await container.mission.create({ 
+    title: "M", 
+    objective: "O", 
+    tasks: [{ title: "Task-0", description: "d0", dependsOn: [], workerKind: "agent" }] 
+  });
   if (opts.awaitingApproval) await container.mission.updateMissionStatus(mission.id, "awaiting_approval");
   const spies = {
     list: vi.spyOn(container.mission, "list"),
@@ -214,7 +219,7 @@ describe("every API route is guarded", () => {
     for (const file of missionRoutes) {
       const source = readFileSync(file, "utf8");
       expect(source, file).toMatch(/protectRoute\(/);
-      expect(source, file).toMatch(/permission:\s*"/);
+      expect(source, file).toMatch(/permission:\s*\"/);
     }
   });
 });
