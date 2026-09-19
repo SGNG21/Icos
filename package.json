@@ -20,6 +20,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
+    "auth:check": "tsx scripts/auth-check.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test",
     "test:db:setup": "tsx scripts/test-db-setup.ts",
     "db:verify-ledger": "tsx scripts/verify-migration-ledger.ts",
