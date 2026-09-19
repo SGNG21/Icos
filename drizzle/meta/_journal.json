@@ -197,6 +197,13 @@
       "when": 1789700000000,
       "tag": "0030_scheduled_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789800000000,
+      "tag": "0031_operational_memory",
+      "breakpoints": true
     }
   ]
 }
