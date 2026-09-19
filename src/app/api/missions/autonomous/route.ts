@@ -4,6 +4,7 @@ import { getContainer } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { zodDetails } from "@/server/http/errors";
 import { toErrorResponse } from "@/server/http/map-error";
+import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { igniteAutonomousMission } from "@/server/usecases/ignite-autonomous-mission";
 
@@ -15,6 +16,9 @@ import { igniteAutonomousMission } from "@/server/usecases/ignite-autonomous-mis
  * and starts the canonical AutonomousMissionRunner, which plans, dispatches and
  * then hands the loop to the existing event-driven pipeline
  * (callback → quality control → accept/correct/retry/replan → completion).
+ *
+ * Requires an authenticated ICOS session with the `tasks.write` permission
+ * (operator and above); the proxy is never the security barrier.
  *
  * The endpoint requires the durable autonomous runtime AND a configured
  * production planner. If either is absent it fails closed rather than silently
@@ -33,6 +37,18 @@ const startAutonomousMissionBodySchema = z
 export async function POST(request: Request): Promise<Response> {
   try {
     const container = await getContainer();
+
+    // Authorization FIRST (fail closed): nothing is read, parsed, created or revealed
+    // (not even configuration state) before the ICOS session + permission are checked.
+    // Same permission as POST /api/tasks: it launches real worker executions.
+    const access = await protectRoute({
+      container,
+      request,
+      route: "api.missions.autonomous.create",
+      permission: "tasks.write",
+      sameOrigin: true,
+    });
+    if (!access.ok) return access.response;
 
     if (!container.autonomousRuntime) {
       return apiError("persistence_unavailable", "runtime autonome indisponible");
@@ -81,7 +97,11 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    return json({ missionId: result.missionId, state: result.state, reason: result.reason });
+    // 202: the mission is durably created and keeps running asynchronously.
+    return json(
+      { missionId: result.missionId, state: result.state, reason: result.reason },
+      { status: 202 },
+    );
   } catch (error) {
     return toErrorResponse(error);
   }
