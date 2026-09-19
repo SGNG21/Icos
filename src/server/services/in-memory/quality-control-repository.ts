@@ -87,6 +87,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
         (candidate) =>
           candidate.missionId === missionId &&
           (candidate.state === "review_pending" ||
+            candidate.state === "reviewing" ||
             candidate.state === "review_unavailable" ||
             candidate.state === "decision_ready") &&
           (!candidate.claimUntil || candidate.claimUntil.getTime() <= now),
@@ -109,7 +110,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       reviewAttemptCount:
         job.state === "review_unavailable"
           ? 1
-          : job.state === "review_pending"
+          : job.state === "review_pending" || job.state === "reviewing"
             ? job.reviewAttemptCount + 1
             : job.reviewAttemptCount,
       claimToken: ownerToken,

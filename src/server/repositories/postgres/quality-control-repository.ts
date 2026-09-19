@@ -132,8 +132,10 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .where(
           and(
             eq(qualityControlJobs.missionId, missionId),
+            // `reviewing` with an expired claim = the reviewer process died mid-review (crash recovery).
             inArray(qualityControlJobs.state, [
               "review_pending",
+              "reviewing",
               "review_unavailable",
               "decision_ready",
             ]),
@@ -152,7 +154,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .set({
           state: sql`case when ${qualityControlJobs.state} in ('review_pending','review_unavailable') then 'reviewing' else ${qualityControlJobs.state} end`,
           // A recovered unavailable review gets a fresh review budget.
-          reviewAttemptCount: sql`case when ${qualityControlJobs.state} = 'review_unavailable' then 1 when ${qualityControlJobs.state} = 'review_pending' then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
+          reviewAttemptCount: sql`case when ${qualityControlJobs.state} = 'review_unavailable' then 1 when ${qualityControlJobs.state} in ('review_pending','reviewing') then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
           claimToken: ownerToken,
           claimUntil: sql`now() + (${leaseMs} * interval '1 millisecond')`,
           updatedAt: sql`now()`,
@@ -530,23 +532,28 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
     if (!Number.isInteger(limit) || limit <= 0) {
       throw new Error("QUALITY_CONTROL_INVALID_RECOVERY_LIMIT");
     }
-    const rows = await this.db
-      .selectDistinct({ missionId: qualityControlJobs.missionId })
-      .from(qualityControlJobs)
-      .where(
-        and(
-          inArray(qualityControlJobs.state, [
-            "review_pending",
-            "reviewing",
-            "decision_ready",
-            "review_unavailable",
-          ]),
-          or(isNull(qualityControlJobs.claimUntil), lte(qualityControlJobs.claimUntil, sql`now()`)),
-        ),
-      )
-      .orderBy(asc(qualityControlJobs.missionId))
-      .limit(limit);
-    return rows.map((row) => row.missionId);
+    // Pending jobs with a free claim, UNION worker results that never got a QC job (crash between the
+    // completion callback and the fire-and-forget registration) while their MissionTask is still in flight.
+    // The 30 s guard avoids racing the callback route's own registration; `recoverUnregistered` is idempotent.
+    const rows = await this.db.execute(sql`
+      select mission_id from (
+        select mission_id from quality_control_jobs
+        where state in ('review_pending','reviewing','decision_ready','review_unavailable')
+          and (claim_until is null or claim_until <= now())
+        union
+        select d.mission_id
+        from task_execution_results r
+        join dispatch_attempts d on d.workflow_id = r.workflow_id
+        join mission_tasks t on t.id = d.mission_task_id
+        left join quality_control_jobs q on q.workflow_id = r.workflow_id
+        where q.workflow_id is null
+          and t.status in ('queued','running','review_pending')
+          and r.recorded_at <= now() - interval '30 seconds'
+      ) recoverable
+      order by mission_id
+      limit ${limit}
+    `);
+    return (rows as unknown as Array<{ mission_id: string }>).map((row) => row.mission_id);
   }
 
   async getByWorkflowId(workflowId: string): Promise<QualityControlJob | null> {

@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -822,5 +823,32 @@ export const scheduledJobs = pgTable(
     ),
     index("scheduled_jobs_due_idx").on(t.state, t.nextRunAt),
     index("scheduled_jobs_lease_idx").on(t.state, t.leaseUntil),
+  ],
+);
+
+/**
+ * Phase 7C — coordination des unités de reprise (ADR-0027). Table de coordination reconstructible
+ * (les scans recalculent tout depuis l'état métier) ; lignes jamais supprimées : journal des reprises.
+ * Horloge unique : `now()` de PostgreSQL.
+ */
+export const recoveryUnits = pgTable(
+  "recovery_units",
+  {
+    kind: text("kind").notNull(),
+    unitKey: text("unit_key").notNull(),
+    missionId: text("mission_id").notNull(),
+    ownerToken: text("owner_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    outcome: text("outcome"),
+    lastError: text("last_error"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ name: "recovery_units_pk", columns: [t.kind, t.unitKey] }),
+    check("recovery_units_attempts_check", sql`${t.attemptCount} >= 0`),
+    index("recovery_units_mission_idx").on(t.missionId),
   ],
 );
