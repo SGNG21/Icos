@@ -11,6 +11,9 @@ import { loadEnv } from "@/config/env";
 import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
 import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
+import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
+import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
+import { sweepAll } from "@/server/recovery/sweep-all";
 
 export interface ProductionServiceScheduler {
   start(): void;
@@ -135,7 +138,30 @@ function createRecoveryScheduler(
     leaseMs: loadEnv().SCHEDULER_LEASE_MS,
   });
 
-  return new AutonomyRecoveryScheduler(sweepWithScheduler(recovery, durableScheduler), options);
+  // Runtime Recovery 7C (ADR-0027): orphan detection beyond running runtimes (settled `waiting`, stale
+  // prepared/dispatched attempts). PostgreSQL-only; the scheduler + existing sweepers above are untouched.
+  const env = loadEnv();
+  const runtimeRecovery = container.db
+    ? composeRuntimeRecovery({
+        db: container.db,
+        wakeup,
+        supervisor,
+        dispatcher: container.taskExecution,
+        missions: container.mission,
+        executionResults: container.executionResults,
+        dispatchAttempts: container.dispatchAttempts,
+        digitalosFacadePath: env.DIGITALOS_FACADE_PATH,
+        probe: new TemporalWorkflowProbe(env.TEMPORAL_ADDRESS, env.TEMPORAL_DISPATCH_TIMEOUT_MS),
+      })
+    : null;
+
+  return new AutonomyRecoveryScheduler(
+    sweepAll([
+      ["autonomy-and-scheduler", sweepWithScheduler(recovery, durableScheduler)],
+      ...(runtimeRecovery ? [["runtime-recovery", runtimeRecovery] as const] : []),
+    ]),
+    options,
+  );
 }
 
 /**
