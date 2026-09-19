@@ -38,6 +38,7 @@ const envSchema = z.object({
   DIGITALOS_FACADE_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
+  SCHEDULER_LEASE_MS: optionalPositiveInteger,
   TEMPORAL_ADDRESS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_TASK_QUEUE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_WORKFLOW_TYPE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),

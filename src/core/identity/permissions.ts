@@ -33,6 +33,8 @@ export const PERMISSIONS = [
   "skills.trust.write",
   "skills.activation.write",
   "skills.delete",
+  // Durable Scheduler (ADR-0025 / Phase 7A).
+  "scheduler.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -66,6 +68,8 @@ const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "skills.trust.write",
     "skills.activation.write",
     "skills.delete",
+    // Durable Scheduler (ADR-0025): admin and above.
+    "scheduler.manage",
   ],
   owner: [],
 };

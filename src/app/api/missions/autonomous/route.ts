@@ -5,7 +5,7 @@ import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { zodDetails } from "@/server/http/errors";
 import { toErrorResponse } from "@/server/http/map-error";
 import { apiError, json, readJson } from "@/server/http/respond";
-import { startAutonomousMission } from "@/server/usecases/start-autonomous-mission";
+import { igniteAutonomousMission } from "@/server/usecases/ignite-autonomous-mission";
 
 /**
  * Phase 6 — Autonomous mission ignition endpoint.
@@ -51,14 +51,8 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    // One objective is enough: mission is created with an empty graph; the
+    // One objective is enough: the mission is created with an empty graph; the
     // runner's initial-planning branch produces and persists the validated DAG.
-    const mission = await container.mission.create({
-      title: parsed.data.title,
-      objective: parsed.data.objective,
-      tasks: [],
-    });
-
     const supervisor = new SupervisorService(
       container.mission,
       container.tasks,
@@ -67,40 +61,27 @@ export async function POST(request: Request): Promise<Response> {
       container.dispatchAttempts,
     );
 
-    let result;
-    try {
-      result = await startAutonomousMission(
-        {
-          missions: container.mission,
-          runtimeRepository: container.autonomousRuntime,
-          supervisor,
-          planner: container.autonomousPlanner,
-        },
-        { missionId: mission.id },
+    const result = await igniteAutonomousMission(
+      {
+        missions: container.mission,
+        runtimeRepository: container.autonomousRuntime,
+        supervisor,
+        planner: container.autonomousPlanner,
+      },
+      { title: parsed.data.title, objective: parsed.data.objective },
+    );
+
+    // The mission and its durable runtime exist even when starting failed: the
+    // recovery sweeper resumes it, so acknowledge with the missionId (never a bare 500
+    // that would push the client to create a duplicate).
+    if (result.outcome === "deferred") {
+      return json(
+        { missionId: result.missionId, state: "starting", reason: "AUTONOMY_START_DEFERRED" },
+        { status: 202 },
       );
-    } catch (error) {
-      // The mission and its durable runtime are already committed: the recovery
-      // sweeper resumes planning/dispatch (e.g. after a transient planner or
-      // provider error). Answering 500 here made clients retry and create a
-      // duplicate mission, so acknowledge with the missionId instead.
-      const runtime = await container.autonomousRuntime.get(mission.id).catch(() => null);
-      if (runtime && !["succeeded", "failed", "cancelled", "escalated"].includes(runtime.state)) {
-        const name = error instanceof Error ? error.name : typeof error;
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[api] autonomous start deferred ${name}: ${message.slice(0, 300)}`);
-        return json(
-          { missionId: mission.id, state: "starting", reason: "AUTONOMY_START_DEFERRED" },
-          { status: 202 },
-        );
-      }
-      throw error;
     }
 
-    return json({
-      missionId: mission.id,
-      state: result.state,
-      reason: result.reason,
-    });
+    return json({ missionId: result.missionId, state: result.state, reason: result.reason });
   } catch (error) {
     return toErrorResponse(error);
   }

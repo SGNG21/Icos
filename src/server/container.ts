@@ -33,6 +33,10 @@ import { PostgresAgentCapabilityRepository } from "@/server/repositories/postgre
 import { PostgresTaskRepository } from "@/server/repositories/postgres/task-repository";
 import { PostgresTaskExecutionResultRepository } from "@/server/repositories/postgres/task-execution-result-repository";
 import { PostgresMissionRepository } from "@/server/repositories/postgres/mission-repository";
+import type { ScheduledJobRepository } from "@/core/contracts/scheduler";
+import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
+import { PostgresScheduledJobRepository } from "@/server/scheduler/postgres-scheduled-job-repository";
+import { SchedulerService } from "@/server/scheduler/scheduler-service";
 import { PostgresDispatchAttemptRepository } from "@/server/repositories/postgres/dispatch-attempt-repository";
 import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-durable-memory";
 import { PostgresReviewerService } from "@/server/repositories/postgres/postgres-reviewer-service";
@@ -156,6 +160,9 @@ export interface Container {
   reviewer: ReviewerService;
   reviewDecisions: ReviewDecisionRepository;
   qualityControlJobs: QualityControlRepository;
+  /** Durable Scheduler (ADR-0025) : file de jobs différés + point d'entrée applicatif. */
+  scheduledJobs: ScheduledJobRepository;
+  scheduler: SchedulerService;
   autonomousRuntime: AutonomousMissionRuntimeRepository;
   autonomousPlanner?: AutonomousMissionPlanner;
   conversationService: ConversationService;
@@ -207,6 +214,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const executionResults = new InMemoryTaskExecutionResultRepository(auditLog, tasksRepository);
   const reviewDecisions = new InMemoryReviewDecisionRepository();
   const autonomousRuntime = new InMemoryAutonomousMissionRuntimeRepository();
+  const scheduledJobs = new InMemoryScheduledJobRepository();
   const conversationService = new ConversationService(
     new InMemoryConversationRepository(),
     new InMemoryMessageRepository(),
@@ -247,6 +255,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       dispatchAttempts,
       autonomousRuntime,
     ),
+    scheduledJobs,
+    scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
     autonomousPlanner: undefined,
     conversationService,
@@ -352,6 +362,7 @@ export async function buildPostgresContainer(
   const executionResults = new PostgresTaskExecutionResultRepository(handle.db);
   const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
   const autonomousRuntime = new PostgresAutonomousMissionRuntimeRepository(handle.db);
+  const scheduledJobs = new PostgresScheduledJobRepository(handle.db);
   const llmReviewer = createOmniRouteReviewer(env);
   if (!llmReviewer) {
     await handle.close().catch(() => {});
@@ -402,6 +413,8 @@ export async function buildPostgresContainer(
     reviewer,
     reviewDecisions,
     qualityControlJobs: new PostgresQualityControlRepository(handle.db),
+    scheduledJobs,
+    scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
     autonomousPlanner: createOmniRouteAutonomousMissionPlanner(env),
     conversationService,

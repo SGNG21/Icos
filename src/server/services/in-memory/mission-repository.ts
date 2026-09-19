@@ -21,11 +21,22 @@ export class InMemoryMissionRepository implements MissionRepository {
   constructor(private readonly taskRepository?: TaskRepository) {}
 
   async create(input: {
+    id?: string;
     title: string;
     objective: string;
     tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
   }): Promise<Mission> {
-    const missionId = randomUUID();
+    if (input.id !== undefined) {
+      if (input.tasks.length > 0) throw new Error("MISSION_CREATE_ID_REQUIRES_EMPTY_GRAPH");
+      const existing = this.missions.get(input.id);
+      if (existing) {
+        if (existing.title !== input.title || existing.objective !== input.objective) {
+          throw new Error("MISSION_ID_CONFLICT");
+        }
+        return existing;
+      }
+    }
+    const missionId = input.id ?? randomUUID();
     const now = new Date();
     const mission: Mission = {
       id: missionId,

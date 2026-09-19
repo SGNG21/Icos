@@ -780,3 +780,47 @@ export const qualityControlJobs = pgTable(
     index("quality_control_jobs_wakeup_idx").on(t.missionId).where(sql`${t.wakeupPending}`),
   ],
 );
+/**
+ * Durable Scheduler (ADR-0025) : file de jobs différés. PostgreSQL est la source
+ * de vérité ; `now()` de la base est la seule horloge (next_run_at, lease, backoff).
+ */
+export const scheduledJobs = pgTable(
+  "scheduled_jobs",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    state: text("state").notNull(),
+    priority: integer("priority").notNull().default(0),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    backoffBaseMs: integer("backoff_base_ms").notNull().default(5000),
+    leaseOwner: text("lease_owner"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastError: text("last_error"),
+    missionId: text("mission_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    unique("scheduled_jobs_idempotency_key_unique").on(t.idempotencyKey),
+    check("scheduled_jobs_kind_check", sql`${t.kind} in ('start_mission','wake_mission')`),
+    check(
+      "scheduled_jobs_state_check",
+      sql`${t.state} in ('scheduled','running','succeeded','dead','expired')`,
+    ),
+    check("scheduled_jobs_attempts_check", sql`${t.maxAttempts} >= 1 and ${t.attemptCount} >= 0`),
+    check("scheduled_jobs_backoff_check", sql`${t.backoffBaseMs} >= 0`),
+    check(
+      "scheduled_jobs_running_lease_check",
+      sql`${t.state} <> 'running' or (${t.leaseOwner} is not null and ${t.leaseUntil} is not null)`,
+    ),
+    index("scheduled_jobs_due_idx").on(t.state, t.nextRunAt),
+    index("scheduled_jobs_lease_idx").on(t.state, t.leaseUntil),
+  ],
+);

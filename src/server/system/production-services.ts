@@ -8,6 +8,9 @@ import { QualityControlService } from "@/server/usecases/quality-control-service
 import { QualityControlRecoverySweeper } from "@/server/autonomy/quality-control-recovery-sweeper";
 import { CombinedAutonomyRecoverySweeper } from "@/server/autonomy/combined-autonomy-recovery-sweeper";
 import { loadEnv } from "@/config/env";
+import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
+import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
+import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 
 export interface ProductionServiceScheduler {
   start(): void;
@@ -107,9 +110,32 @@ function createRecoveryScheduler(
     container.qualityControlJobs,
     (missionId) => wakeup.wake(missionId),
   );
-  const sweeper = new CombinedAutonomyRecoverySweeper(autonomySweeper, qualitySweeper);
+  const recovery = new CombinedAutonomyRecoverySweeper(autonomySweeper, qualitySweeper);
 
-  return new AutonomyRecoveryScheduler(sweeper, options);
+  // Durable Scheduler (ADR-0025): the same timer only triggers a consultation of the
+  // durable job table; PostgreSQL stays the source of truth.
+  const planner = container.autonomousPlanner;
+  const handlers = createSchedulerHandlers({
+    ignite: {
+      missions: container.mission,
+      runtimeRepository: container.autonomousRuntime,
+      supervisor,
+      // Fail closed without a planner: the mission stays `running` and recovery keeps
+      // retrying planning once configured (never a false success).
+      planner: planner ?? {
+        async plan() {
+          throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
+        },
+      },
+    },
+    missions: container.mission,
+    wakeup,
+  });
+  const durableScheduler = new DurableScheduler(container.scheduledJobs, handlers, {
+    leaseMs: loadEnv().SCHEDULER_LEASE_MS,
+  });
+
+  return new AutonomyRecoveryScheduler(sweepWithScheduler(recovery, durableScheduler), options);
 }
 
 /**

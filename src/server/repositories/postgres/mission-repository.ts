@@ -53,6 +53,7 @@ export class PostgresMissionRepository implements MissionRepository {
   }
 
   async create(input: {
+    id?: string;
     title: string;
     objective: string;
     tasks: Omit<
@@ -60,6 +61,15 @@ export class PostgresMissionRepository implements MissionRepository {
       "id" | "missionId" | "status" | "taskId"
     >[];
   }): Promise<Mission> {
+    if (input.id !== undefined) {
+      return this.createWithImposedId(
+        input.id,
+        input.title,
+        input.objective,
+        input.tasks.length,
+      );
+    }
+
     const missionId = randomUUID();
     const now = new Date();
 
@@ -137,6 +147,30 @@ export class PostgresMissionRepository implements MissionRepository {
     });
 
     return mission;
+  }
+
+  /**
+   * Idempotent creation (empty graph only): the primary key arbitrates
+   * concurrent creators; a replay returns the stored mission.
+   */
+  private async createWithImposedId(
+    id: string,
+    title: string,
+    objective: string,
+    taskCount: number,
+  ): Promise<Mission> {
+    if (taskCount > 0) throw new Error("MISSION_CREATE_ID_REQUIRES_EMPTY_GRAPH");
+    const now = new Date();
+    await this.db
+      .insert(missions)
+      .values({ id, title, objective, status: "draft", createdAt: now, updatedAt: now })
+      .onConflictDoNothing({ target: missions.id });
+    const stored = await this.findById(id);
+    if (!stored) throw new Error("MISSION_CREATE_INVARIANT_VIOLATED");
+    if (stored.title !== title || stored.objective !== objective) {
+      throw new Error("MISSION_ID_CONFLICT");
+    }
+    return stored;
   }
 
   async applyPlan(

@@ -190,6 +190,13 @@
       "when": 1789600000000,
       "tag": "0029_qc_review_unavailable_wakeup_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789700000000,
+      "tag": "0030_scheduled_jobs",
+      "breakpoints": true
     }
   ]
 }

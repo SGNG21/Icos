@@ -3,6 +3,12 @@ import type { MissionPlan } from "@/server/mission/mission-plan";
 
 export interface MissionRepository {
   create(input: {
+    /**
+     * Impose l'id de la Mission (création IDEMPOTENTE, graphe vide uniquement) : un
+     * rejeu avec le même id et le même contenu renvoie la Mission existante ; un même
+     * id pour un autre contenu lève MISSION_ID_CONFLICT.
+     */
+    id?: string;
     title: string;
     objective: string;
     tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
