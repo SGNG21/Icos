@@ -35,7 +35,9 @@ async function install({ role, linked, operationalAccess }: Options) {
       operationalAccess ??
       (linked === undefined
         ? undefined
-        : new OperationalAccessService({ listAgentIdsForHuman: async () => new Set(linked) } as never)),
+        : new OperationalAccessService({
+            listAgentIdsForHuman: async () => new Set(linked),
+          } as never)),
   } as Container;
   (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
 
@@ -44,11 +46,17 @@ async function install({ role, linked, operationalAccess }: Options) {
     const created = await container.mission.create({
       title,
       objective: `secret objective of ${title}`,
-      tasks: assignees.map((_, i) => ({ title: `${title}-T${i}`, description: `d${i}`, dependsOn: [], workerKind: "agent" })),
+      tasks: assignees.map((_, i) => ({
+        title: `${title}-T${i}`,
+        description: `d${i}`,
+        dependsOn: [],
+        workerKind: "agent",
+      })),
     });
     const store = (container.tasks as unknown as { tasks: Task[] }).tasks;
     for (const [i, mt] of (await container.mission.listTasks(created.id)).entries()) {
-      if (assignees[i] !== null) store.find((t) => t.id === mt.taskId)!.assignedAgentId = assignees[i]!;
+      if (assignees[i] !== null)
+        store.find((t) => t.id === mt.taskId)!.assignedAgentId = assignees[i]!;
     }
     await container.mission.updateMissionStatus(created.id, "running");
     return created;
@@ -57,9 +65,12 @@ async function install({ role, linked, operationalAccess }: Options) {
 }
 
 const request = (path: string) =>
-  new Request(`${ORIGIN}${path}`, { headers: { origin: ORIGIN, cookie: "icos.session_token=opaque-test-value" } }) as never;
+  new Request(`${ORIGIN}${path}`, {
+    headers: { origin: ORIGIN, cookie: "icos.session_token=opaque-test-value" },
+  }) as never;
 const list = () => listMissions(request("/api/missions"));
-const detail = (id: string) => getMission(request(`/api/missions/${id}`), { params: Promise.resolve({ id }) });
+const detail = (id: string) =>
+  getMission(request(`/api/missions/${id}`), { params: Promise.resolve({ id }) });
 
 type Groups = Record<string, Array<{ id: string; title: string }>>;
 const listedIds = async (response: Response) =>
@@ -111,10 +122,15 @@ describe("GET /api/missions — operational scope", () => {
     expect(await listedIds(await list())).toEqual([f.open.id, f.empty.id].sort());
   });
 
-  it.each(["admin", "owner"] as const)("%s keeps the unrestricted view (global scope)", async (role) => {
-    const f = await fixture({ role, linked: [] });
-    expect(await listedIds(await list())).toEqual([f.a.id, f.b.id, f.mixed.id, f.open.id, f.empty.id].sort());
-  });
+  it.each(["admin", "owner"] as const)(
+    "%s keeps the unrestricted view (global scope)",
+    async (role) => {
+      const f = await fixture({ role, linked: [] });
+      expect(await listedIds(await list())).toEqual(
+        [f.a.id, f.b.id, f.mixed.id, f.open.id, f.empty.id].sort(),
+      );
+    },
+  );
 
   it("fails closed without an OperationalAccessService: minimum scope", async () => {
     const f = await fixture({ role: "viewer" });
@@ -122,7 +138,10 @@ describe("GET /api/missions — operational scope", () => {
   });
 
   it("fails closed on an invalid scope shape", async () => {
-    const f = await fixture({ role: "viewer", operationalAccess: { resolveScope: async () => ({ kind: "everything" }) } });
+    const f = await fixture({
+      role: "viewer",
+      operationalAccess: { resolveScope: async () => ({ kind: "everything" }) },
+    });
     expect(await listedIds(await list())).toEqual([f.open.id, f.empty.id].sort());
   });
 
@@ -147,7 +166,11 @@ describe("GET /api/missions/[id] — operational scope", () => {
     const a = await f.mission("Alpha", ["agent-a"]);
     const response = await detail(a.id);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { mission: { id: string; title: string }; tasks: unknown[]; progression: { total: number } };
+    const body = (await response.json()) as {
+      mission: { id: string; title: string };
+      tasks: unknown[];
+      progression: { total: number };
+    };
     expect(body.mission).toMatchObject({ id: a.id, title: "Alpha" });
     expect(body.tasks).toHaveLength(1);
     expect(body.progression.total).toBe(1);
@@ -163,7 +186,8 @@ describe("GET /api/missions/[id] — operational scope", () => {
     expect(denied.status).toBe(404);
     expect(await denied.clone().json()).toEqual(await unknown.json());
     const text = await denied.text();
-    for (const secret of [b.id, "Bravo", b.objective, "Bravo-T0"]) expect(text).not.toContain(secret);
+    for (const secret of [b.id, "Bravo", b.objective, "Bravo-T0"])
+      expect(text).not.toContain(secret);
     expect(auditList).not.toHaveBeenCalled();
   });
 
@@ -173,18 +197,24 @@ describe("GET /api/missions/[id] — operational scope", () => {
     expect((await detail(mixed.id)).status).toBe(404);
   });
 
-  it.each(["admin", "owner"] as const)("%s keeps the unrestricted view of any mission", async (role) => {
-    const f = await install({ role, linked: [] });
-    const b = await f.mission("Bravo", ["agent-b"]);
-    expect((await detail(b.id)).status).toBe(200);
-  });
+  it.each(["admin", "owner"] as const)(
+    "%s keeps the unrestricted view of any mission",
+    async (role) => {
+      const f = await install({ role, linked: [] });
+      const b = await f.mission("Bravo", ["agent-b"]);
+      expect((await detail(b.id)).status).toBe(200);
+    },
+  );
 
   it("fails closed without a scope service, on an invalid scope, and on a resolution error (no data)", async () => {
     const none = await install({ role: "viewer" });
     const b1 = await none.mission("Bravo", ["agent-b"]);
     expect((await detail(b1.id)).status).toBe(404);
 
-    const invalid = await install({ role: "viewer", operationalAccess: { resolveScope: async () => null } });
+    const invalid = await install({
+      role: "viewer",
+      operationalAccess: { resolveScope: async () => null },
+    });
     const b2 = await invalid.mission("Bravo", ["agent-b"]);
     expect((await detail(b2.id)).status).toBe(404);
 
@@ -212,7 +242,9 @@ describe("GET /api/missions/[id] — operational scope", () => {
     const operator = await install({ role: "operator", linked: ["agent-a"] });
     const a2 = await operator.mission("Alpha", ["agent-a"]);
     const operatorAudit = vi.spyOn(operator.container.audit, "list");
-    expect(Array.isArray(((await (await detail(a2.id)).json()) as { timeline: unknown[] }).timeline)).toBe(true);
+    expect(
+      Array.isArray(((await (await detail(a2.id)).json()) as { timeline: unknown[] }).timeline),
+    ).toBe(true);
     expect(operatorAudit).toHaveBeenCalledTimes(1);
   });
 });
