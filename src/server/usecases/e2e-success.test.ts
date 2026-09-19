@@ -71,6 +71,8 @@ describe("E2E success scenario", () => {
     }
     // Reset the UUID index for each test
     uuidIndex = 0;
+    // Force in-memory persistence for test isolation
+    process.env.PERSISTENCE = 'memory';
     // Create a fresh container
     container = await import("@/server/container").then(({ createContainer }) => createContainer());
     if (!container) throw new Error("Container is null");
@@ -116,6 +118,8 @@ describe("E2E success scenario", () => {
     if (container) {
       await container.close();
     }
+    // Clean up environment variable
+    delete process.env.PERSISTENCE;
   });
 
   it("should process a mission A->B->C and end with mission succeeded", async () => {
