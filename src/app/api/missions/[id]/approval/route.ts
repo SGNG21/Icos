@@ -1,13 +1,30 @@
-import { getContainer } from "../../../../../server/container";
+import { getContainer } from "@/server/container";
+import { protectRoute } from "@/server/http/protect-route";
+import { readJson } from "@/server/http/respond";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Mission } from "@/core/mission/contracts";
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const { params: paramsPromise } = context;
-  const { id } = await paramsPromise;
   try {
     const container = await getContainer();
-    const { action } = await request.json();
+
+    // Authorization FIRST (fail closed): nothing is read, parsed or modified before the
+    // ICOS session, the `approvals.decide` permission and the same-origin check pass.
+    const access = await protectRoute({
+      container,
+      request,
+      route: "api.missions.approval",
+      permission: "approvals.decide",
+      sameOrigin: true,
+    });
+    if (!access.ok) return access.response;
+
+    const { id } = await context.params;
+    const body = await readJson(request);
+    if (!body.ok) {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+    const action = (body.value as { action?: unknown } | null)?.action;
 
     if (action !== "approve" && action !== "reject") {
       return NextResponse.json(

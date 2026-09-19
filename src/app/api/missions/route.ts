@@ -1,4 +1,5 @@
 import { getContainer } from "@/server/container";
+import { protectRoute } from "@/server/http/protect-route";
 import { type NextRequest, NextResponse } from "next/server";
 import * as missionContracts from "@/core/mission/contracts";
 
@@ -57,9 +58,18 @@ function isRecent(mission: missionContracts.Mission): boolean {
   return diffDays <= 7;
 }
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
     const container = await getContainer();
+
+    // Authorization FIRST (fail closed); the proxy is never the security barrier.
+    const access = await protectRoute({
+      container,
+      request,
+      route: "api.missions.list",
+      permission: "cockpit.read",
+    });
+    if (!access.ok) return access.response;
 
     // Fetch all missions
     const missions = await container.mission.list();

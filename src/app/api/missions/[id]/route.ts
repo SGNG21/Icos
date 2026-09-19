@@ -1,4 +1,6 @@
+import { hasPermission } from "@/core/identity";
 import { getContainer } from "@/server/container";
+import { protectRoute } from "@/server/http/protect-route";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import type { AuditEntry } from "@/core/contracts";
@@ -6,6 +8,16 @@ import type { AuditEntry } from "@/core/contracts";
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const container = await getContainer();
+
+    // Authorization FIRST (fail closed); the proxy is never the security barrier.
+    const access = await protectRoute({
+      container,
+      request,
+      route: "api.missions.read",
+      permission: "cockpit.read",
+    });
+    if (!access.ok) return access.response;
+
     const missionService = container.missionService;
     if (!missionService) {
       return NextResponse.json({ error: "Mission service not available" }, { status: 500 });
@@ -30,7 +42,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 
     // Fetch audit entries for tasks in this mission
     const taskIds = tasks.map((t) => t.id);
-    const auditEntries = await container.audit.list();
+    // Audit details need audit.read.full (same gate as GET /api/audit); viewers keep the
+    // mission view without the audit timeline.
+    const auditEntries = hasPermission(access.session.roles, "audit.read.full")
+      ? await container.audit.list()
+      : [];
     // Filter entries related to mission tasks
     const missionAudit = auditEntries.filter(
       (entry) => entry.taskId && taskIds.includes(entry.taskId),
