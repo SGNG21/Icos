@@ -36,7 +36,9 @@ export async function isMissionInScope(
   missionTasks?: readonly { taskId: string }[],
 ): Promise<boolean> {
   if (scope.kind === "global") return true;
-  for (const missionTask of missionTasks ?? (await deps.mission.listTasks(missionId))) {
+  const tasks = missionTasks ?? (await deps.mission.listTasks(missionId));
+  if (tasks.length === 0) return false;
+  for (const missionTask of tasks) {
     if (!(await deps.tasks.getByIdForScope(missionTask.taskId, scope))) return false;
   }
   return true;
