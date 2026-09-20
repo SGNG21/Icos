@@ -1,13 +1,9 @@
-import { z } from "zod";
-
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 
 import { HighLevelGoalInputSchema, HighLevelGoalSchema } from "@/core/contracts/high-level-goal";
-import { GoalNormalizer } from "@/server/services/goal-normalizer";
-import { GoalPlanner } from "@/server/services/goal-planner";
 
 /**
  * Phase 8 — High-level goal intake endpoint.
@@ -23,10 +19,7 @@ import { GoalPlanner } from "@/server/services/goal-planner";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const createGoalBodySchema = z.object({
-  title: z.string().trim().min(1),
-  objective: z.string().trim().min(1),
-}).strict();
+const createGoalBodySchema = HighLevelGoalInputSchema;
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -54,16 +47,17 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    // Normalize the goal.
-    const normalizer = new GoalNormalizer();
-    const goal = normalizer.normalize(parsed.data);
+    // Normalize the goal using the container's normalizer.
+    const goal = container.goalNormalizer.normalize(parsed.data);
 
     // Validate the normalized goal (throws if invalid).
     HighLevelGoalSchema.parse(goal);
 
-    // Plan the goal.
-    const planner = new GoalPlanner();
-    const preview = planner.plan(goal);
+    // Store the normalized goal for later preview validation.
+    container.goalPreviewStore.store(goal.id, goal);
+
+    // Plan the goal using the container's planner.
+    const preview = container.goalPlanner.plan(goal);
 
     // Return the preview.
     return json({ goal, preview });

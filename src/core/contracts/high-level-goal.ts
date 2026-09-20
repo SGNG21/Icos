@@ -7,6 +7,17 @@ import { idSchema, isoDateTimeSchema } from "./common";
 export const HighLevelGoalInputSchema = z.object({
   title: z.string().trim().min(1),
   objective: z.string().trim().min(1),
+  // Optional explicit fields that must be preserved if provided
+  constraints: z.array(z.string()).optional(),
+  successCriteria: z.array(z.string()).optional(),
+  priority: z.number().int().min(1).max(5).optional(),
+  riskLevel: z.enum(["read_only", "reversible", "sensitive"]).optional(),
+  deadline: isoDateTimeSchema.optional(),
+  budget: z.number().nonnegative().optional(),
+  allowedCapabilities: z.array(z.string()).optional(),
+  forbiddenCapabilities: z.array(z.string()).optional(),
+  humanApprovalPolicy: z.enum(["never", "if_risky", "always"]).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export type HighLevelGoalInput = z.infer<typeof HighLevelGoalInputSchema>;

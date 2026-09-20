@@ -100,6 +100,7 @@ import { CeoApplicationService } from "@/server/services/ceo-service";
 import { MissionService } from "@/server/mission/mission-service";
 import { GoalNormalizer } from "./services/goal-normalizer";
 import { GoalPlanner } from "./services/goal-planner";
+import { GoalPreviewStore } from "./services/goal-preview-store";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
@@ -133,8 +134,9 @@ export interface Container {
   skillService?: SkillService;
   skillUow?: SkillUnitOfWork;
   /** Goal intake services */
-  goalNormalizer?: GoalNormalizer;
-  goalPlanner?: GoalPlanner;
+  goalNormalizer: GoalNormalizer;
+  goalPlanner: GoalPlanner;
+  goalPreviewStore: GoalPreviewStore;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -229,6 +231,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   // Goal intake services
   const goalNormalizer = new GoalNormalizer();
   const goalPlanner = new GoalPlanner();
+  const goalPreviewStore = GoalPreviewStore.getInstance();
 
   return {
     agents: new InMemoryAgentRepository(agents),
@@ -272,6 +275,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: undefined,
     close: async () => {},
+    // Goal intake services
+    goalNormalizer,
+    goalPlanner,
+    goalPreviewStore,
   };
 }
 
@@ -367,6 +374,9 @@ export async function buildPostgresContainer(
   const tasks = new PostgresTaskRepository(handle.db);
   const mission = new PostgresMissionRepository(handle.db, tasks);
   const missionService = new MissionService(mission);
+  const goalNormalizer = new GoalNormalizer();
+  const goalPlanner = new GoalPlanner();
+  const goalPreviewStore = GoalPreviewStore.getInstance();
   const dispatchAttempts = new PostgresDispatchAttemptRepository(handle.db);
   const executionResults = new PostgresTaskExecutionResultRepository(handle.db);
   const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
@@ -430,6 +440,10 @@ export async function buildPostgresContainer(
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: handle.db,
     close: handle.close,
+    // Goal intake services
+    goalNormalizer,
+    goalPlanner,
+    goalPreviewStore,
   };
 }
 

@@ -17,19 +17,16 @@ export class GoalNormalizer {
     // In a real system, this might be a UUID or a hash.
     const id = `goal-${this.sanitizeForId(input.title)}-${this.sanitizeForId(input.objective)}`;
 
-    // For now, we set the normalizedIntent to the objective, but we could do more processing.
+    // We set the normalizedIntent to the objective (trimmed) for now.
     const normalizedIntent = input.objective.trim();
 
-    // We'll extract constraints and success criteria from the objective and title using simple rules.
-    // This is a placeholder for more sophisticated extraction (e.g., using NLP or LLM).
-    const constraints: string[] = this.extractConstraints(input.objective, input.title);
-    const successCriteria: string[] = this.extractSuccessCriteria(input.objective, input.title);
-
-    // Default values for other fields.
-    const priority = 3; // medium priority
-    const riskLevel = "reversible"; // default risk level
-    const humanApprovalPolicy = "if_risky"; // default approval policy
-    const metadata: Record<string, string> = {}; // no extra metadata for now
+    // Preserve explicit fields if provided, otherwise use defaults or extraction.
+    const constraints = input.constraints ?? this.extractConstraints(input.objective, input.title);
+    const successCriteria = input.successCriteria ?? this.extractSuccessCriteria(input.objective, input.title);
+    const priority = input.priority ?? 3; // medium priority
+    const riskLevel = input.riskLevel ?? "reversible"; // default risk level
+    const humanApprovalPolicy = input.humanApprovalPolicy ?? "if_risky"; // default approval policy
+    const metadata = input.metadata ?? {}; // no extra metadata for now
     const createdAt = new Date().toISOString(); // timestamp of normalization as ISO string
 
     // Build the normalized goal.
@@ -43,10 +40,10 @@ export class GoalNormalizer {
       successCriteria,
       priority,
       riskLevel,
-      deadline: undefined,
-      budget: undefined,
-      allowedCapabilities: [],
-      forbiddenCapabilities: [],
+      deadline: input.deadline,
+      budget: input.budget,
+      allowedCapabilities: input.allowedCapabilities ?? [],
+      forbiddenCapabilities: input.forbiddenCapabilities ?? [],
       humanApprovalPolicy,
       metadata,
       createdAt,
