@@ -8,8 +8,8 @@ import { workerKindSchema } from "./task-execution";
 export const TaskRequirementsSchema = z.object({
   /** Required capability (e.g., "text-generation", "image-classification") */
   capabilityRequired: z.string().min(1),
-  /** Preferred worker kind (optional) */
-  workerKindPreferred: workerKindSchema.optional(),
+  /** Preferred worker kinds (optional, empty means no preference) */
+  workerKindPreferred: z.array(workerKindSchema).default([]),
   /** Allowed worker kinds (if empty, all are allowed) */
   workerKindAllowed: z.array(workerKindSchema).default([]),
   /** Sensitivity level of the task */
@@ -127,17 +127,27 @@ export const SelectionPolicySchema = z.object({
   /** Whether to allow fallback */
   allowFallback: z.boolean().default(true),
   /** Weight for capability fit (0-1) */
-  weightCapabilityFit: z.number().min(0).max(1).default(0.3),
+  weightCapabilityFit: z.number().min(0).max(1).default(0.25),
   /** Weight for quality (0-1) */
   weightQuality: z.number().min(0).max(1).default(0.2),
   /** Weight for reliability (0-1) */
-  weightReliability: z.number().min(0).max(1).default(0.2),
+  weightReliability: z.number().min(0).max(1).default(0.15),
   /** Weight for latency (0-1, lower is better) */
   weightLatency: z.number().min(0).max(1).default(0.1),
   /** Weight for cost (0-1, lower is better) */
   weightCost: z.number().min(0).max(1).default(0.1),
   /** Weight for context headroom (0-1, higher is better) */
-  weightContextHeadroom: z.number().min(0).max(1).default(0.1),
+  weightContextHeadroom: z.number().min(0).max(1).default(0.05),
+  /** Weight for feature fit (0-1) */
+  weightFeatureFit: z.number().min(0).max(1).default(0.05),
+  /** Weight for provider health (0-1) */
+  weightProviderHealth: z.number().min(0).max(1).default(0.025),
+  /** Weight for trust (0-1) */
+  weightTrust: z.number().min(0).max(1).default(0.025),
+  /** Weight for provider preference (0-1) */
+  weightProviderPreference: z.number().min(0).max(1).default(0.025),
+  /** Weight for model preference (0-1) */
+  weightModelPreference: z.number().min(0).max(1).default(0.025),
 });
 
 export type SelectionPolicy = z.infer<typeof SelectionPolicySchema>;
@@ -170,6 +180,10 @@ export const SelectionConstraintsSchema = z.object({
   qualityTarget: z.number().min(0).max(1),
   /** Reliability target */
   reliabilityTarget: z.number().min(0).max(1),
+  /** Allowed worker kinds (if empty, all are allowed) */
+  workerKindAllowed: z.array(workerKindSchema),
+  /** Preferred worker kinds (empty means no preference) */
+  workerKindPreferred: z.array(workerKindSchema),
 });
 
 export type SelectionConstraints = z.infer<typeof SelectionConstraintsSchema>;
@@ -222,6 +236,9 @@ export const RejectedCandidateSchema = z.object({
     "MODEL_UNAVAILABLE",
     "SENSITIVITY_POLICY_BLOCK",
     "FEATURE_MISSING",
+    "WORKER_KIND_NOT_ALLOWED",
+    "QUALITY_TARGET_NOT_MET",
+    "RELIABILITY_TARGET_NOT_MET",
   ]),
   /** Optional details */
   details: z.string().optional(),
@@ -243,25 +260,66 @@ export const FallbackPlanSchema = z.array(
 export type FallbackPlan = z.infer<typeof FallbackPlanSchema>;
 
 /**
- * The final selection decision.
+ * The final selection decision (discriminated union).
  */
-export const SelectionDecisionSchema = z.object({
-  /** Selected worker kind */
-  selectedWorkerKind: workerKindSchema,
-  /** Selected model ID */
-  selectedModelId: z.string(),
-  /** Selected provider ID */
-  selectedProviderId: z.string(),
-  /** Score breakdown */
-  score: SelectionScoreSchema,
-  /** Rationale for the selection */
-  rationale: z.string(),
-  /** Evidence supporting the decision */
-  evidence: z.array(z.string()).default([]),
-  /** Fallback plan */
-  fallbackPlan: FallbackPlanSchema,
-  /** List of rejected candidates with reasons */
-  rejectedCandidates: z.array(RejectedCandidateSchema),
-});
+export const SelectionDecisionSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("selected"),
+    /** Selected worker kind */
+    selectedWorkerKind: workerKindSchema,
+    /** Selected model ID */
+    selectedModelId: z.string(),
+    /** Selected provider ID */
+    selectedProviderId: z.string(),
+    /** Score breakdown */
+    score: SelectionScoreSchema,
+    /** Rationale for the selection */
+    rationale: z.string(),
+    /** Evidence supporting the decision */
+    evidence: z.array(z.string()).default([]),
+    /** Fallback plan */
+    fallbackPlan: FallbackPlanSchema,
+    /** List of rejected candidates with reasons */
+    rejectedCandidates: z.array(RejectedCandidateSchema),
+  }),
+  z.object({
+    status: z.literal("no_viable_candidate"),
+    /** Selected worker kind (null when no viable candidate) */
+    selectedWorkerKind: z.null(),
+    /** Selected model ID (null when no viable candidate) */
+    selectedModelId: z.null(),
+    /** Selected provider ID (null when no viable candidate) */
+    selectedProviderId: z.null(),
+    /** Score breakdown (all zero) */
+    score: z.object({
+      overall: z.number().min(0).max(100).default(0),
+      capabilityFit: z.number().min(0).max(100).default(0),
+      quality: z.number().min(0).max(100).default(0),
+      reliability: z.number().min(0).max(100).default(0),
+      latency: z.number().min(0).max(100).default(0),
+      cost: z.number().min(0).max(100).default(0),
+      contextHeadroom: z.number().min(0).max(100).default(0),
+      featureFit: z.number().min(0).max(100).default(0),
+      providerHealth: z.number().min(0).max(100).default(0),
+      trust: z.number().min(0).max(100).default(0),
+    }),
+    /** Rationale for the selection */
+    rationale: z.string(),
+    /** Evidence supporting the decision */
+    evidence: z.array(z.string()).default([]),
+    /** Fallback plan (empty when no viable candidate) */
+    fallbackPlan: z.array(
+      z.object({
+        workerKind: workerKindSchema,
+        modelId: z.string(),
+        providerId: z.string(),
+      })
+    ).default([]),
+    /** List of rejected candidates with reasons */
+    rejectedCandidates: z.array(RejectedCandidateSchema),
+    /** Reason for no viable candidate */
+    reason: z.enum(["NO_VIABLE_CANDIDATE"]),
+  }),
+]);
 
 export type SelectionDecision = z.infer<typeof SelectionDecisionSchema>;

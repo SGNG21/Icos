@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { AISelectionEngine } from "./ai-selection-engine";
 import { AIResourceCatalog } from "./ai-resource-catalog";
-import { TaskRequirements, SelectionPolicy } from "@/core/contracts/ai-selection";
+import { TaskRequirements, SelectionPolicy, SelectionDecision } from "@/core/contracts/ai-selection";
 
 describe("AISelectionEngine", () => {
   let engine: AISelectionEngine;
@@ -12,11 +12,31 @@ describe("AISelectionEngine", () => {
     engine = new AISelectionEngine(catalog);
   });
 
+  function assertSelectedDecision(decision: SelectionDecision): Extract<SelectionDecision, {status: "selected"}> {
+    expect(decision.status).toBe("selected");
+    return decision as Extract<SelectionDecision, {status: "selected"}>;
+  }
+
+  const defaultPolicy: SelectionPolicy = {
+    allowFallback: true,
+    weightCapabilityFit: 0.25,
+    weightQuality: 0.2,
+    weightReliability: 0.15,
+    weightLatency: 0.1,
+    weightCost: 0.1,
+    weightContextHeadroom: 0.05,
+    weightFeatureFit: 0.05,
+    weightProviderHealth: 0.025,
+    weightTrust: 0.025,
+    weightProviderPreference: 0.025,
+    weightModelPreference: 0.025,
+  };
+
   describe("select", () => {
     it("should select a viable candidate when all requirements are met", () => {
       const taskRequirements: TaskRequirements = {
         capabilityRequired: "text-generation",
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         sensitivity: "reversible",
         requiresTools: true,
         requiresStructuredOutput: true,
@@ -48,7 +68,7 @@ describe("AISelectionEngine", () => {
         capabilityRequired: "non-existent-capability",
         sensitivity: "reversible",
         workerKindAllowed: [],
-        workerKindPreferred: undefined,
+        workerKindPreferred: [],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -82,7 +102,7 @@ describe("AISelectionEngine", () => {
         forbiddenProviders: ["openai"],
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -113,7 +133,7 @@ describe("AISelectionEngine", () => {
         forbiddenModels: ["gpt-4"],
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -142,7 +162,7 @@ describe("AISelectionEngine", () => {
         requiresTools: true,
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresStructuredOutput: false,
         minContextWindow: 1024,
         preferredProviders: [],
@@ -176,7 +196,7 @@ describe("AISelectionEngine", () => {
         requiresStructuredOutput: true,
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         minContextWindow: 1024,
         preferredProviders: [],
@@ -206,7 +226,7 @@ describe("AISelectionEngine", () => {
         minContextWindow: 1000000, // Very large
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         preferredProviders: [],
@@ -236,7 +256,7 @@ describe("AISelectionEngine", () => {
         maxCost: 0.00001, // Very low cost
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -266,7 +286,7 @@ describe("AISelectionEngine", () => {
         maxLatencyMs: 1, // Very low latency
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -298,7 +318,7 @@ describe("AISelectionEngine", () => {
         forbiddenProviders: ["openai"], // Let's treat openai as unavailable for this test
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -333,7 +353,7 @@ describe("AISelectionEngine", () => {
         capabilityRequired: "text-generation",
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -351,14 +371,13 @@ describe("AISelectionEngine", () => {
       const decision = engine.select(taskRequirements);
 
       // Check that the selected model is offered by the selected provider
-      const isOffered = customCatalog.isModelOffered(
-        decision.selectedModelId,
-        decision.selectedProviderId
-      );
-      // Since we are using the same catalog, we expect it to be offered.
-      // However, note that the engine might have selected a candidate that is offered.
       // We'll just check that the decision is not the fail-closed one (so there is at least one offered model).
-      if (decision.score.overall > 0) {
+      if (decision.status === "selected") {
+        const isOffered = customCatalog.isModelOffered(
+          decision.selectedModelId,
+          decision.selectedProviderId
+        );
+        // Since we are using the same catalog, we expect it to be offered.
         expect(isOffered).toBe(true);
       }
     });
@@ -368,7 +387,7 @@ describe("AISelectionEngine", () => {
         capabilityRequired: "text-generation",
         sensitivity: "sensitive",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -404,7 +423,7 @@ describe("AISelectionEngine", () => {
         requiredFeatures: ["vision"],
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -431,7 +450,7 @@ describe("AISelectionEngine", () => {
     it("should produce deterministic selections for the same input", () => {
       const taskRequirements: TaskRequirements = {
         capabilityRequired: "text-generation",
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         sensitivity: "reversible",
         requiresTools: true,
         requiresStructuredOutput: true,
@@ -448,8 +467,8 @@ describe("AISelectionEngine", () => {
         maxCost: undefined,
       };
 
-      const decision1 = engine.select(taskRequirements, {} as SelectionPolicy);
-      const decision2 = engine.select(taskRequirements, {} as SelectionPolicy);
+      const decision1 = engine.select(taskRequirements, defaultPolicy);
+      const decision2 = engine.select(taskRequirements, defaultPolicy);
 
       // The selected worker, model, and provider should be the same
       expect(decision1.selectedWorkerKind).toBe(decision2.selectedWorkerKind);
@@ -464,7 +483,7 @@ describe("AISelectionEngine", () => {
         capabilityRequired: "text-generation",
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -503,7 +522,7 @@ describe("AISelectionEngine", () => {
         capabilityRequired: "text-generation",
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,
@@ -518,7 +537,7 @@ describe("AISelectionEngine", () => {
         maxCost: undefined,
       };
 
-      const decisionWithoutForbid = engine.select(taskRequirements, {} as SelectionPolicy);
+      const decisionWithoutForbid = assertSelectedDecision(engine.select(taskRequirements, {} as SelectionPolicy));
 
       // Now, forbid the selected provider and run again.
       const taskRequirementsWithForbid: TaskRequirements = {
@@ -527,7 +546,7 @@ describe("AISelectionEngine", () => {
         forbiddenModels: [],
         sensitivity: "reversible",
         workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: "agent",
+        workerKindPreferred: ["agent"],
         requiresTools: false,
         requiresStructuredOutput: false,
         minContextWindow: 1024,

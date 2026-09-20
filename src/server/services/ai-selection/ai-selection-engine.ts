@@ -24,12 +24,17 @@ export class AISelectionEngine {
     taskRequirements: TaskRequirements,
     policy: SelectionPolicy = {
       allowFallback: true,
-      weightCapabilityFit: 0.3,
+      weightCapabilityFit: 0.25,
       weightQuality: 0.2,
-      weightReliability: 0.2,
+      weightReliability: 0.15,
       weightLatency: 0.1,
       weightCost: 0.1,
-      weightContextHeadroom: 0.1,
+      weightContextHeadroom: 0.05,
+      weightFeatureFit: 0.05,
+      weightProviderHealth: 0.025,
+      weightTrust: 0.025,
+      weightProviderPreference: 0.025,
+      weightModelPreference: 0.025,
     }
   ): SelectionDecision {
     // Step 1: Derive constraints from task requirements and policy
@@ -46,6 +51,8 @@ export class AISelectionEngine {
       requiredFeatures: [...(taskRequirements.requiredFeatures ?? [])],
       qualityTarget: taskRequirements.qualityTarget,
       reliabilityTarget: taskRequirements.reliabilityTarget,
+      workerKindAllowed: taskRequirements.workerKindAllowed,
+      workerKindPreferred: taskRequirements.workerKindPreferred,
     };
 
     // Step 2: Generate all possible candidates (worker + model + provider combinations)
@@ -124,197 +131,229 @@ export class AISelectionEngine {
   }
 
   /**
-   * Apply hard policy filters to eliminate incompatible candidates.
-   * Returns viable candidates and rejected candidates with reasons.
-   */
-  private applyHardFilters(
-    candidates: Array<{
-      worker: WorkerCandidate;
-      model: ModelCandidate;
-      provider: ProviderCandidate;
-    }>,
-    constraints: SelectionConstraints
-  ): {
-    viableCandidates: Array<{
-      worker: WorkerCandidate;
-      model: ModelCandidate;
-      provider: ProviderCandidate;
-    }>;
-    rejectedCandidates: RejectedCandidate[];
-  } {
-    const viable: Array<{
-      worker: WorkerCandidate;
-      model: ModelCandidate;
-      provider: ProviderCandidate;
-    }> = [];
-    const rejected: RejectedCandidate[] = [];
+     * Apply hard policy filters to eliminate incompatible candidates.
+     * Returns viable candidates and rejected candidates with reasons.
+     */
+    private applyHardFilters(
+      candidates: Array<{
+        worker: WorkerCandidate;
+        model: ModelCandidate;
+        provider: ProviderCandidate;
+      }>,
+      constraints: SelectionConstraints
+    ): {
+      viableCandidates: Array<{
+        worker: WorkerCandidate;
+        model: ModelCandidate;
+        provider: ProviderCandidate;
+      }>;
+      rejectedCandidates: RejectedCandidate[];
+    } {
+      const viable: Array<{
+        worker: WorkerCandidate;
+        model: ModelCandidate;
+        provider: ProviderCandidate;
+      }> = [];
+      const rejected: RejectedCandidate[] = [];
 
-    for (const candidate of candidates) {
-      const { worker, model, provider } = candidate;
-      const candidateId = `${worker.workerKind}-${model.modelId}-${provider.providerId}`;
+      for (const candidate of candidates) {
+        const { worker, model, provider } = candidate;
+        const candidateId = `${worker.workerKind}-${model.modelId}-${provider.providerId}`;
 
-      // Check 1: Capability mismatch
-      if (
-        !worker.capabilities.includes(constraints.capabilityRequired) &&
-        !model.capabilities.includes(constraints.capabilityRequired)
-      ) {
-        rejected.push({
-          candidateId,
-          reason: "CAPABILITY_MISMATCH",
-          details: `Required capability '${constraints.capabilityRequired}' not supported by worker '${worker.workerKind}' or model '${model.modelId}'`,
-        });
-        continue;
-      }
-
-      // Check 2: Forbidden provider
-      if (constraints.forbiddenProviders.includes(provider.providerId)) {
-        rejected.push({
-          candidateId,
-          reason: "PROVIDER_FORBIDDEN",
-          details: `Provider '${provider.providerId}' is forbidden`,
-        });
-        continue;
-      }
-
-      // Check 3: Forbidden model
-      if (constraints.forbiddenModels.includes(model.modelId)) {
-        rejected.push({
-          candidateId,
-          reason: "MODEL_FORBIDDEN",
-          details: `Model '${model.modelId}' is forbidden`,
-        });
-        continue;
-      }
-
-      // Check 4: Tools required but not supported
-      if (
-        constraints.requiresTools &&
-        !(worker.supportsTools && model.supportsTools)
-      ) {
-        rejected.push({
-          candidateId,
-          reason: "TOOLS_UNSUPPORTED",
-          details: `Task requires tools but worker '${worker.workerKind}' (supportsTools: ${worker.supportsTools}) or model '${model.modelId}' (supportsTools: ${model.supportsTools}) does not support tools`,
-        });
-        continue;
-      }
-
-      // Check 5: Structured output required but not supported
-      if (
-        constraints.requiresStructuredOutput &&
-        !(worker.supportsStructuredOutput && model.supportsStructuredOutput)
-      ) {
-        rejected.push({
-          candidateId,
-          reason: "STRUCTURED_OUTPUT_UNSUPPORTED",
-          details: `Task requires structured output but worker '${worker.workerKind}' (supportsStructuredOutput: ${worker.supportsStructuredOutput}) or model '${model.modelId}' (supportsStructuredOutput: ${model.supportsStructuredOutput}) does not support structured output`,
-        });
-        continue;
-      }
-
-      // Check 6: Context window too small
-      const minContextWindow = Math.max(
-        worker.contextWindow,
-        model.contextWindow
-      );
-      if (constraints.minContextWindow > minContextWindow) {
-        rejected.push({
-          candidateId,
-          reason: "CONTEXT_TOO_SMALL",
-          details: `Required context window (${constraints.minContextWindow}) exceeds available (${minContextWindow})`,
-        });
-        continue;
-      }
-
-      // Check 7: Budget exceeded (if maxCost is specified)
-      if (
-        constraints.maxCost !== null &&
-        constraints.maxCost !== undefined
-      ) {
-        // Estimate cost per unit (simplified: average of worker and model cost)
-        const estimatedCostPerUnit =
-          (worker.typicalCostPerUnit + model.typicalCostPerUnit) / 2;
-        if (estimatedCostPerUnit > constraints.maxCost) {
+        // Check 1: Capability mismatch
+        if (
+          !worker.capabilities.includes(constraints.capabilityRequired) &&
+          !model.capabilities.includes(constraints.capabilityRequired)
+        ) {
           rejected.push({
             candidateId,
-            reason: "BUDGET_EXCEEDED",
-            details: `Estimated cost per unit (${estimatedCostPerUnit}) exceeds maximum (${constraints.maxCost})`,
+            reason: "CAPABILITY_MISMATCH",
+            details: `Required capability '${constraints.capabilityRequired}' not supported by worker '${worker.workerKind}' or model '${model.modelId}'`,
           });
           continue;
         }
-      }
 
-      // Check 8: Latency exceeded (if maxLatencyMs is specified)
-      if (
-        constraints.maxLatencyMs !== null &&
-        constraints.maxLatencyMs !== undefined
-      ) {
-        // Estimate latency (simplified: average of worker and model latency)
-        const estimatedLatencyMs =
-          (worker.typicalLatencyMs + model.typicalLatencyMs) / 2;
-        if (estimatedLatencyMs > constraints.maxLatencyMs) {
+        // Check 2: Forbidden provider
+        if (constraints.forbiddenProviders.includes(provider.providerId)) {
           rejected.push({
             candidateId,
-            reason: "LATENCY_EXCEEDED",
-            details: `Estimated latency (${estimatedLatencyMs}ms) exceeds maximum (${constraints.maxLatencyMs}ms)`,
+            reason: "PROVIDER_FORBIDDEN",
+            details: `Provider '${provider.providerId}' is forbidden`,
           });
           continue;
         }
+
+        // Check 3: Forbidden model
+        if (constraints.forbiddenModels.includes(model.modelId)) {
+          rejected.push({
+            candidateId,
+            reason: "MODEL_FORBIDDEN",
+            details: `Model '${model.modelId}' is forbidden`,
+          });
+          continue;
+        }
+
+        // Check 4: Worker kind allowed (hard policy)
+        if (
+          (constraints.workerKindAllowed?.length ?? 0) > 0 &&
+          !constraints.workerKindAllowed.includes(worker.workerKind)
+        ) {
+          rejected.push({
+            candidateId,
+            reason: "WORKER_KIND_NOT_ALLOWED",
+            details: `Worker kind '${worker.workerKind}' is not allowed by task requirements`,
+          });
+          continue;
+        }
+
+        // Check 5: Tools required but not supported
+        if (
+          constraints.requiresTools &&
+          !(worker.supportsTools && model.supportsTools)
+        ) {
+          rejected.push({
+            candidateId,
+            reason: "TOOLS_UNSUPPORTED",
+            details: `Task requires tools but worker '${worker.workerKind}' (supportsTools: ${worker.supportsTools}) or model '${model.modelId}' (supportsTools: ${model.supportsTools}) does not support tools`,
+          });
+          continue;
+        }
+
+        // Check 6: Structured output required but not supported
+        if (
+          constraints.requiresStructuredOutput &&
+          !(worker.supportsStructuredOutput && model.supportsStructuredOutput)
+        ) {
+          rejected.push({
+            candidateId,
+            reason: "STRUCTURED_OUTPUT_UNSUPPORTED",
+            details: `Task requires structured output but worker '${worker.workerKind}' (supportsStructuredOutput: ${worker.supportsStructuredOutput}) or model '${model.modelId}' (supportsStructuredOutput: ${model.supportsStructuredOutput}) does not support structured output`,
+          });
+          continue;
+        }
+
+        // Check 7: Context window too small (use min of worker and model)
+        const effectiveContextWindow = Math.min(worker.contextWindow, model.contextWindow);
+        if (constraints.minContextWindow > effectiveContextWindow) {
+          rejected.push({
+            candidateId,
+            reason: "CONTEXT_TOO_SMALL",
+            details: `Required context window (${constraints.minContextWindow}) exceeds available (${effectiveContextWindow})`,
+          });
+          continue;
+        }
+
+        // Check 8: Quality target not met (use min of worker and model quality)
+        const effectiveQuality = Math.min(worker.quality, model.quality);
+        if (effectiveQuality < constraints.qualityTarget) {
+          rejected.push({
+            candidateId,
+            reason: "QUALITY_TARGET_NOT_MET",
+            details: `Effective quality (${effectiveQuality}) is below target (${constraints.qualityTarget})`,
+          });
+          continue;
+        }
+
+        // Check 9: Reliability target not met (use min of worker and model reliability)
+        const effectiveReliability = Math.min(worker.reliability, model.reliability);
+        if (effectiveReliability < constraints.reliabilityTarget) {
+          rejected.push({
+            candidateId,
+            reason: "RELIABILITY_TARGET_NOT_MET",
+            details: `Effective reliability (${effectiveReliability}) is below target (${constraints.reliabilityTarget})`,
+          });
+          continue;
+        }
+
+        // Check 10: Budget exceeded (if maxCost is specified)
+        if (
+          constraints.maxCost !== null &&
+          constraints.maxCost !== undefined
+        ) {
+          // Estimate cost per unit (simplified: average of worker and model cost)
+          const estimatedCostPerUnit =
+            (worker.typicalCostPerUnit + model.typicalCostPerUnit) / 2;
+          if (estimatedCostPerUnit > constraints.maxCost) {
+            rejected.push({
+              candidateId,
+              reason: "BUDGET_EXCEEDED",
+              details: `Estimated cost per unit (${estimatedCostPerUnit}) exceeds maximum (${constraints.maxCost})`,
+            });
+            continue;
+          }
+        }
+
+        // Check 11: Latency exceeded (if maxLatencyMs is specified)
+        if (
+          constraints.maxLatencyMs !== null &&
+          constraints.maxLatencyMs !== undefined
+        ) {
+          // Estimate latency (simplified: average of worker and model latency)
+          const estimatedLatencyMs =
+            (worker.typicalLatencyMs + model.typicalLatencyMs) / 2;
+          if (estimatedLatencyMs > constraints.maxLatencyMs) {
+            rejected.push({
+              candidateId,
+              reason: "LATENCY_EXCEEDED",
+              details: `Estimated latency (${estimatedLatencyMs}ms) exceeds maximum (${constraints.maxLatencyMs}ms)`,
+            });
+            continue;
+          }
+        }
+
+        // Check 12: Provider unavailable
+        if (!this.catalog.isProviderAvailable(provider.providerId)) {
+          rejected.push({
+            candidateId,
+            reason: "PROVIDER_UNAVAILABLE",
+            details: `Provider '${provider.providerId}' is currently unavailable`,
+          });
+          continue;
+        }
+
+        // Check 13: Model not offered by provider
+        if (!this.catalog.isModelOffered(model.modelId, provider.providerId)) {
+          rejected.push({
+            candidateId,
+            reason: "MODEL_UNAVAILABLE",
+            details: `Model '${model.modelId}' is not offered by provider '${provider.providerId}'`,
+          });
+          continue;
+        }
+
+        // Check 14: Sensitivity policy block
+        if (
+          constraints.sensitivity === "sensitive" &&
+          (provider.trust < 0.8 || provider.security < 0.7)
+        ) {
+          rejected.push({
+            candidateId,
+            reason: "SENSITIVITY_POLICY_BLOCK",
+            details: `Sensitive task requires provider trust >= 0.8 and security >= 0.7, but got trust: ${provider.trust}, security: ${provider.security}`,
+          });
+          continue;
+        }
+
+        // Check 15: Feature missing
+        const missingFeature = constraints.requiredFeatures.find(
+          (feature) =>
+            !worker.features.includes(feature) && !model.features.includes(feature)
+        );
+        if (missingFeature) {
+          rejected.push({
+            candidateId,
+            reason: "FEATURE_MISSING",
+            details: `Required feature '${missingFeature}' not supported by worker '${worker.workerKind}' or model '${model.modelId}'`,
+          });
+          continue;
+        }
+
+        // If we passed all checks, the candidate is viable
+        viable.push(candidate);
       }
 
-      // Check 9: Provider unavailable
-      if (!this.catalog.isProviderAvailable(provider.providerId)) {
-        rejected.push({
-          candidateId,
-          reason: "PROVIDER_UNAVAILABLE",
-          details: `Provider '${provider.providerId}' is currently unavailable`,
-        });
-        continue;
-      }
-
-      // Check 10: Model not offered by provider
-      if (!this.catalog.isModelOffered(model.modelId, provider.providerId)) {
-        rejected.push({
-          candidateId,
-          reason: "MODEL_UNAVAILABLE",
-          details: `Model '${model.modelId}' is not offered by provider '${provider.providerId}'`,
-        });
-        continue;
-      }
-
-      // Check 11: Sensitivity policy block
-      if (
-        constraints.sensitivity === "sensitive" &&
-        (provider.trust < 0.8 || provider.security < 0.7)
-      ) {
-        rejected.push({
-          candidateId,
-          reason: "SENSITIVITY_POLICY_BLOCK",
-          details: `Sensitive task requires provider trust >= 0.8 and security >= 0.7, but got trust: ${provider.trust}, security: ${provider.security}`,
-        });
-        continue;
-      }
-
-      // Check 12: Feature missing
-      const missingFeature = constraints.requiredFeatures.find(
-        (feature) =>
-          !worker.features.includes(feature) && !model.features.includes(feature)
-      );
-      if (missingFeature) {
-        rejected.push({
-          candidateId,
-          reason: "FEATURE_MISSING",
-          details: `Required feature '${missingFeature}' not supported by worker '${worker.workerKind}' or model '${model.modelId}'`,
-        });
-        continue;
-      }
-
-      // If we passed all checks, the candidate is viable
-      viable.push(candidate);
+      return { viableCandidates: viable, rejectedCandidates: rejected };
     }
-
-    return { viableCandidates: viable, rejectedCandidates: rejected };
-  }
 
   /**
    * Score viable candidates based on the policy weights.
@@ -470,48 +509,12 @@ export class AISelectionEngine {
     rejectedCandidates: RejectedCandidate[],
     reason: string
   ): SelectionDecision {
-    // We need to provide dummy values for the required fields, but mark them as invalid
-    // In a real implementation, we might throw or have a special invalid state
-    const dummyWorker: WorkerCandidate = {
-      workerKind: "agent" as const,
-      capabilities: [],
-      supportsTools: false,
-      supportsStructuredOutput: false,
-      typicalLatencyMs: 0,
-      typicalCostPerUnit: 0,
-      contextWindow: 0,
-      reliability: 0,
-      quality: 0,
-      features: [],
-    };
-
-    const dummyModel: ModelCandidate = {
-      modelId: "none",
-      provider: "none",
-      capabilities: [],
-      supportsTools: false,
-      supportsStructuredOutput: false,
-      contextWindow: 0,
-      typicalLatencyMs: 0,
-      typicalCostPerUnit: 0,
-      reliability: 0,
-      quality: 0,
-      features: [],
-    };
-
-    const dummyProvider: ProviderCandidate = {
-      providerId: "none",
-      health: 0,
-      isAvailable: false,
-      offeredModels: [],
-      trust: 0,
-      security: 0,
-    };
-
+    // Return a fail-closed decision with status no_viable_candidate and null selections
     return {
-      selectedWorkerKind: dummyWorker.workerKind,
-      selectedModelId: dummyModel.modelId,
-      selectedProviderId: dummyProvider.providerId,
+      status: "no_viable_candidate",
+      selectedWorkerKind: null,
+      selectedModelId: null,
+      selectedProviderId: null,
       score: {
         overall: 0,
         capabilityFit: 0,
@@ -531,6 +534,7 @@ export class AISelectionEngine {
       ],
       fallbackPlan: [],
       rejectedCandidates: rejectedCandidates,
+      reason: "NO_VIABLE_CANDIDATE",
     };
   }
 
@@ -576,6 +580,7 @@ export class AISelectionEngine {
     );
 
     return {
+      status: "selected",
       selectedWorkerKind: worker.workerKind,
       selectedModelId: model.modelId,
       selectedProviderId: provider.providerId,

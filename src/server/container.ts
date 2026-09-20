@@ -243,10 +243,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const goalPreviewStore = new GoalPreviewStore(goalRepository);
   
   // AI Selection Engine (Phase 8B)
-  const aiResourceCatalog = new AIResourceCatalog();
-  const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
-
-  return {
+    const aiResourceCatalog = new AIResourceCatalog();
+    const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
+  
+    return {
     agents: new InMemoryAgentRepository(agents),
     tasks: tasksRepository,
     actions: new InMemoryActionRepository(store),
@@ -315,6 +315,7 @@ export function composeAuthentication(
   ) => IcosBetterAuth = createBetterAuth,
 ): { auth: AuthGateway; authHttp: AuthHttpGateway } {
   const betterAuth = createAuth(db, config);
+  const aiResourceCatalog = new AIResourceCatalog();
   return {
     auth: new AuthenticationService(betterAuth, new PostgresHumanUserRepository(db), roles, db),
     authHttp: new BetterAuthHttpGateway(betterAuth),
@@ -336,6 +337,7 @@ export function composeAdministration(
   Container,
   "users" | "agentLinks" | "humanAdministration" | "operationalAccess" | "humanAdministrationUow"
 > {
+  const aiResourceCatalog = new AIResourceCatalog();
   return {
     users: input.users,
     agentLinks: input.agentLinks,
@@ -410,6 +412,7 @@ export async function buildPostgresContainer(
     new PostgresMessageRepository(handle.db),
   );
 
+  const aiResourceCatalog = new AIResourceCatalog();
   return {
     agents,
     tasks,
@@ -462,8 +465,8 @@ export async function buildPostgresContainer(
     goalPlanner,
     goalPreviewStore,
     // AI Selection Engine (Phase 8B)
-    aiResourceCatalog: new AIResourceCatalog(),
-    aiSelectionEngine: new AISelectionEngine(new AIResourceCatalog()),
+    aiResourceCatalog,
+    aiSelectionEngine: new AISelectionEngine(aiResourceCatalog),
   };
 }
 
