@@ -8,6 +8,7 @@ import type { Role } from "./roles";
 export const PERMISSIONS = [
   "cockpit.read",
   "tasks.write", // création + transition
+  "missions.write", // création de missions via goals
   "approvals.decide", // décisions / approbations
   "audit.read.limited",
   "audit.read.full",
@@ -49,7 +50,7 @@ const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "agentCapabilities.read",
     "skills.read",
   ],
-  operator: ["tasks.write", "approvals.decide", "audit.read.full", "skills.propose"],
+  operator: ["tasks.write", "missions.write", "approvals.decide", "audit.read.full", "skills.propose"],
   admin: [
     "agents.manage",
     "config.manage",

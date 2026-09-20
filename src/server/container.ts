@@ -15,6 +15,7 @@ import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { createDatabase } from "@/server/database/client";
 import type { Database } from "@/server/database/client";
 import { PersistenceUnavailableError } from "@/server/database/errors";
+import { InMemoryDurableMemory, type DurableMemory } from "@/core/context/durable-memory";
 import { agents as agentsTable } from "@/server/database/schema";
 import { InMemoryActionDecisionStore } from "@/server/services/in-memory/action-decision-store";
 import { InMemoryActionRepository } from "@/server/services/in-memory/action-repository";
@@ -52,6 +53,7 @@ import type {
   AgentRepository,
   ApprovalRepository,
   AuditRepository,
+  GoalRepository,
   HumanAgentLinkRepository,
   HumanUserAdministrationRepository,
   TaskExecutionResultRepository,
@@ -86,7 +88,8 @@ import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-ta
 import { TemporalTaskExecutionDispatcher } from "@/server/execution/temporal-task-execution-dispatcher";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
 import { InMemoryTaskExecutionResultRepository } from "@/server/services/in-memory/task-execution-result-repository";
-import { InMemoryDurableMemory, type DurableMemory } from "@/core/context/durable-memory";
+import { InMemoryGoalRepository } from "@/server/services/in-memory/goal-repository";
+import { PostgresGoalRepository } from "@/server/repositories/postgres/goal-repository";
 import { InMemoryReviewerService } from "@/server/review/in-memory-reviewer-service";
 import type { ReviewerService } from "@/server/review/ports";
 import { createOmniRouteReviewer } from "@/server/review/omniroute-reviewer";
@@ -98,6 +101,9 @@ import { InMemoryConversationRepository, InMemoryMessageRepository } from "@/ser
 import { ConversationService } from "@/server/services/conversation-service";
 import { CeoApplicationService } from "@/server/services/ceo-service";
 import { MissionService } from "@/server/mission/mission-service";
+import { GoalNormalizer } from "./services/goal-normalizer";
+import { GoalPlanner } from "./services/goal-planner";
+import { GoalPreviewStore } from "./services/goal-preview-store";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
@@ -130,6 +136,10 @@ export interface Container {
   skillEvaluations?: SkillEvaluationRepository;
   skillService?: SkillService;
   skillUow?: SkillUnitOfWork;
+  /** Goal intake services */
+  goalNormalizer: GoalNormalizer;
+  goalPlanner: GoalPlanner;
+  goalPreviewStore: GoalPreviewStore;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -221,6 +231,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   );
   const missionService = new MissionService(mission);
 
+  // Goal intake services
+  const goalNormalizer = new GoalNormalizer();
+  const goalPlanner = new GoalPlanner();
+  const goalRepository = new InMemoryGoalRepository(auditLog);
+  const goalPreviewStore = new GoalPreviewStore(goalRepository);
+
   return {
     agents: new InMemoryAgentRepository(agents),
     tasks: tasksRepository,
@@ -263,6 +279,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: undefined,
     close: async () => {},
+    // Goal intake services
+    goalNormalizer,
+    goalPlanner,
+    goalPreviewStore,
   };
 }
 
@@ -358,6 +378,10 @@ export async function buildPostgresContainer(
   const tasks = new PostgresTaskRepository(handle.db);
   const mission = new PostgresMissionRepository(handle.db, tasks);
   const missionService = new MissionService(mission);
+  const goalNormalizer = new GoalNormalizer();
+  const goalPlanner = new GoalPlanner();
+  const goalRepository = new PostgresGoalRepository(handle.db);
+  const goalPreviewStore = new GoalPreviewStore(goalRepository);
   const dispatchAttempts = new PostgresDispatchAttemptRepository(handle.db);
   const executionResults = new PostgresTaskExecutionResultRepository(handle.db);
   const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
@@ -421,6 +445,10 @@ export async function buildPostgresContainer(
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: handle.db,
     close: handle.close,
+    // Goal intake services
+    goalNormalizer,
+    goalPlanner,
+    goalPreviewStore,
   };
 }
 
@@ -458,6 +486,10 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
   return buildMemoryContainer(options.seeds);
 }
 
+const CONTAINER_KEY = "__icosContainerPromise__";
+
+type GlobalWithContainer = typeof globalThis & { [CONTAINER_KEY]?: Promise<Container> };
+
 /**
  * Singleton mémoïsé sur `globalThis` sous forme de `Promise<Container>`.
  *
@@ -477,10 +509,6 @@ export async function createContainer(options: CreateContainerOptions = {}): Pro
  * - pour le backend PostgreSQL, le pool est partagé via ce container ; une
  *   initialisation rejetée purge le cache.
  */
-const CONTAINER_KEY = "__icosContainerPromise__";
-
-type GlobalWithContainer = typeof globalThis & { [CONTAINER_KEY]?: Promise<Container> };
-
 export function getContainer(): Promise<Container> {
   const globalRef = globalThis as GlobalWithContainer;
   globalRef[CONTAINER_KEY] ??= createContainer().catch((error: unknown) => {
