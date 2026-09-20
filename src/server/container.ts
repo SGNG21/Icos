@@ -104,6 +104,8 @@ import { MissionService } from "@/server/mission/mission-service";
 import { GoalNormalizer } from "./services/goal-normalizer";
 import { GoalPlanner } from "./services/goal-planner";
 import { GoalPreviewStore } from "./services/goal-preview-store";
+import { AIResourceCatalog } from "./services/ai-selection/ai-resource-catalog";
+import { AISelectionEngine } from "./services/ai-selection/ai-selection-engine";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
@@ -140,6 +142,9 @@ export interface Container {
   goalNormalizer: GoalNormalizer;
   goalPlanner: GoalPlanner;
   goalPreviewStore: GoalPreviewStore;
+  /** AI Selection Engine (Phase 8B) */
+  aiResourceCatalog: AIResourceCatalog;
+  aiSelectionEngine: AISelectionEngine;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
    * backend PostgreSQL ET une configuration d'auth valide ; `undefined` sinon
@@ -236,6 +241,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const goalPlanner = new GoalPlanner();
   const goalRepository = new InMemoryGoalRepository(auditLog);
   const goalPreviewStore = new GoalPreviewStore(goalRepository);
+  
+  // AI Selection Engine (Phase 8B)
+  const aiResourceCatalog = new AIResourceCatalog();
+  const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
 
   return {
     agents: new InMemoryAgentRepository(agents),
@@ -283,6 +292,9 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     goalNormalizer,
     goalPlanner,
     goalPreviewStore,
+    // AI Selection Engine (Phase 8B)
+    aiResourceCatalog,
+    aiSelectionEngine,
   };
 }
 
@@ -449,6 +461,9 @@ export async function buildPostgresContainer(
     goalNormalizer,
     goalPlanner,
     goalPreviewStore,
+    // AI Selection Engine (Phase 8B)
+    aiResourceCatalog: new AIResourceCatalog(),
+    aiSelectionEngine: new AISelectionEngine(new AIResourceCatalog()),
   };
 }
 
