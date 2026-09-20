@@ -50,6 +50,8 @@ import type {
   taskExecutionResults,
 } from "./schema";
 
+import { goals, goalPreviews } from "./schema";
+import { randomUUID } from "crypto";
 type AgentRow = typeof agents.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ActionRow = typeof actions.$inferSelect;
@@ -612,5 +614,87 @@ export function skillEvalToRow(evalRecord: Evaluation): SkillEvalInsert {
     completedAt: evalRecord.completedAt ? new Date(evalRecord.completedAt) : null,
     metadata: evalRecord.metadata ?? null,
     createdAt: new Date(evalRecord.createdAt),
+  };
+}
+
+// --- Goals mapping ---
+
+import { HighLevelGoalSchema, GoalPlanPreviewSchema } from "@/core/contracts/high-level-goal";
+import type { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
+
+export type GoalRow = typeof goals.$inferSelect;
+export type GoalInsert = typeof goals.$inferInsert;
+export type GoalPreviewRow = typeof goalPreviews.$inferSelect;
+export type GoalPreviewInsert = typeof goalPreviews.$inferInsert;
+
+export function rowToGoal(row: GoalRow): HighLevelGoal {
+  const parsed = HighLevelGoalSchema.safeParse({
+    id: row.id,
+    title: row.title,
+    objective: row.objective,
+    rawInput: row.rawInput,
+    normalizedIntent: row.normalizedIntent,
+    constraints: row.constraints ?? [],
+    successCriteria: row.successCriteria ?? [],
+    priority: row.priority ?? 3,
+    riskLevel: row.riskLevel ?? "reversible",
+    deadline: row.deadline ?? undefined,
+    budget: row.budget ?? undefined,
+    allowedCapabilities: row.allowedCapabilities ?? [],
+    forbiddenCapabilities: row.forbiddenCapabilities ?? [],
+    humanApprovalPolicy: row.humanApprovalPolicy ?? "if_risky",
+    metadata: row.metadata ?? {},
+    createdAt: iso(row.createdAt),
+  });
+  if (!parsed.success) {
+    throw new RepositoryMappingError("goals", parsed.error.message);
+  }
+  return parsed.data;
+}
+
+export function goalToRow(goal: HighLevelGoal): GoalInsert {
+  return {
+    id: goal.id,
+    goalId: goal.id,
+    title: goal.title,
+    objective: goal.objective,
+    rawInput: goal.rawInput,
+    normalizedIntent: goal.normalizedIntent,
+    constraints: goal.constraints ?? [],
+    successCriteria: goal.successCriteria ?? [],
+    priority: goal.priority ?? 3,
+    riskLevel: goal.riskLevel ?? "reversible",
+    deadline: goal.deadline ? new Date(goal.deadline) : null,
+    budget: goal.budget ?? null,
+    allowedCapabilities: goal.allowedCapabilities ?? [],
+    forbiddenCapabilities: goal.forbiddenCapabilities ?? [],
+    humanApprovalPolicy: goal.humanApprovalPolicy ?? "if_risky",
+    metadata: goal.metadata ?? {},
+    status: "pending",
+    convertedAt: null,
+    resultingMissionId: null,
+    idempotencyKey: null,
+    createdAt: new Date(goal.createdAt),
+    updatedAt: new Date(goal.createdAt),
+  };
+}
+
+export function goalPreviewToRow(preview: GoalPlanPreview): GoalPreviewInsert {
+  return {
+    id: randomUUID(),
+    goalId: preview.goalId,
+    missionTitle: preview.missionTitle,
+    missionObjective: preview.missionObjective,
+    tasks: preview.tasks,
+    createdAt: new Date(),
+  };
+}
+
+export function rowToGoalPreview(row: GoalPreviewRow): GoalPlanPreview {
+  return {
+    goalId: row.goalId,
+    missionTitle: row.missionTitle,
+    missionObjective: row.missionObjective,
+    tasks: row.tasks as GoalPlanPreview['tasks'],
   };
 }

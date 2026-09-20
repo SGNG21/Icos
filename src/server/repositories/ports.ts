@@ -119,3 +119,14 @@ export interface TaskExecutionResultRepository {
 }
 
 export type { DurableMemory } from "@/core/context/durable-memory";
+
+import type { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
+
+export interface GoalRepository {
+  create(goal: HighLevelGoal, preview: GoalPlanPreview): Promise<void>;
+  getById(goalId: string): Promise<{ goal: HighLevelGoal; preview: GoalPlanPreview } | null>;
+  updateStatus(goalId: string, status: string): Promise<void>;
+  setConverted(goalId: string, missionId: string): Promise<void>;
+  setIdempotencyKey(goalId: string, idempotencyKey: string): Promise<void>;
+  getByIdempotencyKey(idempotencyKey: string): Promise<{ goal: HighLevelGoal; preview: GoalPlanPreview; missionId?: string } | null>;
+}

@@ -38,6 +38,11 @@ export const auditEventTypeSchema = z.enum([
   "skill.activation_changed",
   "skill.security_scan_recorded",
   "skill.eval_recorded",
+  // Goal intake (Phase 8A).
+  "goal.created",
+  "goal.status_updated",
+  "goal.converted",
+  "goal.idempotency_key_set",
 ]);
 
 export const auditActorSchema = z.object({

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "goals_goalId_idempotencyKey_idx" ON "goals" USING btree ("goalId", "idempotencyKey") WHERE "idempotencyKey" IS NOT NULL;

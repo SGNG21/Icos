@@ -1,32 +1,30 @@
-import { HighLevelGoal } from "@/core/contracts/high-level-goal";
+import { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
+import type { GoalRepository } from "@/server/repositories/ports";
 
 /**
- * In-memory store for normalized goals to allow preview validation.
- * Goals are automatically removed after a max age to prevent memory leaks.
+ * Store for normalized goals to allow preview validation.
+ * Uses a repository for persistence and an in-memory cache for recent goals.
  */
 export class GoalPreviewStore {
   private static readonly MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
-  private static readonly instance: GoalPreviewStore = new GoalPreviewStore();
-  private storeMap: Map<string, { goal: HighLevelGoal; timestamp: number }> = new Map();
+  private readonly repository: GoalRepository;
+  private cache: Map<string, { goal: HighLevelGoal; timestamp: number }> = new Map();
 
-  private constructor() {
-    // No-op
-  }
-
-  static getInstance(): GoalPreviewStore {
-    return GoalPreviewStore.instance;
+  constructor(repository: GoalRepository) {
+    this.repository = repository;
   }
 
   /**
-   * Store a normalized goal for later preview validation.
+   * Store a normalized goal and its preview for later preview validation.
    * @param goalId - The ID of the goal.
    * @param goal - The normalized goal.
+   * @param preview - The generated preview for the goal.
    */
-  store(goalId: string, goal: HighLevelGoal): void {
-    this.storeMap.set(goalId, {
-      goal,
-      timestamp: Date.now(),
-    });
+  async store(goalId: string, goal: HighLevelGoal, preview: GoalPlanPreview): Promise<void> {
+    // Persist to repository
+    await this.repository.create(goal, preview);
+    // Update cache
+    this.cache.set(goalId, { goal, timestamp: Date.now() });
   }
 
   /**
@@ -34,28 +32,30 @@ export class GoalPreviewStore {
    * @param goalId - The ID of the goal.
    * @returns The goal if found and not expired, otherwise null.
    */
-  retrieve(goalId: string): HighLevelGoal | null {
-    const entry = this.storeMap.get(goalId);
-    if (!entry) {
-      return null;
+  async retrieve(goalId: string): Promise<HighLevelGoal | null> {
+    // Check cache first
+    const cached = this.cache.get(goalId);
+    if (cached && (Date.now() - cached.timestamp <= GoalPreviewStore.MAX_AGE_MS)) {
+      return cached.goal;
     }
 
-    const now = Date.now();
-    if (now - entry.timestamp > GoalPreviewStore.MAX_AGE_MS) {
-      // Remove expired entry
-      this.storeMap.delete(goalId);
-      return null;
+    // If not in cache or expired, try the repository
+    const result = await this.repository.getById(goalId);
+    if (result) {
+      // Update cache
+      this.cache.set(goalId, { goal: result.goal, timestamp: Date.now() });
+      return result.goal;
     }
 
-    return entry.goal;
+    return null;
   }
 
   /**
-   * Remove a goal from the store (e.g., after preview conversion to prevent replay).
-   * Note: We don't remove by default to allow idempotent conversion.
-   * @param goalId - The ID of the goal to remove.
+   * Remove a goal from the cache (e.g., after preview conversion to prevent replay).
+   * Note: We don't remove from the repository to preserve audit and idempotency.
+   * @param goalId - The ID of the goal to remove from the cache.
    */
-  remove(goalId: string): void {
-    this.storeMap.delete(goalId);
+  async remove(goalId: string): Promise<void> {
+    this.cache.delete(goalId);
   }
 }

@@ -53,11 +53,11 @@ export async function POST(request: Request): Promise<Response> {
     // Validate the normalized goal (throws if invalid).
     HighLevelGoalSchema.parse(goal);
 
-    // Store the normalized goal for later preview validation.
-    container.goalPreviewStore.store(goal.id, goal);
-
     // Plan the goal using the container's planner.
     const preview = container.goalPlanner.plan(goal);
+
+    // Store the normalized goal and its preview for later preview validation.
+    await container.goalPreviewStore.store(goal.id, goal, preview);
 
     // Return the preview.
     return json({ goal, preview });

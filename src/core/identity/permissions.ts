@@ -50,7 +50,7 @@ const OWN_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "agentCapabilities.read",
     "skills.read",
   ],
-  operator: ["tasks.write", "approvals.decide", "audit.read.full", "skills.propose"],
+  operator: ["tasks.write", "missions.write", "approvals.decide", "audit.read.full", "skills.propose"],
   admin: [
     "agents.manage",
     "config.manage",

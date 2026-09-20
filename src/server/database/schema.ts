@@ -852,3 +852,67 @@ export const recoveryUnits = pgTable(
     index("recovery_units_mission_idx").on(t.missionId),
   ],
 );
+
+/**
+ * Goals and goal previews (Phase 8).
+ */
+export const goals = pgTable("goals", {
+  id: text("id").primaryKey().notNull(),
+  goalId: text("goalId").notNull(),
+  title: text("title").notNull(),
+  objective: text("objective").notNull(),
+  rawInput: text("rawInput").notNull(),
+  normalizedIntent: text("normalizedIntent").notNull(),
+  constraints: text("constraints")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  successCriteria: text("successCriteria")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  priority: integer("priority").notNull().default(3),
+  riskLevel: text("riskLevel").notNull().default('reversible'),
+  deadline: timestamp("deadline", { withTimezone: true }),
+  budget: doublePrecision("budget"),
+  allowedCapabilities: text("allowedCapabilities")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  forbiddenCapabilities: text("forbiddenCapabilities")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  humanApprovalPolicy: text("humanApprovalPolicy")
+    .notNull()
+    .default('if_risky'),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'`),
+  status: text("status").notNull().default('pending'),
+  convertedAt: timestamp("convertedAt", { withTimezone: true }),
+  resultingMissionId: text("resultingMissionId"),
+  idempotencyKey: text("idempotencyKey"),
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (t) => [
+  unique("goals_goalId_unique").on(t.goalId),
+]);
+
+export const goalPreviews = pgTable("goal_previews", {
+  id: text("id").primaryKey().notNull(),
+  goalId: text("goalId")
+    .notNull()
+    .references(() => goals.goalId, { onDelete: "cascade" }),
+  missionTitle: text("missionTitle").notNull(),
+  missionObjective: text("missionObjective").notNull(),
+  tasks: jsonb("tasks").notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (t) => [
+  unique("goal_previews_goalId_unique").on(t.goalId),
+  index("goal_previews_goalId_idx").on(t.goalId),
+]);

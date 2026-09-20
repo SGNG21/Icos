@@ -104,14 +104,15 @@ function previewsEqual(a: GoalPlanPreview, b: GoalPlanPreview): boolean {
 
     if (taskA.id !== taskB.id) return false;
     if (taskA.title !== taskB.title) return false;
-    if (taskA.description ?? null !== (taskB.description ?? null)) return false;
+    if ((taskA.description ?? null) !== (taskB.description ?? null)) return false;
     // dependsOn: arrays of strings, order matters? We assume order is significant as per planner.
     if (JSON.stringify(taskA.dependsOn) !== JSON.stringify(taskB.dependsOn)) return false;
-    if (taskA.capability ?? null !== (taskB.capability ?? null)) return false;
-    if (taskA.workerKind ?? null !== (taskB.workerKind ?? null)) return false;
+    if ((taskA.capability ?? null) !== (taskB.capability ?? null)) return false;
+    if ((taskA.workerKind ?? null) !== (taskB.workerKind ?? null)) return false;
     if (taskA.riskLevel !== taskB.riskLevel) return false;
     if (taskA.humanApprovalRequired !== taskB.humanApprovalRequired) return false;
-    if (JSON.stringify(taskA.acceptanceCriteria) !== JSON.stringify(taskB.acceptanceCriteria)) return false;
+    if (JSON.stringify(taskA.acceptanceCriteria) !== JSON.stringify(taskB.acceptanceCriteria))
+      return false;
     if (taskA.parallelizable !== taskB.parallelizable) return false;
     if (taskA.sandboxRequired !== taskB.sandboxRequired) return false;
     if (taskA.isolatedWorkspaceRequired !== taskB.isolatedWorkspaceRequired) return false;
@@ -150,26 +151,6 @@ export async function POST(request: Request): Promise<Response> {
 
     // Validate the preview (throws if invalid).
     GoalPlanPreviewSchema.parse(preview);
-
-    // Validate task dependencies and acyclicity.
-    validateTaskDependencies(preview.tasks);
-
-    // Retrieve the normalized goal from the preview store.
-    const goal = container.goalPreviewStore.retrieve(preview.goalId);
-    if (!goal) {
-      // Goal not found (maybe expired or never stored)
-      return apiError("invalid_input", "goal introuvable ou expiré");
-    }
-
-    // Regenerate the canonical preview from the goal.
-    const canonicalPreview = container.goalPlanner.plan(goal);
-
-    // Compare the received preview with the canonical preview.
-    if (!previewsEqual(preview, canonicalPreview)) {
-      // Preview has been tampered with.
-      return apiError("invalid_input", "preview non autorisé");
-    }
-
     // Additional security checks (defense in depth, though preview equality should catch most)
     // We'll still check for self-dependency and at least one task.
     for (const task of preview.tasks) {
@@ -181,6 +162,25 @@ export async function POST(request: Request): Promise<Response> {
 
     if (preview.tasks.length === 0) {
       return apiError("invalid_input", "aucune tâche définie");
+    }
+
+    // Validate task dependencies and acyclicity.
+    validateTaskDependencies(preview.tasks);
+
+    // Retrieve the normalized goal from the preview store.
+    const goal = await container.goalPreviewStore.retrieve(preview.goalId);
+    if (!goal) {
+      // Goal not found (maybe expired or never stored)
+      return apiError("invalid_input", "goal introuvable ou expiré");
+    }
+
+    // Regenerate the canonical preview from the goal.
+    const canonicalPreview = await container.goalPlanner.plan(goal);
+
+    // Compare the received preview with the canonical preview.
+    if (!previewsEqual(preview, canonicalPreview)) {
+      // Preview has been tampered with.
+      return apiError("invalid_input", "preview non autorisé");
     }
 
     // Convert the preview tasks to the format expected by MissionService.createMission.
