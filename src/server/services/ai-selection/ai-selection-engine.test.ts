@@ -537,7 +537,7 @@ describe("AISelectionEngine", () => {
         maxCost: undefined,
       };
 
-      const decisionWithoutForbid = assertSelectedDecision(engine.select(taskRequirements, {} as SelectionPolicy));
+      const decisionWithoutForbid = assertSelectedDecision(engine.select(taskRequirements, defaultPolicy));
 
       // Now, forbid the selected provider and run again.
       const taskRequirementsWithForbid: TaskRequirements = {
@@ -559,7 +559,7 @@ describe("AISelectionEngine", () => {
         maxCost: undefined,
       };
 
-      const decisionWithForbid = engine.select(taskRequirementsWithForbid, {} as SelectionPolicy);
+      const decisionWithForbid = engine.select(taskRequirementsWithForbid, defaultPolicy);
 
       // The new selection should not have the forbidden provider.
       expect(decisionWithForbid.selectedProviderId).not.toBe(

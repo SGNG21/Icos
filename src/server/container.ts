@@ -315,7 +315,6 @@ export function composeAuthentication(
   ) => IcosBetterAuth = createBetterAuth,
 ): { auth: AuthGateway; authHttp: AuthHttpGateway } {
   const betterAuth = createAuth(db, config);
-  const aiResourceCatalog = new AIResourceCatalog();
   return {
     auth: new AuthenticationService(betterAuth, new PostgresHumanUserRepository(db), roles, db),
     authHttp: new BetterAuthHttpGateway(betterAuth),
@@ -337,7 +336,6 @@ export function composeAdministration(
   Container,
   "users" | "agentLinks" | "humanAdministration" | "operationalAccess" | "humanAdministrationUow"
 > {
-  const aiResourceCatalog = new AIResourceCatalog();
   return {
     users: input.users,
     agentLinks: input.agentLinks,

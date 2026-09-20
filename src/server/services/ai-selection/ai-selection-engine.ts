@@ -1,17 +1,15 @@
-import { TaskRequirements, SelectionPolicy, SelectionConstraints } from "@/core/contracts/ai-selection";
+import { TaskRequirements, SelectionPolicy, SelectionConstraints, WorkerCandidate, ModelCandidate, ProviderCandidate, SelectionScore, RejectedCandidate, SelectionDecision, FallbackPlan, AIResourceCatalogPort } from "@/core/contracts/ai-selection";
 import { AIResourceCatalog } from "./ai-resource-catalog";
-import { WorkerCandidate, ModelCandidate, ProviderCandidate, SelectionScore, RejectedCandidate, SelectionDecision, FallbackPlan } from "@/core/contracts/ai-selection";
-import { workerKindSchema } from "@/core/contracts/task-execution";
 
 /**
  * AI Selection Engine with hard policy filters and deterministic scoring.
  * Implements fail-closed selection for sensitive tasks.
  */
 export class AISelectionEngine {
-  private catalog: AIResourceCatalog;
+  private catalog: AIResourceCatalogPort;
 
-  constructor(catalog?: AIResourceCatalog) {
-    this.catalog = catalog || new AIResourceCatalog();
+  constructor(catalog: AIResourceCatalogPort = new AIResourceCatalog()) {
+    this.catalog = catalog;
   }
 
   /**
@@ -55,10 +53,13 @@ export class AISelectionEngine {
       workerKindPreferred: taskRequirements.workerKindPreferred,
     };
 
-    // Step 2: Generate all possible candidates (worker + model + provider combinations)
-    const allCandidates = this.generateAllCandidates();
+    // Step 2: Generate a deterministic snapshot of the catalog
+    const snapshot = this.catalog.snapshot();
 
-    // Step 3: Apply hard filters (eliminate incompatible candidates)
+    // Step 3: Generate all possible candidates (worker + model + provider combinations) from snapshot
+    const allCandidates = this.generateAllCandidates(snapshot.workers, snapshot.models, snapshot.providers);
+
+    // Step 4: Apply hard filters (eliminate incompatible candidates)
     const { viableCandidates, rejectedCandidates } = this.applyHardFilters(
       allCandidates,
       constraints
@@ -105,7 +106,11 @@ export class AISelectionEngine {
    * Generate all possible combinations of workers, models, and providers.
    * Only includes combinations where the model is actually offered by the provider.
    */
-  private generateAllCandidates(): Array<{
+  private generateAllCandidates(
+    workers: WorkerCandidate[],
+    models: ModelCandidate[],
+    providers: ProviderCandidate[]
+  ): Array<{
     worker: WorkerCandidate;
     model: ModelCandidate;
     provider: ProviderCandidate;
@@ -116,11 +121,11 @@ export class AISelectionEngine {
       provider: ProviderCandidate;
     }> = [];
 
-    for (const worker of this.catalog.listWorkers()) {
-      for (const model of this.catalog.listModels()) {
-        for (const provider of this.catalog.listProviders()) {
+    for (const worker of workers) {
+      for (const model of models) {
+        for (const provider of providers) {
           // Only include if the provider actually offers this model
-          if (this.catalog.isModelOffered(model.modelId, provider.providerId)) {
+          if (provider.offeredModels.includes(model.modelId)) {
             candidates.push({ worker, model, provider });
           }
         }

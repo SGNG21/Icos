@@ -323,3 +323,24 @@ export const SelectionDecisionSchema = z.discriminatedUnion("status", [
 ]);
 
 export type SelectionDecision = z.infer<typeof SelectionDecisionSchema>;
+
+/**
+ * Port abstraction for AI resource catalog.
+ * Allows the selection engine to depend on an interface rather than concrete catalog.
+ */
+export interface AIResourceCatalogPort {
+  listWorkers(): WorkerCandidate[];
+  listModels(): ModelCandidate[];
+  listProviders(): ProviderCandidate[];
+  isProviderAvailable(providerId: string): boolean;
+  isModelOffered(modelId: string, providerId: string): boolean;
+  /**
+   * Returns a deterministic snapshot of the catalog state.
+   * The snapshot must be a consistent point-in-time view.
+   */
+  snapshot(): {
+    workers: WorkerCandidate[];
+    models: ModelCandidate[];
+    providers: ProviderCandidate[];
+  };
+}

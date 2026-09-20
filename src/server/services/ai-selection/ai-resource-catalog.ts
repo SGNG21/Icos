@@ -1,10 +1,10 @@
-import { WorkerCandidate, ModelCandidate, ProviderCandidate } from "@/core/contracts/ai-selection";
+import { WorkerCandidate, ModelCandidate, ProviderCandidate, AIResourceCatalogPort } from "@/core/contracts/ai-selection";
 
 /**
  * In-memory deterministic AI resource catalog.
  * For Phase 8B, we use a hardcoded catalog that can be replaced later by a dynamic one (e.g., from OmniRoute).
  */
-export class AIResourceCatalog {
+export class AIResourceCatalog implements AIResourceCatalogPort {
   private workers: WorkerCandidate[];
   private models: ModelCandidate[];
   private providers: ProviderCandidate[];
@@ -146,38 +146,28 @@ export class AIResourceCatalog {
     ];
   }
 
-  /**
-   * List all worker kinds.
-   */
+  /** List all worker kinds. */
   listWorkers(): WorkerCandidate[] {
     return [...this.workers]; // return a copy
   }
 
-  /**
-   * List all models.
-   */
+  /** List all models. */
   listModels(): ModelCandidate[] {
     return [...this.models];
   }
 
-  /**
-   * List all providers.
-   */
+  /** List all providers. */
   listProviders(): ProviderCandidate[] {
     return [...this.providers];
   }
 
-  /**
-   * Get capabilities for a specific worker kind.
-   */
+  /** Get capabilities for a specific worker kind. */
   getWorkerCapabilities(workerKind: string): string[] {
     const worker = this.workers.find((w) => w.workerKind === workerKind);
     return worker ? [...worker.capabilities] : [];
   }
 
-  /**
-   * Get capabilities for a specific model from a provider.
-   */
+  /** Get capabilities for a specific model from a provider. */
   getModelCapabilities(modelId: string, providerId: string): string[] {
     const model = this.models.find(
       (m) => m.modelId === modelId && m.provider === providerId
@@ -185,27 +175,37 @@ export class AIResourceCatalog {
     return model ? [...model.capabilities] : [];
   }
 
-  /**
-   * Get health score for a provider (0-1).
-   */
+  /** Get health score for a provider (0-1). */
   getProviderHealth(providerId: string): number {
     const provider = this.providers.find((p) => p.providerId === providerId);
     return provider ? provider.health : 0;
   }
 
-  /**
-   * Check if a provider is available.
-   */
+  /** Check if a provider is available. */
   isProviderAvailable(providerId: string): boolean {
     const provider = this.providers.find((p) => p.providerId === providerId);
     return provider ? provider.isAvailable : false;
   }
 
-  /**
-   * Check if a model is offered by a provider.
-   */
+  /** Check if a model is offered by a provider. */
   isModelOffered(modelId: string, providerId: string): boolean {
     const provider = this.providers.find((p) => p.providerId === providerId);
     return provider ? provider.offeredModels.includes(modelId) : false;
+  }
+
+  /**
+   * Returns a deterministic snapshot of the catalog state.
+   * The snapshot must be a consistent point-in-time view.
+   */
+  snapshot(): {
+    workers: WorkerCandidate[];
+    models: ModelCandidate[];
+    providers: ProviderCandidate[];
+  } {
+    return {
+      workers: [...this.workers],
+      models: [...this.models],
+      providers: [...this.providers],
+    };
   }
 }
