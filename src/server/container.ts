@@ -241,11 +241,11 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const goalPlanner = new GoalPlanner();
   const goalRepository = new InMemoryGoalRepository(auditLog);
   const goalPreviewStore = new GoalPreviewStore(goalRepository);
-  
+
   // AI Selection Engine (Phase 8B)
     const aiResourceCatalog = new AIResourceCatalog();
     const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
-  
+
     return {
     agents: new InMemoryAgentRepository(agents),
     tasks: tasksRepository,

@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { AISelectionEngine } from "./ai-selection-engine";
 import { AIResourceCatalog } from "./ai-resource-catalog";
 import { TaskRequirements, SelectionPolicy, SelectionDecision } from "@/core/contracts/ai-selection";
+import { WorkerCandidate, ModelCandidate, ProviderCandidate, AIResourceCatalogPort } from "@/core/contracts/ai-selection";
 
 describe("AISelectionEngine", () => {
   let engine: AISelectionEngine;
@@ -339,48 +340,6 @@ describe("AISelectionEngine", () => {
       expect(decision.selectedProviderId).not.toBe("openai");
     });
 
-    it("should reject when model is not offered by provider", () => {
-      // This is already handled in generateAllCandidates: we only include if the provider offers the model.
-      // So we can test by trying to force a combination that is not offered.
-      // We'll create a custom catalog for this test.
-      const customCatalog = new AIResourceCatalog();
-      // We'll add a model that is not offered by any provider? Actually, our catalog generation only includes offered models.
-      // Let's instead test that the engine does not select a model that is not offered.
-      // We'll rely on the fact that the engine's generateAllCandidates only includes offered models.
-      // So we can skip this test and trust the implementation.
-      // Alternatively, we can test by checking that the selected model is indeed offered by the selected provider.
-      const taskRequirements: TaskRequirements = {
-        capabilityRequired: "text-generation",
-        sensitivity: "reversible",
-        workerKindAllowed: ["agent", "other", "hermes", "openhands", "digitalos"],
-        workerKindPreferred: ["agent"],
-        requiresTools: false,
-        requiresStructuredOutput: false,
-        minContextWindow: 1024,
-        preferredProviders: [],
-        forbiddenProviders: [],
-        preferredModels: [],
-        forbiddenModels: [],
-        requiredFeatures: [],
-        qualityTarget: 0.8,
-        reliabilityTarget: 0.9,
-        maxLatencyMs: undefined,
-        maxCost: undefined,
-      };
-
-      const decision = engine.select(taskRequirements);
-
-      // Check that the selected model is offered by the selected provider
-      // We'll just check that the decision is not the fail-closed one (so there is at least one offered model).
-      if (decision.status === "selected") {
-        const isOffered = customCatalog.isModelOffered(
-          decision.selectedModelId,
-          decision.selectedProviderId
-        );
-        // Since we are using the same catalog, we expect it to be offered.
-        expect(isOffered).toBe(true);
-      }
-    });
 
     it("should block sensitive tasks with low-trust providers", () => {
       const taskRequirements: TaskRequirements = {
@@ -575,3 +534,388 @@ describe("AISelectionEngine", () => {
     });
   });
 });
+    it("should only combine model with its owning provider when same modelId exists across providers", () => {
+      // Create a mock catalog with two providers offering the same modelId but different provider ownership
+      class MockCatalog implements AIResourceCatalogPort {
+        private workers: WorkerCandidate[] = [
+          {
+            workerKind: "agent",
+            capabilities: ["text-generation"],
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            typicalLatencyMs: 1000,
+            typicalCostPerUnit: 0.0001,
+            contextWindow: 4096,
+            reliability: 0.95,
+            quality: 0.9,
+            features: [],
+          }
+        ];
+        private models: ModelCandidate[] = [
+          {
+            modelId: "shared-model",
+            provider: "provider-a",
+            capabilities: ["cap1"], // only cap1
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            contextWindow: 4096,
+            typicalLatencyMs: 1000,
+            typicalCostPerUnit: 0.0001,
+            reliability: 0.95,
+            quality: 0.9,
+            features: [],
+          },
+          {
+            modelId: "shared-model",
+            provider: "provider-b",
+            capabilities: ["cap2"], // only cap2
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            contextWindow: 4096,
+            typicalLatencyMs: 1000,
+            typicalCostPerUnit: 0.0001,
+            reliability: 0.95,
+            quality: 0.9,
+            features: [],
+          }
+        ];
+        private providers: ProviderCandidate[] = [
+          {
+            providerId: "provider-a",
+            health: 0.99,
+            isAvailable: true,
+            offeredModels: ["shared-model"],
+            trust: 0.9,
+            security: 0.85,
+          },
+          {
+            providerId: "provider-b",
+            health: 0.97,
+            isAvailable: true,
+            offeredModels: ["shared-model"],
+            trust: 0.92,
+            security: 0.9,
+          }
+        ];
+
+        listWorkers(): WorkerCandidate[] { return [...this.workers]; }
+        listModels(): ModelCandidate[] { return [...this.models]; }
+        listProviders(): ProviderCandidate[] { return [...this.providers]; }
+        getWorkerCapabilities(workerKind: string): string[] {
+          const w = this.workers.find(w => w.workerKind === workerKind);
+          return w ? [...w.capabilities] : [];
+        }
+        getModelCapabilities(modelId: string, providerId: string): string[] {
+          const m = this.models.find(m => m.modelId === modelId && m.provider === providerId);
+          return m ? [...m.capabilities] : [];
+        }
+        getProviderHealth(providerId: string): number {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.health : 0;
+        }
+        isProviderAvailable(providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.isAvailable : false;
+        }
+        isModelOffered(modelId: string, providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.offeredModels.includes(modelId) : false;
+        }
+        snapshot() {
+          return {
+            workers: [...this.workers],
+            models: [...this.models],
+            providers: [...this.providers],
+          };
+        }
+      }
+
+      const mockCatalog = new MockCatalog();
+      const engine = new AISelectionEngine(mockCatalog);
+
+      // Task requirements:
+      // - capabilityRequired: cap1 (only modelA has it)
+      // - forbiddenProviders: ["provider-a"] to block the legitimate pair for provider-a
+      // - If cross pairing were allowed, we would have a viable candidate: modelA (provider-a) with provider-b
+      //   because modelA has cap1 and provider-b is not forbidden.
+      //   But cross pairing is blocked, so we expect no viable candidate -> fail closed.
+      const taskRequirements: TaskRequirements = {
+        capabilityRequired: "cap1",
+        forbiddenProviders: ["provider-a"],
+        sensitivity: "reversible",
+        workerKindAllowed: ["agent"],
+        workerKindPreferred: ["agent"],
+        requiresTools: false,
+        requiresStructuredOutput: false,
+        minContextWindow: 1024,
+        preferredProviders: [],
+        preferredModels: [],
+        forbiddenModels: [],
+        requiredFeatures: [],
+        qualityTarget: 0.8,
+        reliabilityTarget: 0.9,
+        maxLatencyMs: undefined,
+        maxCost: undefined,
+      };
+
+      const decision = engine.select(taskRequirements);
+
+      // If cross pairing were allowed, we would have a viable candidate: modelA (provider-a) with provider-b
+      // because modelA has cap1 and provider-b is not forbidden.
+      // Since cross pairing is blocked, there should be no viable candidate -> fail closed.
+      expect(decision.score.overall).toBe(0);
+      expect(decision.rationale).toContain("No viable candidate found");
+
+      // Additionally, we can check that the rejected candidates include the forbidden provider and capability mismatch.
+      const forbiddenProviderRejections = decision.rejectedCandidates.filter(
+        r => r.reason === "PROVIDER_FORBIDDEN" && r.details?.includes("provider-a")
+      );
+      expect(forbiddenProviderRejections.length).toBeGreaterThan(0);
+      const capabilityMismatchRejections = decision.rejectedCandidates.filter(
+        r => r.reason === "CAPABILITY_MISMATCH"
+      );
+      expect(capabilityMismatchRejections.length).toBeGreaterThan(0);
+    });
+
+    it("should call snapshot exactly once per selection", () => {
+      let snapshotCalls = 0;
+      class MockCatalog implements AIResourceCatalogPort {
+        private workers: WorkerCandidate[] = [
+          {
+            workerKind: "agent",
+            capabilities: ["text-generation"],
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            typicalLatencyMs: 1000,
+            typicalCostPerUnit: 0.0001,
+            contextWindow: 4096,
+            reliability: 0.95,
+            quality: 0.9,
+            features: [],
+          }
+        ];
+        private models: ModelCandidate[] = [
+          {
+            modelId: "gpt-4",
+            provider: "openai",
+            capabilities: ["text-generation"],
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            contextWindow: 8192,
+            typicalLatencyMs: 1500,
+            typicalCostPerUnit: 0.0002,
+            reliability: 0.95,
+            quality: 0.95,
+            features: ["vision"],
+          }
+        ];
+        private providers: ProviderCandidate[] = [
+          {
+            providerId: "openai",
+            health: 0.99,
+            isAvailable: true,
+            offeredModels: ["gpt-4"],
+            trust: 0.9,
+            security: 0.85,
+          }
+        ];
+
+        listWorkers(): WorkerCandidate[] { return [...this.workers]; }
+        listModels(): ModelCandidate[] { return [...this.models]; }
+        listProviders(): ProviderCandidate[] { return [...this.providers]; }
+        getWorkerCapabilities(workerKind: string): string[] {
+          const w = this.workers.find(w => w.workerKind === workerKind);
+          return w ? [...w.capabilities] : [];
+        }
+        getModelCapabilities(modelId: string, providerId: string): string[] {
+          const m = this.models.find(m => m.modelId === modelId && m.provider === providerId);
+          return m ? [...m.capabilities] : [];
+        }
+        getProviderHealth(providerId: string): number {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.health : 0;
+        }
+        isProviderAvailable(providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.isAvailable : false;
+        }
+        isModelOffered(modelId: string, providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.offeredModels.includes(modelId) : false;
+        }
+        snapshot() {
+          snapshotCalls++;
+          return {
+            workers: [...this.workers],
+            models: [...this.models],
+            providers: [...this.providers],
+          };
+        }
+      }
+
+      const mockCatalog = new MockCatalog();
+      const engine = new AISelectionEngine(mockCatalog);
+
+      const taskRequirements: TaskRequirements = {
+        capabilityRequired: "text-generation",
+        sensitivity: "reversible",
+        workerKindAllowed: ["agent"],
+        workerKindPreferred: ["agent"],
+        requiresTools: false,
+        requiresStructuredOutput: false,
+        minContextWindow: 1024,
+        preferredProviders: [],
+        preferredModels: [],
+        forbiddenModels: [],
+        requiredFeatures: [],
+        qualityTarget: 0.8,
+        reliabilityTarget: 0.9,
+        maxLatencyMs: undefined,
+        maxCost: undefined,
+      forbiddenProviders: [],
+      };
+
+      engine.select(taskRequirements);
+      expect(snapshotCalls).toBe(1);
+    });
+
+    it("should depend only on the snapshot, not subsequent catalog changes during selection", () => {
+      let snapshotCalls = 0;
+      let listWorkersCalls = 0;
+      let listModelsCalls = 0;
+      let listProvidersCalls = 0;
+      class MockCatalog implements AIResourceCatalogPort {
+        private workers: WorkerCandidate[] = [
+          {
+            workerKind: "agent",
+            capabilities: ["text-generation"],
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            typicalLatencyMs: 1000,
+            typicalCostPerUnit: 0.0001,
+            contextWindow: 4096,
+            reliability: 0.95,
+            quality: 0.9,
+            features: [],
+          }
+        ];
+        private models: ModelCandidate[] = [
+          {
+            modelId: "gpt-4",
+            provider: "openai",
+            capabilities: ["text-generation"],
+            supportsTools: true,
+            supportsStructuredOutput: true,
+            contextWindow: 8192,
+            typicalLatencyMs: 1500,
+            typicalCostPerUnit: 0.0002,
+            reliability: 0.95,
+            quality: 0.95,
+            features: ["vision"],
+          }
+        ];
+        private providers: ProviderCandidate[] = [
+          {
+            providerId: "openai",
+            health: 0.99,
+            isAvailable: true,
+            offeredModels: ["gpt-4"],
+            trust: 0.9,
+            security: 0.85,
+          }
+        ];
+
+        listWorkers(): WorkerCandidate[] {
+          listWorkersCalls++;
+          return [...this.workers];
+        }
+        listModels(): ModelCandidate[] {
+          listModelsCalls++;
+          return [...this.models];
+        }
+        listProviders(): ProviderCandidate[] {
+          listProvidersCalls++;
+          return [...this.providers];
+        }
+        getWorkerCapabilities(workerKind: string): string[] {
+          const w = this.workers.find(w => w.workerKind === workerKind);
+          return w ? [...w.capabilities] : [];
+        }
+        getModelCapabilities(modelId: string, providerId: string): string[] {
+          const m = this.models.find(m => m.modelId === modelId && m.provider === providerId);
+          return m ? [...m.capabilities] : [];
+        }
+        getProviderHealth(providerId: string): number {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.health : 0;
+        }
+        isProviderAvailable(providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.isAvailable : false;
+        }
+        isModelOffered(modelId: string, providerId: string): boolean {
+          const p = this.providers.find(p => p.providerId === providerId);
+          return p ? p.offeredModels.includes(modelId) : false;
+        }
+        snapshot() {
+          snapshotCalls++;
+          return {
+            workers: [...this.workers],
+            models: [...this.models],
+            providers: [...this.providers],
+          };
+        }
+      }
+
+      const mockCatalog = new MockCatalog();
+      const engine = new AISelectionEngine(mockCatalog);
+
+      const taskRequirements: TaskRequirements = {
+        capabilityRequired: "text-generation",
+        sensitivity: "reversible",
+        workerKindAllowed: ["agent"],
+        workerKindPreferred: ["agent"],
+        requiresTools: false,
+        requiresStructuredOutput: false,
+        minContextWindow: 1024,
+        preferredProviders: [],
+        preferredModels: [],
+        forbiddenModels: [],
+        requiredFeatures: [],
+        qualityTarget: 0.8,
+        reliabilityTarget: 0.9,
+        maxLatencyMs: undefined,
+        maxCost: undefined,
+      forbiddenProviders: [],
+      };
+
+      // Now, change the underlying catalog data (if the engine were to call list* after snapshot, it would see changes)
+      // We'll modify the arrays inside the mock catalog to see if the engine uses them.
+      // Since we return copies in list*, we need to modify the original arrays that the copies are sliced from.
+      // Actually our list* returns [...this.workers] etc., which is a copy of the current array.
+      // So if we modify this.workers after the snapshot, subsequent listWorkers will return the modified array.
+      // We'll push a dummy worker that would affect selection if used.
+      (mockCatalog as any).workers.push({
+        workerKind: "other",
+        capabilities: ["text-generation"],
+        supportsTools: false,
+        supportsStructuredOutput: false,
+        typicalLatencyMs: 500,
+        typicalCostPerUnit: 0.00005,
+        contextWindow: 2048,
+        reliability: 0.98,
+        quality: 0.85,
+        features: ["precision"],
+      });
+
+      // Now run selection
+      engine.select(taskRequirements);
+
+      // The engine should have called snapshot exactly once
+      expect(snapshotCalls).toBe(1);
+      // And should NOT have called listWorkers, listModels, or listProviders after the snapshot
+      // Because the selection uses only the snapshot data.
+      expect(listWorkersCalls).toBe(0);
+      expect(listModelsCalls).toBe(0);
+      expect(listProvidersCalls).toBe(0);
+    });

@@ -103,37 +103,39 @@ export class AISelectionEngine {
   }
 
   /**
-   * Generate all possible combinations of workers, models, and providers.
-   * Only includes combinations where the model is actually offered by the provider.
-   */
-  private generateAllCandidates(
-    workers: WorkerCandidate[],
-    models: ModelCandidate[],
-    providers: ProviderCandidate[]
-  ): Array<{
-    worker: WorkerCandidate;
-    model: ModelCandidate;
-    provider: ProviderCandidate;
-  }> {
-    const candidates: Array<{
+     * Generate all possible combinations of workers, models, and providers.
+     * Only includes combinations where the model is actually offered by the provider
+     * and the model's provider matches the provider candidate.
+     */
+    private generateAllCandidates(
+      workers: WorkerCandidate[],
+      models: ModelCandidate[],
+      providers: ProviderCandidate[]
+    ): Array<{
       worker: WorkerCandidate;
       model: ModelCandidate;
       provider: ProviderCandidate;
-    }> = [];
+    }> {
+      const candidates: Array<{
+        worker: WorkerCandidate;
+        model: ModelCandidate;
+        provider: ProviderCandidate;
+      }> = [];
 
-    for (const worker of workers) {
-      for (const model of models) {
-        for (const provider of providers) {
-          // Only include if the provider actually offers this model
-          if (provider.offeredModels.includes(model.modelId)) {
-            candidates.push({ worker, model, provider });
+      for (const worker of workers) {
+        for (const model of models) {
+          for (const provider of providers) {
+            // Only include if the provider actually offers this model
+            // and the model belongs to this provider
+            if (provider.offeredModels.includes(model.modelId) && model.provider === provider.providerId) {
+              candidates.push({ worker, model, provider });
+            }
           }
         }
       }
-    }
 
-    return candidates;
-  }
+      return candidates;
+    }
 
   /**
      * Apply hard policy filters to eliminate incompatible candidates.
