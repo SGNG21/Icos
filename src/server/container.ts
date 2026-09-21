@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
+import { AIResourceCatalogPort } from "@/core/contracts/ai-selection";
+import { AIResourceCatalog } from "@/server/services/ai-selection/ai-resource-catalog";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
 import { loadEnv, resolveAuthConfig, type AuthConfig, type Env } from "@/config/env";
 import { AuthenticationService } from "@/server/auth/authentication-service";
@@ -24,6 +26,8 @@ import { InMemoryApprovalRepository } from "@/server/services/in-memory/approval
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
+import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
+import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { PostgresActionRepository } from "@/server/repositories/postgres/action-repository";
 import { PostgresAgentRepository } from "@/server/repositories/postgres/agent-repository";
@@ -53,7 +57,6 @@ import type {
   AgentRepository,
   ApprovalRepository,
   AuditRepository,
-  GoalRepository,
   HumanAgentLinkRepository,
   HumanUserAdministrationRepository,
   TaskExecutionResultRepository,
@@ -104,7 +107,7 @@ import { MissionService } from "@/server/mission/mission-service";
 import { GoalNormalizer } from "./services/goal-normalizer";
 import { GoalPlanner } from "./services/goal-planner";
 import { GoalPreviewStore } from "./services/goal-preview-store";
-import { AIResourceCatalog } from "./services/ai-selection/ai-resource-catalog";
+
 import { AISelectionEngine } from "./services/ai-selection/ai-selection-engine";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
@@ -143,7 +146,7 @@ export interface Container {
   goalPlanner: GoalPlanner;
   goalPreviewStore: GoalPreviewStore;
   /** AI Selection Engine (Phase 8B) */
-  aiResourceCatalog: AIResourceCatalog;
+  aiResourceCatalog: AIResourceCatalogPort;
   aiSelectionEngine: AISelectionEngine;
   /**
    * Façade d'authentification humaine (Better Auth). Présente uniquement avec le
@@ -242,9 +245,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const goalRepository = new InMemoryGoalRepository(auditLog);
   const goalPreviewStore = new GoalPreviewStore(goalRepository);
 
-  // AI Selection Engine (Phase 8B)
-    const aiResourceCatalog = new AIResourceCatalog();
-    const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
+  // Worker Registry (Phase 8C)
+  const workerRegistry = new InMemoryWorkerRegistry([]);
+  // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
+  const baseCatalog = new AIResourceCatalog();
+  const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
+  const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
 
     return {
     agents: new InMemoryAgentRepository(agents),
@@ -410,7 +416,9 @@ export async function buildPostgresContainer(
     new PostgresMessageRepository(handle.db),
   );
 
-  const aiResourceCatalog = new AIResourceCatalog();
+  const workerRegistry = new InMemoryWorkerRegistry([]);
+  const baseCatalog = new AIResourceCatalog();
+  const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
   return {
     agents,
     tasks,
