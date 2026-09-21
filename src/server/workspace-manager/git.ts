@@ -82,7 +82,8 @@ export class Git {
     return result;
   }
 
-  private async out(args: string[], cwd?: string): Promise<string> {
+  /** Internal helper for git commands that return stdout. */
+  protected async out(args: string[], cwd?: string): Promise<string> {
     return (await this.exec(args, cwd)).stdout.trim();
   }
 

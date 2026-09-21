@@ -5,6 +5,7 @@ import type { TaskRepository } from "@/server/repositories/ports";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { DurableMemory } from "@/core/context/durable-memory";
+import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
 
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
@@ -20,6 +21,7 @@ export class SupervisorService {
     private readonly dispatcher: TaskExecutionDispatcher,
     private readonly durableMemory: DurableMemory,
     private readonly dispatchAttempts?: DispatchAttemptRepository,
+    private readonly workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator,
   ) {}
 
   /**
@@ -145,6 +147,54 @@ export class SupervisorService {
 
       const prompt = task.description || task.title;
 
+      // Phase 8D: Use WorkspaceExecutionCoordinator for workspace-aware execution
+      if (this.workspaceExecutionCoordinator && task.workerKind) {
+        let allocated = false;
+        try {
+          // Allocate workspace for this task
+          await this.workspaceExecutionCoordinator.allocateWorkspace(
+            mission.id,
+            task.taskId,
+            task.workerKind,
+            task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30),
+          );
+          allocated = true;
+
+          // Prepare the dispatch input (without workflowId, as the coordinator will handle it)
+          const dispatchInput = {
+            missionId: mission.id,
+            taskId: task.taskId,
+            taskTitle: task.title,
+            prompt,
+            workerKind: task.workerKind || undefined,
+            capability: task.capability || undefined,
+            digitalosFacadePath,
+            signal,
+          };
+
+          // Execute in workspace (this will dispatch and handle the workspace lifecycle)
+          const coordResult = await this.workspaceExecutionCoordinator.executeInWorkspace(
+            mission.id,
+            task.taskId,
+            dispatchInput,
+          );
+
+          // Update task status based on coordinator result
+          if (coordResult.success) {
+            await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "succeeded");
+          } else {
+            await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "failed");
+          }
+        } finally {
+          if (allocated) {
+            // Release workspace
+            await this.workspaceExecutionCoordinator.releaseWorkspace(task.taskId);
+          }
+        }
+
+        continue;
+      }
+
       if (this.dispatchAttempts) {
         const attemptNumber = 1;
         const workflowId = workflowIdForAttempt(task.taskId, attemptNumber);
@@ -245,6 +295,7 @@ export class SupervisorService {
 
     if (tasks.every((task) => task.status === "succeeded" || task.status === "superseded")) {
       await this.missionRepository.updateMissionStatus(mission.id, "succeeded");
+      return;
     }
   }
 }

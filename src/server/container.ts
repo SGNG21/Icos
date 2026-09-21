@@ -28,6 +28,19 @@ import { InMemoryTaskRepository } from "@/server/services/in-memory/task-reposit
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
+import { WorkspaceManager } from "@/server/workspace-manager/manager";
+import { InMemoryWorkspaceRegistry } from "@/server/workspace-manager/registry";
+import { InMemoryGit } from "@/server/workspace-manager/in-memory-git";
+import { InMemoryTestDatabaseProvisioner } from "@/server/workspace-manager/in-memory-test-database-provisioner";
+import { IntegrationGate } from "@/server/workspace-manager/integration-gate";
+import { InMemoryCommandRunner } from "@/server/workspace-manager/in-memory-gate-deps";
+import { InMemoryGateDatabase } from "@/server/workspace-manager/in-memory-gate-deps";
+import { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
+import { PostgresTestDatabaseProvisioner } from "@/server/workspace-manager/test-database";
+import { PostgresWorkspaceRegistry } from "@/server/workspace-manager/postgres-workspace-registry";
+import { PostgresGit } from "@/server/workspace-manager/postgres-git";
+import { PostgresCommandRunner } from "@/server/workspace-manager/postgres-gate-deps";
+import { PostgresGateDatabase } from "@/server/workspace-manager/postgres-gate-deps";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { PostgresActionRepository } from "@/server/repositories/postgres/action-repository";
 import { PostgresAgentRepository } from "@/server/repositories/postgres/agent-repository";
@@ -186,6 +199,12 @@ export interface Container {
   conversationService: ConversationService;
   ceoService: CeoApplicationService;
   db?: Database;
+  /** Workspace Manager (Phase 8D) */
+  workspaceManager?: WorkspaceManager;
+  /** Integration Gate (Phase 8D) */
+  integrationGate?: IntegrationGate;
+  /** Workspace Execution Coordinator (Phase 8D) */
+  workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
   close: () => Promise<void>;
 }
@@ -252,6 +271,27 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
   const aiSelectionEngine = new AISelectionEngine(aiResourceCatalog);
 
+  // Workspace Manager (Phase 8D)
+  const git = new InMemoryGit();
+  const workspaceRegistry = new InMemoryWorkspaceRegistry();
+  const provisioner = new InMemoryTestDatabaseProvisioner();
+  const workspaceManager = new WorkspaceManager({ git, registry: workspaceRegistry, provisioner });
+  const integrationGate = new IntegrationGate({
+    git,
+    manager: workspaceManager,
+    runner: new InMemoryCommandRunner(),
+    database: new InMemoryGateDatabase(),
+  });
+  const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
+    git,
+    manager: workspaceManager,
+    integrationGate,
+    dispatcher: new InMemoryTaskExecutionDispatcher(),
+    missions: mission,
+    tasks: tasksRepository,
+    durableMemory: new InMemoryDurableMemory(),
+  });
+
     return {
     agents: new InMemoryAgentRepository(agents),
     tasks: tasksRepository,
@@ -294,6 +334,9 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: undefined,
     close: async () => {},
+    workspaceManager,
+    integrationGate,
+    workspaceExecutionCoordinator,
     // Goal intake services
     goalNormalizer,
     goalPlanner,
@@ -419,6 +462,36 @@ export async function buildPostgresContainer(
   const workerRegistry = new InMemoryWorkerRegistry([]);
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
+
+  // Workspace Manager (Phase 8D) - PostgreSQL
+  const pgWorkspaceRegistry = new PostgresWorkspaceRegistry(env.DATABASE_URL);
+  await pgWorkspaceRegistry.initialize();
+  const pgProvisioner = new PostgresTestDatabaseProvisioner(env.DATABASE_URL);
+  const pgGit = new PostgresGit(env.DATABASE_URL);
+  const workspaceManager = new WorkspaceManager({ git: pgGit, registry: pgWorkspaceRegistry, provisioner: pgProvisioner });
+  const integrationGate = new IntegrationGate({
+    git: pgGit,
+    manager: workspaceManager,
+    runner: new PostgresCommandRunner(),
+    database: new PostgresGateDatabase(),
+  });
+  const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
+    git: pgGit,
+    manager: workspaceManager,
+    integrationGate,
+    dispatcher: new TemporalTaskExecutionDispatcher(
+      env.TEMPORAL_ADDRESS,
+      env.TEMPORAL_TASK_QUEUE,
+      env.TEMPORAL_WORKFLOW_TYPE,
+      true,
+      undefined,
+      env.TEMPORAL_DISPATCH_TIMEOUT_MS,
+    ),
+    missions: mission,
+    tasks: tasks,
+    durableMemory: new PostgresDurableMemory(handle.db),
+  });
+
   return {
     agents,
     tasks,
@@ -473,6 +546,10 @@ export async function buildPostgresContainer(
     // AI Selection Engine (Phase 8B)
     aiResourceCatalog,
     aiSelectionEngine: new AISelectionEngine(aiResourceCatalog),
+    // Workspace Manager (Phase 8D)
+    workspaceManager,
+    integrationGate,
+    workspaceExecutionCoordinator,
   };
 }
 
