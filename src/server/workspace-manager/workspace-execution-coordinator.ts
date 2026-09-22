@@ -339,11 +339,28 @@ export class WorkspaceExecutionCoordinator {
               await this.manager.transition(ws.workspaceId, "abandoned", "reconciliation");
               await this.manager.cleanup(ws.workspaceId);
               released++;
+              // Update execution workspace status to released
+              const execWs =
+                ws.taskId !== null ? this.executionWorkspaces.get(ws.taskId) : undefined;
+              if (execWs) {
+                execWs.status = "released";
+                execWs.releasedAt = new Date().toISOString();
+              }
             }
           } else {
             // Uncommitted changes - block for human intervention
             await this.manager.transition(ws.workspaceId, "blocked", "reconciliation");
             errors.push(`${ws.workspaceId}: uncommitted changes, manual intervention required`);
+            // Update execution workspace status to failed
+            const execWs =
+              ws.taskId !== null ? this.executionWorkspaces.get(ws.taskId) : undefined;
+            if (execWs) {
+              execWs.status = "failed";
+              execWs.executionResult = {
+                outcome: "failure",
+                error: "Workspace blocked due to uncommitted changes",
+              };
+            }
           }
         } else {
           // Valid lease - resume lease renewal
