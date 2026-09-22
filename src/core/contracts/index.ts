@@ -12,3 +12,4 @@ export * from "./task-execution";
 export * from "./high-level-goal";
 export * from "../context/contracts";
 export * from "./review";
+export * from "./self-development";
