@@ -5,6 +5,7 @@ import type {
   SelfDevelopmentCandidate,
   PolicyEvaluation,
   RepairResult,
+  RepairRequest,
   ReviewOutcome,
   SelfDevelopmentOutcome,
   PolicyEvaluationPort,
@@ -25,8 +26,15 @@ class MockPolicyEvaluationPort implements PolicyEvaluationPort {
 class MockBoundedRepairPort implements BoundedRepairPort {
   constructor(private results: RepairResult[]) {}
   private callCount = 0;
-  async requestRepair(): Promise<RepairResult> {
-    return this.results[this.callCount++] ?? { success: false, error: "NO_MORE_RESULTS" } as RepairResult;
+  async requestRepair(request: RepairRequest): Promise<RepairResult> {
+    const result = this.results[this.callCount++] ?? {
+      candidateId: request.candidateId,
+      attemptNumber: request.attemptNumber,
+      success: false,
+      error: "NO_MORE_RESULTS",
+      completedAt: new Date().toISOString()
+    } as RepairResult;
+    return result;
   }
   async getMaxAttempts(): Promise<number> {
     return 3;
@@ -502,6 +510,113 @@ describe("SelfDevelopmentController", () => {
 
       expect(outcome.finalState).toBe("accepted");
       // Controller just sequentially calls repair port - no rotation logic
+    });
+  });
+
+  describe("correlation integrity", () => {
+    it("mismatched policy candidateId fails closed", async () => {
+      const controller = createController(
+        {
+          candidateId: "candidate-002", // MISMATCH with baseCandidate
+          result: "allow",
+          reason: "ok",
+          maxRepairAttempts: 3,
+          evaluatedAt: new Date().toISOString()
+        },
+        [],
+        []
+      );
+
+      const outcome = await controller.processCandidate(baseCandidate);
+
+      expect(outcome.finalState).toBe("human_decision_required");
+      expect(outcome.rejectionReason).toContain("CORRELATION_ERROR:policyEvaluation candidateId mismatch");
+      expect(metrics.getSnapshot().humanEscalations).toBe(1);
+    });
+
+    it("mismatched repair candidateId fails closed", async () => {
+      const controller = createController(
+        {
+          candidateId: "candidate-001",
+          result: "repair",
+          reason: "needs fix",
+          maxRepairAttempts: 2,
+          evaluatedAt: new Date().toISOString()
+        },
+        [
+          {
+            candidateId: "candidate-002", // MISMATCH
+            attemptNumber: 1,
+            success: true,
+            repairedProposal: { key: "repaired" },
+            completedAt: new Date().toISOString()
+          }
+        ],
+        []
+      );
+
+      const outcome = await controller.processCandidate(baseCandidate);
+
+      expect(outcome.finalState).toBe("human_decision_required");
+      expect(outcome.rejectionReason).toContain("CORRELATION_ERROR:repairResult candidateId mismatch");
+      expect(metrics.getSnapshot().humanEscalations).toBe(1);
+    });
+
+    it("mismatched review candidateId fails closed", async () => {
+      const controller = createController(
+        {
+          candidateId: "candidate-001",
+          result: "allow",
+          reason: "ok",
+          maxRepairAttempts: 3,
+          evaluatedAt: new Date().toISOString()
+        },
+        [],
+        [
+          {
+            candidateId: "candidate-002", // MISMATCH
+            result: "approved",
+            reason: "approved",
+            reviewedAt: new Date().toISOString()
+          }
+        ]
+      );
+
+      const outcome = await controller.processCandidate(baseCandidate);
+
+      expect(outcome.finalState).toBe("human_decision_required");
+      expect(outcome.rejectionReason).toContain("CORRELATION_ERROR:reviewOutcome candidateId mismatch");
+      expect(metrics.getSnapshot().humanEscalations).toBe(1);
+    });
+
+    it("matching candidateId normal flows remain unchanged", async () => {
+      // This test ensures that when candidateIds match, normal flow works as before
+      const controller = createController(
+        {
+          candidateId: "candidate-001", // MATCH
+          result: "allow",
+          reason: "ok",
+          maxRepairAttempts: 3,
+          evaluatedAt: new Date().toISOString()
+        },
+        [],
+        [
+          {
+            candidateId: "candidate-001", // MATCH
+            result: "approved",
+            reason: "approved",
+            reviewedAt: new Date().toISOString()
+          }
+        ]
+      );
+
+      const outcome = await controller.processCandidate(baseCandidate);
+
+      expect(outcome.finalState).toBe("accepted");
+      expect(outcome.acceptedProposal).toEqual({ key: "value" });
+      expect(outcome.repairAttemptsUsed).toBe(0);
+      expect(metrics.getSnapshot().repairsAccepted).toBe(1);
+      expect(metrics.getSnapshot().candidatesProcessed).toBe(1);
     });
   });
 });

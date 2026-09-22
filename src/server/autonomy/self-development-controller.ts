@@ -46,6 +46,14 @@ export class SelfDevelopmentController {
       // Policy Evaluation
       policyEvaluation = await this.policyEvaluation.evaluate(candidate);
 
+      // Verify candidateId correlation - fail closed on mismatch
+      if (policyEvaluation.candidateId !== candidate.candidateId) {
+        this.metrics.recordHumanEscalation();
+        finalState = "human_decision_required";
+        rejectionReason = `CORRELATION_ERROR:policyEvaluation candidateId mismatch (expected ${candidate.candidateId}, got ${policyEvaluation.candidateId})`;
+        return this.buildOutcome(candidate.candidateId, finalState, acceptedProposal, rejectionReason, repairAttemptsUsed);
+      }
+
       // Handle unknown policy result - fail closed
       if (!this.isKnownPolicyResult(policyEvaluation.result)) {
         this.metrics.recordHumanEscalation();
@@ -117,6 +125,12 @@ export class SelfDevelopmentController {
     // Direct approval path - go to review
     const reviewOutcome = await this.independentReview.review(candidate.candidateId, candidate.proposal.payload);
 
+    // Verify candidateId correlation - fail closed on mismatch
+    if (reviewOutcome.candidateId !== candidate.candidateId) {
+      this.metrics.recordHumanEscalation();
+      return { state: "human_decision_required", rejectionReason: `CORRELATION_ERROR:reviewOutcome candidateId mismatch (expected ${candidate.candidateId}, got ${reviewOutcome.candidateId})` };
+    }
+
     // Handle unknown review result - fail closed
     if (!this.isKnownReviewResult(reviewOutcome.result)) {
       this.metrics.recordHumanEscalation();
@@ -164,6 +178,16 @@ export class SelfDevelopmentController {
 
       const repairResult = await this.boundedRepair.requestRepair(repairRequest);
 
+      // Verify candidateId correlation - fail closed on mismatch
+      if (repairResult.candidateId !== candidate.candidateId) {
+        this.metrics.recordHumanEscalation();
+        return {
+          state: "human_decision_required",
+          rejectionReason: `CORRELATION_ERROR:repairResult candidateId mismatch (expected ${candidate.candidateId}, got ${repairResult.candidateId})`,
+          repairAttemptsUsed: attemptNumber,
+        };
+      }
+
       if (!repairResult.success) {
         this.metrics.recordRepairRejected();
         lastFeedback = repairResult.error ?? "REPAIR_FAILED";
@@ -176,6 +200,16 @@ export class SelfDevelopmentController {
       }
 
       const reviewOutcome = await this.independentReview.review(candidate.candidateId, currentProposal);
+
+      // Verify candidateId correlation - fail closed on mismatch
+      if (reviewOutcome.candidateId !== candidate.candidateId) {
+        this.metrics.recordHumanEscalation();
+        return {
+          state: "human_decision_required",
+          rejectionReason: `CORRELATION_ERROR:reviewOutcome candidateId mismatch (expected ${candidate.candidateId}, got ${reviewOutcome.candidateId})`,
+          repairAttemptsUsed: attemptNumber,
+        };
+      }
 
       // Handle unknown review result - fail closed
       if (!this.isKnownReviewResult(reviewOutcome.result)) {
