@@ -30,6 +30,46 @@ function makeRunnableWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
   };
 }
 
+function makeUnhealthyWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "unhealthy",
+    availability: "available",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnavailableWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "healthy",
+    availability: "unavailable",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnknownHealthWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "unknown",
+    availability: "available",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnknownAvailabilityWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "healthy",
+    availability: "unknown",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
 describe("BoundedRepairController", () => {
   let registry: InMemoryWorkerRegistry;
   let controller: BoundedRepairController;
@@ -111,7 +151,7 @@ describe("BoundedRepairController", () => {
     expect(secondDecision.candidate).toBeDefined();
     expect(secondDecision.candidate!.attemptNumber).toBe(2);
     expect(secondDecision.candidate!.worker.id).not.toBe(firstCandidate.worker.id);
-    expect(secondDecision.candidate!.parentCandidateId).toBe(firstCandidate.worker.id);
+    expect(secondDecision.candidate!.parentRepairAttemptId).toBe(firstCandidate.repairAttemptId);
     expect(secondDecision.attemptsUsed).toBe(2);
   });
 
@@ -196,7 +236,7 @@ describe("BoundedRepairController", () => {
     expect(secondDecision.reason).toContain("All eligible workers exhausted");
   });
 
-  test("workflowId is unique per attempt and preserves parent identity", () => {
+  test("workflowId is canonical across attempts and distinct repairAttemptId per attempt", () => {
       // Create a registry with TWO workers having the same capability for this test
       const worker1: WorkerRegistryEntry = {
         ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
@@ -226,22 +266,25 @@ describe("BoundedRepairController", () => {
         "Failed"
       );
       const secondCandidate = secondDecision.candidate!;
+
+      // Workflow ID should be SAME across attempts (canonical identity)
+      expect(firstCandidate.workflowId).toBe(secondCandidate.workflowId);
+
+      // Both should contain the base workflow ID
+      expect(firstCandidate.workflowId).toContain("website.build");
+      expect(secondCandidate.workflowId).toContain("website.build");
     
-      // Workflow IDs should be different
-      expect(firstCandidate.workflowId).not.toBe(secondCandidate.workflowId);
-    
-      // Both should contain missionId and taskId
-      expect(firstCandidate.workflowId).toContain("mission-1");
-      expect(firstCandidate.workflowId).toContain("task-1");
-      expect(secondCandidate.workflowId).toContain("mission-1");
-      expect(secondCandidate.workflowId).toContain("task-1");
+      // Repair attempt IDs should be DIFFERENT per attempt
+      expect(firstCandidate.repairAttemptId).toBeDefined();
+      expect(secondCandidate.repairAttemptId).toBeDefined();
+      expect(firstCandidate.repairAttemptId).not.toBe(secondCandidate.repairAttemptId);
     
       // Should contain attempt number
-      expect(firstCandidate.workflowId).toContain("repair-1");
-      expect(secondCandidate.workflowId).toContain("repair-2");
+      expect(firstCandidate.repairAttemptId).toContain("repair-1");
+      expect(secondCandidate.repairAttemptId).toContain("repair-2");
     
-      // Second candidate should reference first candidate as parent
-      expect(secondCandidate.parentCandidateId).toBe(firstCandidate.worker.id);
+      // Second candidate should reference first candidate's repairAttemptId as parent
+      expect(secondCandidate.parentRepairAttemptId).toBe(firstCandidate.repairAttemptId);
     });
 
   test("buildDispatchInput preserves workflowId and workerKind", () => {
@@ -386,5 +429,113 @@ describe("BoundedRepairController", () => {
       const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
       expect(decision.candidate!.worker.id).not.toBe("unhealthy-worker-001");
     }
+  });
+
+  test("filters out workers with unknown health (fail closed)", () => {
+    const unknownHealthWorker: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "agent")!),
+      id: "unknown-health-worker-001",
+      health: "unknown",
+    };
+
+    const mixedRegistry = new InMemoryWorkerRegistry([
+      ...testWorkers.map(makeRunnableWorker),
+      unknownHealthWorker,
+    ]);
+
+    const mixedController = new BoundedRepairController({
+      workerRegistry: mixedRegistry,
+      maxAttempts: 3,
+      requiredCapability: "text-generation",
+    });
+
+    const missionTask = createTestMissionTask({ capability: "text-generation" });
+
+    for (let i = 0; i < 5; i++) {
+      const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
+      expect(decision.candidate!.worker.id).not.toBe("unknown-health-worker-001");
+    }
+  });
+
+  test("filters out workers with unknown availability (fail closed)", () => {
+    const unknownAvailabilityWorker: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "agent")!),
+      id: "unknown-availability-worker-001",
+      availability: "unknown",
+    };
+
+    const mixedRegistry = new InMemoryWorkerRegistry([
+      ...testWorkers.map(makeRunnableWorker),
+      unknownAvailabilityWorker,
+    ]);
+
+    const mixedController = new BoundedRepairController({
+      workerRegistry: mixedRegistry,
+      maxAttempts: 3,
+      requiredCapability: "text-generation",
+    });
+
+    const missionTask = createTestMissionTask({ capability: "text-generation" });
+
+    for (let i = 0; i < 5; i++) {
+      const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
+      expect(decision.candidate!.worker.id).not.toBe("unknown-availability-worker-001");
+    }
+  });
+
+  test("maxAttempts=3 means exactly three total repair attempts", () => {
+    // Create a registry with THREE workers having the same capability
+    const worker1: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
+      id: "worker-attempt-1",
+    };
+    const worker2: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
+      id: "worker-attempt-2",
+    };
+    const worker3: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
+      id: "worker-attempt-3",
+    };
+    const threeWorkerRegistry = new InMemoryWorkerRegistry([worker1, worker2, worker3]);
+
+    const threeWorkerController = new BoundedRepairController({
+      workerRegistry: threeWorkerRegistry,
+      maxAttempts: 3,
+      requiredCapability: "website.build",
+    });
+
+    const missionTask = createTestMissionTask({ capability: "website.build" });
+
+    // First attempt
+    const firstDecision = threeWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
+    expect(firstDecision.decision).toBe("RETRY");
+    expect(firstDecision.attemptsUsed).toBe(1);
+    const firstCandidate = firstDecision.candidate!;
+
+    // Second attempt
+    const secondDecision = threeWorkerController.getNextCandidate(
+      "mission-1", "task-1", firstCandidate, "Failed"
+    );
+    expect(secondDecision.decision).toBe("RETRY");
+    expect(secondDecision.attemptsUsed).toBe(2);
+    const secondCandidate = secondDecision.candidate!;
+
+    // Third attempt
+    const thirdDecision = threeWorkerController.getNextCandidate(
+      "mission-1", "task-1", secondCandidate, "Failed again"
+    );
+    expect(thirdDecision.decision).toBe("RETRY");
+    expect(thirdDecision.attemptsUsed).toBe(3);
+    const thirdCandidate = thirdDecision.candidate!;
+
+    // Fourth attempt should be EXHAUSTED (max 3 attempts reached)
+    const fourthDecision = threeWorkerController.getNextCandidate(
+      "mission-1", "task-1", thirdCandidate, "Failed third time"
+    );
+    expect(fourthDecision.decision).toBe("EXHAUSTED");
+    expect(fourthDecision.attemptsUsed).toBe(3);
+    expect(fourthDecision.maxAttempts).toBe(3);
+    expect(fourthDecision.reason).toContain("Max repair attempts (3) reached");
   });
 });

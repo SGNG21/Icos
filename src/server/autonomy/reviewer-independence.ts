@@ -197,7 +197,7 @@ export class IndependentReviewerSelector {
 
     const allWorkers = this.workerRegistry.listWorkers();
     
-    // Filter eligible reviewers: active, supported runtime, healthy/unknown, available/unknown
+    // Filter eligible reviewers: active, supported runtime, healthy, available
     const eligibleReviewers = allWorkers.filter((worker) => {
       if (worker.id === this.producerWorkerId) {
         return false; // Cannot be the same worker
@@ -211,11 +211,13 @@ export class IndependentReviewerSelector {
         return false;
       }
       
-      if (worker.health !== "healthy" && worker.health !== "unknown") {
+      // Fail closed: ONLY "healthy" is acceptable, UNKNOWN is ineligible
+      if (worker.health !== "healthy") {
         return false;
       }
       
-      if (worker.availability !== "available" && worker.availability !== "unknown") {
+      // Fail closed: ONLY "available" is acceptable, UNKNOWN is ineligible
+      if (worker.availability !== "available") {
         return false;
       }
       

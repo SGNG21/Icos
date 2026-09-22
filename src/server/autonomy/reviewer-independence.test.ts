@@ -22,6 +22,46 @@ function makeRunnableWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
   };
 }
 
+function makeUnhealthyWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "unhealthy",
+    availability: "available",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnavailableWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "healthy",
+    availability: "unavailable",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnknownHealthWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "unknown",
+    availability: "available",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
+function makeUnknownAvailabilityWorker(worker: WorkerRegistryEntry): WorkerRegistryEntry {
+  return {
+    ...worker,
+    health: "healthy",
+    availability: "unknown",
+    runtimeSupport: "SUPPORTED_RUNTIME",
+    status: "active",
+  };
+}
+
 function createMockReviewInput(producerWorkerId: string): ReviewInput {
   return {
     mission: {
@@ -376,6 +416,67 @@ describe("IndependentReviewerSelector", () => {
     const result = selector.select();
     
     expect(result.reviewerWorkerId).not.toBe("unavailable-reviewer-001");
+  });
+
+  test("select filters out workers with unknown health (fail closed)", () => {
+    const unknownHealthWorker: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers[0]),
+      id: "unknown-health-reviewer-001",
+      health: "unknown",
+    };
+
+    const mixedRegistry = new InMemoryWorkerRegistry([
+      ...runnableWorkers,
+      unknownHealthWorker,
+    ]);
+
+    const producerId = runnableWorkers[1].id; // openhands
+
+    const selector = new IndependentReviewerSelector(mixedRegistry, producerId, ["search"]);
+
+    const result = selector.select();
+
+    expect(result.reviewerWorkerId).not.toBe("unknown-health-reviewer-001");
+  });
+
+  test("select filters out workers with unknown availability (fail closed)", () => {
+    const unknownAvailabilityWorker: WorkerRegistryEntry = {
+      ...makeRunnableWorker(testWorkers[0]),
+      id: "unknown-availability-reviewer-001",
+      availability: "unknown",
+    };
+
+    const mixedRegistry = new InMemoryWorkerRegistry([
+      ...runnableWorkers,
+      unknownAvailabilityWorker,
+    ]);
+
+    const producerId = runnableWorkers[1].id; // openhands
+
+    const selector = new IndependentReviewerSelector(mixedRegistry, producerId, ["search"]);
+
+    const result = selector.select();
+
+    expect(result.reviewerWorkerId).not.toBe("unknown-availability-reviewer-001");
+  });
+
+  test("self-review denied - selector excludes producer from eligible reviewers", () => {
+    const producerId = runnableWorkers[0].id;
+
+    // Create registry with ONLY the producer worker matching capability
+    const limitedWorkers = [
+      makeRunnableWorker(testWorkers[0]), // producer with website.build
+      makeRunnableWorker(testWorkers[1]), // openhands - no website.build
+    ];
+    const limitedRegistry = new InMemoryWorkerRegistry(limitedWorkers);
+
+    const selector = new IndependentReviewerSelector(limitedRegistry, producerId, ["website.build"]);
+
+    const result = selector.select();
+
+    // Producer is excluded, openhands doesn't have website.build capability
+    expect(result.success).toBe(false);
+    expect(result.decision).toBe("NO_ELIGIBLE_REVIEWERS");
   });
 });
 
