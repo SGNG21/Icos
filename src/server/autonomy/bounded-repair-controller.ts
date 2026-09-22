@@ -20,6 +20,7 @@ export interface RepairDecision {
 
 export interface BoundedRepairControllerOptions {
   workerRegistry: WorkerRegistryPort;
+  workflowId: string;
   maxAttempts?: number;
   requiredCapability?: string;
   requiredWorkerKind?: string;
@@ -27,17 +28,20 @@ export interface BoundedRepairControllerOptions {
 
 export class BoundedRepairController {
   private readonly workerRegistry: WorkerRegistryPort;
+  private readonly workflowId: string;
   private readonly maxAttempts: number;
   private readonly requiredCapability?: string;
   private readonly requiredWorkerKind?: string;
-  private readonly baseWorkflowId: string;
 
   constructor(options: BoundedRepairControllerOptions) {
+    if (!options.workflowId || options.workflowId.trim() === "") {
+      throw new Error("Canonical workflowId is required and must not be empty");
+    }
     this.workerRegistry = options.workerRegistry;
+    this.workflowId = options.workflowId;
     this.maxAttempts = options.maxAttempts ?? 3;
     this.requiredCapability = options.requiredCapability;
     this.requiredWorkerKind = options.requiredWorkerKind;
-    this.baseWorkflowId = `icos-${options.requiredCapability ?? "task"}-${crypto.randomUUID().slice(0, 8)}`;
   }
 
   private generateRepairAttemptId(attemptNumber: number): string {
@@ -128,7 +132,7 @@ export class BoundedRepairController {
         decision: "RETRY",
         candidate: {
           worker: selectedWorker,
-          workflowId: this.baseWorkflowId,
+          workflowId: this.workflowId,
           attemptNumber: 1,
           repairAttemptId,
         },
@@ -188,7 +192,7 @@ export class BoundedRepairController {
         decision: "RETRY",
         candidate: {
           worker: selectedWorker,
-          workflowId: this.baseWorkflowId,
+          workflowId: this.workflowId,
           attemptNumber: nextAttemptNumber,
           repairAttemptId,
           parentRepairAttemptId: previousCandidate.repairAttemptId,

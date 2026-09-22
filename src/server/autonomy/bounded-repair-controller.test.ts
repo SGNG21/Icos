@@ -83,9 +83,42 @@ describe("BoundedRepairController", () => {
     
     controller = new BoundedRepairController({
       workerRegistry: registry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
+  });
+
+  test("constructor throws when workflowId is missing", () => {
+    expect(() => {
+      new BoundedRepairController({
+        workerRegistry: registry,
+        maxAttempts: 3,
+        requiredCapability: "website.build",
+      } as any);
+    }).toThrow("Canonical workflowId is required and must not be empty");
+  });
+
+  test("constructor throws when workflowId is empty string", () => {
+    expect(() => {
+      new BoundedRepairController({
+        workerRegistry: registry,
+        workflowId: "",
+        maxAttempts: 3,
+        requiredCapability: "website.build",
+      });
+    }).toThrow("Canonical workflowId is required and must not be empty");
+  });
+
+  test("constructor throws when workflowId is whitespace only", () => {
+    expect(() => {
+      new BoundedRepairController({
+        workerRegistry: registry,
+        workflowId: "   ",
+        maxAttempts: 3,
+        requiredCapability: "website.build",
+      });
+    }).toThrow("Canonical workflowId is required and must not be empty");
   });
 
   test("getFirstCandidate returns RETRY with first eligible worker", () => {
@@ -104,6 +137,7 @@ describe("BoundedRepairController", () => {
   test("getFirstCandidate returns HUMAN_DECISION_REQUIRED when no eligible workers", () => {
     const controllerNoWorkers = new BoundedRepairController({
       workerRegistry: new InMemoryWorkerRegistry([]),
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
@@ -130,6 +164,7 @@ describe("BoundedRepairController", () => {
     
     const twoWorkerController = new BoundedRepairController({
       workerRegistry: twoWorkerRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
@@ -169,6 +204,7 @@ describe("BoundedRepairController", () => {
     
     const twoWorkerController = new BoundedRepairController({
       workerRegistry: twoWorkerRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
@@ -209,83 +245,98 @@ describe("BoundedRepairController", () => {
   });
 
   test("getNextCandidate returns HUMAN_DECISION_REQUIRED when no valid alternate worker", () => {
-    // Create controller with only ONE worker matching the capability
-    const singleWorker = [makeRunnableWorker(testWorkers.find(w => w.capabilities.includes("website.build"))!)];
-    const singleWorkerRegistry = new InMemoryWorkerRegistry(singleWorker);
+      // Create controller with only ONE worker matching the capability
+      const singleWorker = [makeRunnableWorker(testWorkers.find(w => w.capabilities.includes("website.build"))!)];
+      const singleWorkerRegistry = new InMemoryWorkerRegistry(singleWorker);
     
-    const singleWorkerController = new BoundedRepairController({
-      workerRegistry: singleWorkerRegistry,
-      maxAttempts: 3,
-      requiredCapability: "website.build",
-    });
-    
-    const missionTask = createTestMissionTask({ capability: "website.build" });
-    
-    const firstDecision = singleWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
-    const firstCandidate = firstDecision.candidate!;
-    
-    const secondDecision = singleWorkerController.getNextCandidate(
-      "mission-1",
-      "task-1",
-      firstCandidate,
-      "Execution failed"
-    );
-    
-    expect(secondDecision.decision).toBe("HUMAN_DECISION_REQUIRED");
-    expect(secondDecision.candidate).toBeUndefined();
-    expect(secondDecision.reason).toContain("All eligible workers exhausted");
-  });
-
-  test("workflowId is canonical across attempts and distinct repairAttemptId per attempt", () => {
-      // Create a registry with TWO workers having the same capability for this test
-      const worker1: WorkerRegistryEntry = {
-        ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
-        id: "digitalos-worker-002",
-      };
-      const worker2: WorkerRegistryEntry = {
-        ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
-        id: "digitalos-worker-003",
-      };
-      const twoWorkerRegistry = new InMemoryWorkerRegistry([worker1, worker2]);
-    
-      const twoWorkerController = new BoundedRepairController({
-        workerRegistry: twoWorkerRegistry,
+      const singleWorkerController = new BoundedRepairController({
+        workerRegistry: singleWorkerRegistry,
+        workflowId: "canonical-workflow-123",
         maxAttempts: 3,
         requiredCapability: "website.build",
       });
     
       const missionTask = createTestMissionTask({ capability: "website.build" });
     
-      const firstDecision = twoWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
+      const firstDecision = singleWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
       const firstCandidate = firstDecision.candidate!;
     
-      const secondDecision = twoWorkerController.getNextCandidate(
+      const secondDecision = singleWorkerController.getNextCandidate(
         "mission-1",
         "task-1",
         firstCandidate,
-        "Failed"
+        "Execution failed"
       );
-      const secondCandidate = secondDecision.candidate!;
-
-      // Workflow ID should be SAME across attempts (canonical identity)
-      expect(firstCandidate.workflowId).toBe(secondCandidate.workflowId);
-
-      // Both should contain the base workflow ID
-      expect(firstCandidate.workflowId).toContain("website.build");
-      expect(secondCandidate.workflowId).toContain("website.build");
     
-      // Repair attempt IDs should be DIFFERENT per attempt
-      expect(firstCandidate.repairAttemptId).toBeDefined();
-      expect(secondCandidate.repairAttemptId).toBeDefined();
-      expect(firstCandidate.repairAttemptId).not.toBe(secondCandidate.repairAttemptId);
-    
-      // Should contain attempt number
-      expect(firstCandidate.repairAttemptId).toContain("repair-1");
-      expect(secondCandidate.repairAttemptId).toContain("repair-2");
-    
-      // Second candidate should reference first candidate's repairAttemptId as parent
-      expect(secondCandidate.parentRepairAttemptId).toBe(firstCandidate.repairAttemptId);
+      expect(secondDecision.decision).toBe("HUMAN_DECISION_REQUIRED");
+      expect(secondDecision.candidate).toBeUndefined();
+      expect(secondDecision.reason).toContain("All eligible workers exhausted");
     });
+
+    test("workflowId is canonical across attempts and distinct repairAttemptId per attempt", () => {
+        // Create a registry with TWO workers having the same capability for this test
+        const worker1: WorkerRegistryEntry = {
+          ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
+          id: "digitalos-worker-002",
+        };
+        const worker2: WorkerRegistryEntry = {
+          ...makeRunnableWorker(testWorkers.find(w => w.workerKind === "digitalos")!),
+          id: "digitalos-worker-003",
+        };
+        const twoWorkerRegistry = new InMemoryWorkerRegistry([worker1, worker2]);
+
+              const twoWorkerController = new BoundedRepairController({
+                workerRegistry: twoWorkerRegistry,
+                workflowId: "canonical-workflow-123",
+                maxAttempts: 3,
+                requiredCapability: "website.build",
+              });
+
+              const missionTask = createTestMissionTask({ capability: "website.build" });
+
+              const firstDecision = twoWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
+              const firstCandidate = firstDecision.candidate!;
+
+              const secondDecision = twoWorkerController.getNextCandidate(
+                "mission-1",
+                "task-1",
+                firstCandidate,
+                "Failed"
+              );
+              const secondCandidate = secondDecision.candidate!;
+
+              const thirdDecision = twoWorkerController.getNextCandidate(
+                "mission-1",
+                "task-1",
+                secondCandidate,
+                "Failed again"
+              );
+              const thirdCandidate = thirdDecision.candidate!;
+
+              // Workflow ID should be SAME across attempts (canonical identity)
+              expect(firstCandidate.workflowId).toBe(secondCandidate.workflowId);
+              expect(secondCandidate.workflowId).toBe(thirdCandidate.workflowId);
+              expect(firstCandidate.workflowId).toBe("canonical-workflow-123");
+        expect(secondCandidate.workflowId).toBe("canonical-workflow-123");
+        expect(thirdCandidate.workflowId).toBe("canonical-workflow-123");
+
+        // Repair attempt IDs should be DIFFERENT per attempt
+        expect(firstCandidate.repairAttemptId).toBeDefined();
+        expect(secondCandidate.repairAttemptId).toBeDefined();
+        expect(thirdCandidate.repairAttemptId).toBeDefined();
+        expect(firstCandidate.repairAttemptId).not.toBe(secondCandidate.repairAttemptId);
+        expect(secondCandidate.repairAttemptId).not.toBe(thirdCandidate.repairAttemptId);
+        expect(firstCandidate.repairAttemptId).not.toBe(thirdCandidate.repairAttemptId);
+
+              // Should contain attempt number
+              expect(firstCandidate.repairAttemptId).toContain("repair-1");
+              expect(secondCandidate.repairAttemptId).toContain("repair-2");
+              expect(thirdCandidate.repairAttemptId).toContain("repair-3");
+
+              // Second candidate should reference first candidate's repairAttemptId as parent
+              expect(secondCandidate.parentRepairAttemptId).toBe(firstCandidate.repairAttemptId);
+              expect(thirdCandidate.parentRepairAttemptId).toBe(secondCandidate.repairAttemptId);
+            });
 
   test("buildDispatchInput preserves workflowId and workerKind", () => {
     const missionTask = createTestMissionTask({ capability: "website.build" });
@@ -326,6 +377,7 @@ describe("BoundedRepairController", () => {
   test("respects requiredWorkerKind filter", () => {
     const digitalosOnlyController = new BoundedRepairController({
       workerRegistry: registry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
       requiredWorkerKind: "digitalos",
@@ -341,6 +393,7 @@ describe("BoundedRepairController", () => {
   test("returns HUMAN_DECISION_REQUIRED when requiredWorkerKind has no eligible workers", () => {
     const hermesOnlyController = new BoundedRepairController({
       workerRegistry: registry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
       requiredWorkerKind: "hermes", // hermes worker doesn't have website.build capability
@@ -366,6 +419,7 @@ describe("BoundedRepairController", () => {
     
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
@@ -393,6 +447,7 @@ describe("BoundedRepairController", () => {
     
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
@@ -419,6 +474,7 @@ describe("BoundedRepairController", () => {
     
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
@@ -445,6 +501,7 @@ describe("BoundedRepairController", () => {
 
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
@@ -471,6 +528,7 @@ describe("BoundedRepairController", () => {
 
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
@@ -501,6 +559,7 @@ describe("BoundedRepairController", () => {
 
     const threeWorkerController = new BoundedRepairController({
       workerRegistry: threeWorkerRegistry,
+      workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
