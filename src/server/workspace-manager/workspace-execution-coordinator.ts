@@ -35,6 +35,7 @@ export interface ExecutionWorkspace {
   allocatedAt: string;
   releasedAt?: string;
   workflowId?: string;
+  fencingToken?: number;
   executionResult?: {
     outcome: string;
     result?: string;
@@ -140,113 +141,123 @@ export class WorkspaceExecutionCoordinator {
 
     await this.manager.create(workspace.workspaceId, "workspace-execution-coordinator");
 
+    // Acquire initial lease with fencing token
+    const leased = await this.manager.acquireLease(workspace.workspaceId, "workspace-execution-coordinator", this.leaseMs);
+
     const execWs: ExecutionWorkspace = {
       workspaceId: workspace.workspaceId,
       taskId,
       missionId,
       status: "allocated",
       allocatedAt: new Date().toISOString(),
+      workflowId: workspace.workflowId ?? undefined,
+      fencingToken: leased.fencingToken,
     };
 
     this.executionWorkspaces.set(taskId, execWs);
-    this.startLeaseRenewal(workspace.workspaceId, "workspace-execution-coordinator");
+    this.startLeaseRenewal(workspace.workspaceId, "workspace-execution-coordinator", leased.fencingToken);
 
     return execWs;
   }
 
   /**
-   * Execute a task within its allocated workspace.
-   * Bridges dispatcher with workspace context.
-   */
-  async executeInWorkspace(
-    missionId: string,
-    taskId: string,
-    input: Omit<TaskExecutionDispatchInput, "workflowId"> & { workflowId?: string },
-    humanApprovedBy?: string,
-  ): Promise<CoordinationResult> {
-    const execWs = this.executionWorkspaces.get(taskId);
-    if (!execWs) {
-      throw new Error(`No workspace allocated for task ${taskId}`);
-    }
-
-    if (execWs.status === "released") {
-      throw new Error(`Workspace for task ${taskId} already released`);
-    }
-
-    const ws = await this.manager.get(execWs.workspaceId);
-    if (ws.releasedAt !== null) {
-      throw new Error(`Workspace ${execWs.workspaceId} has been released`);
-    }
-
-    // Transition to executing
-    execWs.status = "executing";
-    await this.manager.transition(execWs.workspaceId, "working", "workspace-execution-coordinator");
-
-    try {
-      // Dispatch execution via dispatcher (workspace-aware)
-      const workflowId = input.workflowId ?? `icos-${missionId}-${taskId}-${randomUUID().slice(0, 8)}`;
-      const dispatchInput: TaskExecutionDispatchInput = {
-        ...input,
-        workflowId,
-      };
-
-      execWs.workflowId = workflowId;
-
-      const result = await this.dispatcher.dispatch(dispatchInput);
-
-      // Verify workflowId matches (idempotency)
-      if (result.workflowId !== workflowId) {
-        throw new Error(`DISPATCH_WORKFLOW_ID_MISMATCH: expected ${workflowId}, got ${result.workflowId}`);
+     * Execute a task within its allocated workspace.
+     * Bridges dispatcher with workspace context.
+     */
+    async executeInWorkspace(
+      missionId: string,
+      taskId: string,
+      input: Omit<TaskExecutionDispatchInput, "workflowId"> & { workflowId?: string },
+      humanApprovedBy?: string,
+    ): Promise<CoordinationResult> {
+      const execWs = this.executionWorkspaces.get(taskId);
+      if (!execWs) {
+        throw new Error(`No workspace allocated for task ${taskId}`);
       }
 
-      // Record execution result in coordination state
-      execWs.executionResult = {
-        outcome: "success",
-        result: `Workflow ${workflowId} dispatched successfully`,
-      };
-
-      // Transition workspace to validating (ready for QC/IntegrationGate)
-      await this.manager.transition(execWs.workspaceId, "validating", "workspace-execution-coordinator");
-      execWs.status = "completed";
-
-      // QC ACCEPT → IntegrationGate handoff
-      const gateResult = await this.handoffToIntegrationGate(
-        execWs.workspaceId,
-        workflowId,
-        humanApprovedBy,
-      );
-
-      return {
-        workspaceId: execWs.workspaceId,
-        taskId,
-        success: gateResult.decision === "ACCEPT",
-        decision: gateResult.decision,
-        reasons: gateResult.reasons,
-        workflowId,
-      };
-    } catch (error) {
-      execWs.status = "failed";
-      execWs.executionResult = {
-        outcome: "failure",
-        error: error instanceof Error ? error.message : String(error),
-      };
-
-      await this.manager.transition(execWs.workspaceId, "blocked", "workspace-execution-coordinator");
-
-      // For workflowId mismatch, throw to maintain fail-closed behavior
-      if (error instanceof Error && error.message.includes("DISPATCH_WORKFLOW_ID_MISMATCH")) {
-        throw error;
+      if (execWs.status === "released") {
+        throw new Error(`Workspace for task ${taskId} already released`);
       }
 
-      return {
-        workspaceId: execWs.workspaceId,
-        taskId,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-        workflowId: execWs.workflowId,
-      };
+      const ws = await this.manager.get(execWs.workspaceId);
+      if (ws.releasedAt !== null) {
+        throw new Error(`Workspace ${execWs.workspaceId} has been released`);
+      }
+
+      // Verify fencing token matches
+      if (execWs.fencingToken !== undefined && ws.fencingToken !== execWs.fencingToken) {
+        throw new Error(`Fencing token mismatch: expected ${execWs.fencingToken}, got ${ws.fencingToken}`);
+      }
+
+      // Transition to executing
+      execWs.status = "executing";
+      await this.manager.transition(execWs.workspaceId, "working", "workspace-execution-coordinator");
+
+      try {
+        // Dispatch execution via dispatcher (workspace-aware)
+        const workflowId = input.workflowId ?? execWs.workflowId ?? `icos-${missionId}-${taskId}-${randomUUID().slice(0, 8)}`;
+        const dispatchInput: TaskExecutionDispatchInput = {
+          ...input,
+          workflowId,
+        };
+
+        execWs.workflowId = workflowId;
+
+        const result = await this.dispatcher.dispatch(dispatchInput);
+
+        // Verify workflowId matches (idempotency)
+        if (result.workflowId !== workflowId) {
+          throw new Error(`DISPATCH_WORKFLOW_ID_MISMATCH: expected ${workflowId}, got ${result.workflowId}`);
+        }
+
+        // Record execution result in coordination state
+        execWs.executionResult = {
+          outcome: "success",
+          result: `Workflow ${workflowId} dispatched successfully`,
+        };
+
+        // Transition workspace to validating (ready for QC/IntegrationGate)
+        await this.manager.transition(execWs.workspaceId, "validating", "workspace-execution-coordinator");
+        execWs.status = "completed";
+
+        // QC ACCEPT -> IntegrationGate handoff
+        const gateResult = await this.handoffToIntegrationGate(
+          execWs.workspaceId,
+          workflowId,
+          humanApprovedBy,
+        );
+
+        return {
+          workspaceId: execWs.workspaceId,
+          taskId,
+          success: gateResult.decision === "ACCEPT",
+          decision: gateResult.decision,
+          reasons: gateResult.reasons,
+          workflowId,
+        };
+      } catch (error) {
+        execWs.status = "failed";
+        execWs.executionResult = {
+          outcome: "failure",
+          error: error instanceof Error ? error.message : String(error),
+        };
+
+        await this.manager.transition(execWs.workspaceId, "blocked", "workspace-execution-coordinator");
+
+        // For workflowId mismatch, throw to maintain fail-closed behavior
+        if (error instanceof Error && error.message.includes("DISPATCH_WORKFLOW_ID_MISMATCH")) {
+          throw error;
+        }
+
+        return {
+          workspaceId: execWs.workspaceId,
+          taskId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          workflowId: execWs.workflowId,
+        };
+      }
     }
-  }
 
   /**
    * QC ACCEPT → IntegrationGate handoff.
@@ -276,7 +287,7 @@ export class WorkspaceExecutionCoordinator {
     return report;
   }
 
-  /** 
+  /**
      * Release workspace after integration (accepted/rejected/abandoned).
      * Cleans up worktree, branch, test database.
      */
@@ -291,8 +302,8 @@ export class WorkspaceExecutionCoordinator {
       }
 
       try {
-        // Release lease before cleanup to match test expectations
-        await this.manager.releaseLease(execWs.workspaceId, "workspace-execution-coordinator");
+        // Release lease before cleanup with fencing token
+        await this.manager.releaseLease(execWs.workspaceId, "workspace-execution-coordinator", execWs.fencingToken);
         await this.manager.cleanup(execWs.workspaceId);
       } finally {
         this.stopLeaseRenewal(execWs.workspaceId);
@@ -365,7 +376,7 @@ export class WorkspaceExecutionCoordinator {
         } else {
           // Valid lease - resume lease renewal
           if (ws.leaseOwner) {
-            this.startLeaseRenewal(ws.workspaceId, ws.leaseOwner);
+            this.startLeaseRenewal(ws.workspaceId, ws.leaseOwner, ws.fencingToken);
           }
           recovered++;
         }
@@ -381,13 +392,19 @@ export class WorkspaceExecutionCoordinator {
    * Start lease renewal for a workspace.
    * Coordinates with AutonomousMissionRunner lease system.
    */
-  private startLeaseRenewal(workspaceId: string, owner: string): void {
+  private startLeaseRenewal(workspaceId: string, owner: string, fencingToken: number): void {
     if (this.leaseTimers.has(workspaceId)) {
       return;
     }
 
     const renew = async () => {
       try {
+        const ws = await this.manager.get(workspaceId);
+        if (ws.fencingToken !== fencingToken) {
+          // Fencing token changed - we lost ownership
+          this.stopLeaseRenewal(workspaceId);
+          return;
+        }
         await this.manager.acquireLease(workspaceId, owner, this.leaseMs);
       } catch {
         // Lease acquisition failed - ownership lost

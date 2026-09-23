@@ -48,6 +48,8 @@ function createMockWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     migrationReservation: null,
     leaseOwner: "coordinator",
     leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    fencingToken: 1,
+    workflowId: "icos-mission-1-task-1",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     releasedAt: null,

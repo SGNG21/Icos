@@ -68,6 +68,10 @@ export interface Workspace {
   migrationReservation: MigrationReservation | null;
   leaseOwner: string | null;
   leaseExpiresAt: string | null;
+  /** Fencing token - monotonic counter for lease ownership verification */
+  fencingToken: number;
+  /** Workflow ID for canonical execution identity and idempotency */
+  workflowId: string | null;
   createdAt: string;
   updatedAt: string;
   /** Renseigné par le cleanup : worktree, DB, lease et réservations libérés. */

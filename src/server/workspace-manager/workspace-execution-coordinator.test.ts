@@ -48,6 +48,8 @@ function createMockWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     migrationReservation: null,
     leaseOwner: "coordinator",
     leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    fencingToken: 1,
+    workflowId: "icos-mission-1-task-1",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     releasedAt: null,
@@ -574,8 +576,8 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       const execWs = await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
       await coordinator.releaseWorkspace("task-1");
 
-      // Verify lease was released
-      expect(mockManager.releaseLease).toHaveBeenCalledWith(execWs.workspaceId, "workspace-execution-coordinator");
+      // Verify lease was released with fencing token
+      expect(mockManager.releaseLease).toHaveBeenCalledWith(execWs.workspaceId, "workspace-execution-coordinator", execWs.fencingToken);
     });
   });
 });

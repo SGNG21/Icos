@@ -170,6 +170,8 @@ export class WorkspaceManager {
         migrationReservation,
         leaseOwner: null,
         leaseExpiresAt: null,
+        fencingToken: 0,
+        workflowId: input.taskId ? `icos-${input.missionId ?? "mission"}-${input.taskId}` : null,
         createdAt: stamp,
         updatedAt: stamp,
         releasedAt: null,
@@ -226,12 +228,19 @@ export class WorkspaceManager {
       this.assertLeaseAllows(w, owner, now);
       w.leaseOwner = owner;
       w.leaseExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
+      w.fencingToken = (w.fencingToken ?? 0) + 1;
     });
   }
 
-  async releaseLease(workspaceId: string, owner: string): Promise<Workspace> {
+  async releaseLease(workspaceId: string, owner: string, expectedFencingToken?: number): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
-      this.assertLeaseAllows(w, owner, now);
+      if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
+      if (w.leaseOwner !== owner) {
+        throw new WorkspaceError("LEASE_NOT_OWNER", `${workspaceId} non détenu par ${owner}`);
+      }
+      if (expectedFencingToken !== undefined && w.fencingToken !== expectedFencingToken) {
+        throw new WorkspaceError("STALE_FENCE", `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`);
+      }
       w.leaseOwner = null;
       w.leaseExpiresAt = null;
     });
