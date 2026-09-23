@@ -1,5 +1,3 @@
-import { idSchema, isoDateTimeSchema } from "@/core/contracts/common";
-
 /**
  * Classification of a self-modification action.
  */
@@ -139,6 +137,109 @@ export interface SelfModificationPolicyInput {
   context?: Record<string, unknown>;
 }
 
+type CanonicalRepositoryPath = {
+  path: string;
+  segments: string[];
+};
+
+/**
+ * Canonicalize a repository-relative path lexically. This deliberately does not
+ * consult the host filesystem or process working directory.
+ */
+function canonicalizeRepositoryPath(candidate: string): CanonicalRepositoryPath | null {
+  if (typeof candidate !== "string" || candidate.length === 0 || candidate.includes("\0")) {
+    return null;
+  }
+
+  const normalizedSeparators = candidate.replaceAll("\\", "/");
+  if (
+    normalizedSeparators.trim().length === 0 ||
+    normalizedSeparators.slice(0, 2) === "//" ||
+    normalizedSeparators[0] === "/" ||
+    /^[a-z]:\//i.test(normalizedSeparators)
+  ) {
+    return null;
+  }
+
+  const segments: string[] = [];
+  for (const segment of normalizedSeparators.split("/")) {
+    if (segment === "" || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return null;
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return { path: segments.join("/"), segments };
+}
+
+function isSegmentPrefix(prefix: string[], candidate: string[]): boolean {
+  return (
+    prefix.length <= candidate.length &&
+    prefix.every((segment, index) => segment === candidate[index])
+  );
+}
+
+function pathsOverlap(a: CanonicalRepositoryPath, b: CanonicalRepositoryPath): boolean {
+  return isSegmentPrefix(a.segments, b.segments) || isSegmentPrefix(b.segments, a.segments);
+}
+
+function canonicalProtectedPaths(): Array<{
+  domain: ProtectedDomain;
+  path: CanonicalRepositoryPath;
+}> {
+  const paths: Array<{ domain: ProtectedDomain; path: CanonicalRepositoryPath }> = [];
+  for (const domain of PROTECTED_DOMAINS) {
+    for (const protectedPath of PROTECTED_PATHS[domain]) {
+      const canonical = canonicalizeRepositoryPath(protectedPath);
+      if (canonical) {
+        paths.push({ domain, path: canonical });
+      }
+    }
+  }
+  return paths;
+}
+
+function analyzeTargetPaths(targetPaths: string[]): {
+  canonicalPaths: CanonicalRepositoryPath[];
+  matchedProtectedPaths: string[];
+  valid: boolean;
+} {
+  if (!Array.isArray(targetPaths) || targetPaths.length === 0) {
+    return { canonicalPaths: [], matchedProtectedPaths: [], valid: false };
+  }
+
+  const canonicalPaths: CanonicalRepositoryPath[] = [];
+  let valid = true;
+  for (const targetPath of targetPaths) {
+    const canonical = canonicalizeRepositoryPath(targetPath);
+    if (!canonical) {
+      valid = false;
+      continue;
+    }
+    canonicalPaths.push(canonical);
+  }
+
+  const protectedPaths = canonicalProtectedPaths();
+  const matchedProtectedPaths = canonicalPaths
+    .filter((targetPath) =>
+      protectedPaths.some((protectedPath) => pathsOverlap(targetPath, protectedPath.path)),
+    )
+    .map((targetPath) => targetPath.path);
+
+  return { canonicalPaths, matchedProtectedPaths, valid };
+}
+
 /**
  * Classify a self-modification based on target paths.
  * Returns "protected" if ANY path touches a protected domain.
@@ -148,17 +249,15 @@ export interface SelfModificationPolicyInput {
 export function classifySelfModification(
   input: SelfModificationPolicyInput,
 ): SelfModificationClassification {
-  // First check: does any target path touch a protected domain?
-  for (const targetPath of input.targetPaths) {
-    for (const protectedPath of ALL_PROTECTED_PATHS) {
-      if (targetPath.startsWith(protectedPath) || protectedPath.startsWith(targetPath)) {
-        return "protected";
-      }
-      // Also check if targetPath is a parent of protected path
-      if (protectedPath.startsWith(targetPath + "/")) {
-        return "protected";
-      }
-    }
+  const pathAnalysis = analyzeTargetPaths(input.targetPaths);
+
+  // Protected rules take precedence over every allow rule.
+  if (pathAnalysis.matchedProtectedPaths.length > 0) {
+    return "protected";
+  }
+
+  if (!pathAnalysis.valid) {
+    return "unknown";
   }
 
   // Check if explicitly in allowed improvement domains
@@ -187,23 +286,20 @@ export function classifySelfModification(
 export function evaluateSelfModification(
   input: SelfModificationPolicyInput,
 ): SelfModificationDecision {
-  const classification = classifySelfModification(input);
+  const pathAnalysis = analyzeTargetPaths(input.targetPaths);
+  const classification =
+    pathAnalysis.matchedProtectedPaths.length > 0
+      ? "protected"
+      : !pathAnalysis.valid
+        ? "unknown"
+        : classifySelfModification(input);
   const decidedAt = new Date().toISOString();
   const decidedBy = "self-modification-policy-engine";
-
-  // Find which protected paths were matched (for evidence)
-  const matchedProtectedPaths: string[] = [];
-  for (const targetPath of input.targetPaths) {
-    for (const protectedPath of ALL_PROTECTED_PATHS) {
-      if (
-        targetPath.startsWith(protectedPath) ||
-        protectedPath.startsWith(targetPath) ||
-        protectedPath.startsWith(targetPath + "/")
-      ) {
-        matchedProtectedPaths.push(targetPath);
-      }
-    }
-  }
+  const canonicalTargetPaths = pathAnalysis.canonicalPaths.map(({ path }) => path);
+  const evidenceTargetPaths =
+    canonicalTargetPaths.length === input.targetPaths.length
+      ? canonicalTargetPaths
+      : input.targetPaths;
 
   let allowed = false;
   let reason = "";
@@ -212,8 +308,8 @@ export function evaluateSelfModification(
   switch (classification) {
     case "protected":
       allowed = false;
-      reason = `Modification targets protected domain(s): ${matchedProtectedPaths.join(", ")}. Autonomous modification of kernel authority, security policy, credential/secrets authority, global governance policy, or completion/certification authority is explicitly denied.`;
-      evidence.push(...input.targetPaths);
+      reason = `Modification targets protected domain(s): ${pathAnalysis.matchedProtectedPaths.join(", ")}. Autonomous modification of kernel authority, security policy, credential/secrets authority, global governance policy, or completion/certification authority is explicitly denied.`;
+      evidence.push(...evidenceTargetPaths);
       evidence.push("fail-closed: protected domains require human approval");
       break;
 
@@ -221,7 +317,7 @@ export function evaluateSelfModification(
       allowed = true;
       reason = `Change falls within allowed improvement domain: ${input.improvementCategory}. Ordinary self-improvement (performance, observability, documentation, tests, refactoring non-core, logging, metrics, cache, cleanup) is permitted with audit trail.`;
       evidence.push(`category: ${input.improvementCategory}`);
-      evidence.push(`targetPaths: ${input.targetPaths.join(", ")}`);
+      evidence.push(`targetPaths: ${canonicalTargetPaths.join(", ")}`);
       evidence.push(`actor: ${input.actor}`);
       if (input.isSelfProposed) {
         evidence.push("self-proposed: additional review recommended");
@@ -232,9 +328,9 @@ export function evaluateSelfModification(
     default:
       // FAIL-CLOSED: UNKNOWN must never become ALLOW
       allowed = false;
-      reason = `Classification UNKNOWN for category "${input.improvementCategory}" and paths [${input.targetPaths.join(", ")}]. fail-closed policy: unknown classifications are explicitly denied. Human review required to classify and authorize.`;
+      reason = `Classification UNKNOWN for category "${input.improvementCategory}" and paths [${evidenceTargetPaths.join(", ")}]. fail-closed policy: unknown classifications are explicitly denied. Human review required to classify and authorize.`;
       evidence.push(`category: ${input.improvementCategory} (not in allowed list)`);
-      evidence.push(`targetPaths: ${input.targetPaths.join(", ")}`);
+      evidence.push(`targetPaths: ${evidenceTargetPaths.join(", ")}`);
       evidence.push("fail-closed: unknown -> deny");
       break;
   }
@@ -244,7 +340,7 @@ export function evaluateSelfModification(
     allowed,
     reason,
     evidence,
-    protectedPaths: matchedProtectedPaths,
+    protectedPaths: pathAnalysis.matchedProtectedPaths,
     decidedAt,
     decidedBy,
   };
@@ -254,27 +350,23 @@ export function evaluateSelfModification(
  * Check if a specific path is protected.
  */
 export function isPathProtected(path: string): boolean {
-  return ALL_PROTECTED_PATHS.some(
-    (protectedPath) =>
-      path.startsWith(protectedPath) ||
-      protectedPath.startsWith(path) ||
-      protectedPath.startsWith(path + "/"),
-  );
+  const candidate = canonicalizeRepositoryPath(path);
+  return candidate
+    ? canonicalProtectedPaths().some((protectedPath) => pathsOverlap(candidate, protectedPath.path))
+    : false;
 }
 
 /**
  * Get the protected domain for a path, if any.
  */
 export function getProtectedDomainForPath(path: string): ProtectedDomain | null {
-  for (const [domain, paths] of Object.entries(PROTECTED_PATHS)) {
-    for (const protectedPath of paths) {
-      if (
-        path.startsWith(protectedPath) ||
-        protectedPath.startsWith(path) ||
-        protectedPath.startsWith(path + "/")
-      ) {
-        return domain as ProtectedDomain;
-      }
+  const candidate = canonicalizeRepositoryPath(path);
+  if (!candidate) {
+    return null;
+  }
+  for (const protectedPath of canonicalProtectedPaths()) {
+    if (pathsOverlap(candidate, protectedPath.path)) {
+      return protectedPath.domain;
     }
   }
   return null;

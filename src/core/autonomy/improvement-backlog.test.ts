@@ -29,7 +29,7 @@ import {
 function makeCandidate(overrides: Partial<ImprovementCandidate> = {}): ImprovementCandidate {
   const now = new Date().toISOString();
   const base: ImprovementCandidate = {
-    id: `imp-${Math.random().toString(36).substring(2, 9)}`,
+    id: 'imp-default',
     identity: {
       contentHash: 'default-hash',
       category: 'performance' as ImprovementCategory,
@@ -68,6 +68,9 @@ function makeCandidate(overrides: Partial<ImprovementCandidate> = {}): Improveme
     // Also ensure the top-level category and targetComponent match identity
     candidate.category = overrides.identity.category;
     candidate.targetComponent = overrides.identity.targetComponent;
+  }
+  if (!overrides.id) {
+    candidate.id = `imp-${candidate.category}-${candidate.targetComponent}-${candidate.title}`;
   }
   return candidate;
 }
@@ -834,6 +837,37 @@ describe('ImprovementBacklog', () => {
       expect(retrieved?.reviewNotes).toBe('Notes');
     });
 
+    it('rejects an update that would duplicate another candidate identity', async () => {
+      const first = makeCandidate({
+        id: 'first',
+        identity: {
+          contentHash: 'first-hash',
+          category: 'performance',
+          targetComponent: 'src/core/first.ts',
+        },
+      });
+      const second = makeCandidate({
+        id: 'second',
+        identity: {
+          contentHash: 'second-hash',
+          category: 'performance',
+          targetComponent: 'src/core/second.ts',
+        },
+      });
+      await backlog.add(first);
+      await backlog.add(second);
+
+      await expect(
+        backlog.update({
+          ...second,
+          identity: { ...first.identity },
+          category: first.category,
+          targetComponent: first.targetComponent,
+        }),
+      ).rejects.toThrow(/duplicates candidate first/);
+      expect(await backlog.list()).toHaveLength(2);
+    });
+
     it('should throw error when updating non-existent candidate', async () => {
       const candidate = makeCandidate({
         title: 'Test',
@@ -881,6 +915,173 @@ describe('ImprovementBacklog', () => {
       // Mutating one list's candidate should not affect the other
       list1[0].title = 'Mutated';
       expect(list2[0].title).toBe('Test');
+    });
+
+    it('deduplicates logically equivalent candidates on insertion', async () => {
+      const first = createImprovementCandidate({
+        title: 'Improve parser',
+        description: 'Remove redundant work',
+        rationale: 'Reduce latency',
+        category: 'performance',
+        targetComponent: 'src\\core\\parser.ts',
+        priority: 'high',
+        proposedBy: 'planner',
+      });
+      const equivalent = {
+        ...createImprovementCandidate({
+          title: ' Improve parser ',
+          description: ' Remove redundant work ',
+          rationale: ' Reduce latency ',
+          category: 'performance',
+          targetComponent: 'src/core/./parser.ts',
+          priority: 'high',
+          proposedBy: 'planner',
+        }),
+        id: 'different-external-id',
+      };
+
+      await backlog.add(first);
+      await backlog.add(equivalent);
+
+      expect(await backlog.list()).toHaveLength(1);
+    });
+
+    it('isolates stored nested identity from caller mutation after add', async () => {
+      const candidate = makeCandidate({ id: 'nested-add' });
+      await backlog.add(candidate);
+
+      candidate.identity.targetComponent = 'mutated/component';
+
+      expect((await backlog.get(candidate.id))?.identity.targetComponent).toBe(
+        'default-component',
+      );
+    });
+
+    it('does not expose nested identity through get or list', async () => {
+      const candidate = makeCandidate({ id: 'nested-read' });
+      await backlog.add(candidate);
+
+      const retrieved = await backlog.get(candidate.id);
+      if (!retrieved) throw new Error('candidate was not stored');
+      retrieved.identity.targetComponent = 'mutated/from-get';
+
+      const listed = await backlog.list();
+      listed[0].identity.targetComponent = 'mutated/from-list';
+
+      expect((await backlog.get(candidate.id))?.identity.targetComponent).toBe(
+        'default-component',
+      );
+    });
+  });
+
+  describe('deterministic target and ordering semantics', () => {
+    it('normalizes path-like target components for identity', () => {
+      const posix = generateCandidateIdentity(
+        'Improve parser',
+        'Description',
+        'Rationale',
+        'maintainability',
+        'src/core/parser.ts',
+      );
+      const lexicalEquivalent = generateCandidateIdentity(
+        ' Improve parser ',
+        ' Description ',
+        ' Rationale ',
+        'maintainability',
+        'src\\core//./parser.ts',
+      );
+
+      expect(lexicalEquivalent).toEqual(posix);
+      expect(lexicalEquivalent.targetComponent).toBe('src/core/parser.ts');
+    });
+
+    it('does not collapse distinct non-path semantic components', () => {
+      const upper = generateCandidateIdentity(
+        'Title',
+        'Description',
+        'Rationale',
+        'other',
+        'PlannerService',
+      );
+      const lower = generateCandidateIdentity(
+        'Title',
+        'Description',
+        'Rationale',
+        'other',
+        'plannerservice',
+      );
+
+      expect(upper).not.toEqual(lower);
+    });
+
+    it.each([
+      ['empty target', ''],
+      ['NUL byte', 'src/core/parser\0.ts'],
+      ['absolute target', '/src/core/parser.ts'],
+      ['escaping traversal', 'src/../../parser.ts'],
+    ])('rejects an unusable path-like %s', (_label, targetComponent) => {
+      expect(() =>
+        generateCandidateIdentity(
+          'Title',
+          'Description',
+          'Rationale',
+          'maintainability',
+          targetComponent,
+        ),
+      ).toThrow();
+    });
+
+    it('uses a deterministic identity and id independent of creation time', () => {
+      const input = {
+        title: 'Stable candidate',
+        description: 'Stable description',
+        rationale: 'Stable rationale',
+        category: 'reliability' as const,
+        targetComponent: 'src/core/stable.ts',
+        priority: 'critical' as const,
+        proposedBy: 'planner',
+      };
+
+      const first = createImprovementCandidate(input);
+      const second = createImprovementCandidate(input);
+
+      expect(first.identity).toEqual(second.identity);
+      expect(first.id).toBe(second.id);
+    });
+
+    it('uses identity as a deterministic tie-break for equal priority and time', () => {
+      const proposedAt = '2026-01-01T00:00:00.000Z';
+      const a = makeCandidate({ id: 'a', priority: 'high', proposedAt });
+      const b = makeCandidate({ id: 'b', priority: 'high', proposedAt });
+
+      expect(sortCandidatesForSelection([b, a]).map((candidate) => candidate.id)).toEqual([
+        'a',
+        'b',
+      ]);
+      expect(sortCandidatesForSelection([a, b]).map((candidate) => candidate.id)).toEqual([
+        'a',
+        'b',
+      ]);
+    });
+
+    it('normalizes a path-like target component filter without host filesystem state', async () => {
+      const backlog = new InMemoryImprovementBacklog();
+      const candidate = createImprovementCandidate({
+        title: 'Path filter',
+        description: 'Description',
+        rationale: 'Rationale',
+        category: 'observability',
+        targetComponent: 'src/core/telemetry.ts',
+        priority: 'medium',
+        proposedBy: 'planner',
+      });
+      await backlog.add(candidate);
+
+      const matches = await backlog.list({
+        targetComponent: 'src\\core\\./telemetry.ts',
+      });
+
+      expect(matches.map((item) => item.id)).toEqual([candidate.id]);
     });
   });
 });

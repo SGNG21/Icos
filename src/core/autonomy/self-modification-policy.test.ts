@@ -308,4 +308,118 @@ describe('SelfModificationPolicy', () => {
       expect(domains).not.toBe(ALLOWED_IMPROVEMENT_DOMAINS);
     });
   });
+
+  describe('lexical repository path security boundary', () => {
+    const allowedInput: SelfModificationPolicyInput = {
+      targetPaths: ['src/core/autonomy/example.ts'],
+      changeDescription: 'Improve a non-protected component',
+      improvementCategory: 'refactoring-non-core',
+      isSelfProposed: true,
+      actor: 'autonomy-planner',
+    };
+
+    it.each([
+      ['dot segments', 'src/core/./autonomy/example.ts'],
+      ['repeated separators', 'src//core///autonomy/example.ts'],
+      ['backslash normalization', 'src\\core\\autonomy\\example.ts'],
+    ])('allows a valid repository-relative path with %s', (_label, targetPath) => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: [targetPath],
+      });
+
+      expect(decision.classification).toBe('allowed');
+      expect(decision.allowed).toBe(true);
+      expect(decision.evidence).toContain('targetPaths: src/core/autonomy/example.ts');
+    });
+
+    it.each([
+      ['exact protected path', 'src/core/contracts/policy.ts'],
+      ['protected child', 'src/core/authorization/roles/reader.ts'],
+      ['normalized protected path', 'src/core/autonomy/../contracts//policy.ts'],
+    ])('denies an allowed category targeting an %s', (_label, targetPath) => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: [targetPath],
+      });
+
+      expect(decision.classification).toBe('protected');
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('keeps a prefix sibling distinct from a protected path', () => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: ['src/core/authorization-old/permissions.ts'],
+      });
+
+      expect(decision.classification).toBe('allowed');
+      expect(decision.allowed).toBe(true);
+      expect(isPathProtected('src/core/authorization-old/permissions.ts')).toBe(false);
+    });
+
+    it.each([
+      ['root traversal', '../secret.ts'],
+      ['nested traversal', 'src/../../secret.ts'],
+      ['deep nested traversal', 'a/../../../secret.ts'],
+      ['POSIX absolute path', '/etc/passwd'],
+      ['repository-looking POSIX absolute path', '/src/file.ts'],
+      ['Windows drive path with backslashes', 'C:\\secret\\file.ts'],
+      ['Windows drive path with slashes', 'd:/secret/file.ts'],
+      ['UNC path with backslashes', '\\\\server\\share\\file.ts'],
+      ['UNC path with slashes', '//server/share/file.ts'],
+      ['NUL byte', 'src/core/example\0.ts'],
+      ['empty path', ''],
+      ['dot-only path', './.'],
+    ])('fails closed for %s', (_label, targetPath) => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: [targetPath],
+      });
+
+      expect(decision.classification).toBe('unknown');
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('fail-closed');
+    });
+
+    it('fails closed when no target path is supplied', () => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: [],
+      });
+
+      expect(decision.classification).toBe('unknown');
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('preserves repository path case semantics', () => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        targetPaths: ['src/Core/authorization/permissions.ts'],
+      });
+
+      expect(decision.classification).toBe('allowed');
+      expect(decision.allowed).toBe(true);
+    });
+
+    it('denies an unknown policy category', () => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        improvementCategory: 'UNKNOWN',
+      });
+
+      expect(decision.classification).toBe('unknown');
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('returns the same authorization result for repeated evaluation', () => {
+      const first = evaluateSelfModification(allowedInput);
+      const second = evaluateSelfModification(allowedInput);
+
+      expect({ ...first, decidedAt: undefined }).toEqual({
+        ...second,
+        decidedAt: undefined,
+      });
+    });
+  });
 });

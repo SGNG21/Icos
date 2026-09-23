@@ -106,6 +106,72 @@ export type ImprovementCandidate = {
   updatedAt: string;
 };
 
+function normalizeTargetComponent(targetComponent: string): string {
+  const trimmed = targetComponent.trim();
+  if (trimmed.length === 0 || trimmed.includes("\0")) {
+    throw new Error("targetComponent must identify a usable component");
+  }
+  if (!/[\\/]/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const normalizedSeparators = trimmed.replaceAll("\\", "/");
+  if (
+    normalizedSeparators.slice(0, 2) === "//" ||
+    normalizedSeparators[0] === "/" ||
+    /^[a-z]:\//i.test(normalizedSeparators)
+  ) {
+    throw new Error("Path-like targetComponent must be repository-relative");
+  }
+
+  const segments: string[] = [];
+  for (const segment of normalizedSeparators.split("/")) {
+    if (segment === "" || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error("Path-like targetComponent must not escape the repository root");
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  if (segments.length === 0) {
+    throw new Error("Path-like targetComponent must identify a component");
+  }
+  return segments.join("/");
+}
+
+function candidateIdentityKey(identity: ImprovementCandidateIdentity): string {
+  return JSON.stringify([
+    identity.contentHash,
+    identity.category,
+    normalizeTargetComponent(identity.targetComponent),
+  ]);
+}
+
+function cloneCandidate(candidate: ImprovementCandidate): ImprovementCandidate {
+  return {
+    ...candidate,
+    identity: { ...candidate.identity },
+  };
+}
+
+function normalizeCandidate(candidate: ImprovementCandidate): ImprovementCandidate {
+  const targetComponent = normalizeTargetComponent(candidate.targetComponent);
+  return {
+    ...candidate,
+    targetComponent,
+    identity: {
+      ...candidate.identity,
+      targetComponent: normalizeTargetComponent(candidate.identity.targetComponent),
+    },
+  };
+}
+
 /**
  * Deterministic hash of candidate content for deduplication.
  * Same content + category + targetComponent = same hash.
@@ -117,12 +183,13 @@ export function computeCandidateContentHash(
   category: ImprovementCategory,
   targetComponent: string,
 ): string {
+  const normalizedTargetComponent = normalizeTargetComponent(targetComponent);
   const payload = {
     title: title.trim(),
     description: description.trim(),
     rationale: rationale.trim(),
     category,
-    targetComponent: targetComponent.trim(),
+    targetComponent: normalizedTargetComponent,
   };
   const serialized = JSON.stringify(payload, Object.keys(payload).sort());
   return createHash("sha256").update(serialized, "utf-8").digest("hex").slice(0, 16);
@@ -138,14 +205,15 @@ export function generateCandidateIdentity(
   category: ImprovementCategory,
   targetComponent: string,
 ): ImprovementCandidateIdentity {
+  const normalizedTargetComponent = normalizeTargetComponent(targetComponent);
   const contentHash = computeCandidateContentHash(
     title,
     description,
     rationale,
     category,
-    targetComponent,
+    normalizedTargetComponent,
   );
-  return { contentHash, category, targetComponent };
+  return { contentHash, category, targetComponent: normalizedTargetComponent };
 }
 
 /**
@@ -158,7 +226,7 @@ export function areCandidatesEquivalent(
   return (
     a.contentHash === b.contentHash &&
     a.category === b.category &&
-    a.targetComponent === b.targetComponent
+    normalizeTargetComponent(a.targetComponent) === normalizeTargetComponent(b.targetComponent)
   );
 }
 
@@ -171,7 +239,7 @@ export function deduplicateCandidates<T extends { identity: ImprovementCandidate
 ): T[] {
   const seen = new Map<string, T>();
   for (const candidate of candidates) {
-    const key = `${candidate.identity.contentHash}:${candidate.identity.category}:${candidate.identity.targetComponent}`;
+    const key = candidateIdentityKey(candidate.identity);
     if (!seen.has(key)) {
       seen.set(key, candidate);
     }
@@ -197,13 +265,27 @@ export function comparePriority(a: ImprovementPriority, b: ImprovementPriority):
  * Sort candidates by priority (highest first), then by proposedAt (oldest first).
  * Deterministic selection.
  */
-export function sortCandidatesForSelection<T extends { priority: ImprovementPriority; proposedAt: string }>(
+export function sortCandidatesForSelection<
+  T extends {
+    priority: ImprovementPriority;
+    proposedAt: string;
+    id?: string;
+    identity?: ImprovementCandidateIdentity;
+  },
+>(
   candidates: T[],
 ): T[] {
   return [...candidates].sort((a, b) => {
     const priorityDiff = comparePriority(a.priority, b.priority);
     if (priorityDiff !== 0) return priorityDiff;
-    return new Date(a.proposedAt).getTime() - new Date(b.proposedAt).getTime();
+    const proposedAtDiff = a.proposedAt.localeCompare(b.proposedAt);
+    if (proposedAtDiff !== 0) return proposedAtDiff;
+    const identityDiff =
+      a.identity && b.identity
+        ? candidateIdentityKey(a.identity).localeCompare(candidateIdentityKey(b.identity))
+        : 0;
+    if (identityDiff !== 0) return identityDiff;
+    return (a.id ?? "").localeCompare(b.id ?? "");
   });
 }
 
@@ -212,7 +294,14 @@ export function sortCandidatesForSelection<T extends { priority: ImprovementPrio
  * Returns null if list is empty.
  * Deterministic: same input always yields same output.
  */
-export function selectHighestPriorityCandidate<T extends { priority: ImprovementPriority; proposedAt: string }>(
+export function selectHighestPriorityCandidate<
+  T extends {
+    priority: ImprovementPriority;
+    proposedAt: string;
+    id?: string;
+    identity?: ImprovementCandidateIdentity;
+  },
+>(
   candidates: T[],
 ): T | null {
   if (candidates.length === 0) return null;
@@ -257,12 +346,13 @@ export function createImprovementCandidate(input: {
   proposedBy: string;
 }): ImprovementCandidate {
   const now = new Date().toISOString();
+  const targetComponent = normalizeTargetComponent(input.targetComponent);
   const identity = generateCandidateIdentity(
     input.title,
     input.description,
     input.rationale,
     input.category,
-    input.targetComponent,
+    targetComponent,
   );
 
   return {
@@ -272,7 +362,7 @@ export function createImprovementCandidate(input: {
     description: input.description.trim(),
     rationale: input.rationale.trim(),
     category: input.category,
-    targetComponent: input.targetComponent.trim(),
+    targetComponent,
     status: "proposed",
     priority: input.priority,
     proposedBy: input.proposedBy.trim(),
@@ -306,7 +396,7 @@ export function updateCandidateStatus(
 
   const now = new Date().toISOString();
   const updated: ImprovementCandidate = {
-    ...candidate,
+    ...cloneCandidate(candidate),
     status: newStatus,
     updatedAt: now,
   };
@@ -343,10 +433,10 @@ export function supersedeCandidate(
   supersedingCandidateId: string,
 ): ImprovementCandidate {
   if (candidate.status === "superseded") {
-    return candidate; // Idempotent
+    return cloneCandidate(candidate); // Idempotent
   }
   return {
-    ...candidate,
+    ...cloneCandidate(candidate),
     status: "superseded",
     supersededBy: supersedingCandidateId,
     updatedAt: new Date().toISOString(),
@@ -377,13 +467,18 @@ export class InMemoryImprovementBacklog implements ImprovementBacklog {
   private candidates = new Map<string, ImprovementCandidate>();
 
   async add(candidate: ImprovementCandidate): Promise<void> {
-    // Defensive copy
-    this.candidates.set(candidate.id, { ...candidate });
+    const normalized = normalizeCandidate(candidate);
+    const duplicate = Array.from(this.candidates.values()).some((stored) =>
+      areCandidatesEquivalent(stored.identity, normalized.identity),
+    );
+    if (!duplicate) {
+      this.candidates.set(normalized.id, cloneCandidate(normalized));
+    }
   }
 
   async get(id: string): Promise<ImprovementCandidate | null> {
     const candidate = this.candidates.get(id);
-    return candidate ? { ...candidate } : null; // Defensive copy
+    return candidate ? cloneCandidate(candidate) : null;
   }
 
   async list(query?: {
@@ -393,7 +488,7 @@ export class InMemoryImprovementBacklog implements ImprovementBacklog {
     priority?: ImprovementPriority;
     limit?: number;
   }): Promise<ImprovementCandidate[]> {
-    let results = Array.from(this.candidates.values()).map((c) => ({ ...c })); // Defensive copies
+    let results = Array.from(this.candidates.values()).map(cloneCandidate);
 
     if (query?.status) {
       results = results.filter((c) => c.status === query.status);
@@ -402,7 +497,8 @@ export class InMemoryImprovementBacklog implements ImprovementBacklog {
       results = results.filter((c) => c.category === query.category);
     }
     if (query?.targetComponent) {
-      results = results.filter((c) => c.targetComponent === query.targetComponent);
+      const targetComponent = normalizeTargetComponent(query.targetComponent);
+      results = results.filter((c) => c.targetComponent === targetComponent);
     }
     if (query?.priority) {
       results = results.filter((c) => c.priority === query.priority);
@@ -422,7 +518,16 @@ export class InMemoryImprovementBacklog implements ImprovementBacklog {
     if (!this.candidates.has(candidate.id)) {
       throw new Error(`Candidate ${candidate.id} not found`);
     }
-    this.candidates.set(candidate.id, { ...candidate }); // Defensive copy
+    const normalized = normalizeCandidate(candidate);
+    const duplicate = Array.from(this.candidates.values()).find(
+      (stored) =>
+        stored.id !== normalized.id &&
+        areCandidatesEquivalent(stored.identity, normalized.identity),
+    );
+    if (duplicate) {
+      throw new Error(`Candidate ${candidate.id} duplicates candidate ${duplicate.id}`);
+    }
+    this.candidates.set(candidate.id, cloneCandidate(normalized));
   }
 
   async remove(id: string): Promise<void> {
