@@ -50,34 +50,34 @@ export class BoundedRepairController {
 
   private getEligibleWorkers(): WorkerRegistryEntry[] {
     const allWorkers = this.workerRegistry.listWorkers();
-    
+
     return allWorkers.filter((worker) => {
       if (worker.status !== "active") {
         return false;
       }
-      
+
       if (worker.runtimeSupport !== "SUPPORTED_RUNTIME") {
         return false;
       }
-      
+
       // Fail closed: ONLY "healthy" is acceptable, UNKNOWN is ineligible
       if (worker.health !== "healthy") {
         return false;
       }
-      
+
       // Fail closed: ONLY "available" is acceptable, UNKNOWN is ineligible
       if (worker.availability !== "available") {
         return false;
       }
-      
+
       if (this.requiredCapability && !worker.capabilities.includes(this.requiredCapability)) {
         return false;
       }
-      
+
       if (this.requiredWorkerKind && worker.workerKind !== this.requiredWorkerKind) {
         return false;
       }
-      
+
       return true;
     });
   }
@@ -93,7 +93,7 @@ export class BoundedRepairController {
         return worker;
       }
     }
-    
+
     // No alternate worker available - do NOT reuse parent worker for retry
     // This ensures fail-closed behavior when no valid alternate exists
     return null;
