@@ -198,8 +198,10 @@ export class PostgresDurableMemory implements DurableMemory {
         observations: pattern.observations,
         occurrenceCount: pattern.occurrenceCount,
         lastSeenAt: pattern.lastSeenAt,
+        outcomeCounts: pattern.outcomeCounts,
+        firstSeenAt: pattern.firstSeenAt,
+        evidenceRefs: pattern.evidenceRefs,
       }),
-      confidence: pattern.confidence,
       createdAt: new Date(),
     });
   }
@@ -213,7 +215,7 @@ export class PostgresDurableMemory implements DurableMemory {
     let res = await this.db
       .select()
       .from(learnedPatterns)
-      .orderBy(desc(learnedPatterns.confidence))
+      .orderBy(desc(learnedPatterns.createdAt))
       .execute();
 
     if (query.capability) {
@@ -230,21 +232,26 @@ export class PostgresDurableMemory implements DurableMemory {
     }
 
     return res.map((row) => {
-      const obs = jsonAs<Pick<LearnedPattern, "observations" | "occurrenceCount" | "lastSeenAt">>(
+      const obs = jsonAs<Pick<LearnedPattern, "observations" | "occurrenceCount" | "lastSeenAt" | "outcomeCounts" | "firstSeenAt" | "evidenceRefs">>(
         row.observations,
       );
+      // Handle legacy rows: provide defaults for missing factual fields
+      const outcomeCounts = obs.outcomeCounts ?? { success: 0, failure: 0, mixed: 0 };
+      const evidenceRefs = obs.evidenceRefs ?? [];
+      const firstSeenAt = obs.firstSeenAt ?? row.createdAt.toISOString(); // fallback to createdAt only
       return {
         id: row.id,
         name: "",
         description: row.description,
-        signature:
-          jsonAs(row.signature),
+        signature: jsonAs(row.signature),
         observations: obs.observations,
         occurrenceCount: obs.occurrenceCount,
         lastSeenAt: obs.lastSeenAt,
-        confidence: row.confidence,
-        outcome: row.outcome as LearnedPattern["outcome"],
+        outcomeCounts,
+        firstSeenAt,
         createdAt: row.createdAt.toISOString(),
+        evidenceRefs,
+        outcome: row.outcome as LearnedPattern["outcome"],
       } as LearnedPattern;
     });
   }

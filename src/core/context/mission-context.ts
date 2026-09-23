@@ -403,7 +403,7 @@ export class InMemoryWorkingMemory implements WorkingMemory {
    * Learn a pattern from execution
    */
   async learnPattern(
-    pattern: Omit<LearnedPattern, "id" | "occurrenceCount" | "lastSeenAt" | "createdAt">,
+    pattern: Omit<LearnedPattern, "id" | "occurrenceCount" | "lastSeenAt" | "createdAt" | "firstSeenAt" | "outcomeCounts" | "evidenceRefs">,
   ): Promise<void> {
     const existing = this.patterns.find(
       (p) =>
@@ -412,18 +412,35 @@ export class InMemoryWorkingMemory implements WorkingMemory {
         p.signature.errorCode === pattern.signature.errorCode,
     );
 
+    const now = new Date().toISOString();
     if (existing) {
       existing.occurrenceCount++;
-      existing.lastSeenAt = new Date().toISOString();
-      existing.confidence = Math.min(1, existing.confidence + 0.1);
-      existing.observations.push(...pattern.observations);
+      existing.lastSeenAt = now;
+      // Increment the exact outcome count
+      const outcomeKey = pattern.outcome as keyof typeof existing.outcomeCounts;
+      if (outcomeKey in existing.outcomeCounts) {
+        existing.outcomeCounts[outcomeKey]++;
+      }
+      // Merge observations (deduplicate)
+      const mergedObservations = [...new Set([...existing.observations, ...pattern.observations])];
+      existing.observations = mergedObservations;
+      // Merge evidenceRefs (deduplicate)
+      const mergedEvidence = [...new Set([...existing.evidenceRefs, ...(pattern.evidenceRefs ?? [])])];
+      existing.evidenceRefs = mergedEvidence;
     } else {
       this.patterns.push({
         ...pattern,
         id: `pattern-${uuidv4()}`,
         occurrenceCount: 1,
-        lastSeenAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
+        lastSeenAt: now,
+        createdAt: now,
+        firstSeenAt: now,
+        outcomeCounts: {
+          success: pattern.outcome === 'success' ? 1 : 0,
+          failure: pattern.outcome === 'failure' ? 1 : 0,
+          mixed: pattern.outcome === 'mixed' ? 1 : 0,
+        },
+        evidenceRefs: pattern.evidenceRefs ?? [],
       });
     }
 
@@ -446,7 +463,12 @@ export class InMemoryWorkingMemory implements WorkingMemory {
         if (errorCode && p.signature.errorCode !== errorCode) return false;
         return true;
       })
-      .sort((a, b) => b.confidence - a.confidence);
+      .sort((a, b) => {
+        // Deterministic ordering: lastSeenAt descending, then id ascending
+        const dateDiff = new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return a.id.localeCompare(b.id);
+      });
   }
 
   /**

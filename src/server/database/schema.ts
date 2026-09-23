@@ -479,13 +479,11 @@ export const learnedPatterns = pgTable(
     description: text("description"),
     outcome: text("outcome").notNull(),
     observations: jsonb("observations").notNull(),
-    confidence: doublePrecision("confidence").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
     index("learned_patterns_capability_idx").on(t.capability),
     index("learned_patterns_worker_kind_idx").on(t.workerKind),
-    index("learned_patterns_confidence_idx").on(t.confidence),
   ],
 );
 

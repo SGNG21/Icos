@@ -130,11 +130,25 @@ export class InMemoryDurableMemory implements DurableMemory {
   async savePattern(pattern: LearnedPattern): Promise<void> {
     const existing = this.patterns.get(pattern.id);
     if (existing) {
-      // Update existing pattern
-      pattern.occurrenceCount = existing.occurrenceCount + 1;
-      pattern.lastSeenAt = new Date().toISOString();
+      // Update existing pattern - merge factual fields
+      const merged: LearnedPattern = {
+        ...existing,
+        occurrenceCount: existing.occurrenceCount + 1,
+        lastSeenAt: new Date().toISOString(),
+        outcomeCounts: {
+          success: existing.outcomeCounts.success + (pattern.outcome === 'success' ? 1 : 0),
+          failure: existing.outcomeCounts.failure + (pattern.outcome === 'failure' ? 1 : 0),
+          mixed: existing.outcomeCounts.mixed + (pattern.outcome === 'mixed' ? 1 : 0),
+        },
+        observations: [...new Set([...existing.observations, ...pattern.observations])],
+        evidenceRefs: [...new Set([...existing.evidenceRefs, ...pattern.evidenceRefs])],
+        // firstSeenAt remains the earliest (existing)
+        // createdAt remains unchanged
+      };
+      this.patterns.set(pattern.id, merged);
+    } else {
+      this.patterns.set(pattern.id, pattern);
     }
-    this.patterns.set(pattern.id, pattern);
   }
 
   async getPatterns(query: {
@@ -155,7 +169,12 @@ export class InMemoryDurableMemory implements DurableMemory {
       results = results.filter((p) => p.outcome === query.outcome);
     }
 
-    results.sort((a, b) => b.confidence - a.confidence);
+    // Deterministic ordering: lastSeenAt descending, then id ascending
+    results.sort((a, b) => {
+      const dateDiff = new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return a.id.localeCompare(b.id);
+    });
 
     if (query.limit) {
       results = results.slice(0, query.limit);

@@ -186,7 +186,7 @@ export const decisionRecordSchema = z.object({
 export type DecisionRecord = z.infer<typeof decisionRecordSchema>;
 
 /**
- * Learned pattern from execution history
+ * Learned pattern from execution history (factual evidence only)
  */
 export const learnedPatternSchema = z.object({
   id: idSchema,
@@ -204,14 +204,22 @@ export const learnedPatternSchema = z.object({
   outcome: z.enum(["success", "failure", "mixed"]),
   // Observations
   observations: z.array(z.string()),
-  // Confidence 0-1
-  confidence: z.number().min(0).max(1),
   // How many times observed
   occurrenceCount: z.number().int().positive(),
-  // Last seen
+  // Outcome counts per result type
+  outcomeCounts: z.object({
+    success: z.number().int().nonnegative(),
+    failure: z.number().int().nonnegative(),
+    mixed: z.number().int().nonnegative(),
+  }),
+  // First time this pattern was seen
+  firstSeenAt: isoDateTimeSchema,
+  // Last time this pattern was seen
   lastSeenAt: isoDateTimeSchema,
   // Created
   createdAt: isoDateTimeSchema,
+  // Evidence references that support this pattern
+  evidenceRefs: z.array(z.string()),
 });
 
 export type LearnedPattern = z.infer<typeof learnedPatternSchema>;
