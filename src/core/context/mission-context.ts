@@ -400,11 +400,14 @@ export class InMemoryWorkingMemory implements WorkingMemory {
   }
 
   /**
-     * Learn a pattern from execution
-     */
-    async learnPattern(
-      pattern: Omit<LearnedPattern, "id" | "occurrenceCount" | "lastSeenAt" | "createdAt" | "firstSeenAt" | "outcomeCounts">,
-    ): Promise<void> {
+   * Learn a pattern from execution
+   */
+  async learnPattern(
+    pattern: Omit<
+      LearnedPattern,
+      "id" | "occurrenceCount" | "lastSeenAt" | "createdAt" | "firstSeenAt" | "outcomeCounts"
+    >,
+  ): Promise<void> {
     const existing = this.patterns.find(
       (p) =>
         p.signature.capability === pattern.signature.capability &&
@@ -425,7 +428,9 @@ export class InMemoryWorkingMemory implements WorkingMemory {
       const mergedObservations = [...new Set([...existing.observations, ...pattern.observations])];
       existing.observations = mergedObservations;
       // Merge evidenceRefs (deduplicate)
-      const mergedEvidence = [...new Set([...existing.evidenceRefs, ...(pattern.evidenceRefs ?? [])])];
+      const mergedEvidence = [
+        ...new Set([...existing.evidenceRefs, ...(pattern.evidenceRefs ?? [])]),
+      ];
       existing.evidenceRefs = mergedEvidence;
     } else {
       this.patterns.push({
@@ -436,9 +441,9 @@ export class InMemoryWorkingMemory implements WorkingMemory {
         createdAt: now,
         firstSeenAt: now,
         outcomeCounts: {
-          success: pattern.outcome === 'success' ? 1 : 0,
-          failure: pattern.outcome === 'failure' ? 1 : 0,
-          mixed: pattern.outcome === 'mixed' ? 1 : 0,
+          success: pattern.outcome === "success" ? 1 : 0,
+          failure: pattern.outcome === "failure" ? 1 : 0,
+          mixed: pattern.outcome === "mixed" ? 1 : 0,
         },
         evidenceRefs: pattern.evidenceRefs ?? [],
       });

@@ -1,4 +1,4 @@
-import { sql, eq, desc, asc } from "drizzle-orm";
+import { sql, eq, desc } from "drizzle-orm";
 import type { Database } from "@/server/database/client";
 import type { DurableMemory } from "@/core/context/durable-memory";
 export type { DurableMemory } from "@/core/context/durable-memory";
@@ -164,21 +164,11 @@ export class PostgresDurableMemory implements DurableMemory {
       reviewerKind: row.reviewerKind as DecisionRecord["reviewerKind"],
       severity: row.severity as DecisionRecord["severity"],
       reasons: jsonAs(row.reasons),
-      requestedChanges: row.requestedChanges
-        ? jsonAs(row.requestedChanges)
-        : undefined,
-      evidenceRefs: row.evidenceRefs
-        ? jsonAs(row.evidenceRefs)
-        : [],
-      findingRefs: row.findingRefs
-        ? jsonAs(row.findingRefs)
-        : [],
-      policyRefs: row.policyRefs
-        ? jsonAs(row.policyRefs)
-        : [],
-      providerMetadata: row.providerMetadata
-        ? jsonAs(row.providerMetadata)
-        : undefined,
+      requestedChanges: row.requestedChanges ? jsonAs(row.requestedChanges) : undefined,
+      evidenceRefs: row.evidenceRefs ? jsonAs(row.evidenceRefs) : [],
+      findingRefs: row.findingRefs ? jsonAs(row.findingRefs) : [],
+      policyRefs: row.policyRefs ? jsonAs(row.policyRefs) : [],
+      providerMetadata: row.providerMetadata ? jsonAs(row.providerMetadata) : undefined,
       confidence: row.confidence ?? undefined,
       createdAt: row.createdAt.toISOString(),
       humanOverridden: row.humanOverridden,
@@ -187,41 +177,40 @@ export class PostgresDurableMemory implements DurableMemory {
   }
 
   async savePattern(pattern: LearnedPattern): Promise<void> {
-    await this.db.insert(learnedPatterns).values({
-      id: pattern.id,
-      capability: pattern.signature.capability ?? undefined,
-      workerKind: pattern.signature.workerKind ?? undefined,
-      signature: JSON.stringify(pattern.signature),
-      description: pattern.description,
-      outcome: pattern.outcome,
-      observations: JSON.stringify({
-        observations: pattern.observations,
-        occurrenceCount: pattern.occurrenceCount,
-        lastSeenAt: pattern.lastSeenAt,
-        outcomeCounts: pattern.outcomeCounts,
-        firstSeenAt: pattern.firstSeenAt,
-        evidenceRefs: pattern.evidenceRefs,
-      }),
-      createdAt: new Date(pattern.createdAt),
-    }).onConflictDoUpdate({
-      target: learnedPatterns.id,
-      set: {
+    const factualAggregate = JSON.stringify({
+      name: pattern.name,
+      observations: pattern.observations,
+      occurrenceCount: pattern.occurrenceCount,
+      lastSeenAt: pattern.lastSeenAt,
+      outcomeCounts: pattern.outcomeCounts,
+      firstSeenAt: pattern.firstSeenAt,
+      evidenceRefs: pattern.evidenceRefs,
+    });
+
+    await this.db
+      .insert(learnedPatterns)
+      .values({
+        id: pattern.id,
         capability: pattern.signature.capability ?? undefined,
         workerKind: pattern.signature.workerKind ?? undefined,
         signature: JSON.stringify(pattern.signature),
         description: pattern.description,
         outcome: pattern.outcome,
-        observations: JSON.stringify({
-          observations: pattern.observations,
-          occurrenceCount: pattern.occurrenceCount,
-          lastSeenAt: pattern.lastSeenAt,
-          outcomeCounts: pattern.outcomeCounts,
-          firstSeenAt: pattern.firstSeenAt,
-          evidenceRefs: pattern.evidenceRefs,
-        }),
-        // createdAt is not updated on conflict; we keep the original createdAt
-      },
-    });
+        observations: factualAggregate,
+        createdAt: new Date(pattern.createdAt),
+      })
+      .onConflictDoUpdate({
+        target: learnedPatterns.id,
+        set: {
+          capability: pattern.signature.capability ?? undefined,
+          workerKind: pattern.signature.workerKind ?? undefined,
+          signature: JSON.stringify(pattern.signature),
+          description: pattern.description,
+          outcome: pattern.outcome,
+          observations: factualAggregate,
+          // Preserve the original persisted creation timestamp on conflict.
+        },
+      });
   }
 
   async getPatterns(query: {
@@ -230,10 +219,7 @@ export class PostgresDurableMemory implements DurableMemory {
     outcome?: string;
     limit?: number;
   }): Promise<LearnedPattern[]> {
-    let res = await this.db
-      .select()
-      .from(learnedPatterns)
-      .execute();
+    let res = await this.db.select().from(learnedPatterns).execute();
 
     if (query.capability) {
       res = res.filter((r) => r.capability === query.capability);
@@ -244,15 +230,22 @@ export class PostgresDurableMemory implements DurableMemory {
     if (query.outcome) {
       res = res.filter((r) => r.outcome === query.outcome);
     }
-    if (query.limit) {
-      res = res.slice(0, query.limit);
-    }
-
     // Map rows to LearnedPattern objects with defaults for legacy fields
     const patterns = res.map((row) => {
-      const obs = jsonAs<Pick<LearnedPattern, "observations" | "occurrenceCount" | "lastSeenAt" | "outcomeCounts" | "firstSeenAt" | "evidenceRefs">>(
-        row.observations,
-      );
+      const obs = jsonAs<
+        Partial<
+          Pick<
+            LearnedPattern,
+            | "name"
+            | "observations"
+            | "occurrenceCount"
+            | "lastSeenAt"
+            | "outcomeCounts"
+            | "firstSeenAt"
+            | "evidenceRefs"
+          >
+        >
+      >(row.observations);
       // Handle legacy rows: provide defaults for missing factual fields
       const outcomeCounts = obs.outcomeCounts ?? { success: 0, failure: 0, mixed: 0 };
       const evidenceRefs = obs.evidenceRefs ?? [];
@@ -260,11 +253,11 @@ export class PostgresDurableMemory implements DurableMemory {
       const lastSeenAt = obs.lastSeenAt ?? row.createdAt.toISOString();
       return {
         id: row.id,
-        name: "",
-        description: row.description,
+        name: obs.name ?? "",
+        description: row.description ?? "",
         signature: jsonAs(row.signature),
-        observations: obs.observations,
-        occurrenceCount: obs.occurrenceCount,
+        observations: obs.observations ?? [],
+        occurrenceCount: obs.occurrenceCount ?? 1,
         lastSeenAt,
         outcomeCounts,
         firstSeenAt,
@@ -281,7 +274,7 @@ export class PostgresDurableMemory implements DurableMemory {
       return a.id.localeCompare(b.id);
     });
 
-    return patterns;
+    return query.limit ? patterns.slice(0, query.limit) : patterns;
   }
 
   async saveHandoffPackage(pkg: HandoffPackage): Promise<void> {
@@ -316,14 +309,9 @@ export class PostgresDurableMemory implements DurableMemory {
       timestamp: row.timestamp.toISOString(),
       reason: row.reason,
       instructions: row.instructions ?? undefined,
-      missionContext:
-        jsonAs(row.missionContext),
-      workingMemorySlice: row.workingMemorySlice
-        ? jsonAs(row.workingMemorySlice)
-        : undefined,
-      durableRefs: row.durableRefs
-        ? jsonAs(row.durableRefs)
-        : {},
+      missionContext: jsonAs(row.missionContext),
+      workingMemorySlice: row.workingMemorySlice ? jsonAs(row.workingMemorySlice) : undefined,
+      durableRefs: row.durableRefs ? jsonAs(row.durableRefs) : {},
     } as HandoffPackage;
   }
 
@@ -453,19 +441,11 @@ export class PostgresDurableMemory implements DurableMemory {
         startedAt: row.startedAt ? row.startedAt.toISOString() : undefined,
         completedAt: row.completedAt.toISOString(),
         recordedAt: row.recordedAt.toISOString(),
-        observations: row.observations
-          ? jsonAs(row.observations)
-          : undefined,
+        observations: row.observations ? jsonAs(row.observations) : undefined,
         confidence: row.confidence ?? undefined,
-        artifacts: row.artifacts
-          ? jsonAs(row.artifacts)
-          : undefined,
-        evidence: row.evidence
-          ? jsonAs(row.evidence)
-          : undefined,
-        findings: row.findings
-          ? jsonAs(row.findings)
-          : undefined,
+        artifacts: row.artifacts ? jsonAs(row.artifacts) : undefined,
+        evidence: row.evidence ? jsonAs(row.evidence) : undefined,
+        findings: row.findings ? jsonAs(row.findings) : undefined,
       };
     });
   }

@@ -19,6 +19,21 @@ import type { Mission, MissionTask } from "@/core/mission/contracts";
 import type { TaskExecutionResult } from "@/core/contracts/task-execution";
 import { v4 as uuidv4 } from "uuid";
 
+function cloneLearnedPattern(pattern: LearnedPattern): LearnedPattern {
+  return {
+    ...pattern,
+    signature: {
+      ...pattern.signature,
+      ...(pattern.signature.taskTitleKeywords
+        ? { taskTitleKeywords: [...pattern.signature.taskTitleKeywords] }
+        : {}),
+    },
+    observations: [...pattern.observations],
+    outcomeCounts: { ...pattern.outcomeCounts },
+    evidenceRefs: [...pattern.evidenceRefs],
+  };
+}
+
 /**
  * In-memory implementation of DurableMemory for testing and development.
  * Production should use PostgreSQL backend.
@@ -42,8 +57,7 @@ export class InMemoryDurableMemory implements DurableMemory {
       .filter(({ checkpoint }) => checkpoint.missionId === missionId)
       .sort((a, b) => {
         const timeDiff =
-          new Date(b.checkpoint.createdAt).getTime() -
-          new Date(a.checkpoint.createdAt).getTime();
+          new Date(b.checkpoint.createdAt).getTime() - new Date(a.checkpoint.createdAt).getTime();
 
         if (timeDiff !== 0) {
           return timeDiff;
@@ -127,10 +141,10 @@ export class InMemoryDurableMemory implements DurableMemory {
   }
 
   // Patterns
-    async savePattern(pattern: LearnedPattern): Promise<void> {
-      // Persist the supplied factual state defensively; replace same-id state with a defensive copy
-      this.patterns.set(pattern.id, { ...pattern });
-    }
+  async savePattern(pattern: LearnedPattern): Promise<void> {
+    // Persist exactly the supplied aggregate while isolating nested mutable values.
+    this.patterns.set(pattern.id, cloneLearnedPattern(pattern));
+  }
 
   async getPatterns(query: {
     capability?: string;
@@ -161,7 +175,7 @@ export class InMemoryDurableMemory implements DurableMemory {
       results = results.slice(0, query.limit);
     }
 
-    return results;
+    return results.map(cloneLearnedPattern);
   }
 
   // Context Items (for retrieval)
