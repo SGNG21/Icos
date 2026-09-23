@@ -17,6 +17,9 @@ Applied history is **never edited in place**: fixes are new forward, idempotent 
 `0028_schema_parity_superseded` (idempotent): `superseded` on `tasks`/`mission_tasks`, `approvals.created_at`,
 conditional rename `decided_by -> decided_by_label`, `created_at DEFAULT now()` on `actions`/`approvals`/`tasks`.
 `0029_qc_review_unavailable_wakeup_outbox`: `quality_control_jobs.review_unavailable` state and `wakeup_pending` outbox.
+`0035_learned_patterns_factual`: aligns the historical `learned_patterns` physical names and lookup indexes with
+`schema.ts`, then removes only its obsolete synthetic `confidence` column/index; factual observations and all
+other `learned_patterns` data remain unchanged.
 
 ## Verification
 - `src/server/database/migration-journal.test.ts` — journal <-> SQL files bijection, contiguous idx, increasing `when`.

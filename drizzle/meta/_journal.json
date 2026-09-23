@@ -225,6 +225,13 @@
       "when": 1789900000002,
       "tag": "0034_goals_idempotency_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790169689077,
+      "tag": "0035_learned_patterns_factual",
+      "breakpoints": true
     }
   ]
 }
