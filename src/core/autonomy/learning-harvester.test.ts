@@ -586,6 +586,8 @@ describe("LearningHarvester", () => {
       expect(pattern.occurrenceCount).toBe(2);
       expect(pattern.outcomeCounts).toEqual({ success: 2, failure: 0, mixed: 0 });
       expect(pattern.evidenceRefs).toEqual(["ref1", "ref2", "ref3"]); // deduplicated
+      expect(pattern.sourceOutcomeIds).toEqual(["1", "2"]);
+      expect(pattern.missionIds).toEqual(["mission-1"]);
       expect(pattern.lastSeenAt).toBe(now);
       expect(pattern.firstSeenAt).toBe(now);
     });
@@ -791,6 +793,65 @@ describe("LearningHarvester", () => {
         expect.arrayContaining(["old-ref", "https://example.com/new-ref"]),
       );
       expect(updatedPattern.observations).toEqual(expect.arrayContaining(["old observation"]));
+    });
+
+    it("does not double count factual source outcomes on replay", async () => {
+      const executionResult: TaskExecutionResult = {
+        id: "exec-idempotent",
+        taskId: "task-1",
+        workflowId: "wf-idempotent",
+        outcome: "success",
+        capability: "cap-1",
+        workerKind: "hermes",
+        completedAt: FIXED_TIMESTAMP,
+        recordedAt: FIXED_TIMESTAMP,
+        findings: [],
+        evidence: [],
+      };
+      const input: LearningHarvesterInput = {
+        missionId: MISSION_ID,
+        executionResults: [executionResult],
+        reviewDecisions: [],
+      };
+
+      await harvestLearning(input, durableMemory);
+      const replay = await harvestLearning(input, durableMemory);
+      const [pattern] = await durableMemory.getPatterns({});
+
+      expect(replay.outcomesProcessed).toBe(1);
+      expect(replay.newPatterns).toEqual([]);
+      expect(replay.updatedPatterns).toEqual([]);
+      expect(pattern.occurrenceCount).toBe(1);
+      expect(pattern.sourceOutcomeIds).toEqual(["exec-exec-idempotent"]);
+      expect(pattern.missionIds).toEqual([MISSION_ID]);
+    });
+
+    it("deduplicates repeated factual source outcomes within one harvest", async () => {
+      const executionResult: TaskExecutionResult = {
+        id: "exec-duplicate-batch",
+        taskId: "task-1",
+        workflowId: "wf-duplicate-batch",
+        outcome: "success",
+        capability: "cap-1",
+        workerKind: "hermes",
+        completedAt: FIXED_TIMESTAMP,
+        recordedAt: FIXED_TIMESTAMP,
+        findings: [],
+        evidence: [],
+      };
+
+      const result = await harvestLearning(
+        {
+          missionId: MISSION_ID,
+          executionResults: [executionResult, executionResult],
+          reviewDecisions: [],
+        },
+        durableMemory,
+      );
+
+      expect(result.outcomesProcessed).toBe(2);
+      expect(result.newPatterns[0].occurrenceCount).toBe(1);
+      expect(result.newPatterns[0].sourceOutcomeIds).toEqual(["exec-exec-duplicate-batch"]);
     });
 
     it("should handle errors during extraction", async () => {

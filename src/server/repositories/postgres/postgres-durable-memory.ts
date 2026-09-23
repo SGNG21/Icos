@@ -185,6 +185,8 @@ export class PostgresDurableMemory implements DurableMemory {
       outcomeCounts: pattern.outcomeCounts,
       firstSeenAt: pattern.firstSeenAt,
       evidenceRefs: pattern.evidenceRefs,
+      sourceOutcomeIds: pattern.sourceOutcomeIds,
+      missionIds: pattern.missionIds,
     });
 
     await this.db
@@ -243,6 +245,8 @@ export class PostgresDurableMemory implements DurableMemory {
             | "outcomeCounts"
             | "firstSeenAt"
             | "evidenceRefs"
+            | "sourceOutcomeIds"
+            | "missionIds"
           >
         >
       >(row.observations);
@@ -263,6 +267,8 @@ export class PostgresDurableMemory implements DurableMemory {
         firstSeenAt,
         createdAt: row.createdAt.toISOString(),
         evidenceRefs,
+        sourceOutcomeIds: obs.sourceOutcomeIds ?? [],
+        missionIds: obs.missionIds ?? [],
         outcome: row.outcome as LearnedPattern["outcome"],
       } as LearnedPattern;
     });

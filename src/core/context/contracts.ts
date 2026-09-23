@@ -220,6 +220,11 @@ export const learnedPatternSchema = z.object({
   createdAt: isoDateTimeSchema,
   // Evidence references that support this pattern
   evidenceRefs: z.array(z.string()),
+  // Durable factual source identities already included in this aggregate.
+  // Used to make repeated harvesting idempotent without synthetic scoring.
+  sourceOutcomeIds: z.array(z.string()).optional(),
+  // Real mission identities represented by this factual aggregate.
+  missionIds: z.array(z.string()).optional(),
 });
 
 export type LearnedPattern = z.infer<typeof learnedPatternSchema>;

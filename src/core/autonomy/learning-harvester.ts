@@ -288,7 +288,7 @@ export function buildPatternFromOutcomes(
   // Deduplicate observations and evidenceRefs
   const uniqueObservations = [...new Set(observations)];
   const uniqueEvidenceRefs = [...new Set(evidenceRefs)];
-  const signatureObj: any = {};
+  const signatureObj: FactualLearnedPattern["signature"] = {};
   if (outcomes[0].capability !== undefined) {
     signatureObj.capability = outcomes[0].capability;
   }
@@ -333,6 +333,8 @@ export function buildPatternFromOutcomes(
     lastSeenAt: lastSeen,
     createdAt: firstSeen,
     evidenceRefs: uniqueEvidenceRefs,
+    sourceOutcomeIds: [...new Set(outcomes.map((outcome) => outcome.id))],
+    missionIds: [...new Set(outcomes.map((outcome) => outcome.missionId))].sort(),
   };
 }
 
@@ -370,31 +372,57 @@ export async function harvestLearning(
   for (const [signature, outcomes] of grouped) {
     try {
       const candidate = buildPatternFromOutcomes(signature, outcomes);
+      const existingSourceOutcomeIds = new Set(
+        existingMap.get(candidate.id)?.sourceOutcomeIds ?? [],
+      );
+      const uniqueOutcomes = new Map<string, FactualOutcome>();
+      for (const outcome of outcomes) {
+        if (!existingSourceOutcomeIds.has(outcome.id)) {
+          uniqueOutcomes.set(outcome.id, outcome);
+        }
+      }
+      const newOutcomes = [...uniqueOutcomes.values()];
+      if (newOutcomes.length === 0) {
+        continue;
+      }
       const existing = existingMap.get(candidate.id);
       if (existing) {
+        const factualDelta = buildPatternFromOutcomes(signature, newOutcomes);
         // Merge: update counts, timestamps, evidenceRefs
         const merged: FactualLearnedPattern = {
           ...existing,
-          occurrenceCount: existing.occurrenceCount + candidate.occurrenceCount,
+          occurrenceCount: existing.occurrenceCount + factualDelta.occurrenceCount,
           outcomeCounts: {
-            success: existing.outcomeCounts.success + candidate.outcomeCounts.success,
-            failure: existing.outcomeCounts.failure + candidate.outcomeCounts.failure,
-            mixed: existing.outcomeCounts.mixed + candidate.outcomeCounts.mixed,
+            success: existing.outcomeCounts.success + factualDelta.outcomeCounts.success,
+            failure: existing.outcomeCounts.failure + factualDelta.outcomeCounts.failure,
+            mixed: existing.outcomeCounts.mixed + factualDelta.outcomeCounts.mixed,
           },
           firstSeenAt:
-            existing.firstSeenAt < candidate.firstSeenAt
+            existing.firstSeenAt < factualDelta.firstSeenAt
               ? existing.firstSeenAt
-              : candidate.firstSeenAt,
+              : factualDelta.firstSeenAt,
           lastSeenAt:
-            existing.lastSeenAt > candidate.lastSeenAt ? existing.lastSeenAt : candidate.lastSeenAt,
-          evidenceRefs: [...new Set([...existing.evidenceRefs, ...candidate.evidenceRefs])],
-          observations: [...new Set([...existing.observations, ...candidate.observations])],
+            existing.lastSeenAt > factualDelta.lastSeenAt
+              ? existing.lastSeenAt
+              : factualDelta.lastSeenAt,
+          evidenceRefs: [...new Set([...existing.evidenceRefs, ...factualDelta.evidenceRefs])],
+          observations: [...new Set([...existing.observations, ...factualDelta.observations])],
+          sourceOutcomeIds: [
+            ...new Set([
+              ...(existing.sourceOutcomeIds ?? []),
+              ...(factualDelta.sourceOutcomeIds ?? []),
+            ]),
+          ],
+          missionIds: [
+            ...new Set([...(existing.missionIds ?? []), ...(factualDelta.missionIds ?? [])]),
+          ].sort(),
         };
         updatedPatterns.push(merged);
         await durableMemory.savePattern(merged);
       } else {
-        newPatterns.push(candidate);
-        await durableMemory.savePattern(candidate);
+        const factualCandidate = buildPatternFromOutcomes(signature, newOutcomes);
+        newPatterns.push(factualCandidate);
+        await durableMemory.savePattern(factualCandidate);
       }
     } catch (err) {
       errors.push(err instanceof Error ? err.message : String(err));

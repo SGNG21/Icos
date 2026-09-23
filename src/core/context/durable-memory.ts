@@ -31,6 +31,8 @@ function cloneLearnedPattern(pattern: LearnedPattern): LearnedPattern {
     observations: [...pattern.observations],
     outcomeCounts: { ...pattern.outcomeCounts },
     evidenceRefs: [...pattern.evidenceRefs],
+    ...(pattern.sourceOutcomeIds ? { sourceOutcomeIds: [...pattern.sourceOutcomeIds] } : {}),
+    ...(pattern.missionIds ? { missionIds: [...pattern.missionIds] } : {}),
   };
 }
 
