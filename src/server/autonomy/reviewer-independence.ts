@@ -47,7 +47,7 @@ export class ReviewerIndependenceChecker {
     if (!workerId) {
       return null;
     }
-    
+
     const worker = this.workerRegistry.getWorker(workerId);
     if (!worker) {
       return {
@@ -56,7 +56,7 @@ export class ReviewerIndependenceChecker {
         source: "unknown",
       };
     }
-    
+
     return {
       workerId: worker.id,
       workerKind: worker.workerKind,
@@ -186,7 +186,7 @@ export class IndependentReviewerSelector {
 
   select(): IndependentReviewerSelectionResult {
     const producerWorker = this.workerRegistry.getWorker(this.producerWorkerId);
-    
+
     if (!producerWorker) {
       return {
         success: false,
@@ -196,31 +196,31 @@ export class IndependentReviewerSelector {
     }
 
     const allWorkers = this.workerRegistry.listWorkers();
-    
+
     // Filter eligible reviewers: active, supported runtime, healthy, available
     const eligibleReviewers = allWorkers.filter((worker) => {
       if (worker.id === this.producerWorkerId) {
         return false; // Cannot be the same worker
       }
-      
+
       if (worker.status !== "active") {
         return false;
       }
-      
+
       if (worker.runtimeSupport !== "SUPPORTED_RUNTIME") {
         return false;
       }
-      
+
       // Fail closed: ONLY "healthy" is acceptable, UNKNOWN is ineligible
       if (worker.health !== "healthy") {
         return false;
       }
-      
+
       // Fail closed: ONLY "available" is acceptable, UNKNOWN is ineligible
       if (worker.availability !== "available") {
         return false;
       }
-      
+
       if (this.requiredCapabilities && this.requiredCapabilities.length > 0) {
         const hasAllCapabilities = this.requiredCapabilities.every(
           (cap) => worker.capabilities.includes(cap)
@@ -229,7 +229,7 @@ export class IndependentReviewerSelector {
           return false;
         }
       }
-      
+
       return true;
     });
 
@@ -272,10 +272,10 @@ export function requireIndependentReviewer(
   if (!check.isIndependent) {
     throw new Error(`${context} requires independent reviewer: ${check.reason}`);
   }
-  
+
   if (!check.reviewerIdentity) {
     throw new Error(`${context} requires reviewer identity but none provided`);
   }
-  
+
   return check.reviewerIdentity;
 }
