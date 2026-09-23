@@ -76,11 +76,11 @@ describe("BoundedRepairController", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    
+
     // Use only the workers that match our capability
     const runnableWorkers = testWorkers.map(makeRunnableWorker);
     registry = new InMemoryWorkerRegistry(runnableWorkers);
-    
+
     controller = new BoundedRepairController({
       workerRegistry: registry,
       workflowId: "canonical-workflow-123",
@@ -123,9 +123,9 @@ describe("BoundedRepairController", () => {
 
   test("getFirstCandidate returns RETRY with first eligible worker", () => {
     const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
     const decision = controller.getFirstCandidate("mission-1", "task-1", missionTask);
-    
+
     expect(decision.decision).toBe("RETRY");
     expect(decision.candidate).toBeDefined();
     expect(decision.candidate!.attemptNumber).toBe(1);
@@ -141,10 +141,10 @@ describe("BoundedRepairController", () => {
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "website.build" });
     const decision = controllerNoWorkers.getFirstCandidate("mission-1", "task-1", missionTask);
-    
+
     expect(decision.decision).toBe("HUMAN_DECISION_REQUIRED");
     expect(decision.candidate).toBeUndefined();
     expect(decision.attemptsUsed).toBe(0);
@@ -161,27 +161,27 @@ describe("BoundedRepairController", () => {
       id: "digitalos-worker-003",
     };
     const twoWorkerRegistry = new InMemoryWorkerRegistry([worker1, worker2]);
-    
+
     const twoWorkerController = new BoundedRepairController({
       workerRegistry: twoWorkerRegistry,
       workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
     const firstDecision = twoWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
     expect(firstDecision.decision).toBe("RETRY");
     const firstCandidate = firstDecision.candidate!;
-    
+
     const secondDecision = twoWorkerController.getNextCandidate(
       "mission-1",
       "task-1",
       firstCandidate,
       "Execution failed"
     );
-    
+
     expect(secondDecision.decision).toBe("RETRY");
     expect(secondDecision.candidate).toBeDefined();
     expect(secondDecision.candidate!.attemptNumber).toBe(2);
@@ -201,19 +201,19 @@ describe("BoundedRepairController", () => {
       id: "digitalos-worker-003",
     };
     const twoWorkerRegistry = new InMemoryWorkerRegistry([worker1, worker2]);
-    
+
     const twoWorkerController = new BoundedRepairController({
       workerRegistry: twoWorkerRegistry,
       workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "website.build",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
     const firstDecision = twoWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
     const firstCandidate = firstDecision.candidate!;
-    
+
     const secondDecision = twoWorkerController.getNextCandidate(
       "mission-1",
       "task-1",
@@ -221,7 +221,7 @@ describe("BoundedRepairController", () => {
       "Execution failed"
     );
     const secondCandidate = secondDecision.candidate!;
-    
+
     const thirdDecision = twoWorkerController.getNextCandidate(
       "mission-1",
       "task-1",
@@ -229,14 +229,14 @@ describe("BoundedRepairController", () => {
       "Execution failed again"
     );
     const thirdCandidate = thirdDecision.candidate!;
-    
+
     const fourthDecision = twoWorkerController.getNextCandidate(
       "mission-1",
       "task-1",
       thirdCandidate,
       "Execution failed third time"
     );
-    
+
     expect(fourthDecision.decision).toBe("EXHAUSTED");
     expect(fourthDecision.candidate).toBeUndefined();
     expect(fourthDecision.attemptsUsed).toBe(3);
@@ -248,26 +248,26 @@ describe("BoundedRepairController", () => {
       // Create controller with only ONE worker matching the capability
       const singleWorker = [makeRunnableWorker(testWorkers.find(w => w.capabilities.includes("website.build"))!)];
       const singleWorkerRegistry = new InMemoryWorkerRegistry(singleWorker);
-    
+
       const singleWorkerController = new BoundedRepairController({
         workerRegistry: singleWorkerRegistry,
         workflowId: "canonical-workflow-123",
         maxAttempts: 3,
         requiredCapability: "website.build",
       });
-    
+
       const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
       const firstDecision = singleWorkerController.getFirstCandidate("mission-1", "task-1", missionTask);
       const firstCandidate = firstDecision.candidate!;
-    
+
       const secondDecision = singleWorkerController.getNextCandidate(
         "mission-1",
         "task-1",
         firstCandidate,
         "Execution failed"
       );
-    
+
       expect(secondDecision.decision).toBe("HUMAN_DECISION_REQUIRED");
       expect(secondDecision.candidate).toBeUndefined();
       expect(secondDecision.reason).toContain("All eligible workers exhausted");
@@ -340,19 +340,19 @@ describe("BoundedRepairController", () => {
 
   test("buildDispatchInput preserves workflowId and workerKind", () => {
     const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
     const firstDecision = controller.getFirstCandidate("mission-1", "task-1", missionTask);
     const candidate = firstDecision.candidate!;
-    
+
     const baseInput = {
       taskId: "canonical-task-456",
       prompt: "Build the website",
       missionId: "mission-1",
       taskTitle: "Website Build",
     };
-    
+
     const dispatchInput = controller.buildDispatchInput(candidate, baseInput);
-    
+
     expect(dispatchInput.workflowId).toBe(candidate.workflowId);
     expect(dispatchInput.workerKind).toBe(candidate.worker.workerKind);
     expect(dispatchInput.capability).toBe("website.build");
@@ -361,10 +361,10 @@ describe("BoundedRepairController", () => {
 
   test("no fabricated worker/provider/model - uses actual registry entries", () => {
     const missionTask = createTestMissionTask({ capability: "website.build" });
-    
+
     const decision = controller.getFirstCandidate("mission-1", "task-1", missionTask);
     const candidate = decision.candidate!;
-    
+
     // Verify the worker exists in our registry
     const registryWorker = registry.getWorker(candidate.worker.id);
     expect(registryWorker).toBeDefined();
@@ -382,10 +382,10 @@ describe("BoundedRepairController", () => {
       requiredCapability: "website.build",
       requiredWorkerKind: "digitalos",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "website.build" });
     const decision = digitalosOnlyController.getFirstCandidate("mission-1", "task-1", missionTask);
-    
+
     expect(decision.decision).toBe("RETRY");
     expect(decision.candidate!.worker.workerKind).toBe("digitalos");
   });
@@ -398,10 +398,10 @@ describe("BoundedRepairController", () => {
       requiredCapability: "website.build",
       requiredWorkerKind: "hermes", // hermes worker doesn't have website.build capability
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "website.build" });
     const decision = hermesOnlyController.getFirstCandidate("mission-1", "task-1", missionTask);
-    
+
     expect(decision.decision).toBe("HUMAN_DECISION_REQUIRED");
   });
 
@@ -411,21 +411,21 @@ describe("BoundedRepairController", () => {
       id: "inactive-worker-001",
       status: "inactive",
     };
-    
+
     const mixedRegistry = new InMemoryWorkerRegistry([
       ...testWorkers.map(makeRunnableWorker),
       inactiveWorker,
     ]);
-    
+
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
       workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "text-generation" });
-    
+
     // Run multiple times to verify inactive is never selected
     for (let i = 0; i < 5; i++) {
       const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
@@ -439,21 +439,21 @@ describe("BoundedRepairController", () => {
       id: "unknown-runtime-worker-001",
       runtimeSupport: "UNKNOWN",
     };
-    
+
     const mixedRegistry = new InMemoryWorkerRegistry([
       ...testWorkers.map(makeRunnableWorker),
       unknownRuntimeWorker,
     ]);
-    
+
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
       workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "text-generation" });
-    
+
     for (let i = 0; i < 5; i++) {
       const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
       expect(decision.candidate!.worker.id).not.toBe("unknown-runtime-worker-001");
@@ -466,21 +466,21 @@ describe("BoundedRepairController", () => {
       id: "unhealthy-worker-001",
       health: "unhealthy",
     };
-    
+
     const mixedRegistry = new InMemoryWorkerRegistry([
       ...testWorkers.map(makeRunnableWorker),
       unhealthyWorker,
     ]);
-    
+
     const mixedController = new BoundedRepairController({
       workerRegistry: mixedRegistry,
       workflowId: "canonical-workflow-123",
       maxAttempts: 3,
       requiredCapability: "text-generation",
     });
-    
+
     const missionTask = createTestMissionTask({ capability: "text-generation" });
-    
+
     for (let i = 0; i < 5; i++) {
       const decision = mixedController.getFirstCandidate("mission-1", `task-${i}`, missionTask);
       expect(decision.candidate!.worker.id).not.toBe("unhealthy-worker-001");
