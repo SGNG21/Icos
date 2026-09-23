@@ -360,9 +360,8 @@ export async function harvestLearning(
   const existingPatterns = await durableMemory.getPatterns({});
   const existingMap = new Map<string, FactualLearnedPattern>();
   for (const p of existingPatterns) {
-    // Convert LearnedPattern to FactualLearnedPattern by omitting confidence
-    const { confidence, ...factual } = p;
-    existingMap.set(factual.id, factual as FactualLearnedPattern);
+    // LearnedPattern is already factual; no confidence field to omit
+    existingMap.set(p.id, p as FactualLearnedPattern);
   }
   const newPatterns: FactualLearnedPattern[] = [];
   const updatedPatterns: FactualLearnedPattern[] = [];
@@ -392,11 +391,10 @@ export async function harvestLearning(
           observations: [...new Set([...existing.observations, ...candidate.observations])],
         };
         updatedPatterns.push(merged);
-        // Save back to durableMemory with confidence = 0
-        await durableMemory.savePattern({ ...merged, confidence: 0 });
+        await durableMemory.savePattern(merged);
       } else {
         newPatterns.push(candidate);
-        await durableMemory.savePattern({ ...candidate, confidence: 0 });
+        await durableMemory.savePattern(candidate);
       }
     } catch (err) {
       errors.push(

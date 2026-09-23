@@ -400,11 +400,11 @@ export class InMemoryWorkingMemory implements WorkingMemory {
   }
 
   /**
-   * Learn a pattern from execution
-   */
-  async learnPattern(
-    pattern: Omit<LearnedPattern, "id" | "occurrenceCount" | "lastSeenAt" | "createdAt" | "firstSeenAt" | "outcomeCounts" | "evidenceRefs">,
-  ): Promise<void> {
+     * Learn a pattern from execution
+     */
+    async learnPattern(
+      pattern: Omit<LearnedPattern, "id" | "occurrenceCount" | "lastSeenAt" | "createdAt" | "firstSeenAt" | "outcomeCounts">,
+    ): Promise<void> {
     const existing = this.patterns.find(
       (p) =>
         p.signature.capability === pattern.signature.capability &&

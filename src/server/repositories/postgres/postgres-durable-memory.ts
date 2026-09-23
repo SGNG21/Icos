@@ -202,7 +202,25 @@ export class PostgresDurableMemory implements DurableMemory {
         firstSeenAt: pattern.firstSeenAt,
         evidenceRefs: pattern.evidenceRefs,
       }),
-      createdAt: new Date(),
+      createdAt: new Date(pattern.createdAt),
+    }).onConflictDoUpdate({
+      target: learnedPatterns.id,
+      set: {
+        capability: pattern.signature.capability ?? undefined,
+        workerKind: pattern.signature.workerKind ?? undefined,
+        signature: JSON.stringify(pattern.signature),
+        description: pattern.description,
+        outcome: pattern.outcome,
+        observations: JSON.stringify({
+          observations: pattern.observations,
+          occurrenceCount: pattern.occurrenceCount,
+          lastSeenAt: pattern.lastSeenAt,
+          outcomeCounts: pattern.outcomeCounts,
+          firstSeenAt: pattern.firstSeenAt,
+          evidenceRefs: pattern.evidenceRefs,
+        }),
+        // createdAt is not updated on conflict; we keep the original createdAt
+      },
     });
   }
 
@@ -215,7 +233,6 @@ export class PostgresDurableMemory implements DurableMemory {
     let res = await this.db
       .select()
       .from(learnedPatterns)
-      .orderBy(desc(learnedPatterns.createdAt))
       .execute();
 
     if (query.capability) {
@@ -231,14 +248,16 @@ export class PostgresDurableMemory implements DurableMemory {
       res = res.slice(0, query.limit);
     }
 
-    return res.map((row) => {
+    // Map rows to LearnedPattern objects with defaults for legacy fields
+    const patterns = res.map((row) => {
       const obs = jsonAs<Pick<LearnedPattern, "observations" | "occurrenceCount" | "lastSeenAt" | "outcomeCounts" | "firstSeenAt" | "evidenceRefs">>(
         row.observations,
       );
       // Handle legacy rows: provide defaults for missing factual fields
       const outcomeCounts = obs.outcomeCounts ?? { success: 0, failure: 0, mixed: 0 };
       const evidenceRefs = obs.evidenceRefs ?? [];
-      const firstSeenAt = obs.firstSeenAt ?? row.createdAt.toISOString(); // fallback to createdAt only
+      const firstSeenAt = obs.firstSeenAt ?? row.createdAt.toISOString();
+      const lastSeenAt = obs.lastSeenAt ?? row.createdAt.toISOString();
       return {
         id: row.id,
         name: "",
@@ -246,7 +265,7 @@ export class PostgresDurableMemory implements DurableMemory {
         signature: jsonAs(row.signature),
         observations: obs.observations,
         occurrenceCount: obs.occurrenceCount,
-        lastSeenAt: obs.lastSeenAt,
+        lastSeenAt,
         outcomeCounts,
         firstSeenAt,
         createdAt: row.createdAt.toISOString(),
@@ -254,6 +273,15 @@ export class PostgresDurableMemory implements DurableMemory {
         outcome: row.outcome as LearnedPattern["outcome"],
       } as LearnedPattern;
     });
+
+    // Deterministic ordering: lastSeenAt descending, then id ascending
+    patterns.sort((a, b) => {
+      const dateDiff = new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return a.id.localeCompare(b.id);
+    });
+
+    return patterns;
   }
 
   async saveHandoffPackage(pkg: HandoffPackage): Promise<void> {
