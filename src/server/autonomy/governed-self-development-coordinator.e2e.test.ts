@@ -322,13 +322,13 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     taskId: missionTask.taskId,
     fileScope: { owns: ["src/feature/**"], shared: [], forbidden: [] },
   });
-  await manager.create(requested.workspaceId);
-  await manager.acquireLease(requested.workspaceId, WRITER_ID, 60_000);
-  await manager.transition(requested.workspaceId, "working", WRITER_ID, 1);
+  const lease = await manager.acquireLease(requested.workspaceId, WRITER_ID, 60_000);
+  await manager.create(requested.workspaceId, WRITER_ID, lease.fencingToken);
+  await manager.transition(requested.workspaceId, "working", WRITER_ID, lease.fencingToken);
   fx.write(requested.worktreePath, "src/feature/change.ts", "export const governed = true;\n");
   fx.commit(requested.worktreePath, "candidate implementation");
-  await manager.transition(requested.workspaceId, "validating", WRITER_ID, 1);
-  await manager.transition(requested.workspaceId, "ready_for_integration", WRITER_ID, 1);
+  await manager.transition(requested.workspaceId, "validating", WRITER_ID, lease.fencingToken);
+  await manager.transition(requested.workspaceId, "ready_for_integration", WRITER_ID, lease.fencingToken);
 
   const runner = new FakeRunner();
   if (options.gateReject) runner.failing = ["typecheck"];

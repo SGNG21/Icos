@@ -139,12 +139,13 @@ export class IntegrationGate {
     const others = (await this.manager.list()).filter(
       (w) => w.workspaceId !== workspaceId && w.releasedAt === null,
     );
-    const report = await this.manager.withLease(
+    await this.manager.assertLease(
       workspaceId,
       options.lease.owner,
       options.lease.fencingToken,
-      () => this.evaluate(ws, head, others, options),
     );
+
+    const report = await this.evaluate(ws, head, others, options);
 
     const next = { ACCEPT: "accepted", REJECT: "rejected", NEEDS_REBASE: "working" } as const;
     if (report.decision !== "NEEDS_HUMAN_APPROVAL") {
