@@ -1,6 +1,9 @@
 import postgres from "postgres";
 
-import { TEST_DATABASE_URL, assertSafeTestDatabaseUrl } from "@/server/database/test-database-guard";
+import {
+  TEST_DATABASE_URL,
+  assertSafeTestDatabaseUrl,
+} from "@/server/database/test-database-guard";
 import { WorkspaceError, type Workspace } from "./types";
 
 /** Registry state persisted to PostgreSQL. */
@@ -82,78 +85,79 @@ export class PostgresWorkspaceRegistry {
   }
 
   /** Execute a transaction with retry logic. */
-    async transaction<T>(fn: (state: { workspaces: Workspace[] }) => T | Promise<T>): Promise<T> {
-      // For PostgreSQL, we use session-level advisory locks for cross-process coordination
-      // Session-level locks are released when the session ends, not at transaction end
-      const lockResult = await this.sql`SELECT pg_try_advisory_lock(123456789)`;
-      const gotLock = lockResult[0]?.pg_try_advisory_lock ?? false;
+  async transaction<T>(fn: (state: { workspaces: Workspace[] }) => Promise<T>): Promise<T> {
+    // Use transaction-scoped advisory lock (pg_advisory_xact_lock) which is automatically
+    // released at transaction end. This ensures atomicity: lock -> read -> validate -> mutate -> persist
+    // all within the SAME transaction handle.
+    const promise = this.sql.begin(async (tx) => {
+      // Acquire transaction-scoped advisory lock
+      const lockResult = await tx`SELECT pg_try_advisory_xact_lock(123456789)`;
+      const gotLock = lockResult[0]?.pg_try_advisory_xact_lock ?? false;
 
       if (!gotLock) {
         throw new WorkspaceError("REGISTRY_LOCKED", "Could not acquire advisory lock");
       }
 
-      try {
-        const workspaces = await this.read();
-        const state = { workspaces };
-        const result = await fn(state);
+      // Read current state within the same transaction
+      const rows = await tx<RegistryRow[]>`
+        SELECT * FROM icos_workspace_registry ORDER BY created_at ASC
+      `;
+      const workspaces = rows.map(this.rowToWorkspace);
+      const state = { workspaces };
 
-        // Persist changes
-        await this.persist(state.workspaces);
+      // Execute user function with state
+      const result = await fn(state);
 
-        return result;
-      } finally {
-        await this.sql`SELECT pg_advisory_unlock(123456789)`;
+      // Persist changes within the same transaction
+      for (const ws of state.workspaces) {
+        await tx`
+          INSERT INTO icos_workspace_registry (
+            workspace_id, worker_id, mission_id, task_id, slug, branch,
+            worktree_path, base_commit, integration_target,
+            file_scope_owns, file_scope_shared, file_scope_forbidden,
+            migration_from, migration_to, migration_namespace,
+            status, created_at, released_at, source_commit,
+            lease_owner, lease_expires_at, fencing_token, workflow_id, updated_at
+          ) VALUES (
+            ${ws.workspaceId}, ${ws.workerId}, ${ws.missionId ?? null}, ${ws.taskId ?? null},
+            ${ws.slug}, ${ws.branch}, ${ws.worktreePath}, ${ws.baseCommit},
+            ${ws.integrationTarget}, ${ws.fileScope.owns}, ${ws.fileScope.shared},
+            ${ws.fileScope.forbidden},
+            ${ws.migrationReservation?.from ?? null}, ${ws.migrationReservation?.to ?? null}, ${ws.migrationReservation?.namespace ?? null},
+            ${ws.status}, ${ws.createdAt}, ${ws.releasedAt ?? null}, ${ws.sourceCommit ?? null},
+            ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.fencingToken ?? 0}, ${ws.workflowId ?? null}, ${ws.updatedAt}
+          )
+          ON CONFLICT (workspace_id) DO UPDATE SET
+            worker_id = EXCLUDED.worker_id,
+            mission_id = EXCLUDED.mission_id,
+            task_id = EXCLUDED.task_id,
+            slug = EXCLUDED.slug,
+            branch = EXCLUDED.branch,
+            worktree_path = EXCLUDED.worktree_path,
+            base_commit = EXCLUDED.base_commit,
+            integration_target = EXCLUDED.integration_target,
+            file_scope_owns = EXCLUDED.file_scope_owns,
+            file_scope_shared = EXCLUDED.file_scope_shared,
+            file_scope_forbidden = EXCLUDED.file_scope_forbidden,
+            migration_from = EXCLUDED.migration_from,
+            migration_to = EXCLUDED.migration_to,
+            migration_namespace = EXCLUDED.migration_namespace,
+            status = EXCLUDED.status,
+            created_at = EXCLUDED.created_at,
+            released_at = EXCLUDED.released_at,
+            source_commit = EXCLUDED.source_commit,
+            lease_owner = EXCLUDED.lease_owner,
+            lease_expires_at = EXCLUDED.lease_expires_at,
+            fencing_token = EXCLUDED.fencing_token,
+            workflow_id = EXCLUDED.workflow_id,
+            updated_at = EXCLUDED.updated_at
+        `;
       }
-    }
 
-  private async persist(workspaces: Workspace[]): Promise<void> {
-      await this.sql.begin(async (tx) => {
-        for (const ws of workspaces) {
-          await tx`
-            INSERT INTO icos_workspace_registry (
-              workspace_id, worker_id, mission_id, task_id, slug, branch,
-              worktree_path, base_commit, integration_target,
-              file_scope_owns, file_scope_shared, file_scope_forbidden,
-              migration_from, migration_to, migration_namespace,
-              status, created_at, released_at, source_commit,
-              lease_owner, lease_expires_at, fencing_token, workflow_id, updated_at
-            ) VALUES (
-              ${ws.workspaceId}, ${ws.workerId}, ${ws.missionId ?? null}, ${ws.taskId ?? null},
-              ${ws.slug}, ${ws.branch}, ${ws.worktreePath}, ${ws.baseCommit},
-              ${ws.integrationTarget}, ${ws.fileScope.owns}, ${ws.fileScope.shared},
-              ${ws.fileScope.forbidden},
-              ${ws.migrationReservation?.from ?? null}, ${ws.migrationReservation?.to ?? null}, ${ws.migrationReservation?.namespace ?? null},
-              ${ws.status}, ${ws.createdAt}, ${ws.releasedAt ?? null}, ${ws.sourceCommit ?? null},
-              ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.fencingToken ?? 0}, ${ws.workflowId ?? null}, ${ws.updatedAt}
-            )
-            ON CONFLICT (workspace_id) DO UPDATE SET
-              worker_id = EXCLUDED.worker_id,
-              mission_id = EXCLUDED.mission_id,
-              task_id = EXCLUDED.task_id,
-              slug = EXCLUDED.slug,
-              branch = EXCLUDED.branch,
-              worktree_path = EXCLUDED.worktree_path,
-              base_commit = EXCLUDED.base_commit,
-              integration_target = EXCLUDED.integration_target,
-              file_scope_owns = EXCLUDED.file_scope_owns,
-              file_scope_shared = EXCLUDED.file_scope_shared,
-              file_scope_forbidden = EXCLUDED.file_scope_forbidden,
-              migration_from = EXCLUDED.migration_from,
-              migration_to = EXCLUDED.migration_to,
-              migration_namespace = EXCLUDED.migration_namespace,
-              status = EXCLUDED.status,
-              created_at = EXCLUDED.created_at,
-              released_at = EXCLUDED.released_at,
-              source_commit = EXCLUDED.source_commit,
-              lease_owner = EXCLUDED.lease_owner,
-              lease_expires_at = EXCLUDED.lease_expires_at,
-              fencing_token = EXCLUDED.fencing_token,
-              workflow_id = EXCLUDED.workflow_id,
-              updated_at = EXCLUDED.updated_at
-          `;
-        }
-      });
-    }
+      return result;
+    });
+    return promise as Promise<T>;
+  }
 
   private rowToWorkspace(row: RegistryRow): Workspace {
     return {
@@ -171,11 +175,14 @@ export class PostgresWorkspaceRegistry {
         shared: row.file_scope_shared,
         forbidden: row.file_scope_forbidden,
       },
-      migrationReservation: row.migration_from !== null ? {
-        from: row.migration_from,
-        to: row.migration_to ?? row.migration_from,
-        namespace: row.migration_namespace ?? "",
-      } : null,
+      migrationReservation:
+        row.migration_from !== null
+          ? {
+              from: row.migration_from,
+              to: row.migration_to ?? row.migration_from,
+              namespace: row.migration_namespace ?? "",
+            }
+          : null,
       status: row.status as Workspace["status"],
       leaseOwner: row.lease_owner ?? null,
       leaseExpiresAt: row.lease_expires_at ?? null,

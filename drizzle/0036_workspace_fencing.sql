@@ -5,10 +5,11 @@ ALTER TABLE icos_workspace_registry
   ADD COLUMN IF NOT EXISTS fencing_token INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS workflow_id TEXT;
 
--- Add unique constraint for workflow_id to prevent duplicate workspaces for same canonical workflow
-CREATE UNIQUE INDEX IF NOT EXISTS uq_icos_workspace_registry_workflow_id
+-- Add partial unique constraint for active workflows (released_at IS NULL)
+-- This allows rebind after workspace is released while preventing duplicate active workflows
+CREATE UNIQUE INDEX IF NOT EXISTS uq_icos_workspace_registry_active_workflow
   ON icos_workspace_registry (workflow_id)
-  WHERE workflow_id IS NOT NULL;
+  WHERE workflow_id IS NOT NULL AND released_at IS NULL;
 
 -- Add index on lease_owner and lease_expires_at for efficient lease queries
 CREATE INDEX IF NOT EXISTS idx_icos_workspace_registry_lease

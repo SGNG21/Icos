@@ -31,6 +31,8 @@ export interface RequestWorkspaceInput {
   workerId: string;
   missionId?: string;
   taskId?: string;
+  /** Canonical workflow ID from durable dispatch identity. Required for autonomous execution paths. */
+  workflowId?: string;
   /** Défaut : `ws/<slug>`. */
   branch?: string;
   /** Défaut : `<racine>/<slug>`. */
@@ -171,7 +173,7 @@ export class WorkspaceManager {
         leaseOwner: null,
         leaseExpiresAt: null,
         fencingToken: 0,
-        workflowId: input.taskId ? `icos-${input.missionId ?? "mission"}-${input.taskId}` : null,
+        workflowId: input.workflowId ?? null,
         createdAt: stamp,
         updatedAt: stamp,
         releasedAt: null,
@@ -209,6 +211,7 @@ export class WorkspaceManager {
     workspaceId: string,
     to: WorkspaceStatus,
     actor: string = SYSTEM_ACTOR,
+    expectedFencingToken?: number,
   ): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
       if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
@@ -217,6 +220,20 @@ export class WorkspaceManager {
       }
       // Le manager (acteur système) agit au nom du détenteur de la lease ; les autres doivent la détenir.
       if (actor !== SYSTEM_ACTOR) this.assertLeaseAllows(w, actor, now);
+      // Verify fencing token if provided
+      if (expectedFencingToken !== undefined && w.fencingToken !== expectedFencingToken) {
+        throw new WorkspaceError(
+          "STALE_FENCE",
+          `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`,
+        );
+      }
+      // Verify lease is still valid for non-system actors
+      if (actor !== SYSTEM_ACTOR && w.leaseExpiresAt) {
+        const leaseExpiry = Date.parse(w.leaseExpiresAt);
+        if (leaseExpiry <= now.getTime()) {
+          throw new WorkspaceError("LEASE_EXPIRED", `Lease expired, cannot transition`);
+        }
+      }
       w.status = to;
     });
   }
@@ -232,14 +249,52 @@ export class WorkspaceManager {
     });
   }
 
-  async releaseLease(workspaceId: string, owner: string, expectedFencingToken?: number): Promise<Workspace> {
+  /** Renew an existing lease without incrementing the fencing token.
+   * Only extends expiry; ownership and fencing token must match exactly. */
+  async renewLease(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken: number,
+    ttlMs: number,
+  ): Promise<Workspace> {
+    return this.update(workspaceId, (w, now) => {
+      if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
+      if (w.leaseOwner !== owner) {
+        throw new WorkspaceError("LEASE_NOT_OWNER", `${workspaceId} non détenu par ${owner}`);
+      }
+      if (w.fencingToken !== expectedFencingToken) {
+        throw new WorkspaceError(
+          "STALE_FENCE",
+          `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`,
+        );
+      }
+      const leaseExpiry = w.leaseExpiresAt ? Date.parse(w.leaseExpiresAt) : 0;
+      if (leaseExpiry <= now.getTime()) {
+        throw new WorkspaceError(
+          "LEASE_EXPIRED",
+          `Lease expired, cannot renew; use acquireLease to reacquire`,
+        );
+      }
+      w.leaseExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
+      // fencingToken is NOT incremented on renewal
+    });
+  }
+
+  async releaseLease(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken?: number,
+  ): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
       if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
       if (w.leaseOwner !== owner) {
         throw new WorkspaceError("LEASE_NOT_OWNER", `${workspaceId} non détenu par ${owner}`);
       }
       if (expectedFencingToken !== undefined && w.fencingToken !== expectedFencingToken) {
-        throw new WorkspaceError("STALE_FENCE", `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`);
+        throw new WorkspaceError(
+          "STALE_FENCE",
+          `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`,
+        );
       }
       w.leaseOwner = null;
       w.leaseExpiresAt = null;
