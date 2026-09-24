@@ -34,6 +34,10 @@ function clone(runtime: AutonomousMissionRuntime): AutonomousMissionRuntime {
     lastHeartbeatAt: new Date(runtime.lastHeartbeatAt),
     lastProgressAt: new Date(runtime.lastProgressAt),
     leaseUntil: runtime.leaseUntil ? new Date(runtime.leaseUntil) : runtime.leaseUntil,
+    workerId: runtime.workerId,
+    workspaceId: runtime.workspaceId,
+    attemptId: runtime.attemptId,
+    workflowId: runtime.workflowId,
   };
 }
 
