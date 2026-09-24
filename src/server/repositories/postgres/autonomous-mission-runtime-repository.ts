@@ -66,6 +66,10 @@ function mapRow(
       row.leaseUntil
         ? new Date(row.leaseUntil)
         : null,
+    workerId: row.workerId ?? null,
+    workspaceId: row.workspaceId ?? null,
+    attemptId: row.attemptId ?? null,
+    workflowId: row.workflowId ?? null,
   };
 }
 
@@ -107,6 +111,10 @@ function toRow(
 
     ownerToken: runtime.ownerToken,
     leaseUntil: runtime.leaseUntil ?? null,
+    workerId: runtime.workerId ?? null,
+    workspaceId: runtime.workspaceId ?? null,
+    attemptId: runtime.attemptId ?? null,
+    workflowId: runtime.workflowId ?? null,
   };
 }
 export class PostgresAutonomousMissionRuntimeRepository
