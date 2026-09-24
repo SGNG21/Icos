@@ -1,9 +1,10 @@
 /**
  * CLI du Workspace Manager / Integration Gate (docs/icos/workspace-manager.md).
  *   pnpm workspace:manager request --slug 7d --worker w1 --scope-file scope.json [--migrations 1]
- *   pnpm workspace:manager create <id> | list | transition <id> <status> --actor a
- *   pnpm workspace:manager gate <id> [--reviewer r] [--verdict APPROVED] [--approved-by human]
- *   pnpm workspace:manager cleanup <id>
+ *   pnpm workspace:manager create <id> | list
+ *   pnpm workspace:manager transition <id> <status> --actor a --fencing-token n
+ *   pnpm workspace:manager gate <id> --actor a --fencing-token n [--reviewer r]
+ *   pnpm workspace:manager cleanup <id> --actor a --fencing-token n
  * Ne merge rien. Le registre vit hors dépôt : <racine des worktrees>/.registry.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -37,6 +38,7 @@ async function main(): Promise<number> {
       target: { type: "string" },
       base: { type: "string" },
       actor: { type: "string" },
+      "fencing-token": { type: "string" },
       reviewer: { type: "string" },
       verdict: { type: "string" },
       "approved-by": { type: "string" },
@@ -66,6 +68,7 @@ async function main(): Promise<number> {
           workerId: need(values.worker, "--worker"),
           missionId: values.mission,
           taskId: values.task,
+          manual: true,
           integrationTarget: values.target,
           baseCommit: values.base,
           migrations: values.migrations ? Number(values.migrations) : undefined,
@@ -87,11 +90,18 @@ async function main(): Promise<number> {
           need(id, "<id>"),
           status as WorkspaceStatus,
           need(values.actor, "--actor"),
+          Number(need(values["fencing-token"], "--fencing-token")),
         ),
       );
       return 0;
     case "cleanup":
-      print(await manager.cleanup(need(id, "<id>")));
+      print(
+        await manager.cleanup(
+          need(id, "<id>"),
+          need(values.actor, "--actor"),
+          Number(need(values["fencing-token"], "--fencing-token")),
+        ),
+      );
       return 0;
     case "gate": {
       const gate = new IntegrationGate({
@@ -108,6 +118,10 @@ async function main(): Promise<number> {
             }
           : undefined,
         humanApprovedBy: values["approved-by"],
+        lease: {
+          owner: need(values.actor, "--actor"),
+          fencingToken: Number(need(values["fencing-token"], "--fencing-token")),
+        },
       });
       const text = formatReport(report);
       console.log(text);

@@ -39,9 +39,8 @@ export class PostgresWorkspaceRegistry {
   private readonly sql: postgres.Sql<Record<string, postgres.PostgresType>>;
 
   constructor(private readonly dbUrl: string = TEST_DATABASE_URL) {
-    const url = new URL(dbUrl);
-    url.pathname = "/postgres"; // connect to admin DB
-    this.sql = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    if (process.env.VITEST) assertSafeTestDatabaseUrl(dbUrl);
+    this.sql = postgres(dbUrl, { max: 1, onnotice: () => {} });
   }
 
   /** Initialize the registry table. */
@@ -73,6 +72,21 @@ export class PostgresWorkspaceRegistry {
         workflow_id TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `;
+    await this.sql`
+      ALTER TABLE icos_workspace_registry
+        ADD COLUMN IF NOT EXISTS fencing_token INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS workflow_id TEXT
+    `;
+    await this.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_icos_workspace_registry_active_workflow
+        ON icos_workspace_registry (workflow_id)
+        WHERE workflow_id IS NOT NULL AND released_at IS NULL
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_icos_workspace_registry_lease
+        ON icos_workspace_registry (lease_owner, lease_expires_at)
+        WHERE lease_owner IS NOT NULL
     `;
   }
 

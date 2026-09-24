@@ -272,6 +272,7 @@ describe("WorkspaceExecutionCoordinator - Phase 8K Restart/Recovery Integration 
       durableMemory: mockDurableMemory,
       leaseMs: 5 * 60 * 1000,
       leaseRenewalIntervalMs: 60 * 1000,
+      ownerToken: "coordinator",
     });
   });
 
@@ -340,7 +341,7 @@ describe("WorkspaceExecutionCoordinator - Phase 8K Restart/Recovery Integration 
     // Verify workspace is released and cleaned up
     const releasedWs = coordinator.getExecutionWorkspace("task-2");
     expect(releasedWs?.status).toBe("released");
-    expect(mockManager.cleanup).toHaveBeenCalledWith(ws?.workspaceId);
+    expect(mockManager.cleanup).toHaveBeenCalledWith(ws?.workspaceId, "coordinator", 2);
   });
 
   it("K3: expired workspace + useful committed work -> safe recovery", async () => {
@@ -367,7 +368,7 @@ describe("WorkspaceExecutionCoordinator - Phase 8K Restart/Recovery Integration 
     expect(mockManager.transition).toHaveBeenCalledWith(
       ws?.workspaceId,
       "ready_for_integration",
-      "reconciliation",
+      "coordinator",
       2,
     );
   });
@@ -398,8 +399,39 @@ describe("WorkspaceExecutionCoordinator - Phase 8K Restart/Recovery Integration 
     expect(mockManager.transition).toHaveBeenCalledWith(
       ws?.workspaceId,
       "blocked",
-      "reconciliation",
+      "coordinator",
       2,
+    );
+  });
+
+  it("K4b: expired reconciliation cannot mutate when reacquisition loses the race", async () => {
+    const ws = createMockWorkspace({
+      workspaceId: "ws-expired-race",
+      missionId: "mission-1",
+      taskId: "task-expired-race",
+      status: "working",
+      leaseOwner: "old-owner",
+      leaseExpiresAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    });
+    mockManager._workspaces.set(ws.workspaceId, ws);
+    (mockManager.acquireLease as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("LEASE_HELD: newer owner won"),
+    );
+
+    const result = await coordinator.reconcile("mission-1");
+
+    expect(result).toMatchObject({ recovered: 0, released: 0 });
+    expect(result.errors.join(" ")).toContain("LEASE_HELD");
+    expect(mockManager.transition).not.toHaveBeenCalledWith(
+      ws.workspaceId,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mockManager.cleanup).not.toHaveBeenCalledWith(
+      ws.workspaceId,
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -426,6 +458,7 @@ describe("WorkspaceExecutionCoordinator - Phase 8K Restart/Recovery Integration 
       durableMemory: mockDurableMemory,
       leaseMs: 5 * 60 * 1000,
       leaseRenewalIntervalMs: 60 * 1000,
+      ownerToken: "coordinator",
     });
 
     // B must recover A's workspace through the real reconciliation path

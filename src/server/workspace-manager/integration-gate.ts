@@ -48,6 +48,8 @@ export interface GateOptions {
   review?: { verdict: "APPROVED" | "CHANGES_REQUESTED"; reviewer: string };
   /** Approbation humaine explicite ; ne peut pas venir du worker lui-même. */
   humanApprovedBy?: string;
+  /** Mandatory durable ownership evidence for autonomous gate mutations. */
+  lease: { owner: string; fencingToken: number };
 }
 
 export interface GateCommands {
@@ -101,7 +103,7 @@ export class IntegrationGate {
     this.commands = { ...DEFAULT_COMMANDS, ...deps.commands };
   }
 
-  async integrate(workspaceId: string, options: GateOptions = {}): Promise<IntegrationReport> {
+  async integrate(workspaceId: string, options: GateOptions): Promise<IntegrationReport> {
     let ws = await this.manager.get(workspaceId);
     const precondition = (why: string) =>
       new WorkspaceError("GATE_PRECONDITION", `${workspaceId}: ${why}`);
@@ -119,18 +121,40 @@ export class IntegrationGate {
       throw precondition("changements non commités : le gate n'évalue que des commits");
     }
     const head = await this.git.headCommit(ws.worktreePath);
-    if (ws.status === "ready_for_integration")
-      ws = await this.manager.transition(workspaceId, "integrating");
-    await this.manager.recordSourceCommit(workspaceId, head);
+    if (ws.status === "ready_for_integration") {
+      ws = await this.manager.transition(
+        workspaceId,
+        "integrating",
+        options.lease.owner,
+        options.lease.fencingToken,
+      );
+    }
+    await this.manager.recordSourceCommit(
+      workspaceId,
+      head,
+      options.lease.owner,
+      options.lease.fencingToken,
+    );
 
     const others = (await this.manager.list()).filter(
       (w) => w.workspaceId !== workspaceId && w.releasedAt === null,
     );
-    const report = await this.evaluate(ws, head, others, options);
+    const report = await this.manager.withLease(
+      workspaceId,
+      options.lease.owner,
+      options.lease.fencingToken,
+      () => this.evaluate(ws, head, others, options),
+    );
 
     const next = { ACCEPT: "accepted", REJECT: "rejected", NEEDS_REBASE: "working" } as const;
-    if (report.decision !== "NEEDS_HUMAN_APPROVAL")
-      await this.manager.transition(workspaceId, next[report.decision]);
+    if (report.decision !== "NEEDS_HUMAN_APPROVAL") {
+      await this.manager.transition(
+        workspaceId,
+        next[report.decision],
+        options.lease.owner,
+        options.lease.fencingToken,
+      );
+    }
     return report;
   }
 
@@ -245,6 +269,11 @@ export class IntegrationGate {
         "postgres",
         async () => {
           assertWorkerDatabaseName(ws.testDatabase);
+          await this.manager.assertLease(
+            ws.workspaceId,
+            options.lease.owner,
+            options.lease.fencingToken,
+          );
           await this.database.reset(ws.testDatabase);
           return this.command(
             ws,

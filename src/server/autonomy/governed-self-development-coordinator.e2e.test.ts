@@ -128,6 +128,7 @@ class DurableFixtureExecutionHandoff implements CanonicalExecutionHandoff {
       missionTaskId: input.missionTaskId,
       taskId: input.taskId,
       workspaceId: this.workspaceId,
+      workspaceLease: { owner: WRITER_ID, fencingToken: 1 },
       producerWorkerId: WRITER_ID,
       executionResult: executionResult({
         id: "execution-initial",
@@ -151,6 +152,7 @@ class DurableFixtureExecutionHandoff implements CanonicalExecutionHandoff {
       missionTaskId: input.missionTaskId,
       taskId: input.taskId,
       workspaceId: this.workspaceId,
+      workspaceLease: { owner: WRITER_ID, fencingToken: 1 },
       producerWorkerId: input.repairCandidate.worker.id,
       executionResult: executionResult({
         id: `execution-repair-${input.repairCandidate.attemptNumber}`,
@@ -315,16 +317,18 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const requested = await manager.request({
     slug: "phase8e",
     workerId: WRITER_ID,
+    workflowId: "governed-self-development-fixture",
     missionId: mission.id,
     taskId: missionTask.taskId,
     fileScope: { owns: ["src/feature/**"], shared: [], forbidden: [] },
   });
   await manager.create(requested.workspaceId);
-  await manager.transition(requested.workspaceId, "working", WRITER_ID);
+  await manager.acquireLease(requested.workspaceId, WRITER_ID, 60_000);
+  await manager.transition(requested.workspaceId, "working", WRITER_ID, 1);
   fx.write(requested.worktreePath, "src/feature/change.ts", "export const governed = true;\n");
   fx.commit(requested.worktreePath, "candidate implementation");
-  await manager.transition(requested.workspaceId, "validating", WRITER_ID);
-  await manager.transition(requested.workspaceId, "ready_for_integration", WRITER_ID);
+  await manager.transition(requested.workspaceId, "validating", WRITER_ID, 1);
+  await manager.transition(requested.workspaceId, "ready_for_integration", WRITER_ID, 1);
 
   const runner = new FakeRunner();
   if (options.gateReject) runner.failing = ["typecheck"];
@@ -425,6 +429,7 @@ describe("GovernedSelfDevelopmentCoordinator Phase 8E E2E", () => {
     expect(h.review.reviewCalls).toHaveLength(1);
     expect(h.integrate).toHaveBeenCalledWith(expect.any(String), {
       review: { verdict: "APPROVED", reviewer: REVIEWER_ID },
+      lease: { owner: WRITER_ID, fencingToken: 1 },
     });
     const patterns = await h.memory.getPatterns({});
     expect(patterns.flatMap((pattern) => pattern.missionIds ?? [])).toContain(h.missionId);

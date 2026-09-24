@@ -4,7 +4,11 @@ import type { WorkspaceManager } from "./manager";
 import type { IntegrationGate } from "./integration-gate";
 import type { IntegrationReport } from "./report";
 import type { Workspace } from "./types";
-import type { TaskExecutionDispatcher, TaskExecutionDispatchInput, TaskExecutionDispatchResult } from "@/server/execution/ports";
+import type {
+  TaskExecutionDispatcher,
+  TaskExecutionDispatchInput,
+  TaskExecutionDispatchResult,
+} from "@/server/execution/ports";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
 import type { DurableMemory } from "@/core/context/durable-memory";
@@ -76,6 +80,7 @@ function createMockManager(): WorkspaceManager & { _workspaces: Map<string, Work
         workerId: input.workerId,
         missionId: input.missionId ?? "mission-1",
         taskId: input.taskId ?? "task-1",
+        workflowId: input.workflowId ?? "icos-mission-1-task-1",
       });
       workspaces.set(ws.workspaceId, ws);
       return ws;
@@ -93,6 +98,14 @@ function createMockManager(): WorkspaceManager & { _workspaces: Map<string, Work
       return ws;
     }),
     acquireLease: vi.fn().mockImplementation(async (id: string, owner: string) => {
+      const ws = workspaces.get(id);
+      if (!ws) throw new Error(`NOT_FOUND: workspace ${id}`);
+      ws.leaseOwner = owner;
+      ws.leaseExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      ws.fencingToken = (ws.fencingToken ?? 0) + 1;
+      return ws;
+    }),
+    renewLease: vi.fn().mockImplementation(async (id: string, owner: string) => {
       const ws = workspaces.get(id);
       if (!ws) throw new Error(`NOT_FOUND: workspace ${id}`);
       ws.leaseOwner = owner;
@@ -116,7 +129,12 @@ function createMockManager(): WorkspaceManager & { _workspaces: Map<string, Work
       const ws = workspaces.get(id);
       if (!ws) throw new Error(`NOT_FOUND: workspace ${id}`);
       ws.releasedAt = new Date().toISOString();
-      return { worktreeRemoved: true, branchDeleted: true, databaseDropped: true, archivePath: "/tmp/archive.json" };
+      return {
+        worktreeRemoved: true,
+        branchDeleted: true,
+        databaseDropped: true,
+        archivePath: "/tmp/archive.json",
+      };
     }),
   } as unknown as WorkspaceManager & { _workspaces: Map<string, Workspace> };
 
@@ -125,40 +143,48 @@ function createMockManager(): WorkspaceManager & { _workspaces: Map<string, Work
 
 function createMockIntegrationGate(): IntegrationGate {
   return {
-    integrate: vi.fn().mockImplementation(async (workspaceId: string, options?: { humanApprovedBy?: string }) => {
-      const report: IntegrationReport = {
-        workspaceId,
-        workerId: "worker-1",
-        branch: "ws/task-test",
-        worktree: "/tmp/ws/task-test",
-        baseCommit: "base-commit",
-        targetCommit: "target-commit",
-        testDatabase: "test_db",
-        fileScopeStatus: "PASS",
-        sharedFilesChanged: [],
-        migrations: [],
-        typecheck: "PASS",
-        lint: "PASS",
-        unitTests: "PASS",
-        postgresTests: "PASS",
-        build: "PASS",
-        secretCheck: "PASS",
-        conflictStatus: "CLEAN",
-        conflictFiles: [],
-        decision: options?.humanApprovedBy ? "ACCEPT" : "NEEDS_HUMAN_APPROVAL",
-        commitSha: "abc123",
-        reasons: options?.humanApprovedBy ? [`approuvé par ${options.humanApprovedBy}`] : ["revue absente"],
-      };
-      return report;
-    }),
+    integrate: vi
+      .fn()
+      .mockImplementation(async (workspaceId: string, options?: { humanApprovedBy?: string }) => {
+        const report: IntegrationReport = {
+          workspaceId,
+          workerId: "worker-1",
+          branch: "ws/task-test",
+          worktree: "/tmp/ws/task-test",
+          baseCommit: "base-commit",
+          targetCommit: "target-commit",
+          testDatabase: "test_db",
+          fileScopeStatus: "PASS",
+          sharedFilesChanged: [],
+          migrations: [],
+          typecheck: "PASS",
+          lint: "PASS",
+          unitTests: "PASS",
+          postgresTests: "PASS",
+          build: "PASS",
+          secretCheck: "PASS",
+          conflictStatus: "CLEAN",
+          conflictFiles: [],
+          decision: options?.humanApprovedBy ? "ACCEPT" : "NEEDS_HUMAN_APPROVAL",
+          commitSha: "abc123",
+          reasons: options?.humanApprovedBy
+            ? [`approuvé par ${options.humanApprovedBy}`]
+            : ["revue absente"],
+        };
+        return report;
+      }),
   } as unknown as IntegrationGate;
 }
 
 function createMockDispatcher(): TaskExecutionDispatcher {
   return {
-    dispatch: vi.fn().mockImplementation(async (input: TaskExecutionDispatchInput): Promise<TaskExecutionDispatchResult> => {
-      return { workflowId: input.workflowId ?? `icos-task-${input.taskId}` };
-    }),
+    dispatch: vi
+      .fn()
+      .mockImplementation(
+        async (input: TaskExecutionDispatchInput): Promise<TaskExecutionDispatchResult> => {
+          return { workflowId: input.workflowId ?? `icos-task-${input.taskId}` };
+        },
+      ),
   } as unknown as TaskExecutionDispatcher;
 }
 
@@ -171,7 +197,9 @@ function createMockMissions(): MissionRepository {
     replacePlan: vi.fn().mockResolvedValue(undefined),
     updateMissionStatus: vi.fn().mockResolvedValue(undefined),
     updateMissionTaskStatus: vi.fn().mockResolvedValue(undefined),
-    getMissionTaskById: vi.fn().mockResolvedValue({ id: "task-1", taskId: "task-1", title: "Test Task" }),
+    getMissionTaskById: vi
+      .fn()
+      .mockResolvedValue({ id: "task-1", taskId: "task-1", title: "Test Task" }),
   } as unknown as MissionRepository;
 }
 
@@ -223,6 +251,7 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       durableMemory: mockDurableMemory,
       leaseMs: 5 * 60 * 1000,
       leaseRenewalIntervalMs: 60 * 1000,
+      ownerToken: "coordinator",
     });
   });
 
@@ -254,6 +283,20 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
 
       expect(tracked).toBeDefined();
       expect(tracked?.workspaceId).toBe(execWs.workspaceId);
+    });
+
+    it("rejects a different canonical workflow for an already allocated task", async () => {
+      await coordinator.allocateWorkspace(
+        "mission-1",
+        "task-1",
+        "worker-1",
+        undefined,
+        "workflow-a",
+      );
+
+      await expect(
+        coordinator.allocateWorkspace("mission-1", "task-1", "worker-1", undefined, "workflow-b"),
+      ).rejects.toThrow(/WORKFLOW_COLLISION/);
     });
   });
 
@@ -326,12 +369,17 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
 
       expect(ws.status).toBe("allocated");
 
-      await coordinator.executeInWorkspace("mission-1", "task-1", {
-        taskId: "task-1",
-        prompt: "Test prompt",
-        workerKind: "digitalos",
-        capability: "test-capability",
-      }, "human-reviewer");
+      await coordinator.executeInWorkspace(
+        "mission-1",
+        "task-1",
+        {
+          taskId: "task-1",
+          prompt: "Test prompt",
+          workerKind: "digitalos",
+          capability: "test-capability",
+        },
+        "human-reviewer",
+      );
 
       const tracked = coordinator.getExecutionWorkspace("task-1");
       expect(tracked?.status).toBe("completed");
@@ -349,16 +397,24 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
     it("runs IntegrationGate after successful execution", async () => {
       await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
 
-      await coordinator.executeInWorkspace("mission-1", "task-1", {
-        taskId: "task-1",
-        prompt: "Test prompt",
-        workerKind: "digitalos",
-        capability: "test-capability",
-      }, "human-reviewer");
+      await coordinator.executeInWorkspace(
+        "mission-1",
+        "task-1",
+        {
+          taskId: "task-1",
+          prompt: "Test prompt",
+          workerKind: "digitalos",
+          capability: "test-capability",
+        },
+        "human-reviewer",
+      );
 
       expect(mockIntegrationGate.integrate).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ humanApprovedBy: "human-reviewer" }),
+        expect.objectContaining({
+          humanApprovedBy: "human-reviewer",
+          lease: { owner: "coordinator", fencingToken: 1 },
+        }),
       );
     });
 
@@ -379,12 +435,17 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
     it("returns ACCEPT when human approval provided", async () => {
       await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
 
-      const result = await coordinator.executeInWorkspace("mission-1", "task-1", {
-        taskId: "task-1",
-        prompt: "Test prompt",
-        workerKind: "digitalos",
-        capability: "test-capability",
-      }, "human-reviewer");
+      const result = await coordinator.executeInWorkspace(
+        "mission-1",
+        "task-1",
+        {
+          taskId: "task-1",
+          prompt: "Test prompt",
+          workerKind: "digitalos",
+          capability: "test-capability",
+        },
+        "human-reviewer",
+      );
 
       expect(result.decision).toBe("ACCEPT");
       expect(result.success).toBe(true);
@@ -394,16 +455,25 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
   describe("release workspace", () => {
     it("releases workspace and cleans up resources", async () => {
       const execWs = await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
-      await coordinator.executeInWorkspace("mission-1", "task-1", {
-        taskId: "task-1",
-        prompt: "Test prompt",
-        workerKind: "digitalos",
-        capability: "test-capability",
-      }, "human-reviewer");
+      await coordinator.executeInWorkspace(
+        "mission-1",
+        "task-1",
+        {
+          taskId: "task-1",
+          prompt: "Test prompt",
+          workerKind: "digitalos",
+          capability: "test-capability",
+        },
+        "human-reviewer",
+      );
 
       await coordinator.releaseWorkspace("task-1");
 
-      expect(mockManager.cleanup).toHaveBeenCalledWith(execWs.workspaceId);
+      expect(mockManager.cleanup).toHaveBeenCalledWith(
+        execWs.workspaceId,
+        "coordinator",
+        execWs.fencingToken,
+      );
       const tracked = coordinator.getExecutionWorkspace("task-1");
       expect(tracked?.status).toBe("released");
       expect(tracked?.releasedAt).toBeDefined();
@@ -431,7 +501,10 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       });
 
       // Add to mock manager's internal map
-      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(ws.workspaceId, ws);
+      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(
+        ws.workspaceId,
+        ws,
+      );
       (mockManager.list as ReturnType<typeof vi.fn>).mockResolvedValue([ws]);
 
       const result = await coordinator.reconcile("mission-1");
@@ -450,7 +523,10 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
         leaseExpiresAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // Expired
       });
 
-      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(ws.workspaceId, ws);
+      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(
+        ws.workspaceId,
+        ws,
+      );
       (mockManager.list as ReturnType<typeof vi.fn>).mockResolvedValue([ws]);
       (mockGit.changedFiles as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
@@ -469,7 +545,10 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
         leaseExpiresAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       });
 
-      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(ws.workspaceId, ws);
+      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(
+        ws.workspaceId,
+        ws,
+      );
       (mockManager.list as ReturnType<typeof vi.fn>).mockResolvedValue([ws]);
       (mockGit.changedFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
         { path: "src/file.ts", status: "modified" },
@@ -490,7 +569,10 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
         leaseExpiresAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       });
 
-      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(ws.workspaceId, ws);
+      (mockManager as unknown as { _workspaces?: Map<string, Workspace> })._workspaces?.set(
+        ws.workspaceId,
+        ws,
+      );
       (mockManager.list as ReturnType<typeof vi.fn>).mockResolvedValue([ws]);
       (mockGit.statusPorcelain as ReturnType<typeof vi.fn>).mockResolvedValue([
         { path: "src/file.ts", status: "modified" },
@@ -504,6 +586,64 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
   });
 
   describe("fail-closed error handling", () => {
+    it("stops dispatch and IntegrationGate after renewal failure", async () => {
+      const dispatch = mockDispatcher.dispatch as ReturnType<typeof vi.fn>;
+      await coordinator.allocateWorkspace(
+        "mission-1",
+        "task-lease-loss",
+        "worker-1",
+        undefined,
+        "workflow-lease-loss",
+      );
+      coordinator["ownershipLost"].add(
+        coordinator.getExecutionWorkspace("task-lease-loss")!.workspaceId,
+      );
+      await expect(
+        coordinator.executeInWorkspace("mission-1", "task-lease-loss", {
+          taskId: "task-lease-loss",
+          prompt: "must not execute",
+          workerKind: "digitalos",
+          capability: "test-capability",
+          workflowId: "workflow-lease-loss",
+        }),
+      ).rejects.toThrow("OWNERSHIP_LOST");
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mockIntegrationGate.integrate).not.toHaveBeenCalled();
+    });
+
+    it("does not run IntegrationGate when ownership is lost after dispatch", async () => {
+      (mockDispatcher.dispatch as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async (input) => {
+          const workspace = Array.from(
+            (
+              mockManager as WorkspaceManager & { _workspaces: Map<string, Workspace> }
+            )._workspaces.values(),
+          )[0]!;
+          workspace.leaseOwner = "replacement-owner";
+          workspace.fencingToken += 1;
+          return { workflowId: input.workflowId };
+        },
+      );
+
+      await coordinator.allocateWorkspace(
+        "mission-1",
+        "task-gate-loss",
+        "worker-1",
+        undefined,
+        "workflow-gate-loss",
+      );
+      const result = await coordinator.executeInWorkspace("mission-1", "task-gate-loss", {
+        taskId: "task-gate-loss",
+        prompt: "lose lease after dispatch",
+        workerKind: "digitalos",
+        capability: "test-capability",
+        workflowId: "workflow-gate-loss",
+      });
+
+      expect(result.error).toContain("OWNERSHIP_LOST");
+      expect(mockIntegrationGate.integrate).not.toHaveBeenCalled();
+    });
+
     it("handles dispatcher failure gracefully", async () => {
       const failingDispatcher = {
         dispatch: vi.fn().mockRejectedValue(new Error("Dispatcher unavailable")),
@@ -568,8 +708,7 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
     it("starts lease renewal timer on allocation", async () => {
       await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
 
-      // Verify lease renewal was started (acquireLease called)
-      expect(mockManager.acquireLease).toHaveBeenCalled();
+      expect(mockManager.renewLease).toHaveBeenCalled();
     });
 
     it("stops lease renewal on release", async () => {
@@ -577,7 +716,11 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       await coordinator.releaseWorkspace("task-1");
 
       // Verify lease was released with fencing token
-      expect(mockManager.releaseLease).toHaveBeenCalledWith(execWs.workspaceId, "workspace-execution-coordinator", execWs.fencingToken);
+      expect(mockManager.cleanup).toHaveBeenCalledWith(
+        execWs.workspaceId,
+        "coordinator",
+        execWs.fencingToken,
+      );
     });
   });
 });
