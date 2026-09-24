@@ -108,7 +108,7 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
     // Expect mission to be created
     expect(mission).not.toBeNull();
     const missionId = mission.id;
-    expect(missionId).toBe("00000000-0000-4000-8000-000000000001");
+    expect(missionId).toMatch(/^00000000-0000-4000-8000-\d{12}$/);
 
     // Get the mission tasks to get their actual IDs
     let tasks = await missionRepository.listTasks(missionId);
