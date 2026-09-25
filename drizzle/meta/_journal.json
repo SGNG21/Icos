@@ -232,6 +232,20 @@
       "when": 1790169689077,
       "tag": "0035_learned_patterns_factual",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790169690000,
+      "tag": "0036_workspace_fencing",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790169700000,
+      "tag": "0037_autonomous_mission_runtime_extend",
+      "breakpoints": true
     }
   ]
 }

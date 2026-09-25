@@ -151,12 +151,35 @@ export class SupervisorService {
       if (this.workspaceExecutionCoordinator && task.workerKind) {
         let allocated = false;
         try {
+          if (!this.dispatchAttempts) {
+            throw new Error(
+              "MISSING_DISPATCH_ATTEMPT_REPOSITORY: workspace execution requires durable canonical workflow identity",
+            );
+          }
+          const attemptNumber = 1;
+          const workflowId = workflowIdForAttempt(task.taskId, attemptNumber);
+          const prepared = await this.dispatchAttempts.prepare({
+            missionId: mission.id,
+            missionTaskId: task.id,
+            taskId: task.taskId,
+            attempt: attemptNumber,
+            workflowId,
+            prompt,
+            workerKind: task.workerKind,
+            capability: task.capability || undefined,
+          });
+          if (!prepared.acquired) continue;
+
           // Allocate workspace for this task
           await this.workspaceExecutionCoordinator.allocateWorkspace(
             mission.id,
             task.taskId,
             task.workerKind,
-            task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30),
+            task.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .slice(0, 30),
+            prepared.attempt.workflowId,
           );
           allocated = true;
 
@@ -170,6 +193,7 @@ export class SupervisorService {
             capability: task.capability || undefined,
             digitalosFacadePath,
             signal,
+            workflowId: prepared.attempt.workflowId,
           };
 
           // Execute in workspace (this will dispatch and handle the workspace lifecycle)
@@ -178,6 +202,7 @@ export class SupervisorService {
             task.taskId,
             dispatchInput,
           );
+          await this.dispatchAttempts.markDispatched(prepared.attempt.id);
 
           // Update task status based on coordinator result
           if (coordResult.success) {

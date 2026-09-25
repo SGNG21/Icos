@@ -33,6 +33,11 @@ export interface AutonomousMissionRuntime {
 
   ownerToken?: string | null;
   leaseUntil?: Date | null;
+
+  workerId?: string | null;
+  workspaceId?: string | null;
+  attemptId?: string | null;
+  workflowId?: string | null;
 }
 
 export interface AutonomousMissionRuntimeRepository {

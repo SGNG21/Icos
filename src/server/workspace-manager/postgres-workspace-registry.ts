@@ -1,6 +1,9 @@
 import postgres from "postgres";
 
-import { TEST_DATABASE_URL, assertSafeTestDatabaseUrl } from "@/server/database/test-database-guard";
+import {
+  TEST_DATABASE_URL,
+  assertSafeTestDatabaseUrl,
+} from "@/server/database/test-database-guard";
 import { WorkspaceError, type Workspace } from "./types";
 
 /** Registry state persisted to PostgreSQL. */
@@ -26,6 +29,8 @@ interface RegistryRow {
   source_commit: string | null;
   lease_owner: string | null;
   lease_expires_at: string | null;
+  fencing_token: number;
+  workflow_id: string | null;
   updated_at: string;
 }
 
@@ -34,9 +39,8 @@ export class PostgresWorkspaceRegistry {
   private readonly sql: postgres.Sql<Record<string, postgres.PostgresType>>;
 
   constructor(private readonly dbUrl: string = TEST_DATABASE_URL) {
-    const url = new URL(dbUrl);
-    url.pathname = "/postgres"; // connect to admin DB
-    this.sql = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    if (process.env.VITEST) assertSafeTestDatabaseUrl(dbUrl);
+    this.sql = postgres(dbUrl, { max: 1, onnotice: () => {} });
   }
 
   /** Initialize the registry table. */
@@ -64,8 +68,25 @@ export class PostgresWorkspaceRegistry {
         source_commit TEXT,
         lease_owner TEXT,
         lease_expires_at TIMESTAMPTZ,
+        fencing_token INTEGER NOT NULL DEFAULT 0,
+        workflow_id TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `;
+    await this.sql`
+      ALTER TABLE icos_workspace_registry
+        ADD COLUMN IF NOT EXISTS fencing_token INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS workflow_id TEXT
+    `;
+    await this.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_icos_workspace_registry_active_workflow
+        ON icos_workspace_registry (workflow_id)
+        WHERE workflow_id IS NOT NULL AND released_at IS NULL
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_icos_workspace_registry_lease
+        ON icos_workspace_registry (lease_owner, lease_expires_at)
+        WHERE lease_owner IS NOT NULL
     `;
   }
 
@@ -78,32 +99,31 @@ export class PostgresWorkspaceRegistry {
   }
 
   /** Execute a transaction with retry logic. */
-  async transaction<T>(fn: (state: { workspaces: Workspace[] }) => T | Promise<T>): Promise<T> {
-    // For PostgreSQL, we use advisory locks for cross-process coordination
-    const lockResult = await this.sql`SELECT pg_try_advisory_xact_lock(123456789)`;
-    const gotLock = lockResult[0]?.pg_try_advisory_xact_lock ?? false;
-    
-    if (!gotLock) {
-      throw new WorkspaceError("REGISTRY_LOCKED", "Could not acquire advisory lock");
-    }
+  async transaction<T>(fn: (state: { workspaces: Workspace[] }) => Promise<T>): Promise<T> {
+    // Use transaction-scoped advisory lock (pg_advisory_xact_lock) which is automatically
+    // released at transaction end. This ensures atomicity: lock -> read -> validate -> mutate -> persist
+    // all within the SAME transaction handle.
+    const promise = this.sql.begin(async (tx) => {
+      // Acquire transaction-scoped advisory lock
+      const lockResult = await tx`SELECT pg_try_advisory_xact_lock(123456789)`;
+      const gotLock = lockResult[0]?.pg_try_advisory_xact_lock ?? false;
 
-    try {
-      const workspaces = await this.read();
+      if (!gotLock) {
+        throw new WorkspaceError("REGISTRY_LOCKED", "Could not acquire advisory lock");
+      }
+
+      // Read current state within the same transaction
+      const rows = await tx<RegistryRow[]>`
+        SELECT * FROM icos_workspace_registry ORDER BY created_at ASC
+      `;
+      const workspaces = rows.map(this.rowToWorkspace);
       const state = { workspaces };
-      const result = await fn(state);
-      
-      // Persist changes
-      await this.persist(state.workspaces);
-      
-      return result;
-    } finally {
-      await this.sql`SELECT pg_advisory_xact_unlock(123456789)`;
-    }
-  }
 
-  private async persist(workspaces: Workspace[]): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      for (const ws of workspaces) {
+      // Execute user function with state
+      const result = await fn(state);
+
+      // Persist changes within the same transaction
+      for (const ws of state.workspaces) {
         await tx`
           INSERT INTO icos_workspace_registry (
             workspace_id, worker_id, mission_id, task_id, slug, branch,
@@ -111,15 +131,15 @@ export class PostgresWorkspaceRegistry {
             file_scope_owns, file_scope_shared, file_scope_forbidden,
             migration_from, migration_to, migration_namespace,
             status, created_at, released_at, source_commit,
-            lease_owner, lease_expires_at, updated_at
+            lease_owner, lease_expires_at, fencing_token, workflow_id, updated_at
           ) VALUES (
             ${ws.workspaceId}, ${ws.workerId}, ${ws.missionId ?? null}, ${ws.taskId ?? null},
             ${ws.slug}, ${ws.branch}, ${ws.worktreePath}, ${ws.baseCommit},
             ${ws.integrationTarget}, ${ws.fileScope.owns}, ${ws.fileScope.shared},
-            ${ws.fileScope.forbidden}, 
+            ${ws.fileScope.forbidden},
             ${ws.migrationReservation?.from ?? null}, ${ws.migrationReservation?.to ?? null}, ${ws.migrationReservation?.namespace ?? null},
             ${ws.status}, ${ws.createdAt}, ${ws.releasedAt ?? null}, ${ws.sourceCommit ?? null},
-            ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.updatedAt}
+            ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.fencingToken ?? 0}, ${ws.workflowId ?? null}, ${ws.updatedAt}
           )
           ON CONFLICT (workspace_id) DO UPDATE SET
             worker_id = EXCLUDED.worker_id,
@@ -142,10 +162,15 @@ export class PostgresWorkspaceRegistry {
             source_commit = EXCLUDED.source_commit,
             lease_owner = EXCLUDED.lease_owner,
             lease_expires_at = EXCLUDED.lease_expires_at,
+            fencing_token = EXCLUDED.fencing_token,
+            workflow_id = EXCLUDED.workflow_id,
             updated_at = EXCLUDED.updated_at
         `;
       }
+
+      return result;
     });
+    return promise as Promise<T>;
   }
 
   private rowToWorkspace(row: RegistryRow): Workspace {
@@ -164,14 +189,19 @@ export class PostgresWorkspaceRegistry {
         shared: row.file_scope_shared,
         forbidden: row.file_scope_forbidden,
       },
-      migrationReservation: row.migration_from !== null ? {
-        from: row.migration_from,
-        to: row.migration_to ?? row.migration_from,
-        namespace: row.migration_namespace ?? "",
-      } : null,
+      migrationReservation:
+        row.migration_from !== null
+          ? {
+              from: row.migration_from,
+              to: row.migration_to ?? row.migration_from,
+              namespace: row.migration_namespace ?? "",
+            }
+          : null,
       status: row.status as Workspace["status"],
       leaseOwner: row.lease_owner ?? null,
       leaseExpiresAt: row.lease_expires_at ?? null,
+      fencingToken: row.fencing_token ?? 0,
+      workflowId: row.workflow_id ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       releasedAt: row.released_at ?? null,

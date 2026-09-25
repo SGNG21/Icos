@@ -1,7 +1,4 @@
-export function workflowIdForAttempt(
-  taskId: string,
-  attempt: number,
-): string {
+export function workflowIdForAttempt(taskId: string, attempt: number): string {
   if (!Number.isInteger(attempt) || attempt < 1) {
     throw new Error(`Invalid execution attempt: ${attempt}`);
   }

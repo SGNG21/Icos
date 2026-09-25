@@ -57,6 +57,7 @@ export type CanonicalExecutionResult =
       missionTaskId: string;
       taskId: string;
       workspaceId: string;
+      workspaceLease: { owner: string; fencingToken: number };
       producerWorkerId: string;
       executionResult: TaskExecutionResult;
     };
@@ -349,6 +350,7 @@ export class GovernedSelfDevelopmentCoordinator {
           verdict: "APPROVED",
           reviewer: currentReview.reviewerWorkerId,
         },
+        lease: currentExecution.workspaceLease,
       },
     );
     if (!isKnownGateDecision(gateReport.decision)) {

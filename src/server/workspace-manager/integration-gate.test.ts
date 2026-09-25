@@ -35,7 +35,11 @@ beforeEach(() => {
 });
 afterEach(() => fx.cleanup());
 
-const APPROVED: GateOptions = { review: { verdict: "APPROVED", reviewer: "reviewer-1" } };
+const LEASE = { owner: "gate-owner", fencingToken: 1 };
+const APPROVED: GateOptions = {
+  review: { verdict: "APPROVED", reviewer: "reviewer-1" },
+  lease: LEASE,
+};
 
 async function prepare(
   slug: string,
@@ -45,16 +49,18 @@ async function prepare(
   const { workspaceId } = await manager.request({
     slug,
     workerId: `worker-${slug}`,
+    manual: true,
     fileScope: { owns: [`src/${slug}/**`], shared: [], forbidden: [] },
     ...over,
   });
   await manager.create(workspaceId);
-  await manager.transition(workspaceId, "working", "me");
+  await manager.acquireLease(workspaceId, LEASE.owner, 60_000);
+  await manager.transition(workspaceId, "working", LEASE.owner, LEASE.fencingToken);
   const dir = path.join(fx.root, slug);
   for (const [file, content] of Object.entries(files)) fx.write(dir, file, content);
   fx.commit(dir, `work ${slug}`);
-  await manager.transition(workspaceId, "validating", "me");
-  await manager.transition(workspaceId, "ready_for_integration", "me");
+  await manager.transition(workspaceId, "validating", LEASE.owner, LEASE.fencingToken);
+  await manager.transition(workspaceId, "ready_for_integration", LEASE.owner, LEASE.fencingToken);
   return workspaceId;
 }
 
@@ -208,6 +214,7 @@ describe("REJECT", () => {
     const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
     const report = await gate.integrate(id, {
       review: { verdict: "CHANGES_REQUESTED", reviewer: "r" },
+      lease: LEASE,
     });
     expect(report.decision).toBe("REJECT");
   });
@@ -295,21 +302,24 @@ describe("NEEDS_HUMAN_APPROVAL", () => {
 
   it("sans revue, ou auto-revue par le worker", async () => {
     const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
-    expect((await gate.integrate(id)).decision).toBe("NEEDS_HUMAN_APPROVAL");
+    expect((await gate.integrate(id, { lease: LEASE })).decision).toBe("NEEDS_HUMAN_APPROVAL");
     expect((await manager.get(id)).status).toBe("integrating");
     const self = await gate.integrate(id, {
       review: { verdict: "APPROVED", reviewer: "worker-7a" },
+      lease: LEASE,
     });
     expect(self.decision).toBe("NEEDS_HUMAN_APPROVAL");
   });
 
   it("approbation humaine explicite (différente du worker) -> ACCEPT ; sinon refusée", async () => {
     const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
-    await gate.integrate(id);
-    await expect(gate.integrate(id, { humanApprovedBy: "worker-7a" })).rejects.toThrow(
-      /APPROVAL_INVALID/,
+    await gate.integrate(id, { lease: LEASE });
+    await expect(
+      gate.integrate(id, { humanApprovedBy: "worker-7a", lease: LEASE }),
+    ).rejects.toThrow(/APPROVAL_INVALID/);
+    expect((await gate.integrate(id, { humanApprovedBy: "owner", lease: LEASE })).decision).toBe(
+      "ACCEPT",
     );
-    expect((await gate.integrate(id, { humanApprovedBy: "owner" })).decision).toBe("ACCEPT");
   });
 
   it("affaiblissement de test ou fichier de gouvernance touché", async () => {
@@ -344,6 +354,14 @@ describe("NEEDS_HUMAN_APPROVAL", () => {
 });
 
 describe("préconditions", () => {
+  it("refuse de démarrer après perte de lease", async () => {
+    const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
+    await manager.releaseLease(id, LEASE.owner, LEASE.fencingToken);
+
+    await expect(gate.integrate(id, APPROVED)).rejects.toThrow(/LEASE_NOT_OWNER|LEASE_EXPIRED/);
+    expect(commands()).toEqual([]);
+  });
+
   it("refuse d'évaluer un worktree avec des changements non commités", async () => {
     const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
     fx.write(path.join(fx.root, "7a"), "src/7a/dirty.ts", "d\n");
@@ -355,6 +373,7 @@ describe("préconditions", () => {
     const { workspaceId } = await manager.request({
       slug: "7a",
       workerId: "w",
+      manual: true,
       fileScope: { owns: ["src/**"], shared: [], forbidden: [] },
     });
     await expect(gate.integrate(workspaceId, APPROVED)).rejects.toThrow(/GATE_PRECONDITION/);
@@ -364,11 +383,13 @@ describe("préconditions", () => {
     const { workspaceId } = await manager.request({
       slug: "7a",
       workerId: "w",
+      manual: true,
       fileScope: { owns: ["src/**"], shared: [], forbidden: [] },
     });
     await manager.create(workspaceId);
+    await manager.acquireLease(workspaceId, LEASE.owner, 60_000);
     for (const s of ["working", "validating", "ready_for_integration"] as const)
-      await manager.transition(workspaceId, s, "me");
+      await manager.transition(workspaceId, s, LEASE.owner, LEASE.fencingToken);
     const report = await gate.integrate(workspaceId, APPROVED);
     expect(report.decision).toBe("REJECT");
     expect(report.reasons.join(" ")).toMatch(/diff vide/);

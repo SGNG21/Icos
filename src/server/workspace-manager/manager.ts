@@ -31,6 +31,8 @@ export interface RequestWorkspaceInput {
   workerId: string;
   missionId?: string;
   taskId?: string;
+  /** Canonical workflow ID from durable dispatch identity. Required for autonomous execution paths. */
+  workflowId?: string;
   /** Défaut : `ws/<slug>`. */
   branch?: string;
   /** Défaut : `<racine>/<slug>`. */
@@ -42,6 +44,8 @@ export interface RequestWorkspaceInput {
   fileScope: FileScope;
   /** Nombre de numéros de migration à réserver (0 = aucune). */
   migrations?: number;
+  /** Explicit opt-in for manual tooling outside autonomous execution. */
+  manual?: boolean;
 }
 
 export interface CleanupResult {
@@ -59,8 +63,6 @@ export interface WorkspaceManagerOptions {
   masterRepo?: string;
   now?: () => Date;
 }
-
-const SYSTEM_ACTOR = "workspace-manager";
 
 export class WorkspaceManager {
   readonly root: string;
@@ -125,6 +127,39 @@ export class WorkspaceManager {
     const stamp = this.now().toISOString();
     return this.registry.transaction(async (state) => {
       const active = activeOf(state);
+      if (input.workflowId) {
+        const sameWorkflow = active.find((workspace) => workspace.workflowId === input.workflowId);
+        if (sameWorkflow) {
+          if (
+            sameWorkflow.missionId !== (input.missionId ?? null) ||
+            sameWorkflow.taskId !== (input.taskId ?? null)
+          ) {
+            throw new WorkspaceError(
+              "WORKFLOW_COLLISION",
+              `${input.workflowId} est déjà lié à ${sameWorkflow.workspaceId}`,
+            );
+          }
+          return sameWorkflow;
+        }
+        const sameTask = active.find(
+          (workspace) =>
+            workspace.missionId === (input.missionId ?? null) &&
+            workspace.taskId === (input.taskId ?? null) &&
+            workspace.workflowId !== input.workflowId,
+        );
+        if (sameTask) {
+          throw new WorkspaceError(
+            "WORKFLOW_COLLISION",
+            `${input.missionId ?? ""}/${input.taskId ?? ""} est déjà lié à ${sameTask.workflowId ?? "aucun workflow"}`,
+          );
+        }
+      }
+      if (!input.workflowId && !input.manual) {
+        throw new WorkspaceError(
+          "WORKFLOW_ID_REQUIRED",
+          "canonical workflowId is required unless this is an explicitly manual workspace",
+        );
+      }
       const nested = (a: string, b: string) =>
         a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
       for (const w of active) {
@@ -170,6 +205,8 @@ export class WorkspaceManager {
         migrationReservation,
         leaseOwner: null,
         leaseExpiresAt: null,
+        fencingToken: 0,
+        workflowId: input.workflowId ?? null,
         createdAt: stamp,
         updatedAt: stamp,
         releasedAt: null,
@@ -181,40 +218,66 @@ export class WorkspaceManager {
   }
 
   /** requested -> creating -> ready : DB de test dédiée puis `git worktree add <path> -b <branch> <base>`. */
-  async create(workspaceId: string, actor?: string): Promise<Workspace> {
-    const ws = await this.transition(workspaceId, "creating", actor);
-    try {
-      await mkdir(this.root, { recursive: true });
-      const realRoot = await realpath(this.root);
-      const realParent = await realpath(path.dirname(ws.worktreePath)).catch(() => "");
-      if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) {
-        throw new WorkspaceError(
-          "PATH_FORBIDDEN",
-          `${ws.worktreePath} sort de ${realRoot} (lien symbolique ?)`,
-        );
+  async create(
+    workspaceId: string,
+    actor?: string,
+    expectedFencingToken?: number,
+  ): Promise<Workspace> {
+    const outcome = await this.registry.transaction(async (state) => {
+      const ws = state.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
+      if (!ws) throw new WorkspaceError("NOT_FOUND", `workspace ${workspaceId}`);
+      const startedAt = this.now();
+      this.assertTransition(ws, "creating");
+      this.assertMutationLease(ws, actor, expectedFencingToken, startedAt);
+      ws.status = "creating";
+      ws.updatedAt = startedAt.toISOString();
+
+      try {
+        await mkdir(this.root, { recursive: true });
+        const realRoot = await realpath(this.root);
+        const realParent = await realpath(path.dirname(ws.worktreePath)).catch(() => "");
+        if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) {
+          throw new WorkspaceError(
+            "PATH_FORBIDDEN",
+            `${ws.worktreePath} sort de ${realRoot} (lien symbolique ?)`,
+          );
+        }
+        await this.provisioner.create(ws.testDatabase);
+        await this.git.addWorktree(ws.worktreePath, ws.branch, ws.baseCommit);
+        const completedAt = this.now();
+        this.assertMutationLease(ws, actor, expectedFencingToken, completedAt);
+        this.assertTransition(ws, "ready");
+        ws.status = "ready";
+        ws.updatedAt = completedAt.toISOString();
+        return { workspace: { ...ws } };
+      } catch (error) {
+        await this.provisioner.drop(ws.testDatabase).catch(() => undefined);
+        const failedAt = this.now();
+        try {
+          this.assertMutationLease(ws, actor, expectedFencingToken, failedAt);
+          this.assertTransition(ws, "blocked");
+          ws.status = "blocked";
+          ws.updatedAt = failedAt.toISOString();
+        } catch {
+          // Preserve the original failure; no unfenced fallback mutation is allowed.
+        }
+        return { workspace: { ...ws }, error };
       }
-      await this.provisioner.create(ws.testDatabase);
-      await this.git.addWorktree(ws.worktreePath, ws.branch, ws.baseCommit);
-      return await this.transition(workspaceId, "ready", actor);
-    } catch (error) {
-      await this.provisioner.drop(ws.testDatabase).catch(() => undefined);
-      await this.transition(workspaceId, "blocked", actor).catch(() => undefined);
-      throw error;
-    }
+    });
+    if ("error" in outcome) throw outcome.error;
+    return outcome.workspace;
   }
 
   async transition(
     workspaceId: string,
     to: WorkspaceStatus,
-    actor: string = SYSTEM_ACTOR,
+    actor?: string,
+    expectedFencingToken?: number,
   ): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
       if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
-      if (!WORKSPACE_TRANSITIONS[w.status].includes(to)) {
-        throw new WorkspaceError("TRANSITION_FORBIDDEN", `${w.status} -> ${to}`);
-      }
-      // Le manager (acteur système) agit au nom du détenteur de la lease ; les autres doivent la détenir.
-      if (actor !== SYSTEM_ACTOR) this.assertLeaseAllows(w, actor, now);
+      this.assertTransition(w, to);
+      this.assertMutationLease(w, actor, expectedFencingToken, now);
       w.status = to;
     });
   }
@@ -223,72 +286,185 @@ export class WorkspaceManager {
   async acquireLease(workspaceId: string, owner: string, ttlMs: number): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
       if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
-      this.assertLeaseAllows(w, owner, now);
+      const held = w.leaseOwner && w.leaseExpiresAt && Date.parse(w.leaseExpiresAt) > now.getTime();
+      if (held) {
+        throw new WorkspaceError(
+          "LEASE_HELD",
+          `${w.workspaceId} détenu par ${w.leaseOwner} jusqu'à ${w.leaseExpiresAt}`,
+        );
+      }
       w.leaseOwner = owner;
       w.leaseExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
+      w.fencingToken = (w.fencingToken ?? 0) + 1;
     });
   }
 
-  async releaseLease(workspaceId: string, owner: string): Promise<Workspace> {
+  /** Renew an existing lease without incrementing the fencing token.
+   * Only extends expiry; ownership and fencing token must match exactly. */
+  async renewLease(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken: number,
+    ttlMs: number,
+  ): Promise<Workspace> {
     return this.update(workspaceId, (w, now) => {
-      this.assertLeaseAllows(w, owner, now);
+      if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
+      if (w.leaseOwner !== owner) {
+        throw new WorkspaceError("LEASE_NOT_OWNER", `${workspaceId} non détenu par ${owner}`);
+      }
+      if (w.fencingToken !== expectedFencingToken) {
+        throw new WorkspaceError(
+          "STALE_FENCE",
+          `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`,
+        );
+      }
+      const leaseExpiry = w.leaseExpiresAt ? Date.parse(w.leaseExpiresAt) : 0;
+      if (leaseExpiry <= now.getTime()) {
+        throw new WorkspaceError(
+          "LEASE_EXPIRED",
+          `Lease expired, cannot renew; use acquireLease to reacquire`,
+        );
+      }
+      w.leaseExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
+      // fencingToken is NOT incremented on renewal
+    });
+  }
+
+  async releaseLease(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken: number,
+  ): Promise<Workspace> {
+    return this.update(workspaceId, (w, now) => {
+      if (w.releasedAt) throw new WorkspaceError("WORKSPACE_RELEASED", workspaceId);
+      this.assertMutationLease(w, owner, expectedFencingToken, now);
       w.leaseOwner = null;
       w.leaseExpiresAt = null;
     });
   }
 
   /** Enregistre le commit source soumis à l'Integration Gate (traçabilité intégration -> commit). */
-  async recordSourceCommit(workspaceId: string, commit: string): Promise<Workspace> {
-    return this.update(workspaceId, (w) => void (w.sourceCommit = commit));
+  async recordSourceCommit(
+    workspaceId: string,
+    commit: string,
+    owner: string,
+    expectedFencingToken: number,
+  ): Promise<Workspace> {
+    return this.update(workspaceId, (w, now) => {
+      this.assertMutationLease(w, owner, expectedFencingToken, now);
+      w.sourceCommit = commit;
+    });
+  }
+
+  async assertLease(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken: number,
+  ): Promise<Workspace> {
+    return this.withLease(workspaceId, owner, expectedFencingToken, async (workspace) => workspace);
+  }
+
+  async withLease<T>(
+    workspaceId: string,
+    owner: string,
+    expectedFencingToken: number,
+    fn: (workspace: Workspace) => Promise<T>,
+  ): Promise<T> {
+    return this.registry.transaction(async (state) => {
+      const workspace = state.workspaces.find((candidate) => candidate.workspaceId === workspaceId);
+      if (!workspace) throw new WorkspaceError("NOT_FOUND", `workspace ${workspaceId}`);
+      this.assertMutationLease(workspace, owner, expectedFencingToken, this.now());
+      return fn({ ...workspace });
+    });
   }
 
   /**
    * Cleanup après acceptation/rejet/abandon. Ne supprime JAMAIS du travail non commité, n'utilise
    * jamais --force, et conserve la branche si elle n'est pas fusionnée (`branch -d`).
    */
-  async cleanup(workspaceId: string): Promise<CleanupResult> {
-    const ws = await this.get(workspaceId);
-    if (ws.releasedAt) throw new WorkspaceError("CLEANUP_REFUSED", "workspace déjà libéré");
-    if (!CLEANABLE_STATUSES.includes(ws.status)) {
-      throw new WorkspaceError(
-        "CLEANUP_REFUSED",
-        `statut ${ws.status} non terminal (accepted|rejected|abandoned requis)`,
-      );
-    }
-    const hasWorktree = existsSync(ws.worktreePath);
-    if (hasWorktree) {
-      const dirty = await this.git.statusPorcelain(ws.worktreePath);
-      if (dirty.length > 0) {
+  async cleanup(
+    workspaceId: string,
+    owner?: string,
+    expectedFencingToken?: number,
+  ): Promise<CleanupResult> {
+    return this.registry.transaction(async (state) => {
+      const ws = state.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
+      if (!ws) throw new WorkspaceError("NOT_FOUND", `workspace ${workspaceId}`);
+      const now = this.now();
+      this.assertMutationLease(ws, owner, expectedFencingToken, now);
+      if (ws.releasedAt) throw new WorkspaceError("CLEANUP_REFUSED", "workspace déjà libéré");
+      if (!CLEANABLE_STATUSES.includes(ws.status)) {
         throw new WorkspaceError(
-          "UNCOMMITTED_CHANGES",
-          `${ws.worktreePath}: ${dirty.length} changement(s) non commité(s)`,
+          "CLEANUP_REFUSED",
+          `statut ${ws.status} non terminal (accepted|rejected|abandoned requis)`,
         );
       }
-    }
-    await mkdir(this.archiveDir, { recursive: true });
-    const archivePath = path.join(this.archiveDir, `${ws.workspaceId}.json`);
-    await writeFile(archivePath, JSON.stringify(ws, null, 2));
+      const hasWorktree = existsSync(ws.worktreePath);
+      if (hasWorktree) {
+        const dirty = await this.git.statusPorcelain(ws.worktreePath);
+        if (dirty.length > 0) {
+          throw new WorkspaceError(
+            "UNCOMMITTED_CHANGES",
+            `${ws.worktreePath}: ${dirty.length} changement(s) non commité(s)`,
+          );
+        }
+      }
+      await mkdir(this.archiveDir, { recursive: true });
+      const archivePath = path.join(this.archiveDir, `${ws.workspaceId}.json`);
+      await writeFile(archivePath, JSON.stringify(ws, null, 2));
 
-    if (hasWorktree) await this.git.removeWorktree(ws.worktreePath);
-    const branchDeleted = (await this.git.branchExists(ws.branch))
-      ? await this.git.deleteBranchIfMerged(ws.branch)
-      : false;
-    await this.provisioner.drop(ws.testDatabase);
-    await this.update(workspaceId, (w, now) => {
-      w.releasedAt = now.toISOString();
-      w.leaseOwner = null;
-      w.leaseExpiresAt = null;
+      if (hasWorktree) await this.git.removeWorktree(ws.worktreePath);
+      const branchDeleted = (await this.git.branchExists(ws.branch))
+        ? await this.git.deleteBranchIfMerged(ws.branch)
+        : false;
+      await this.provisioner.drop(ws.testDatabase);
+      ws.releasedAt = now.toISOString();
+      ws.leaseOwner = null;
+      ws.leaseExpiresAt = null;
+      ws.updatedAt = now.toISOString();
+      return {
+        worktreeRemoved: hasWorktree,
+        branchDeleted,
+        databaseDropped: true,
+        archivePath,
+      };
     });
-    return { worktreeRemoved: hasWorktree, branchDeleted, databaseDropped: true, archivePath };
   }
 
-  private assertLeaseAllows(w: Workspace, actor: string, now: Date): void {
-    const held = w.leaseOwner && w.leaseExpiresAt && Date.parse(w.leaseExpiresAt) > now.getTime();
-    if (held && w.leaseOwner !== actor) {
+  private assertMutationLease(
+    w: Workspace,
+    actor: string | undefined,
+    expectedFencingToken: number | undefined,
+    now: Date,
+  ): void {
+    if (!w.leaseOwner && !w.leaseExpiresAt && w.fencingToken === 0 && !w.workflowId) return;
+    if (!actor || expectedFencingToken === undefined) {
       throw new WorkspaceError(
-        "LEASE_HELD",
-        `${w.workspaceId} détenu par ${w.leaseOwner} jusqu'à ${w.leaseExpiresAt}`,
+        "FENCING_EVIDENCE_REQUIRED",
+        `${w.workspaceId} requiert owner + fencing token`,
       );
+    }
+    if (w.leaseOwner !== actor) {
+      throw new WorkspaceError("LEASE_NOT_OWNER", `${w.workspaceId} non détenu par ${actor}`);
+    }
+    if (w.fencingToken !== expectedFencingToken) {
+      throw new WorkspaceError(
+        "STALE_FENCE",
+        `Fencing token mismatch: expected ${expectedFencingToken}, got ${w.fencingToken}`,
+      );
+    }
+    const leaseExpiry = w.leaseExpiresAt ? Date.parse(w.leaseExpiresAt) : 0;
+    if (leaseExpiry <= now.getTime()) {
+      throw new WorkspaceError("LEASE_EXPIRED", "Lease expired, autonomous mutation refused");
+    }
+  }
+
+  private assertTransition(workspace: Workspace, to: WorkspaceStatus): void {
+    if (workspace.releasedAt) {
+      throw new WorkspaceError("WORKSPACE_RELEASED", workspace.workspaceId);
+    }
+    if (!WORKSPACE_TRANSITIONS[workspace.status].includes(to)) {
+      throw new WorkspaceError("TRANSITION_FORBIDDEN", `${workspace.status} -> ${to}`);
     }
   }
 

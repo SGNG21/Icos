@@ -579,6 +579,10 @@ export const autonomousMissionRuntime = pgTable(
         withTimezone: true,
       },
     ),
+    workerId: text("worker_id"),
+    workspaceId: text("workspace_id"),
+    attemptId: text("attempt_id"),
+    workflowId: text("workflow_id"),
   },
   (t) => [
     check(

@@ -31,6 +31,7 @@ afterEach(() => fx.cleanup());
 const input = (slug: string, over: Partial<RequestWorkspaceInput> = {}): RequestWorkspaceInput => ({
   slug,
   workerId: `worker-${slug}`,
+  manual: true,
   integrationTarget: "integration/phase-7",
   fileScope: { owns: [`src/${slug}/**`], shared: [], forbidden: [] },
   ...over,
@@ -159,14 +160,14 @@ describe("transitions et leases", () => {
 
   it("un seul détenteur de lease actif ; reprise après expiration", async () => {
     const { workspaceId } = await manager.request(input("7a"));
-    await manager.acquireLease(workspaceId, "agent-1", 60_000);
+    const first = await manager.acquireLease(workspaceId, "agent-1", 60_000);
     await expect(manager.acquireLease(workspaceId, "agent-2", 60_000)).rejects.toThrow(
       /LEASE_HELD/,
     );
-    await manager.acquireLease(workspaceId, "agent-1", 60_000); // renouvellement
-    await expect(manager.transition(workspaceId, "creating", "agent-2")).rejects.toThrow(
-      /LEASE_HELD/,
-    );
+    await manager.renewLease(workspaceId, "agent-1", first.fencingToken, 60_000);
+    await expect(
+      manager.transition(workspaceId, "creating", "agent-2", first.fencingToken),
+    ).rejects.toThrow(/LEASE_NOT_OWNER/);
     clock += 61_000;
     const w = await manager.acquireLease(workspaceId, "agent-2", 60_000);
     expect(w.leaseOwner).toBe("agent-2");

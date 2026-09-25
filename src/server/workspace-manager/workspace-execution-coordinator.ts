@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
+
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
 import type { IntegrationGate } from "./integration-gate";
 import type { IntegrationReport } from "./report";
-import type { Workspace, WorkspaceStatus } from "./types";
+
 import type { TaskExecutionDispatcher, TaskExecutionDispatchInput } from "@/server/execution/ports";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -25,6 +26,7 @@ export interface WorkspaceExecutionCoordinatorOptions {
   };
   leaseMs?: number;
   leaseRenewalIntervalMs?: number;
+  ownerToken?: string;
 }
 
 export interface ExecutionWorkspace {
@@ -35,6 +37,7 @@ export interface ExecutionWorkspace {
   allocatedAt: string;
   releasedAt?: string;
   workflowId?: string;
+  fencingToken?: number;
   executionResult?: {
     outcome: string;
     result?: string;
@@ -82,12 +85,15 @@ export class WorkspaceExecutionCoordinator {
   };
   private readonly leaseMs: number;
   private readonly leaseRenewalIntervalMs: number;
+  private readonly ownerToken: string;
 
   // In-memory execution workspace tracking (durable state in mission/tasks)
   private executionWorkspaces = new Map<string, ExecutionWorkspace>();
 
   // Lease renewal timers
   private leaseTimers = new Map<string, NodeJS.Timeout>();
+  private leaseRenewals = new Map<string, Promise<void>>();
+  private ownershipLost = new Set<string>();
 
   constructor(options: WorkspaceExecutionCoordinatorOptions) {
     this.git = options.git;
@@ -104,7 +110,9 @@ export class WorkspaceExecutionCoordinator {
       forbidden: ["drizzle/", "config/", ".github/", "docker/", "*.md"],
     };
     this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
-    this.leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? DEFAULT_LEASE_RENEWAL_INTERVAL_MS;
+    this.leaseRenewalIntervalMs =
+      options.leaseRenewalIntervalMs ?? DEFAULT_LEASE_RENEWAL_INTERVAL_MS;
+    this.ownerToken = options.ownerToken ?? `workspace-execution-coordinator:${randomUUID()}`;
   }
 
   /**
@@ -116,9 +124,15 @@ export class WorkspaceExecutionCoordinator {
     taskId: string,
     workerId: string,
     slugHint?: string,
+    workflowId?: string,
   ): Promise<ExecutionWorkspace> {
     const existing = this.executionWorkspaces.get(taskId);
     if (existing && existing.status !== "released") {
+      if (workflowId && existing.workflowId && existing.workflowId !== workflowId) {
+        throw new Error(
+          `WORKFLOW_COLLISION: task ${taskId} is bound to ${existing.workflowId}, not ${workflowId}`,
+        );
+      }
       // Already allocated - verify workspace still exists and is valid
       const ws = await this.manager.get(existing.workspaceId);
       if (ws.releasedAt === null) {
@@ -133,12 +147,27 @@ export class WorkspaceExecutionCoordinator {
       workerId,
       missionId,
       taskId,
+      workflowId,
       integrationTarget: this.defaultIntegrationTarget,
       fileScope: this.defaultFileScope,
       migrations: 0,
     });
 
-    await this.manager.create(workspace.workspaceId, "workspace-execution-coordinator");
+    const leaseIsOursAndValid =
+      workspace.leaseOwner === this.ownerToken &&
+      workspace.leaseExpiresAt !== null &&
+      Date.parse(workspace.leaseExpiresAt) > Date.now();
+    const leased = leaseIsOursAndValid
+      ? await this.manager.renewLease(
+          workspace.workspaceId,
+          this.ownerToken,
+          workspace.fencingToken,
+          this.leaseMs,
+        )
+      : await this.manager.acquireLease(workspace.workspaceId, this.ownerToken, this.leaseMs);
+    if (workspace.status === "requested") {
+      await this.manager.create(workspace.workspaceId, this.ownerToken, leased.fencingToken);
+    }
 
     const execWs: ExecutionWorkspace = {
       workspaceId: workspace.workspaceId,
@@ -146,10 +175,12 @@ export class WorkspaceExecutionCoordinator {
       missionId,
       status: "allocated",
       allocatedAt: new Date().toISOString(),
+      workflowId: workspace.workflowId ?? undefined,
+      fencingToken: leased.fencingToken,
     };
 
     this.executionWorkspaces.set(taskId, execWs);
-    this.startLeaseRenewal(workspace.workspaceId, "workspace-execution-coordinator");
+    this.startLeaseRenewal(workspace.workspaceId, this.ownerToken, leased.fencingToken);
 
     return execWs;
   }
@@ -178,13 +209,25 @@ export class WorkspaceExecutionCoordinator {
       throw new Error(`Workspace ${execWs.workspaceId} has been released`);
     }
 
+    await this.assertOwned(execWs);
+
     // Transition to executing
     execWs.status = "executing";
-    await this.manager.transition(execWs.workspaceId, "working", "workspace-execution-coordinator");
+    await this.manager.transition(
+      execWs.workspaceId,
+      "working",
+      this.ownerToken,
+      execWs.fencingToken,
+    );
 
     try {
       // Dispatch execution via dispatcher (workspace-aware)
-      const workflowId = input.workflowId ?? `icos-${missionId}-${taskId}-${randomUUID().slice(0, 8)}`;
+      const workflowId = input.workflowId ?? execWs.workflowId;
+      if (!workflowId) {
+        throw new Error(
+          "MISSING_CANONICAL_WORKFLOW_ID: canonical workflowId must be supplied from durable dispatch identity",
+        );
+      }
       const dispatchInput: TaskExecutionDispatchInput = {
         ...input,
         workflowId,
@@ -192,12 +235,16 @@ export class WorkspaceExecutionCoordinator {
 
       execWs.workflowId = workflowId;
 
+      await this.assertOwned(execWs);
       const result = await this.dispatcher.dispatch(dispatchInput);
 
       // Verify workflowId matches (idempotency)
       if (result.workflowId !== workflowId) {
-        throw new Error(`DISPATCH_WORKFLOW_ID_MISMATCH: expected ${workflowId}, got ${result.workflowId}`);
+        throw new Error(
+          `DISPATCH_WORKFLOW_ID_MISMATCH: expected ${workflowId}, got ${result.workflowId}`,
+        );
       }
+      await this.assertOwned(execWs);
 
       // Record execution result in coordination state
       execWs.executionResult = {
@@ -206,10 +253,15 @@ export class WorkspaceExecutionCoordinator {
       };
 
       // Transition workspace to validating (ready for QC/IntegrationGate)
-      await this.manager.transition(execWs.workspaceId, "validating", "workspace-execution-coordinator");
+      await this.manager.transition(
+        execWs.workspaceId,
+        "validating",
+        this.ownerToken,
+        execWs.fencingToken,
+      );
       execWs.status = "completed";
 
-      // QC ACCEPT → IntegrationGate handoff
+      // QC ACCEPT -> IntegrationGate handoff
       const gateResult = await this.handoffToIntegrationGate(
         execWs.workspaceId,
         workflowId,
@@ -231,7 +283,9 @@ export class WorkspaceExecutionCoordinator {
         error: error instanceof Error ? error.message : String(error),
       };
 
-      await this.manager.transition(execWs.workspaceId, "blocked", "workspace-execution-coordinator");
+      await this.manager
+        .transition(execWs.workspaceId, "blocked", this.ownerToken, execWs.fencingToken)
+        .catch(() => undefined);
 
       // For workflowId mismatch, throw to maintain fail-closed behavior
       if (error instanceof Error && error.message.includes("DISPATCH_WORKFLOW_ID_MISMATCH")) {
@@ -257,18 +311,30 @@ export class WorkspaceExecutionCoordinator {
     workflowId: string,
     humanApprovedBy?: string,
   ): Promise<IntegrationReport> {
-    const ws = await this.manager.get(workspaceId);
+    const execWs = Array.from(this.executionWorkspaces.values()).find(
+      (w) => w.workspaceId === workspaceId,
+    );
+    if (!execWs) throw new Error(`OWNERSHIP_LOST: workspace ${workspaceId} is not tracked`);
+    await this.assertOwned(execWs);
 
     // Transition to ready_for_integration
-    await this.manager.transition(workspaceId, "ready_for_integration", "workspace-execution-coordinator");
+    await this.manager.transition(
+      workspaceId,
+      "ready_for_integration",
+      this.ownerToken,
+      execWs.fencingToken,
+    );
 
     // Run IntegrationGate
     const report = await this.integrationGate.integrate(workspaceId, {
       humanApprovedBy,
+      lease: {
+        owner: this.ownerToken,
+        fencingToken: execWs.fencingToken!,
+      },
     });
 
     // Update execution workspace with gate result
-    const execWs = Array.from(this.executionWorkspaces.values()).find((w) => w.workspaceId === workspaceId);
     if (execWs) {
       execWs.status = report.decision === "ACCEPT" ? "completed" : "failed";
     }
@@ -276,30 +342,29 @@ export class WorkspaceExecutionCoordinator {
     return report;
   }
 
-  /** 
-     * Release workspace after integration (accepted/rejected/abandoned).
-     * Cleans up worktree, branch, test database.
-     */
-    async releaseWorkspace(taskId: string): Promise<void> {
-      const execWs = this.executionWorkspaces.get(taskId);
-      if (!execWs) {
-        return;
-      }
-
-      if (execWs.status === "released") {
-        return;
-      }
-
-      try {
-        // Release lease before cleanup to match test expectations
-        await this.manager.releaseLease(execWs.workspaceId, "workspace-execution-coordinator");
-        await this.manager.cleanup(execWs.workspaceId);
-      } finally {
-        this.stopLeaseRenewal(execWs.workspaceId);
-        execWs.status = "released";
-        execWs.releasedAt = new Date().toISOString();
-      }
+  /**
+   * Release workspace after integration (accepted/rejected/abandoned).
+   * Cleans up worktree, branch, test database.
+   */
+  async releaseWorkspace(taskId: string): Promise<void> {
+    const execWs = this.executionWorkspaces.get(taskId);
+    if (!execWs) {
+      return;
     }
+
+    if (execWs.status === "released") {
+      return;
+    }
+
+    try {
+      // Cleanup is fenced and clears the durable lease after resource cleanup.
+      await this.manager.cleanup(execWs.workspaceId, this.ownerToken, execWs.fencingToken!);
+    } finally {
+      this.stopLeaseRenewal(execWs.workspaceId);
+      execWs.status = "released";
+      execWs.releasedAt = new Date().toISOString();
+    }
+  }
 
   /**
    * Restart reconciliation: recover execution state after crash/restart.
@@ -322,9 +387,15 @@ export class WorkspaceExecutionCoordinator {
     for (const ws of activeWorkspaces) {
       try {
         // Check if workspace has a valid lease
-        const hasValidLease = ws.leaseOwner && ws.leaseExpiresAt && Date.parse(ws.leaseExpiresAt) > Date.now();
+        const hasValidLease =
+          ws.leaseOwner && ws.leaseExpiresAt && Date.parse(ws.leaseExpiresAt) > Date.now();
 
         if (!hasValidLease) {
+          const claimed = await this.manager.acquireLease(
+            ws.workspaceId,
+            this.ownerToken,
+            this.leaseMs,
+          );
           // Lease expired - check if work was committed
           const dirty = await this.git.statusPorcelain(ws.worktreePath);
           if (dirty.length === 0) {
@@ -332,12 +403,34 @@ export class WorkspaceExecutionCoordinator {
             const changed = await this.git.changedFiles(ws.baseCommit, ws.branch);
             if (changed.length > 0) {
               // Has committed work - transition to ready_for_integration
-              await this.manager.transition(ws.workspaceId, "ready_for_integration", "reconciliation");
+              await this.manager.transition(
+                ws.workspaceId,
+                "ready_for_integration",
+                this.ownerToken,
+                claimed.fencingToken,
+              );
+              if (ws.taskId && ws.missionId) {
+                this.executionWorkspaces.set(ws.taskId, {
+                  workspaceId: ws.workspaceId,
+                  taskId: ws.taskId,
+                  missionId: ws.missionId,
+                  status: "completed",
+                  allocatedAt: ws.createdAt,
+                  workflowId: ws.workflowId ?? undefined,
+                  fencingToken: claimed.fencingToken,
+                });
+              }
+              this.startLeaseRenewal(ws.workspaceId, this.ownerToken, claimed.fencingToken);
               recovered++;
             } else {
               // No work - abandon
-              await this.manager.transition(ws.workspaceId, "abandoned", "reconciliation");
-              await this.manager.cleanup(ws.workspaceId);
+              await this.manager.transition(
+                ws.workspaceId,
+                "abandoned",
+                this.ownerToken,
+                claimed.fencingToken,
+              );
+              await this.manager.cleanup(ws.workspaceId, this.ownerToken, claimed.fencingToken);
               released++;
               // Update execution workspace status to released
               const execWs =
@@ -349,11 +442,15 @@ export class WorkspaceExecutionCoordinator {
             }
           } else {
             // Uncommitted changes - block for human intervention
-            await this.manager.transition(ws.workspaceId, "blocked", "reconciliation");
+            await this.manager.transition(
+              ws.workspaceId,
+              "blocked",
+              this.ownerToken,
+              claimed.fencingToken,
+            );
             errors.push(`${ws.workspaceId}: uncommitted changes, manual intervention required`);
             // Update execution workspace status to failed
-            const execWs =
-              ws.taskId !== null ? this.executionWorkspaces.get(ws.taskId) : undefined;
+            const execWs = ws.taskId !== null ? this.executionWorkspaces.get(ws.taskId) : undefined;
             if (execWs) {
               execWs.status = "failed";
               execWs.executionResult = {
@@ -363,10 +460,10 @@ export class WorkspaceExecutionCoordinator {
             }
           }
         } else {
-          // Valid lease - resume lease renewal
-          if (ws.leaseOwner) {
-            this.startLeaseRenewal(ws.workspaceId, ws.leaseOwner);
+          if (ws.leaseOwner !== this.ownerToken) {
+            throw new Error(`LEASE_HELD: ${ws.workspaceId} is owned by another coordinator`);
           }
+          this.startLeaseRenewal(ws.workspaceId, this.ownerToken, ws.fencingToken);
           recovered++;
         }
       } catch (error) {
@@ -381,22 +478,36 @@ export class WorkspaceExecutionCoordinator {
    * Start lease renewal for a workspace.
    * Coordinates with AutonomousMissionRunner lease system.
    */
-  private startLeaseRenewal(workspaceId: string, owner: string): void {
+  private startLeaseRenewal(workspaceId: string, owner: string, fencingToken: number): void {
     if (this.leaseTimers.has(workspaceId)) {
       return;
     }
 
     const renew = async () => {
       try {
-        await this.manager.acquireLease(workspaceId, owner, this.leaseMs);
+        const ws = await this.manager.get(workspaceId);
+        if (ws.fencingToken !== fencingToken) {
+          // Fencing token changed - we lost ownership
+          this.ownershipLost.add(workspaceId);
+          this.stopLeaseRenewal(workspaceId);
+          return;
+        }
+        await this.manager.renewLease(workspaceId, owner, fencingToken, this.leaseMs);
       } catch {
-        // Lease acquisition failed - ownership lost
+        // Lease renewal failed - ownership lost
+        this.ownershipLost.add(workspaceId);
         this.stopLeaseRenewal(workspaceId);
       }
     };
 
-    // Initial acquisition
-    renew();
+    // Initial renewal
+    const initialRenewal = renew();
+    this.leaseRenewals.set(workspaceId, initialRenewal);
+    void initialRenewal.finally(() => {
+      if (this.leaseRenewals.get(workspaceId) === initialRenewal) {
+        this.leaseRenewals.delete(workspaceId);
+      }
+    });
 
     // Schedule renewals
     const timer = setInterval(renew, this.leaseRenewalIntervalMs);
@@ -414,6 +525,23 @@ export class WorkspaceExecutionCoordinator {
     }
   }
 
+  private async assertOwned(execWs: ExecutionWorkspace): Promise<void> {
+    const renewal = this.leaseRenewals.get(execWs.workspaceId);
+    if (renewal) await renewal;
+    const workspace = await this.manager.get(execWs.workspaceId);
+    const expiresAt = workspace.leaseExpiresAt ? Date.parse(workspace.leaseExpiresAt) : 0;
+    if (
+      this.ownershipLost.has(execWs.workspaceId) ||
+      workspace.leaseOwner !== this.ownerToken ||
+      execWs.fencingToken === undefined ||
+      workspace.fencingToken !== execWs.fencingToken ||
+      expiresAt <= Date.now()
+    ) {
+      this.ownershipLost.add(execWs.workspaceId);
+      throw new Error(`OWNERSHIP_LOST: workspace ${execWs.workspaceId}`);
+    }
+  }
+
   /**
    * Get execution workspace status for a task.
    */
@@ -425,9 +553,7 @@ export class WorkspaceExecutionCoordinator {
    * List all execution workspaces for a mission.
    */
   listExecutionWorkspaces(missionId: string): ExecutionWorkspace[] {
-    return Array.from(this.executionWorkspaces.values()).filter(
-      (w) => w.missionId === missionId,
-    );
+    return Array.from(this.executionWorkspaces.values()).filter((w) => w.missionId === missionId);
   }
 
   /**
