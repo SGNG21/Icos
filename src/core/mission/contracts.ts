@@ -43,6 +43,8 @@ export const MissionSchema = z.object({
   id: z.string(),
   title: z.string(),
   objective: z.string(),
+  // Optional goalId for missions originating from a goal (CORE3)
+  goalId: z.string().optional(),
   status: MissionStatusSchema,
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -54,5 +56,6 @@ export type MissionTask = z.infer<typeof MissionTaskSchema>;
 export interface CreateMissionInput {
   title: string;
   objective: string;
+  goalId?: string;
   tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
 }

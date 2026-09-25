@@ -56,6 +56,7 @@ export class PostgresMissionRepository implements MissionRepository {
     id?: string;
     title: string;
     objective: string;
+    goalId?: string;
     tasks: Omit<
       MissionTask,
       "id" | "missionId" | "status" | "taskId"
@@ -87,8 +88,8 @@ export class PostgresMissionRepository implements MissionRepository {
     const preparedTasks = input.tasks.map((taskInput) => {
       const prepared = prepareTaskCreation({
         missionId: missionId,
-        goalId: undefined, // TODO: derive from goal if available
-        planId: undefined, // TODO: derive from plan if available
+        goalId: input.goalId ?? undefined,
+        planId: undefined,
         title: taskInput.title,
         description: taskInput.description ?? undefined,
         objective: input.objective,
@@ -224,7 +225,7 @@ export class PostgresMissionRepository implements MissionRepository {
         const prepared =
           prepareTaskCreation({
             missionId: missionId,
-            goalId: undefined, // TODO: derive from goal if available
+            goalId: input.goalId,
             planId: undefined, // TODO: derive from plan if available
             title: task.title,
             description: task.description ?? undefined,
