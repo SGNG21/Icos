@@ -18,6 +18,9 @@ export const HighLevelGoalInputSchema = z.object({
   forbiddenCapabilities: z.array(z.string()).optional(),
   humanApprovalPolicy: z.enum(["never", "if_risky", "always"]).optional(),
   metadata: z.record(z.string(), z.string()).optional(),
+  // CORE3 additions
+  correlationId: z.string().optional(),
+  policyContext: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export type HighLevelGoalInput = z.infer<typeof HighLevelGoalInputSchema>;
@@ -42,6 +45,9 @@ export const HighLevelGoalSchema = z.object({
   humanApprovalPolicy: z.enum(["never", "if_risky", "always"]).default("if_risky"),
   metadata: z.record(z.string(), z.string()).default({}),
   createdAt: isoDateTimeSchema,
+  // CORE3 additions
+  correlationId: z.string().optional(),
+  policyContext: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export type HighLevelGoal = z.infer<typeof HighLevelGoalSchema>;

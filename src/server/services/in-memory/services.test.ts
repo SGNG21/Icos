@@ -57,7 +57,25 @@ describe("InMemoryTaskRepository", () => {
     const audit = new InMemoryAuditLog();
     const repo = new InMemoryTaskRepository(audit, demoTasks);
 
-    const result = await repo.create({ title: "Nouvelle tâche", assignedAgentId: "agent-cto" });
+    const result = await repo.create({
+      title: "Nouvelle tâche",
+      assignedAgentId: "agent-cto",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect((await repo.getById(result.task.id))?.status).toBe("draft");
@@ -69,7 +87,25 @@ describe("InMemoryTaskRepository", () => {
     const repo = new InMemoryTaskRepository(new FailingAuditLog(), demoTasks);
     const before = (await repo.list()).length;
 
-    const result = await repo.create({ title: "Tâche fantôme" });
+    const result = await repo.create({
+      title: "Tâche fantôme",
+      assignedAgentId: undefined,
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     expect(result).toMatchObject({ ok: false, reason: "audit_failed" });
     expect(await repo.list()).toHaveLength(before);
   });

@@ -88,12 +88,62 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
       }),
     );
     const repo = new PostgresTaskRepository(ctx.handle.db);
-    const linkedTask = await repo.create({ title: "Liée", assignedAgentId: "agent-cto" });
+    const linkedTask = await repo.create({
+      title: "Liée",
+      assignedAgentId: "agent-cto",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     const otherTask = await repo.create({
       title: "Hors portée",
       assignedAgentId: "agent-other",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
     });
-    const unassignedTask = await repo.create({ title: "Non assignée" });
+    const unassignedTask = await repo.create({
+      title: "Non assignée",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     if (!linkedTask.ok || !otherTask.ok || !unassignedTask.ok) {
       throw new Error("création de tâche échouée");
     }
@@ -155,7 +205,25 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
     const tasks = new PostgresTaskRepository(ctx.handle.db);
     const audit = new PostgresAuditRepository(ctx.handle.db);
 
-    const result = await tasks.create({ title: "Tâche", assignedAgentId: "agent-cto" });
+    const result = await tasks.create({
+      title: "Tâche",
+      assignedAgentId: "agent-cto",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect((await tasks.getById(result.task.id))?.status).toBe("draft");
@@ -165,7 +233,25 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
 
   it("applique les transitions valides et refuse les invalides / inconnues", async () => {
     const tasks = new PostgresTaskRepository(ctx.handle.db);
-    const created = await tasks.create({ title: "Tâche" });
+    const created = await tasks.create({
+      title: "Tâche",
+      assignedAgentId: "agent-cto",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     if (!created.ok) throw new Error("création échouée");
 
     expect((await tasks.transition(created.task.id, "queued")).ok).toBe(true);
@@ -181,7 +267,25 @@ describe.skipIf(!dockerAvailable)("Repositories PostgreSQL (intégration)", () =
 
   it("hydrate Task.actionIds depuis actions.task_id (source unique)", async () => {
     const tasks = new PostgresTaskRepository(ctx.handle.db);
-    const created = await tasks.create({ title: "Tâche" });
+    const created = await tasks.create({
+      title: "Tâche",
+      assignedAgentId: "agent-cto",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: ""
+    });
     if (!created.ok) throw new Error("création échouée");
 
     await ctx.handle.db

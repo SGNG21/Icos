@@ -29,13 +29,36 @@ describe("comparateurs d'ordre", () => {
   });
 
   it("tasks : createdAt ASC, id ASC (par instant)", () => {
-    const base = {
+    const baseTask: Task = {
+      id: "placeholder-id",
       title: "t",
+      missionId: "mission-1",
+      goalId: "goal-1",
+      planId: "plan-1",
+      objective: "objective",
+      instructions: "instructions",
+      dependencies: [],
+      successCriteria: [],
+      requiredCapabilities: [],
+      riskClass: "reversible",
+      allowedFileScope: [],
+      expectedArtifacts: [],
+      priority: 3,
+      attemptBudget: 3,
+      reviewPolicy: "if_risky",
+      integrationPolicy: "",
+      assignedAgentId: undefined,
       status: "draft" as const,
       actionIds: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
-    const t = (id: string, createdAt: string): Task => ({ ...base, id, createdAt });
+    const t = (id: string, createdAt: string): Task => ({
+      ...baseTask,
+      id,
+      createdAt,
+      updatedAt: createdAt,
+    });
     const sorted = [
       t("task-b", "2026-07-21T10:00:00.000Z"),
       t("task-a", "2026-07-21T09:00:00.000Z"),

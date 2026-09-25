@@ -246,6 +246,20 @@
       "when": 1790169700000,
       "tag": "0037_autonomous_mission_runtime_extend",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790169800000,
+      "tag": "0038_goals_core3_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790169801000,
+      "tag": "0039_task_core3_fields",
+      "breakpoints": true
     }
   ]
 }

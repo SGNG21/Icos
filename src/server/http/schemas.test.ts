@@ -4,7 +4,7 @@ import { createTaskBodySchema, transitionBodySchema } from "./schemas";
 
 describe("createTaskBodySchema", () => {
   it("normalise le titre avec trim", () => {
-    const result = createTaskBodySchema.safeParse({ title: "  Nouvelle tâche  " });
+    const result = createTaskBodySchema.safeParse({ title: "  Nouvelle tâche  ", missionId: "mission-1", goalId: "goal-1" });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.title).toBe("Nouvelle tâche");

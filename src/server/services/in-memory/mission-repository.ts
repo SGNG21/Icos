@@ -52,8 +52,24 @@ export class InMemoryMissionRepository implements MissionRepository {
     if (this.taskRepository) {
       for (const taskInput of input.tasks) {
         const created = await this.taskRepository.create({
+          missionId: missionId,
+          goalId: missionId, // TODO: derive from goal if available
+          planId: missionId, // TODO: derive from plan if available
           title: taskInput.title,
           description: taskInput.description ?? undefined,
+          objective: input.objective,
+          instructions: taskInput.description ?? '',
+          dependencies: [],
+          successCriteria: [],
+          requiredCapabilities: [],
+          riskClass: 'reversible',
+          allowedFileScope: [],
+          expectedArtifacts: [],
+          priority: 3,
+          attemptBudget: 3,
+          reviewPolicy: 'if_risky',
+          integrationPolicy: '',
+          assignedAgentId: undefined,
         });
         if (!created.ok) {
           throw new Error(
@@ -148,9 +164,24 @@ export class InMemoryMissionRepository implements MissionRepository {
     for (const task of plan.tasks) {
       const created =
         await this.taskRepository.create({
+          missionId: missionId,
+          goalId: missionId, // TODO: derive from goal if available
+          planId: missionId, // TODO: derive from plan if available
           title: task.title,
           description:
             task.description ?? undefined,
+          objective: task.title, // or maybe we should get from goal? but for now use title
+          instructions: task.description ?? '',
+          dependencies: [],
+          successCriteria: [],
+          requiredCapabilities: [],
+          riskClass: 'reversible',
+          allowedFileScope: [],
+          expectedArtifacts: [],
+          priority: 3,
+          attemptBudget: 3,
+          reviewPolicy: 'if_risky',
+          integrationPolicy: '',
         });
 
       if (!created.ok) {
@@ -245,8 +276,24 @@ export class InMemoryMissionRepository implements MissionRepository {
     const created: MissionTask[] = [];
     for (const task of plan.tasks) {
       const canonical = await this.taskRepository.create({
+        missionId: missionId,
+        goalId: missionId, // TODO: derive from goal if available
+        planId: missionId, // TODO: derive from plan if available
         title: task.title,
         description: task.description,
+        objective: task.title, // or maybe we should get from goal? but for now use title
+        instructions: task.description ?? '',
+        dependencies: [],
+        successCriteria: [],
+        requiredCapabilities: [],
+        riskClass: 'reversible',
+        allowedFileScope: [],
+        expectedArtifacts: [],
+        priority: 3,
+        attemptBudget: 3,
+        reviewPolicy: 'if_risky',
+        integrationPolicy: '',
+        assignedAgentId: undefined,
       });
       if (!canonical.ok) throw new Error("MISSION_REPLAN_TASK_CREATION_FAILED");
       created.push({

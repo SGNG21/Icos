@@ -86,8 +86,24 @@ export class PostgresMissionRepository implements MissionRepository {
     // the database transaction. No persistence occurs here.
     const preparedTasks = input.tasks.map((taskInput) => {
       const prepared = prepareTaskCreation({
+        missionId: missionId,
+        goalId: undefined, // TODO: derive from goal if available
+        planId: undefined, // TODO: derive from plan if available
         title: taskInput.title,
         description: taskInput.description ?? undefined,
+        objective: input.objective,
+        instructions: taskInput.description ?? '',
+        dependencies: [],
+        successCriteria: [],
+        requiredCapabilities: [],
+        riskClass: 'reversible',
+        allowedFileScope: [],
+        expectedArtifacts: [],
+        priority: 3,
+        attemptBudget: 3,
+        reviewPolicy: 'if_risky',
+        integrationPolicy: '',
+        assignedAgentId: undefined,
       });
 
       if (!prepared.ok) {
@@ -207,9 +223,24 @@ export class PostgresMissionRepository implements MissionRepository {
       plan.tasks.map((task) => {
         const prepared =
           prepareTaskCreation({
+            missionId: missionId,
+            goalId: undefined, // TODO: derive from goal if available
+            planId: undefined, // TODO: derive from plan if available
             title: task.title,
-            description:
-              task.description ?? undefined,
+            description: task.description ?? undefined,
+            objective: task.title, // or maybe we should get from goal? but for now use title
+            instructions: task.description ?? '',
+            dependencies: [],
+            successCriteria: [],
+            requiredCapabilities: [],
+            riskClass: 'reversible',
+            allowedFileScope: [],
+            expectedArtifacts: [],
+            priority: 3,
+            attemptBudget: 3,
+            reviewPolicy: 'if_risky',
+            integrationPolicy: '',
+            assignedAgentId: undefined,
           });
 
         if (!prepared.ok) {
@@ -357,8 +388,24 @@ export class PostgresMissionRepository implements MissionRepository {
     const missionTaskIdByKey = new Map(plan.tasks.map((task) => [task.key, randomUUID()]));
     const preparedTasks = plan.tasks.map((task) => {
       const prepared = prepareTaskCreation({
+        missionId: missionId,
+        goalId: missionId, // TODO: derive from goal if available
+        planId: missionId, // TODO: derive from plan if available
         title: task.title,
         description: task.description,
+        objective: task.title, // or maybe we should get from goal? but for now use title
+        instructions: task.description ?? '',
+        dependencies: [],
+        successCriteria: [],
+        requiredCapabilities: [],
+        riskClass: 'reversible',
+        allowedFileScope: [],
+        expectedArtifacts: [],
+        priority: 3,
+        attemptBudget: 3,
+        reviewPolicy: 'if_risky',
+        integrationPolicy: '',
+        assignedAgentId: undefined,
       });
       if (!prepared.ok) throw new Error("MISSION_REPLAN_TASK_PREPARATION_FAILED");
       return prepared;

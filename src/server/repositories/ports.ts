@@ -68,6 +68,21 @@ export interface AgentRepository extends AgentLookup {
 export interface CreateTaskInput {
   title: string;
   description?: string;
+  missionId?: string;
+  goalId?: string;
+  planId?: string;
+  objective?: string;
+  instructions?: string;
+  dependencies?: { taskId: string; type: "blocking" | "non_blocking" }[];
+  successCriteria?: string[];
+  requiredCapabilities?: string[];
+  riskClass?: "read_only" | "reversible" | "sensitive";
+  allowedFileScope?: string[];
+  expectedArtifacts?: string[];
+  priority?: number; // 1-5
+  attemptBudget?: number; // >=1
+  reviewPolicy?: "never" | "if_risky" | "always";
+  integrationPolicy?: string;
   assignedAgentId?: string;
 }
 
