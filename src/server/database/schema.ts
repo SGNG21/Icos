@@ -27,7 +27,6 @@ import { user } from "./auth-schema";
  *   tâche↔actions est `actions.task_id` ; `actionIds` est dérivé en
  *   lecture.
  */
-
 export const agents = pgTable(
   "agents",
   {
@@ -407,9 +406,13 @@ export const missions = pgTable(
     title: text("title").notNull(),
     objective: text("objective").notNull(),
     status: text("status").notNull(),
+    goalId: text("goalId"),
+    planId: text("planId"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-    userId: text("user_id").notNull().default("00000000-0000-0000-0000-000000000000"),
+    userId: text("user_id")
+      .notNull()
+      .default("00000000-0000-0000-0000-000000000000"),
   },
   (t) => [
     check(
@@ -506,7 +509,6 @@ export const contextItems = pgTable(
     index("context_items_type_idx").on(t.type),
   ],
 );
-
 
 export const autonomousMissionRuntime = pgTable(
   "autonomous_mission_runtime",
@@ -676,10 +678,9 @@ export const dispatchAttempts = pgTable(
   },
   (t) => [
     unique("dispatch_attempts_workflow_id_unique").on(t.workflowId),
-    unique("dispatch_attempts_mission_task_attempt_unique").on(
-      t.missionTaskId,
-      t.attempt,
-    ),
+    unique(
+      "dispatch_attempts_mission_task_attempt_unique"
+    ).on(t.missionTaskId, t.attempt),
     check(
       "dispatch_attempts_attempt_check",
       sql`${t.attempt} >= 1`,
@@ -719,7 +720,10 @@ export const taskExecutionResults = pgTable(
   },
   (t) => [
     unique("task_execution_results_workflow_id_unique").on(t.workflowId),
-    check("task_execution_results_outcome_check", sql`${t.outcome} in ('success','failure')`),
+    check(
+      "task_execution_results_outcome_check",
+      sql`${t.outcome} in ('success','failure')`,
+    ),
     check(
       "task_execution_results_worker_kind_check",
       sql`${t.workerKind} is null or ${t.workerKind} in ('hermes','openhands','digitalos','other','agent')`,
@@ -768,8 +772,14 @@ export const qualityControlJobs = pgTable(
   },
   (t) => [
     unique("quality_control_jobs_execution_result_unique").on(t.executionResultId),
-    check("quality_control_jobs_execution_attempt_check", sql`${t.executionAttempt} >= 1`),
-    check("quality_control_jobs_review_attempt_check", sql`${t.reviewAttemptCount} >= 0`),
+    check(
+      "quality_control_jobs_execution_attempt_check",
+      sql`${t.executionAttempt} >= 1`,
+    ),
+    check(
+      "quality_control_jobs_review_attempt_check",
+      sql`${t.reviewAttemptCount} >= 0`,
+    ),
     check(
       "quality_control_jobs_state_check",
       sql`${t.state} in ('review_pending','reviewing','decision_ready','review_unavailable','action_applied','escalated')`,
@@ -783,6 +793,7 @@ export const qualityControlJobs = pgTable(
     index("quality_control_jobs_wakeup_idx").on(t.missionId).where(sql`${t.wakeupPending}`),
   ],
 );
+
 /**
  * Durable Scheduler (ADR-0025) : file de jobs différés. PostgreSQL est la source
  * de vérité ; `now()` de la base est la seule horloge (next_run_at, lease, backoff).
@@ -806,19 +817,32 @@ export const scheduledJobs = pgTable(
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
     lastError: text("last_error"),
     missionId: text("mission_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (t) => [
     unique("scheduled_jobs_idempotency_key_unique").on(t.idempotencyKey),
-    check("scheduled_jobs_kind_check", sql`${t.kind} in ('start_mission','wake_mission')`),
+    check(
+      "scheduled_jobs_kind_check",
+      sql`${t.kind} in ('start_mission','wake_mission')`,
+    ),
     check(
       "scheduled_jobs_state_check",
       sql`${t.state} in ('scheduled','running','succeeded','dead','expired')`,
     ),
-    check("scheduled_jobs_attempts_check", sql`${t.maxAttempts} >= 1 and ${t.attemptCount} >= 0`),
-    check("scheduled_jobs_backoff_check", sql`${t.backoffBaseMs} >= 0`),
+    check(
+      "scheduled_jobs_attempts_check",
+      sql`${t.maxAttempts} >= 1 and ${t.attemptCount} >= 0`,
+    ),
+    check(
+      "scheduled_jobs_backoff_check",
+      sql`${t.backoffBaseMs} >= 0`,
+    ),
     check(
       "scheduled_jobs_running_lease_check",
       sql`${t.state} <> 'running' or (${t.leaseOwner} is not null and ${t.leaseUntil} is not null)`,
@@ -844,8 +868,12 @@ export const recoveryUnits = pgTable(
     attemptCount: integer("attempt_count").notNull().default(0),
     outcome: text("outcome"),
     lastError: text("last_error"),
-    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   },
   (t) => [
@@ -918,3 +946,24 @@ export const goalPreviews = pgTable("goal_previews", {
   unique("goal_previews_goalId_unique").on(t.goalId),
   index("goal_previews_goalId_idx").on(t.goalId),
 ]);
+
+/**
+ * Autonomous plans (Phase 8C).
+ */
+export const autonomousPlans = pgTable("autonomous_plans", {
+  id: text("id").primaryKey(),
+  missionId: text("mission_id")
+    .notNull()
+    .references(() => missions.id, { onDelete: "cascade" }),
+  goalId: text("goal_id").notNull(),
+  planId: text("plan_id").notNull(),
+  version: integer("version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+}, (t) => [
+  unique("autonomous_plans_mission_id_version_unique").on(t.missionId, t.version),
+  unique("autonomous_plans_plan_id_unique").on(t.planId),
+  index("autonomous_plans_mission_id_idx").on(t.missionId),
+]);
+
+export type AutonomousPlan = typeof autonomousPlans.$inferSelect;

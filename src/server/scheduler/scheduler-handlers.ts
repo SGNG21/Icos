@@ -26,11 +26,12 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
       const missionId = text(job.payload.missionId);
       const title = text(job.payload.title);
       const objective = text(job.payload.objective);
-      if (!missionId || !title || !objective) {
+      const goalId = text(job.payload.goalId);
+      if (!missionId || !title || !objective || !goalId) {
         throw new PermanentJobError("SCHEDULER_INVALID_PAYLOAD");
       }
       // Fixed Mission id + idempotent create: a replay never creates a second Mission.
-      await igniteAutonomousMission(deps.ignite, { id: missionId, title, objective });
+      await igniteAutonomousMission(deps.ignite, { id: missionId, title, objective, goalId });
     },
 
     async wake_mission(job) {

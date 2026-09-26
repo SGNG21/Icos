@@ -49,6 +49,7 @@ export interface StartAutonomousMissionDeps {
 
 export interface StartAutonomousMissionInput {
   missionId: string;
+  goalId?: string;
 }
 
 const DEFAULT_OPTIONS: AutonomousMissionRunnerOptions = {

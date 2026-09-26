@@ -264,10 +264,11 @@ export function createHarness(options: HarnessOptions) {
 
   const recoverySweeper = new AutonomyRecoverySweeper(runtimeRepository, autonomyWakeup);
 
-  async function ignite(input: { title: string; objective: string }): Promise<Mission> {
+  async function ignite(input: { title: string; objective: string; goalId: string }): Promise<Mission> {
     const mission = await missions.create({
       title: input.title,
       objective: input.objective,
+      goalId: input.goalId,
       tasks: [],
     });
     await startAutonomousMission(
@@ -278,7 +279,7 @@ export function createHarness(options: HarnessOptions) {
         planner: options.planner,
         now: options.now,
       },
-      { missionId: mission.id },
+      { missionId: mission.id, goalId: input.goalId },
     );
     return mission;
   }

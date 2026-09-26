@@ -11,6 +11,7 @@ export interface MissionRepository {
     id?: string;
     title: string;
     objective: string;
+    goalId?: string;
     tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
   }): Promise<Mission>;
   /**

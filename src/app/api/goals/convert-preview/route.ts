@@ -197,6 +197,7 @@ export async function POST(request: Request): Promise<Response> {
     const mission = await missionService.createMission({
       title: preview.missionTitle,
       objective: preview.missionObjective,
+      goalId: preview.goalId,
       tasks: missionTasksInput,
     });
 

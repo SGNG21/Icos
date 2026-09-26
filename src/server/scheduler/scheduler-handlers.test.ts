@@ -51,7 +51,7 @@ describe("scheduler handlers", () => {
   it("start_mission creates the mission under the id fixed at enqueue and starts it", async () => {
     const f = setup();
     await f.handlers.start_mission(
-      jobOf("start_mission", { title: "T", objective: "O", missionId: "mission-from-enqueue" }),
+      jobOf("start_mission", { title: "T", objective: "O", missionId: "mission-from-enqueue", goalId: "g-1" }),
       { signal },
     );
     expect((await f.missions.findById("mission-from-enqueue"))?.objective).toBe("O");
@@ -60,7 +60,7 @@ describe("scheduler handlers", () => {
 
   it("start_mission is replay-safe (crash after the mission was created, job re-run)", async () => {
     const f = setup();
-    const job = jobOf("start_mission", { title: "T", objective: "O", missionId: "m-replay" });
+    const job = jobOf("start_mission", { title: "T", objective: "O", missionId: "m-replay", goalId: "g-1" });
     await f.handlers.start_mission(job, { signal });
     await f.handlers.start_mission(job, { signal });
     expect(await f.missions.list()).toHaveLength(1);

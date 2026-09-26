@@ -1,6 +1,7 @@
 import type { MissionRepository } from "@/server/mission/ports";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import { isValidMissionTransition } from "@/core/mission/machine";
+import type { CreateMissionInput } from "@/core/mission/contracts";
 import type {
   MissionPlan,
 } from "@/server/mission/mission-plan";
@@ -9,13 +10,9 @@ import {
 } from "@/server/mission/mission-plan";
 
 export class MissionService {
-  constructor(private readonly missionRepository: MissionRepository) {}
+  constructor(private readonly missionRepository: MissionRepository) {};
 
-  async createMission(input: {
-    title: string;
-    objective: string;
-    tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
-  }): Promise<Mission> {
+  async createMission(input: CreateMissionInput): Promise<Mission> {
     // Validation graph
     this.validateGraph(input.tasks);
 

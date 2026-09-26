@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { Mission, MissionTask } from "@/core/mission/contracts";
+import type { AutonomousPlan } from "@/core/contracts/autonomous-plan";
+
+import type { Mission, MissionTask, CreateMissionInput } from "@/core/mission/contracts";
 import type { MissionRepository } from "@/server/mission/ports";
 import type {
   MissionPlan,
@@ -17,15 +19,11 @@ import type { Task } from "@/core/contracts";
 export class InMemoryMissionRepository implements MissionRepository {
   private missions: Map<string, Mission> = new Map();
   private missionTasks: Map<string, MissionTask> = new Map();
+  private autonomousPlans: Map<string, AutonomousPlan[]> = new Map();
 
   constructor(private readonly taskRepository?: TaskRepository) {}
 
-  async create(input: {
-    id?: string;
-    title: string;
-    objective: string;
-    tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
-  }): Promise<Mission> {
+  async create(input: CreateMissionInput & { id?: string }): Promise<Mission> {
     if (input.id !== undefined) {
       if (input.tasks.length > 0) throw new Error("MISSION_CREATE_ID_REQUIRES_EMPTY_GRAPH");
       const existing = this.missions.get(input.id);
@@ -42,6 +40,8 @@ export class InMemoryMissionRepository implements MissionRepository {
       id: missionId,
       title: input.title,
       objective: input.objective,
+      goalId: input.goalId ?? undefined,
+      planId: undefined,
       status: "draft",
       createdAt: now,
       updatedAt: now,
@@ -53,8 +53,8 @@ export class InMemoryMissionRepository implements MissionRepository {
       for (const taskInput of input.tasks) {
         const created = await this.taskRepository.create({
           missionId: missionId,
-          goalId: missionId, // TODO: derive from goal if available
-          planId: missionId, // TODO: derive from plan if available
+          goalId: input.goalId ?? undefined,
+          planId: undefined,
           title: taskInput.title,
           description: taskInput.description ?? undefined,
           objective: input.objective,
@@ -116,27 +116,46 @@ export class InMemoryMissionRepository implements MissionRepository {
   ): Promise<MissionTask[]> {
     validateMissionPlan(plan);
 
-    const mission =
-      this.missions.get(missionId);
-
+    const mission = this.missions.get(missionId);
     if (!mission) {
       throw new Error(
         `MISSION_NOT_FOUND:${missionId}`,
       );
     }
-
-    const existing = Array.from(
-      this.missionTasks.values(),
-    ).some(
-      (task) =>
-        task.missionId === missionId,
-    );
-
-    if (existing) {
-      throw new Error(
-        `MISSION_PLAN_ALREADY_APPLIED:${missionId}`,
-      );
+    const goalId = mission.goalId;
+    if (!goalId) {
+      throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
     }
+
+    // Get the existing plans for this mission (if any)
+    const existingPlans = this.autonomousPlans.get(missionId) ?? [];
+    const existingPlan = existingPlans.length > 0 ? existingPlans[existingPlans.length - 1] : undefined;
+
+    let planId: string;
+    if (existingPlan) {
+      // Reuse the existing planId from the durable record
+      planId = existingPlan.planId;
+    } else {
+      // No existing plan, create a new one (version 1)
+      planId = randomUUID();
+      const newPlan: AutonomousPlan = {
+        id: randomUUID(),
+        missionId,
+        goalId,
+        planId,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.autonomousPlans.set(missionId, [newPlan]);
+    }
+
+    // Update the mission's planId to the current planId
+    this.missions.set(missionId, {
+      ...mission,
+      planId,
+      updatedAt: new Date(),
+    });
 
     if (!this.taskRepository) {
       throw new Error(
@@ -145,12 +164,11 @@ export class InMemoryMissionRepository implements MissionRepository {
       );
     }
 
-    /*
-     * Allocate every MissionTask ID before creating anything so
-     * planner keys can be resolved deterministically.
-     */
-    const missionTaskIdByKey =
-      new Map<string, string>();
+            /*
+             * Allocate every MissionTask ID before creating anything so
+             * planner keys can be resolved deterministically.
+             */
+    const missionTaskIdByKey = new Map<string, string>();
 
     for (const task of plan.tasks) {
       missionTaskIdByKey.set(
@@ -162,28 +180,26 @@ export class InMemoryMissionRepository implements MissionRepository {
     const createdTasks: Task[] = [];
 
     for (const task of plan.tasks) {
-      const created =
-        await this.taskRepository.create({
-          missionId: missionId,
-          goalId: missionId, // TODO: derive from goal if available
-          planId: missionId, // TODO: derive from plan if available
-          title: task.title,
-          description:
-            task.description ?? undefined,
-          objective: task.title, // or maybe we should get from goal? but for now use title
-          instructions: task.description ?? '',
-          dependencies: [],
-          successCriteria: [],
-          requiredCapabilities: [],
-          riskClass: 'reversible',
-          allowedFileScope: [],
-          expectedArtifacts: [],
-          priority: 3,
-          attemptBudget: 3,
-          reviewPolicy: 'if_risky',
-          integrationPolicy: '',
-        });
-
+      const created = await this.taskRepository.create({
+        missionId: missionId,
+        goalId: goalId,
+        planId: planId,
+        title: task.title,
+        description: task.description ?? undefined,
+        objective: task.title, // or maybe we should get from goal? but for now use title
+        instructions: task.description ?? '',
+        dependencies: [],
+        successCriteria: [],
+        requiredCapabilities: [],
+        riskClass: 'reversible',
+        allowedFileScope: [],
+        expectedArtifacts: [],
+        priority: 3,
+        attemptBudget: 3,
+        reviewPolicy: 'if_risky',
+        integrationPolicy: '',
+        assignedAgentId: undefined,
+      });
       if (!created.ok) {
         throw new Error(
           `Failed to create canonical task: ` +
@@ -191,72 +207,42 @@ export class InMemoryMissionRepository implements MissionRepository {
             `${created.message}`,
         );
       }
-
-      createdTasks.push(
-        created.task,
-      );
+      createdTasks.push(created.task);
     }
 
     const result: MissionTask[] =
       plan.tasks.map((task, index) => {
-        const id =
-          missionTaskIdByKey.get(task.key);
-
+        const id = missionTaskIdByKey.get(task.key);
         if (!id) {
           throw new Error(
             `MISSION_PLAN_INTERNAL_ID_MISSING:` +
               `${task.key}`,
           );
         }
-
-        const dependsOn =
-          task.dependsOn.map((dependencyKey) => {
-            const dependencyId =
-              missionTaskIdByKey.get(
-                dependencyKey,
-              );
-
-            if (!dependencyId) {
-              throw new Error(
-                `MISSION_PLAN_INTERNAL_DEPENDENCY_ID_MISSING:` +
-                  `${task.key}:${dependencyKey}`,
-              );
-            }
-
-            return dependencyId;
-          });
-
+        const dependsOn = task.dependsOn.map((dependencyKey) => {
+          const dependencyId = missionTaskIdByKey.get(dependencyKey);
+          if (!dependencyId) {
+            throw new Error(
+              `MISSION_PLAN_INTERNAL_DEPENDENCY_ID_MISSING:` +
+                `${task.key}:${dependencyKey}`,
+            );
+          }
+          return dependencyId;
+        });
         const missionTask: MissionTask = {
           id,
           missionId,
           title: task.title,
-          description:
-            task.description ?? null,
+          description: task.description ?? null,
           dependsOn,
           status: "draft",
-          workerKind:
-            task.workerKind ?? null,
-          capability:
-            task.capability ?? null,
-          taskId:
-            createdTasks[index].id,
+          workerKind: task.workerKind ?? null,
+          capability: task.capability ?? null,
+          taskId: createdTasks[index].id,
         };
-
-        this.missionTasks.set(
-          id,
-          missionTask,
-        );
-
+        this.missionTasks.set(id, missionTask);
         return missionTask;
       });
-
-    this.missions.set(
-      missionId,
-      {
-        ...mission,
-        updatedAt: new Date(),
-      },
-    );
 
     return result;
   }
@@ -265,6 +251,44 @@ export class InMemoryMissionRepository implements MissionRepository {
     validateMissionPlan(plan);
     const mission = this.missions.get(missionId);
     if (!mission) throw new Error(`MISSION_NOT_FOUND:${missionId}`);
+    const goalId = mission.goalId;
+    if (!goalId) throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
+
+    // For replacePlan, we create a new plan version
+    const existingPlans = this.autonomousPlans.get(missionId) ?? [];
+    let existingPlan: AutonomousPlan | undefined;
+    let version: number;
+    if (existingPlans.length > 0) {
+      existingPlan = existingPlans[existingPlans.length - 1]; // get the latest
+    }
+    let planId: string;
+    if (existingPlan) {
+      planId = randomUUID(); // new planId for new version
+      version = existingPlan.version + 1;
+      // Update the autonomous plan by adding a new version to the list
+      const updatedPlan: AutonomousPlan = {
+        ...existingPlan,
+        planId,
+        version,
+        updatedAt: new Date(),
+      };
+      existingPlans.push(updatedPlan);
+      this.autonomousPlans.set(missionId, existingPlans);
+    } else {
+      planId = randomUUID();
+      version = 1;
+      const autonomousPlan: AutonomousPlan = {
+        id: randomUUID(),
+        missionId,
+        goalId,
+        planId,
+        version,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.autonomousPlans.set(missionId, [autonomousPlan]);
+    }
+
     if (!this.taskRepository) throw new Error("TaskRepository required for replacePlan()");
 
     const existing = await this.listTasks(missionId);
@@ -277,8 +301,8 @@ export class InMemoryMissionRepository implements MissionRepository {
     for (const task of plan.tasks) {
       const canonical = await this.taskRepository.create({
         missionId: missionId,
-        goalId: missionId, // TODO: derive from goal if available
-        planId: missionId, // TODO: derive from plan if available
+        goalId: goalId,
+        planId: planId,
         title: task.title,
         description: task.description,
         objective: task.title, // or maybe we should get from goal? but for now use title
@@ -314,6 +338,12 @@ export class InMemoryMissionRepository implements MissionRepository {
     for (const task of [...succeeded, ...superseded, ...created]) {
       this.missionTasks.set(task.id, task);
     }
+    // Update the mission's planId to the new planId
+    this.missions.set(missionId, {
+      ...mission,
+      planId,
+      updatedAt: new Date(),
+    });
     return [...succeeded, ...superseded, ...created];
   }
 
@@ -337,7 +367,6 @@ export class InMemoryMissionRepository implements MissionRepository {
         return task.missionId;
       }
     }
-
     return null;
   }
 
@@ -407,6 +436,8 @@ export class InMemoryMissionRepository implements MissionRepository {
     }
     // Delete the mission
     this.missions.delete(missionId);
+    // Also delete any autonomous plan for this mission
+    this.autonomousPlans.delete(missionId);
   }
 
   async list(filter?: { status?: Mission["status"] }): Promise<Mission[]> {

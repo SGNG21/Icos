@@ -31,6 +31,7 @@ const startAutonomousMissionBodySchema = z
   .object({
     title: z.string().trim().min(1),
     objective: z.string().trim().min(1),
+    goalId: z.string(),
   })
   .strict();
 
@@ -84,7 +85,7 @@ export async function POST(request: Request): Promise<Response> {
         supervisor,
         planner: container.autonomousPlanner,
       },
-      { title: parsed.data.title, objective: parsed.data.objective },
+      { title: parsed.data.title, objective: parsed.data.objective, goalId: parsed.data.goalId },
     );
 
     // The mission and its durable runtime exist even when starting failed: the

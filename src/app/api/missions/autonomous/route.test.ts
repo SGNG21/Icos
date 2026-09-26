@@ -43,7 +43,7 @@ function install(access: Access, plan: () => Promise<unknown> = onePlan) {
   return { container, dispatch, planner, readSession: auth.readSession as ReturnType<typeof vi.fn> };
 }
 
-async function callRoute(headers: Record<string, string>, body: unknown = { title: "t", objective: "o" }) {
+async function callRoute(headers: Record<string, string>, body: unknown = { title: "t", objective: "o", goalId: "g-1" }) {
   const { POST } = await import("./route");
   return POST(
     new Request(`${ORIGIN}/api/missions/autonomous`, {

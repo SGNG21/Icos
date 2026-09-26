@@ -29,12 +29,13 @@ const TERMINAL_RUNTIME_STATES = ["succeeded", "failed", "cancelled", "escalated"
  */
 export async function igniteAutonomousMission(
   deps: IgniteAutonomousMissionDeps,
-  input: { id?: string; title: string; objective: string },
+  input: { id?: string; title: string; objective: string; goalId?: string },
 ): Promise<IgniteAutonomousMissionResult> {
   const mission = await deps.missions.create({
     ...(input.id !== undefined ? { id: input.id } : {}),
     title: input.title,
     objective: input.objective,
+    goalId: input.goalId ?? undefined,
     tasks: [],
   });
 

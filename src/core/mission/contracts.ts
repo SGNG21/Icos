@@ -45,6 +45,8 @@ export const MissionSchema = z.object({
   objective: z.string(),
   // Optional goalId for missions originating from a goal (CORE3)
   goalId: z.string().optional(),
+  // Optional planId for missions that have an associated autonomous plan (CORE3)
+  planId: z.string().optional(),
   status: MissionStatusSchema,
   createdAt: z.date(),
   updatedAt: z.date(),
