@@ -26,10 +26,19 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
       const missionId = text(job.payload.missionId);
       const title = text(job.payload.title);
       const objective = text(job.payload.objective);
-      const goalId = text(job.payload.goalId);
-      if (!missionId || !title || !objective || !goalId) {
+      if (!missionId || !title || !objective) {
         throw new PermanentJobError("SCHEDULER_INVALID_PAYLOAD");
       }
+      /*
+       * goalId is OPTIONAL, matching igniteAutonomousMission's own contract.
+       *
+       * A scheduled job that names a goal produces a goal-backed autonomous
+       * mission with plan lineage; one that does not produces a generic
+       * mission (mission N11). A goalId is never invented to satisfy a
+       * required field: fake lineage is worse than absent lineage.
+       */
+      const goalId = text(job.payload.goalId) ?? undefined;
+
       // Fixed Mission id + idempotent create: a replay never creates a second Mission.
       await igniteAutonomousMission(deps.ignite, { id: missionId, title, objective, goalId });
     },

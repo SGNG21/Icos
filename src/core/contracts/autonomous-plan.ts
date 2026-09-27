@@ -10,8 +10,19 @@ export const autonomousPlanSchema = z.object({
   id: idSchema,
   missionId: z.string(),
   goalId: z.string(),
+  /** Identity of ONE persisted plan version. Never equal to planFingerprint. */
   planId: z.string(),
+  /**
+   * Deterministic hash of canonical logical plan content.
+   * Idempotency detection only — never an identity.
+   */
+  planFingerprint: z.string(),
   version: z.number().int().positive(),
+  /**
+   * Lineage pointer to the superseded version's planId (not its surrogate id).
+   * Null on the first version of a mission's plan chain.
+   */
+  predecessorPlanId: z.string().nullish(),
   // Optional: createdAt, updatedAt if needed
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),

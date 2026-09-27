@@ -12,6 +12,7 @@ import {
   text,
   timestamp,
   unique,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 
 import { user } from "./auth-schema";
@@ -406,8 +407,13 @@ export const missions = pgTable(
     title: text("title").notNull(),
     objective: text("objective").notNull(),
     status: text("status").notNull(),
-    goalId: text("goalId"),
-    planId: text("planId"),
+    /*
+     * CORE3 lineage: the goal this mission serves and the mission's CURRENT
+     * autonomous plan version. snake_case column names, matching the rest of
+     * this table (created_at, user_id) and migration 0040.
+     */
+    goalId: text("goal_id"),
+    planId: text("plan_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
     userId: text("user_id")
@@ -956,14 +962,33 @@ export const autonomousPlans = pgTable("autonomous_plans", {
     .notNull()
     .references(() => missions.id, { onDelete: "cascade" }),
   goalId: text("goal_id").notNull(),
+  /*
+   * Identity of ONE persisted plan version. Never equal to planFingerprint.
+   */
   planId: text("plan_id").notNull(),
+  /*
+   * Deterministic hash of the canonical logical plan content.
+   * Used only for applyPlan idempotency detection, never as an identity.
+   */
+  planFingerprint: text("plan_fingerprint").notNull(),
   version: integer("version").notNull(),
+  /*
+   * References autonomous_plans(plan_id) — the logical plan identity of the
+   * superseded version — NOT the internal surrogate id.
+   */
+  predecessorPlanId: text("predecessor_plan_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 }, (t) => [
   unique("autonomous_plans_mission_id_version_unique").on(t.missionId, t.version),
   unique("autonomous_plans_plan_id_unique").on(t.planId),
+  unique("autonomous_plans_mission_id_plan_fingerprint_unique").on(t.missionId, t.planFingerprint),
   index("autonomous_plans_mission_id_idx").on(t.missionId),
+  foreignKey({
+    columns: [t.predecessorPlanId],
+    foreignColumns: [t.planId],
+    name: "autonomous_plans_predecessor_plan_id_fkey",
+  }),
 ]);
 
 export type AutonomousPlan = typeof autonomousPlans.$inferSelect;

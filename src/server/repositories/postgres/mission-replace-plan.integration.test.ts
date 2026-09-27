@@ -51,14 +51,34 @@ describe("PostgreSQL mission graph replacement", () => {
       ],
     });
 
-    expect(after).toHaveLength(2);
+    /*
+     * Decision 0029: a replan preserves history instead of deleting rows.
+     * Succeeded work is kept untouched, unfinished work becomes `superseded`,
+     * and the new plan's tasks are created as `draft`.
+     */
+    expect(after).toHaveLength(3);
     expect(after).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: before[0].id, status: "succeeded" }),
+        expect.objectContaining({ id: before[1].id, status: "superseded" }),
         expect.objectContaining({ title: "Replacement branch", status: "draft" }),
       ]),
     );
-    expect(after.find((task) => task.id === before[1].id)).toBeUndefined();
+
+    // The failed branch is retained as durable history, never deleted.
+    const supersededTask = after.find((task) => task.id === before[1].id);
+    expect(supersededTask).toBeDefined();
+    expect(supersededTask?.status).toBe("superseded");
+
+    // And it is durably persisted, not merely reported.
+    const persisted = await container.mission.listTasks(mission.id);
+    expect(persisted).toHaveLength(3);
+    expect(
+      persisted.find((task) => task.id === before[1].id)?.status,
+    ).toBe("superseded");
+    expect(
+      persisted.find((task) => task.id === before[0].id)?.status,
+    ).toBe("succeeded");
   });
 
   it("rolls back the whole replacement when an insert fails", async () => {

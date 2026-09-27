@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AutonomousPlan } from "@/server/database/schema";
 import { autonomousPlans } from "@/server/database/schema";
 
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { MissionStatus } from "@/core/mission/contracts";
 
 import type { Mission, MissionTask } from "@/core/mission/contracts";
@@ -13,6 +13,7 @@ import type {
   MissionPlan,
 } from "@/server/mission/mission-plan";
 import {
+  fingerprintMissionPlan,
   validateMissionPlan,
 } from "@/server/mission/mission-plan";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -229,42 +230,81 @@ export class PostgresMissionRepository implements MissionRepository {
     if (!missionObj) {
       throw new Error(`MISSION_NOT_FOUND:${missionId}`);
     }
-    const goalId = missionObj.goalId;
-    if (!goalId) {
-      throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
-    }
+    /*
+     * Autonomous vs generic missions (mission N11).
+     *
+     * A goal-backed mission is autonomous: it receives immutable plan lineage
+     * in autonomous_plans and its canonical Tasks carry goalId + planId.
+     *
+     * A mission with no goalId is a generic/manual mission. The canonical Task
+     * contract declares goalId/planId OPTIONAL for exactly this case
+     * (taskSchema, versus the strict autonomousTaskSpecSchema), so the strict
+     * autonomous requirement must not be forced onto the generic path.
+     *
+     * Lineage is SKIPPED, never faked: goalId is never defaulted to missionId
+     * and planId is never invented.
+     */
+    const goalId = missionObj.goalId ?? undefined;
 
-    // Check for existing autonomous plan for this mission (durability across restarts)
-    const existingPlan = await this.db
-      .select()
-      .from(autonomousPlans)
-      .where(eq(autonomousPlans.missionId, missionId))
-      .limit(1);
+    let planId: string | undefined;
 
-    let planId: string;
-    if (existingPlan[0]) {
-      // Reuse the existing planId from the durable record
-      planId = existingPlan[0].planId;
-    } else {
-      // No existing plan, create a new one
-      planId = randomUUID();
+    if (goalId) {
+      /*
+       * applyPlan idempotency (mission N8).
+       *
+       * Keyed on the plan FINGERPRINT, not merely on missionId: an applyPlan
+       * retry of the same logical plan must reuse the same persisted plan
+       * version (P1/version 1) instead of allocating a duplicate row.
+       *
+       * planFingerprint is content; planId is identity. Never equal.
+       */
+      const planFingerprint =
+        fingerprintMissionPlan(plan);
+
+      const existingPlan = await this.db
+        .select()
+        .from(autonomousPlans)
+        .where(
+          and(
+            eq(
+              autonomousPlans.missionId,
+              missionId,
+            ),
+            eq(
+              autonomousPlans.planFingerprint,
+              planFingerprint,
+            ),
+          ),
+        )
+        .limit(1);
+
+      if (existingPlan[0]) {
+        // Same logical plan already persisted: reuse its durable identity.
+        planId = existingPlan[0].planId;
+      } else {
+        // First version of this mission's plan chain.
+        planId = randomUUID();
+        await this.db
+          .insert(autonomousPlans)
+          .values({
+            id: randomUUID(),
+            missionId,
+            goalId,
+            planId,
+            planFingerprint,
+            version: 1,
+            predecessorPlanId: null,
+            createdAt: now,
+            updatedAt: now,
+          });
+      }
+
+      // Ensure the mission points to the current plan version.
       await this.db
-        .insert(autonomousPlans)
-        .values({
-          id: randomUUID(),
-          missionId,
-          goalId,
-          planId,
-          version: 1,
-          createdAt: now,
-          updatedAt: now,
-        });
+        .update(missions)
+        .set({ planId })
+        .where(eq(missions.id, missionId));
     }
-    // Ensure the mission points to the current plan
-    await this.db
-      .update(missions)
-      .set({ planId })
-      .where(eq(missions.id, missionId));
 
     const preparedTasks =
       plan.tasks.map((task) => {
@@ -429,6 +469,25 @@ export class PostgresMissionRepository implements MissionRepository {
     );
   }
 
+  /**
+   * Immutable plan lineage, oldest version first.
+   * Superseded versions are never removed or mutated.
+   */
+  async listPlanLineage(
+    missionId: string,
+  ): Promise<AutonomousPlan[]> {
+    return await this.db
+      .select()
+      .from(autonomousPlans)
+      .where(
+        eq(
+          autonomousPlans.missionId,
+          missionId,
+        ),
+      )
+      .orderBy(asc(autonomousPlans.version));
+  }
+
   async replacePlan(missionId: string, plan: MissionPlan): Promise<MissionTask[]> {
     validateMissionPlan(plan);
     const now = new Date();
@@ -437,33 +496,42 @@ export class PostgresMissionRepository implements MissionRepository {
     if (!missionObj) {
       throw new Error(`MISSION_NOT_FOUND:${missionId}`);
     }
-    const goalId = missionObj.goalId;
-    if (!goalId) {
-      throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
-    }
+    // See applyPlan: generic missions carry no autonomous plan lineage.
+    const goalId = missionObj.goalId ?? undefined;
 
-    // For replacePlan, we update the autonomous plan to a new version
-    const existingPlan = await this.db
-      .select()
-      .from(autonomousPlans)
-      .where(eq(autonomousPlans.missionId, missionId))
-      .limit(1);
+    /*
+     * Replanning lineage (mission N8).
+     *
+     * A genuine replan APPENDS an immutable new version:
+     *
+     *   P1 <- P2 <- P3
+     *
+     * The superseded row is never mutated: previous AutonomousPlan versions
+     * are immutable history. predecessorPlanId carries the previous version's
+     * planId (its logical identity), never its surrogate id.
+     */
+    let planId: string | undefined;
 
-    let planId: string;
-    if (existingPlan[0]) {
-      // Generate a new planId for the new version
+    if (goalId) {
+      const planFingerprint =
+        fingerprintMissionPlan(plan);
+
+      const currentPlan = await this.db
+        .select()
+        .from(autonomousPlans)
+        .where(
+          eq(
+            autonomousPlans.missionId,
+            missionId,
+          ),
+        )
+        .orderBy(
+          desc(autonomousPlans.version),
+        )
+        .limit(1);
+
       planId = randomUUID();
-      await this.db
-        .update(autonomousPlans)
-        .set({
-          planId: planId,
-          version: existingPlan[0].version + 1,
-          updatedAt: now,
-        })
-        .where(eq(autonomousPlans.missionId, missionId));
-    } else {
-      // No existing plan, create a new one (should not happen in replan, but handle)
-      planId = randomUUID();
+
       await this.db
         .insert(autonomousPlans)
         .values({
@@ -471,10 +539,30 @@ export class PostgresMissionRepository implements MissionRepository {
           missionId,
           goalId,
           planId,
-          version: 1,
+          planFingerprint,
+          /*
+           * No current row means replacePlan was reached without a persisted
+           * plan version. The in-transaction MISSION_PLAN_NOT_APPLIED check
+           * below is the authoritative guard; rooting the chain at version 1
+           * only keeps the lineage well-formed.
+           */
+          version: currentPlan[0]
+            ? currentPlan[0].version + 1
+            : 1,
+          predecessorPlanId:
+            currentPlan[0]?.planId ?? null,
           createdAt: now,
           updatedAt: now,
         });
+
+      /*
+       * The mission current-plan pointer advances to the new version.
+       * It never moves backwards to a superseded plan.
+       */
+      await this.db
+        .update(missions)
+        .set({ planId })
+        .where(eq(missions.id, missionId));
     }
 
     const preparedTasks =
@@ -560,6 +648,13 @@ export class PostgresMissionRepository implements MissionRepository {
         };
       });
 
+    /*
+     * Captured inside the transaction so the returned graph reflects exactly
+     * what was persisted.
+     */
+    let preservedIds: string[] = [];
+    let supersededIds: string[] = [];
+
     await this.db.transaction(async (tx) => {
       /*
        * Fail closed:
@@ -602,32 +697,70 @@ export class PostgresMissionRepository implements MissionRepository {
         );
       }
 
-      // Delete existing mission tasks and their canonical tasks and audits?
-      // For simplicity, we delete all mission tasks and their canonical tasks and audits for this mission.
-      // In a real system, we might want to keep history, but for now we clean slate.
-      const existingMissionTasks = await tx
-        .select({ id: missionTasks.id })
+      /*
+       * Replanning preserves history; it is NOT a clean slate.
+       *
+       * Matches InMemoryMissionRepository.replacePlan:
+       *   - active work blocks the replan entirely (fail closed)
+       *   - succeeded MissionTasks are preserved untouched
+       *   - every other pre-existing MissionTask becomes `superseded`
+       *   - the new plan's tasks are inserted as `draft`
+       *
+       * Rows are never deleted: a MissionTask that ran is durable evidence,
+       * and its canonical Task + audit entries must stay referentially valid.
+       */
+      const priorTasks = await tx
+        .select()
         .from(missionTasks)
-        .where(eq(missionTasks.missionId, missionId));
+        .where(
+          eq(
+            missionTasks.missionId,
+            missionId,
+          ),
+        );
 
-      const existingTaskIds = await tx
-        .select({ taskId: missionTasks.taskId })
-        .from(missionTasks)
-        .where(eq(missionTasks.missionId, missionId));
+      const ACTIVE_STATUSES = [
+        "queued",
+        "running",
+        "review_pending",
+      ];
 
-      // Delete mission tasks
-      await tx
-        .delete(missionTasks)
-        .where(eq(missionTasks.missionId, missionId));
+      if (
+        priorTasks.some((task) =>
+          ACTIVE_STATUSES.includes(task.status),
+        )
+      ) {
+        throw new Error(
+          "MISSION_REPLAN_ACTIVE_WORK",
+        );
+      }
 
-      // Delete canonical tasks that are only used by this mission (optional, but we assume they are not shared)
-      // For safety, we only delete tasks that are not referenced by other mission tasks.
-      // Since we don't track references, we'll skip deleting canonical tasks to avoid accidental data loss.
-      // Instead, we rely on the fact that tasks are immutable and can be reused.
-      // However, to avoid orphaned tasks, we could delete tasks that are not used by any mission task.
-      // Given the complexity, we leave it as is for now.
+      supersededIds = priorTasks
+        .filter(
+          (task) => task.status !== "succeeded",
+        )
+        .map((task) => task.id);
 
-      // Delete audit entries for the deleted mission tasks? We'll skip for now.
+      preservedIds = priorTasks
+        .filter(
+          (task) => task.status === "succeeded",
+        )
+        .map((task) => task.id);
+
+      if (supersededIds.length > 0) {
+        await tx
+          .update(missionTasks)
+          .set({
+            status: "superseded",
+            updatedAt: now,
+          })
+          .where(
+            inArray(
+              missionTasks.id,
+              supersededIds,
+            ),
+          );
+      }
 
       for (const prepared of preparedTasks) {
         await tx
@@ -659,9 +792,34 @@ export class PostgresMissionRepository implements MissionRepository {
         );
     });
 
-    return missionTasksToInsert.map(
-      rowToMissionTask,
-    );
+    /*
+     * The replaced graph is preserved succeeded work + superseded history +
+     * the newly created tasks, read back from the durable rows.
+     */
+    const retainedIds = [
+      ...preservedIds,
+      ...supersededIds,
+    ];
+
+    const retained =
+      retainedIds.length > 0
+        ? await this.db
+            .select()
+            .from(missionTasks)
+            .where(
+              inArray(
+                missionTasks.id,
+                retainedIds,
+              ),
+            )
+        : [];
+
+    return [
+      ...retained.map(rowToMissionTask),
+      ...missionTasksToInsert.map(
+        rowToMissionTask,
+      ),
+    ];
   }
 
   async findById(id: string): Promise<Mission | null> {

@@ -260,6 +260,13 @@
       "when": 1790169801000,
       "tag": "0039_task_core3_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790454400287,
+      "tag": "0040_autonomous_plan_lineage",
+      "breakpoints": true
     }
   ]
 }

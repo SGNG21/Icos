@@ -1,4 +1,5 @@
 import type { Mission, MissionTask } from "@/core/mission/contracts";
+import type { AutonomousPlan } from "@/core/contracts/autonomous-plan";
 import type { MissionPlan } from "@/server/mission/mission-plan";
 
 export interface MissionRepository {
@@ -26,6 +27,16 @@ export interface MissionRepository {
   ): Promise<MissionTask[]>;
   /** Atomically replaces unfinished graph work while preserving succeeded history. */
   replacePlan?(missionId: string, plan: MissionPlan): Promise<MissionTask[]>;
+
+  /**
+   * Immutable plan lineage for a mission, oldest version first.
+   *
+   * Superseded versions remain queryable: the chain P1 <- P2 <- P3 is
+   * history, not mutable state. Used to prove replanning lineage.
+   */
+  listPlanLineage?(
+    missionId: string,
+  ): Promise<AutonomousPlan[]>;
 
   findById(id: string): Promise<Mission | null>;
   list(filter?: { status?: Mission["status"] }): Promise<Mission[]>;

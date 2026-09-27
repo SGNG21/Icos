@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface MissionPlanTask {
   /**
    * Stable planner-local identifier.
@@ -132,4 +134,60 @@ export function validateMissionPlan(
   for (const key of byKey.keys()) {
     visit(key);
   }
+}
+
+/*
+ * Canonical JSON serialization for fingerprinting.
+ *
+ * Object keys are emitted in sorted order at every depth so that two
+ * logically identical plans always serialize identically regardless of
+ * property insertion order.
+ *
+ * Array order IS significant: a reordered task list is treated as a
+ * different logical plan. This fails closed — it allocates a new plan
+ * version rather than silently reusing a plan that may materialize
+ * canonical tasks in a different order.
+ *
+ * Never use JSON.stringify(value, Object.keys(value).sort()): the second
+ * argument is a replacer whitelist applied at EVERY depth, which strips
+ * nested task properties and makes the fingerprint blind to plan content.
+ */
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalize).join(",")}]`;
+  }
+
+  const entries = Object.entries(
+    value as Record<string, unknown>,
+  )
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+  return `{${entries
+    .map(
+      ([k, v]) =>
+        `${JSON.stringify(k)}:${canonicalize(v)}`,
+    )
+    .join(",")}}`;
+}
+
+/**
+ * Deterministic hash of the canonical logical content of a MissionPlan.
+ *
+ * This is the planFingerprint of mission §8. It is NOT a planId:
+ * a planId identifies ONE persisted plan version, while the fingerprint
+ * identifies logical plan CONTENT and is used only for idempotency
+ * detection (an applyPlan retry of the same logical plan must reuse the
+ * same persisted plan version instead of allocating a new one).
+ */
+export function fingerprintMissionPlan(
+  plan: MissionPlan,
+): string {
+  return createHash("sha256")
+    .update(canonicalize(plan))
+    .digest("hex");
 }

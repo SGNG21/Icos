@@ -60,7 +60,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     })();
 
     const h = createHarness({ planner, reviewer, dispatcher });
-    const mission = await h.ignite({ title: "Ship it", objective: "Produce the deliverable" });
+    const mission = await h.ignite({ title: "Ship it", objective: "Produce the deliverable", goalId: "g-1" });
 
     // Exactly one task planned and dispatched with deterministic workflow id.
     const tasks = await h.listTasks(mission.id);
@@ -111,6 +111,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     const mission = await h.ignite({
       title: "Correctable",
       objective: "Produce evidence-backed output",
+      goalId: "g-2",
     });
     const taskId = await firstTaskId(h, mission.id);
 
@@ -156,6 +157,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     const mission = await h.ignite({
       title: "Retryable",
       objective: "Survive a transient failure",
+      goalId: "g-3",
     });
     const taskId = await firstTaskId(h, mission.id);
 
@@ -208,6 +210,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     const mission = await h.ignite({
       title: "Replannable",
       objective: "Reach the objective even if the first graph is wrong",
+      goalId: "g-4",
     });
     const originalTaskId = await firstTaskId(h, mission.id);
 
@@ -249,7 +252,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     const dispatcher = new ScriptedWorkerDispatcher();
     const h = createHarness({ planner, reviewer: approving, dispatcher });
 
-    const mission = await h.ignite({ title: "Crashy", objective: "Survive a mid-flight crash" });
+    const mission = await h.ignite({ title: "Crashy", objective: "Survive a mid-flight crash", goalId: "g-5" });
     const taskId = await firstTaskId(h, mission.id);
     expect(dispatcher.dispatches).toHaveLength(1);
 
@@ -297,7 +300,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
       }
     })();
     const h = createHarness({ planner, reviewer: approving });
-    const mission = await h.ignite({ title: "Contended", objective: "Only one owner mutates" });
+    const mission = await h.ignite({ title: "Contended", objective: "Only one owner mutates", goalId: "g-6" });
 
     // Two competing runners contend for the same mission runtime.
     const makeRunner = () =>
@@ -340,7 +343,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     const dispatcher = new ScriptedWorkerDispatcher();
     const h = createHarness({ planner, reviewer: throwing, dispatcher });
 
-    const mission = await h.ignite({ title: "No reviewer", objective: "Must not fake success" });
+    const mission = await h.ignite({ title: "No reviewer", objective: "Must not fake success", goalId: "g-7" });
     const taskId = await firstTaskId(h, mission.id);
 
     // Worker completes, but the review fails closed: recordMissionTaskExecution
@@ -378,7 +381,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
       }
     })();
     const h = createHarness({ planner, reviewer: malformed });
-    const mission = await h.ignite({ title: "Malformed", objective: "Reject malformed review" });
+    const mission = await h.ignite({ title: "Malformed", objective: "Reject malformed review", goalId: "g-8" });
     const taskId = await firstTaskId(h, mission.id);
 
     await expect(h.completeWorker({ workflowId: `icos-task-${taskId}` })).rejects.toThrow();
@@ -438,7 +441,7 @@ describe("Phase 6 — autonomous E2E (deterministic)", () => {
     // Ignition triggers planning + first dispatch, which throws; the runner
     // leaves a PREPARED attempt and surfaces the transport error.
     await expect(
-      h.ignite({ title: "Ambiguous", objective: "Recover uncertain dispatch" }),
+      h.ignite({ title: "Ambiguous", objective: "Recover uncertain dispatch", goalId: "g-9" }),
     ).rejects.toThrow("AMBIGUOUS_TRANSPORT_FAILURE");
     void mission;
 

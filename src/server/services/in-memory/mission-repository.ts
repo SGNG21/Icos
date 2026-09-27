@@ -7,6 +7,7 @@ import type {
   MissionPlan,
 } from "@/server/mission/mission-plan";
 import {
+  fingerprintMissionPlan,
   validateMissionPlan,
 } from "@/server/mission/mission-plan";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -122,40 +123,80 @@ export class InMemoryMissionRepository implements MissionRepository {
         `MISSION_NOT_FOUND:${missionId}`,
       );
     }
-    const goalId = mission.goalId;
-    if (!goalId) {
-      throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
+    /*
+     * Generic missions carry no autonomous plan lineage (mission N11).
+     * See PostgresMissionRepository.applyPlan for the full rationale.
+     */
+    const goalId = mission.goalId ?? undefined;
+
+    /*
+     * N2.7 initial-plan invariant, matching PostgresMissionRepository:
+     * applyPlan() may only initialize a mission that has no tasks yet.
+     * Replanning has explicit semantics via replacePlan().
+     */
+    for (const missionTask of this.missionTasks.values()) {
+      if (missionTask.missionId === missionId) {
+        throw new Error(
+          `MISSION_PLAN_ALREADY_APPLIED:${missionId}`,
+        );
+      }
     }
 
-    // Get the existing plans for this mission (if any)
-    const existingPlans = this.autonomousPlans.get(missionId) ?? [];
-    const existingPlan = existingPlans.length > 0 ? existingPlans[existingPlans.length - 1] : undefined;
+    /*
+     * applyPlan idempotency (mission N8).
+     *
+     * planFingerprint is plan CONTENT; planId is plan IDENTITY.
+     * They are never equal and the fingerprint is never used as an id.
+     *
+     * Reached when a previous attempt persisted the plan row but crashed
+     * before materializing tasks: the same logical plan must reuse the same
+     * durable planId rather than allocating a duplicate version.
+     */
+    let planId: string | undefined;
 
-    let planId: string;
-    if (existingPlan) {
-      // Reuse the existing planId from the durable record
-      planId = existingPlan.planId;
-    } else {
-      // No existing plan, create a new one (version 1)
-      planId = randomUUID();
-      const newPlan: AutonomousPlan = {
-        id: randomUUID(),
-        missionId,
-        goalId,
+    if (goalId) {
+      const planFingerprint =
+        fingerprintMissionPlan(plan);
+
+      const existingPlans =
+        this.autonomousPlans.get(missionId) ??
+        [];
+
+      const samePlan = existingPlans.find(
+        (p) =>
+          p.planFingerprint ===
+          planFingerprint,
+      );
+
+      if (samePlan) {
+        planId = samePlan.planId;
+      } else {
+        planId = randomUUID();
+        const newPlan: AutonomousPlan = {
+          id: randomUUID(),
+          missionId,
+          goalId,
+          planId,
+          planFingerprint,
+          version: 1,
+          predecessorPlanId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        existingPlans.push(newPlan);
+        this.autonomousPlans.set(
+          missionId,
+          existingPlans,
+        );
+      }
+
+      // The mission pointer tracks the applied plan version.
+      this.missions.set(missionId, {
+        ...mission,
         planId,
-        version: 1,
-        createdAt: new Date(),
         updatedAt: new Date(),
-      };
-      this.autonomousPlans.set(missionId, [newPlan]);
+      });
     }
-
-    // Update the mission's planId to the current planId
-    this.missions.set(missionId, {
-      ...mission,
-      planId,
-      updatedAt: new Date(),
-    });
 
     if (!this.taskRepository) {
       throw new Error(
@@ -164,10 +205,10 @@ export class InMemoryMissionRepository implements MissionRepository {
       );
     }
 
-            /*
-             * Allocate every MissionTask ID before creating anything so
-             * planner keys can be resolved deterministically.
-             */
+    /*
+     * Allocate every MissionTask ID before creating anything so
+     * planner keys can be resolved deterministically.
+     */
     const missionTaskIdByKey = new Map<string, string>();
 
     for (const task of plan.tasks) {
@@ -247,46 +288,79 @@ export class InMemoryMissionRepository implements MissionRepository {
     return result;
   }
 
+  /**
+   * Immutable plan lineage, oldest version first.
+   * Superseded versions are never removed or mutated.
+   */
+  async listPlanLineage(
+    missionId: string,
+  ): Promise<AutonomousPlan[]> {
+    return [
+      ...(this.autonomousPlans.get(missionId) ??
+        []),
+    ].sort((a, b) => a.version - b.version);
+  }
+
   async replacePlan(missionId: string, plan: MissionPlan): Promise<MissionTask[]> {
     validateMissionPlan(plan);
     const mission = this.missions.get(missionId);
     if (!mission) throw new Error(`MISSION_NOT_FOUND:${missionId}`);
-    const goalId = mission.goalId;
-    if (!goalId) throw new Error(`MISSION_HAS_NO_GOAL_ID:${missionId}`);
+    // Generic missions carry no autonomous plan lineage (mission N11).
+    const goalId = mission.goalId ?? undefined;
 
-    // For replacePlan, we create a new plan version
-    const existingPlans = this.autonomousPlans.get(missionId) ?? [];
-    let existingPlan: AutonomousPlan | undefined;
-    let version: number;
-    if (existingPlans.length > 0) {
-      existingPlan = existingPlans[existingPlans.length - 1]; // get the latest
-    }
-    let planId: string;
-    if (existingPlan) {
-      planId = randomUUID(); // new planId for new version
-      version = existingPlan.version + 1;
-      // Update the autonomous plan by adding a new version to the list
-      const updatedPlan: AutonomousPlan = {
-        ...existingPlan,
-        planId,
-        version,
-        updatedAt: new Date(),
-      };
-      existingPlans.push(updatedPlan);
-      this.autonomousPlans.set(missionId, existingPlans);
-    } else {
+    /*
+     * Replanning lineage (mission N8), matching PostgresMissionRepository.
+     *
+     * A genuine replan APPENDS an immutable new version with a NEW planId:
+     *
+     *   P1 <- P2 <- P3
+     *
+     * Previous versions are never mutated, and predecessorPlanId carries the
+     * superseded version's planId (its logical identity), never its
+     * surrogate id.
+     */
+    let planId: string | undefined;
+
+    if (goalId) {
+      const planFingerprint =
+        fingerprintMissionPlan(plan);
+
+      const existingPlans =
+        this.autonomousPlans.get(missionId) ??
+        [];
+
+      const currentPlan = existingPlans.reduce<
+        AutonomousPlan | undefined
+      >(
+        (latest, candidate) =>
+          !latest ||
+          candidate.version > latest.version
+            ? candidate
+            : latest,
+        undefined,
+      );
+
       planId = randomUUID();
-      version = 1;
-      const autonomousPlan: AutonomousPlan = {
+
+      existingPlans.push({
         id: randomUUID(),
         missionId,
         goalId,
         planId,
-        version,
+        planFingerprint,
+        version: currentPlan
+          ? currentPlan.version + 1
+          : 1,
+        predecessorPlanId:
+          currentPlan?.planId ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
-      this.autonomousPlans.set(missionId, [autonomousPlan]);
+      });
+
+      this.autonomousPlans.set(
+        missionId,
+        existingPlans,
+      );
     }
 
     if (!this.taskRepository) throw new Error("TaskRepository required for replacePlan()");
@@ -338,10 +412,14 @@ export class InMemoryMissionRepository implements MissionRepository {
     for (const task of [...succeeded, ...superseded, ...created]) {
       this.missionTasks.set(task.id, task);
     }
-    // Update the mission's planId to the new planId
+    /*
+     * The mission current-plan pointer advances to the new version, and never
+     * moves backwards. A generic mission has no plan lineage, so its existing
+     * pointer is preserved rather than cleared.
+     */
     this.missions.set(missionId, {
       ...mission,
-      planId,
+      planId: planId ?? mission.planId,
       updatedAt: new Date(),
     });
     return [...succeeded, ...superseded, ...created];

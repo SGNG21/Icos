@@ -24,7 +24,7 @@ const onePlan = async () => ({
 describe("igniteAutonomousMission", () => {
   it("creates the mission under the imposed id and starts it", async () => {
     const f = setup(onePlan);
-    const result = await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O" });
+    const result = await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O", goalId: "g-1" });
     expect(result).toMatchObject({ missionId: "m-1", outcome: "started" });
     expect((await f.missions.findById("m-1"))?.title).toBe("T");
     expect(f.dispatch).toHaveBeenCalledTimes(1);
@@ -32,8 +32,8 @@ describe("igniteAutonomousMission", () => {
 
   it("is replay-safe: igniting the same id twice never creates a second mission or replans/redispatches", async () => {
     const f = setup(onePlan);
-    await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O" });
-    await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O" });
+    await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O", goalId: "g-1" });
+    await igniteAutonomousMission(f.deps, { id: "m-1", title: "T", objective: "O", goalId: "g-1" });
     expect(await f.missions.list()).toHaveLength(1);
     expect(f.planner.plan).toHaveBeenCalledTimes(1);
     expect(f.dispatch).toHaveBeenCalledTimes(1);
