@@ -10,15 +10,37 @@ M1 — immutable plan lineage: COMPLETE and committed
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-8b93ab2994ce28fd466fadd11d67b59e2ed074d5
-"fix(core3): immutable autonomous plan lineage + repository recovery (M0/M1)"
-Working tree clean at time of writing.
+See M1-FREEZE.md §1 for the frozen git facts.
+M1 implementation commit: 8b93ab2. Freeze commit follows this edit.
 
 ## CERTIFIED_MILESTONES
 - M0 repository recovery — evidence in M0-RECOVERY-REPORT.md
-- M1 immutable plan lineage — evidence in commit 8b93ab2
+- M1 immutable plan lineage — FROZEN, evidence in M1-FREEZE.md (commit 8b93ab2)
 
-### M1 proofs (all factual, re-runnable)
+## RUNTIME WIRING (verified, M1-FREEZE.md §8)
+AUTHORITATIVE: src/server/repositories/postgres/mission-repository.ts
+               (PostgresMissionRepository, container.ts:440)
+IN-MEMORY:     src/server/services/in-memory/mission-repository.ts (container.ts:249)
+DEAD:          src/server/mission/postgres-mission-repository.ts — zero importers,
+               never touches autonomous_plans. SHOULD_NEXT, not removed in M1.
+
+## CERTIFICATION WORK FROM SKIPPED TESTS (M1-FREEZE.md §5)
+77 integration tests in 10 files are SKIPPED — all via
+describe.skipIf(!dockerAvailable) (Testcontainers; Docker daemon not running
+here). Skipped tests are NOT pass evidence. No M1 proof depends on Docker.
+
+CERT-1 BLOCKS CORE3 — capability-schema (7) + postgres-capability-uow (4):
+        must pass before CAPABILITY_ROUTING is PROVEN in M4.
+CERT-2 BLOCKS CORE3 — append-only (3): must pass before claiming audit/evidence
+        immutability (mission N18/N31).
+CERT-3 SHOULD      — repositories (14) + container.postgres (5) +
+        postgres-action-decision-uow (6): broad persistence regression cover.
+CERT-4 NOT CORE3   — auth-application (15), auth-foundation (7),
+        user-agent-administration (13), auth-bootstrap-cli (3).
+
+Cheapest fix for CERT-1..3: start Docker, re-run the integration suite.
+
+### M1 proofs (all factual, re-runnable) — full table in M1-FREEZE.md §9
 PLAN_ID_NOT_FINGERPRINT      PROVEN (unit + postgres)
 APPLYPLAN_IDEMPOTENT         PROVEN (postgres crash-window retry reuses P1)
 REPLAN_NEW_IDENTITY          PROVEN (postgres: P2 planId != P1 planId)
@@ -29,13 +51,15 @@ UNIQUE_PLAN_ID               PROVEN (postgres constraint rejects)
 UNIQUE_MISSION_VERSION       PROVEN (postgres constraint rejects)
 PREDECESSOR_FK_ENFORCED      PROVEN (postgres rejects dangling predecessor)
 FINGERPRINT_CONTENT_SENSITIVE PROVEN (unit, + mutation-tested)
+FINGERPRINT_SCOPED_PER_MISSION PROVEN (postgres)
 GENERIC_MISSION_NO_LINEAGE   PROVEN (postgres)
+SUPERSEDED_NEVER_RUNNABLE    PROVEN (unit, + mutation-tested)
 MIGRATION_RERUNNABLE         PROVEN (applied twice via psql, exit 0)
 MIGRATION_LEGACY_UPGRADE     PROVEN (pre-0040 table + row upgraded, no loss)
 CORE1_REGRESSION             PASS (integration 0 failures)
 CORE2_REGRESSION             PASS (integration 0 failures)
 TYPECHECK                    PASS
-TESTS                        PASS (1525 unit + 212 integration)
+TESTS                        PASS (1530 unit + 212 integration)
 DIFF_CHECK                   PASS
 
 ## TEST_BASELINE
@@ -84,9 +108,8 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
    create a lineage node) but not yet explicitly decided/documented. No test
    currently pins this behavior either way.
 
-8. 10 integration FILES / 77 tests are SKIPPED. Not yet investigated. Skipped
-   tests are not evidence; before CORE3 certification, each skip must be
-   justified or enabled.
+8. RESOLVED as a record — the 77 skips are enumerated and classified in
+   M1-FREEZE.md §5 and tracked above as CERT-1..CERT-4. Still unrun.
 
 9. `SchedulerService` has its own private `canonical()` JSON serializer for
    payload hashing, separate from `fingerprintMissionPlan`'s canonicalize().
@@ -131,6 +154,17 @@ touched, kept for orientation.
 - drizzle/0040_autonomous_plan_lineage.sql      (hardened, additive, rollback notes)
 - drizzle/meta/_journal.json                    (idx 37 / 0040)
 - src/server/usecases/*.test.ts                 (goalId added — legitimate)
+
+## REPLAN SEMANTIC — LOCKED (M1-FREEZE.md §6)
+Historical MissionTasks stay durable as `superseded`; replan deletes no rows.
+Verified that computeReadyTasks, readyDraftTasks, hasActiveWork, hasDraftTasks
+and the dispatch ledger all refuse superseded work, and that a superseded
+DEPENDENCY does not unlock downstream tasks (fail closed).
+supervisor-service.ts already treats succeeded|superseded as mission success —
+pre-existing, and independent confirmation that supersede-don't-delete is the
+real contract.
+Locked by src/server/supervisor/readiness-superseded.test.ts, mutation-verified.
+Do NOT add `superseded` to any readiness/ready/active set.
 
 ## NEXT_ACTION — M2 (DAG model + validation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
