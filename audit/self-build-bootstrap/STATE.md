@@ -5,17 +5,39 @@ Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M2 — DAG model + validation (NEXT, not started)
-M1 — immutable plan lineage: COMPLETE and committed
+M3 — durable dependency/readiness engine (NEXT, not started)
+M2 — canonical plan contract + task planning metadata: COMPLETE, committed 71ee3aa
+M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-See M1-FREEZE.md §1 for the frozen git facts.
-M1 implementation commit: 8b93ab2. Freeze commit follows this edit.
+71ee3aaa29d06dce305ea838fecefef104c9905f  (M2)
+M1 freeze facts: M1-FREEZE.md §1. M1 implementation: 8b93ab2.
 
 ## CERTIFIED_MILESTONES
 - M0 repository recovery — evidence in M0-RECOVERY-REPORT.md
 - M1 immutable plan lineage — FROZEN, evidence in M1-FREEZE.md (commit 8b93ab2)
+- M2 canonical plan contract + task planning metadata — commit 71ee3aa,
+  audit in M2-POST-PHASE-AUDIT.md
+
+### M2 proofs
+PARALLEL_ROOTS_PROVEN        PROVEN (planExecutionOrder roots + levels)
+DETERMINISTIC_ORDER_PROVEN   PROVEN (shuffled input -> identical order)
+VALID_DAG / CYCLE_REJECTED / MISSING_REFERENCE_REJECTED /
+DUPLICATE_KEY_REJECTED / SELF_DEPENDENCY_REJECTED   PASS (pre-existing validator)
+UNKNOWN_RISK_FAILS_CLOSED    PROVEN (validator + DB CHECK)
+PLANNER_METADATA_ORIGIN      PROVEN (planner parses + forwards envelope)
+METADATA_PERSISTED           PROVEN (postgres round-trip)
+SURVIVES_RESTART             PROVEN (container closed, values reread)
+SURVIVES_REPLAN              PROVEN (P1 task keeps its own envelope + planId)
+MIGRATION_0041_RERUNNABLE    PROVEN (exit 0 twice)
+MIGRATION_0041_LEGACY_SAFE   PROVEN (populated pre-0041 tasks table upgraded)
+
+### NOT proven by M2 (do not overclaim — M2-POST-PHASE-AUDIT S1)
+The envelope is persisted but NOT yet honored at runtime: attemptBudget bounds
+nothing, reviewPolicy branches nothing, requiredCapabilities does not route, and
+the worker prompt still uses `task.description || task.title`. Those belong to
+M4/M5 and to bounded repair.
 
 ## RUNTIME WIRING (verified, M1-FREEZE.md §8)
 AUTHORITATIVE: src/server/repositories/postgres/mission-repository.ts
@@ -59,7 +81,7 @@ MIGRATION_LEGACY_UPGRADE     PROVEN (pre-0040 table + row upgraded, no loss)
 CORE1_REGRESSION             PASS (integration 0 failures)
 CORE2_REGRESSION             PASS (integration 0 failures)
 TYPECHECK                    PASS
-TESTS                        PASS (1530 unit + 212 integration)
+TESTS                        PASS (1560 unit + 219 integration)
 DIFF_CHECK                   PASS
 
 ## TEST_BASELINE
@@ -69,7 +91,7 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at 8b93ab2):
+Current (at 71ee3aa):
 - `pnpm run typecheck`: PASS
 - `pnpm run test` (unit): PASS — 129 files, 1525 tests
 - integration: PASS — 38 files / 212 tests, 0 failed, 10 files / 77 tests skipped
@@ -166,7 +188,26 @@ real contract.
 Locked by src/server/supervisor/readiness-superseded.test.ts, mutation-verified.
 Do NOT add `superseded` to any readiness/ready/active set.
 
-## NEXT_ACTION — M2 (DAG model + validation)
+## NEXT_ACTION — M3 (durable dependency / readiness engine, mission N13)
+
+M3 must resolve M2 audit finding S2 FIRST: the task DAG has two
+representations. `mission_tasks.depends_on` holds the real edges and drives
+`computeReadyTasks`; `tasks.dependencies` is persisted but every writer passes
+`[]`, so the canonical Task's own edge list is permanently empty. Mission N13
+requires readiness to derive from CANONICAL dependency completion, so decide
+which is authoritative and stop writing the other. Do not backfill one from the
+other (audit R1).
+
+Then:
+1. exactly-once DAG advancement — a dependency must be canonically completed,
+   never merely claimed by a worker;
+2. wire `planExecutionOrder().levels` into the readiness/parallelism path
+   instead of recomputing readiness ad hoc;
+3. prove: C depends on A+B advances ONLY when both are canonically succeeded;
+   a superseded dependency never advances it (already locked by
+   readiness-superseded.test.ts); concurrent advancement cannot double-advance.
+
+## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
 duplicate keys, unknown dependency refs, self-dependencies, duplicate edges and
 cycles. M2 therefore starts from a real base. Still missing per mission N11/N12:
