@@ -1044,3 +1044,63 @@ export const autonomousPlans = pgTable("autonomous_plans", {
 ]);
 
 export type AutonomousPlan = typeof autonomousPlans.$inferSelect;
+/*
+ * Durable worker registry (migration 0042, decision 0031).
+ *
+ * A Worker is an EXECUTION UNIT. It is deliberately NOT a Model, NOT a
+ * Provider, NOT an Account and NOT a capacity slot — those are separate
+ * concerns owned by the AI resource catalog and, later, the Resource Manager.
+ * Nothing here names a provider; routing is data, not code.
+ *
+ * Before 0042 the registry was `new InMemoryWorkerRegistry([])` in
+ * container.ts: empty at boot, unqueryable, and gone on restart. Capability
+ * routing on top of that could not survive a process restart, so it could not
+ * be certified.
+ *
+ * FAIL CLOSED BY DEFAULT: health, availability and runtime_support all default
+ * to their "unknown" value, and the canonical matcher
+ * (src/core/workers/worker-eligibility.ts) admits only the one exact value per
+ * gate. A row inserted with no probe data routes nothing.
+ */
+export const workers = pgTable(
+  "workers",
+  {
+    id: text("id").primaryKey(),
+    workerKind: text("worker_kind").notNull(),
+    displayName: text("display_name").notNull(),
+    /** Capability keys this worker can satisfy. Matched exactly, never by prefix. */
+    capabilities: jsonb("capabilities").default([]).notNull(),
+    features: jsonb("features").default([]).notNull(),
+    supportsTools: boolean("supports_tools").default(false).notNull(),
+    supportsStructuredOutput: boolean("supports_structured_output").default(false).notNull(),
+    status: text("status").default("inactive").notNull(),
+    runtime: text("runtime").default("unknown").notNull(),
+    runtimeSupport: text("runtime_support").default("UNKNOWN").notNull(),
+    health: text("health").default("unknown").notNull(),
+    availability: text("availability").default("unknown").notNull(),
+    tags: jsonb("tags").default([]).notNull(),
+    metadata: jsonb("metadata").default({}).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    /*
+     * Fail closed at the database boundary too: an unknown enum value cannot be
+     * stored even by a caller that bypasses the Zod contract.
+     */
+    check("workers_status_check", sql`${t.status} in ('active','inactive','maintenance')`),
+    check("workers_runtime_check", sql`${t.runtime} in ('node','docker','binary','wasm','unknown')`),
+    check(
+      "workers_runtime_support_check",
+      sql`${t.runtimeSupport} in ('SUPPORTED_RUNTIME','DECLARED_ONLY','UNKNOWN')`,
+    ),
+    check("workers_health_check", sql`${t.health} in ('healthy','degraded','unhealthy','unknown')`),
+    check(
+      "workers_availability_check",
+      sql`${t.availability} in ('available','unavailable','unknown')`,
+    ),
+    index("workers_worker_kind_idx").on(t.workerKind),
+    index("workers_status_idx").on(t.status),
+  ],
+);
+
+export type WorkerRow = typeof workers.$inferSelect;

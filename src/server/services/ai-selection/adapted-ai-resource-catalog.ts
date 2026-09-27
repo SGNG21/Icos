@@ -1,6 +1,7 @@
 import { WorkerCandidate, ModelCandidate, ProviderCandidate, AIResourceCatalogPort } from "@/core/contracts/ai-selection";
 import { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import { WorkerRegistryPort } from "@/core/contracts/worker-registry";
+import { evaluateWorkerEligibility } from "@/core/workers/worker-eligibility";
 import { AIResourceCatalog } from "./ai-resource-catalog";
 
 /**
@@ -98,18 +99,16 @@ export class AdaptedAIResourceCatalog implements AIResourceCatalogPort {
   }
 
   /**
-     * Determines if a worker is runnable based on registry state.
-     * Runnable means: status == active, runtimeSupport == SUPPORTED_RUNTIME,
-     * availability != unavailable, and health != unhealthy.
-     * This matches a fail-closed policy where unknown health/availability are allowed
-     * but unhealthy/unavailable are not.
-     */
-    private isRunnable(entry: WorkerRegistryEntry): boolean {
-      return (
-        entry.status === "active" &&
-        entry.runtimeSupport === "SUPPORTED_RUNTIME" &&
-        entry.availability !== "unavailable" &&
-        entry.health !== "unhealthy"
-      );
-    }
+   * Delegates to THE canonical eligibility authority (decision 0031).
+   *
+   * BEHAVIOUR CHANGE, DELIBERATE: this method previously accepted
+   * `availability !== "unavailable" && health !== "unhealthy"`, so a worker
+   * whose health or availability was "unknown" was treated as runnable. That
+   * was a third, LOOSER matcher, and it failed OPEN on exactly the state the
+   * registry defaults to. Unknown now fails closed, consistent with reviewer
+   * selection and bounded repair.
+   */
+  private isRunnable(entry: WorkerRegistryEntry): boolean {
+    return evaluateWorkerEligibility(entry).eligible;
+  }
 }

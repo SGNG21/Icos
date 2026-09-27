@@ -1,4 +1,5 @@
 import type { WorkerRegistryPort, WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import { selectEligibleWorkers } from "@/core/workers/worker-eligibility";
 import type { ReviewInput, ReviewDecision, ReviewDecisionRecord } from "@/server/review/ports";
 
 export interface ReviewerIdentity {
@@ -197,40 +198,19 @@ export class IndependentReviewerSelector {
 
     const allWorkers = this.workerRegistry.listWorkers();
 
-    // Filter eligible reviewers: active, supported runtime, healthy, available
-    const eligibleReviewers = allWorkers.filter((worker) => {
-      if (worker.id === this.producerWorkerId) {
-        return false; // Cannot be the same worker
-      }
-
-      if (worker.status !== "active") {
-        return false;
-      }
-
-      if (worker.runtimeSupport !== "SUPPORTED_RUNTIME") {
-        return false;
-      }
-
-      // Fail closed: ONLY "healthy" is acceptable, UNKNOWN is ineligible
-      if (worker.health !== "healthy") {
-        return false;
-      }
-
-      // Fail closed: ONLY "available" is acceptable, UNKNOWN is ineligible
-      if (worker.availability !== "available") {
-        return false;
-      }
-
-      if (this.requiredCapabilities && this.requiredCapabilities.length > 0) {
-        const hasAllCapabilities = this.requiredCapabilities.every(
-          (cap) => worker.capabilities.includes(cap)
-        );
-        if (!hasAllCapabilities) {
-          return false;
-        }
-      }
-
-      return true;
+    /*
+     * Eligibility is delegated to THE canonical authority
+     * (src/core/workers/worker-eligibility.ts, decision 0031). This method used
+     * to hand-roll the same gates; BoundedRepairController hand-rolled them
+     * again, and AdaptedAIResourceCatalog hand-rolled a LOOSER variant that let
+     * unprobed workers through. Reviewer independence is expressed here purely
+     * as "exclude the producer" — the strict active / supported-runtime /
+     * healthy / available / all-capabilities gates come from the shared matcher,
+     * unchanged in meaning.
+     */
+    const eligibleReviewers = selectEligibleWorkers(allWorkers, {
+      requiredCapabilities: this.requiredCapabilities,
+      excludeWorkerIds: [this.producerWorkerId],
     });
 
     if (eligibleReviewers.length === 0) {
@@ -241,9 +221,8 @@ export class IndependentReviewerSelector {
       };
     }
 
-    // Select first eligible reviewer (deterministic: sorted by ID)
-    const selectedReviewer = eligibleReviewers
-      .sort((a, b) => a.id.localeCompare(b.id))[0];
+    // selectEligibleWorkers already returns a deterministic id-sorted list.
+    const selectedReviewer = eligibleReviewers[0];
 
     return {
       success: true,

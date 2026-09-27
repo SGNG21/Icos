@@ -76,6 +76,8 @@ export async function POST(request: Request): Promise<Response> {
       container.taskExecution,
       container.durableMemory,
       container.dispatchAttempts,
+      undefined,
+      container.capabilityRouter,
     );
 
     const result = await igniteAutonomousMission(

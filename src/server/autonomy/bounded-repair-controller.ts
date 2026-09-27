@@ -1,4 +1,5 @@
 import type { WorkerRegistryPort, WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import { selectEligibleWorkers } from "@/core/workers/worker-eligibility";
 import type { MissionTask } from "@/core/mission/contracts";
 import type { TaskExecutionDispatchInput } from "@/server/execution/ports";
 
@@ -48,37 +49,14 @@ export class BoundedRepairController {
     return `repair-${attemptNumber}-${crypto.randomUUID().slice(0, 8)}`;
   }
 
+  /**
+   * Delegates to THE canonical eligibility authority (decision 0031). This
+   * used to be a verbatim copy of IndependentReviewerSelector's filter.
+   */
   private getEligibleWorkers(): WorkerRegistryEntry[] {
-    const allWorkers = this.workerRegistry.listWorkers();
-
-    return allWorkers.filter((worker) => {
-      if (worker.status !== "active") {
-        return false;
-      }
-
-      if (worker.runtimeSupport !== "SUPPORTED_RUNTIME") {
-        return false;
-      }
-
-      // Fail closed: ONLY "healthy" is acceptable, UNKNOWN is ineligible
-      if (worker.health !== "healthy") {
-        return false;
-      }
-
-      // Fail closed: ONLY "available" is acceptable, UNKNOWN is ineligible
-      if (worker.availability !== "available") {
-        return false;
-      }
-
-      if (this.requiredCapability && !worker.capabilities.includes(this.requiredCapability)) {
-        return false;
-      }
-
-      if (this.requiredWorkerKind && worker.workerKind !== this.requiredWorkerKind) {
-        return false;
-      }
-
-      return true;
+    return selectEligibleWorkers(this.workerRegistry.listWorkers(), {
+      requiredCapabilities: this.requiredCapability ? [this.requiredCapability] : undefined,
+      workerKind: this.requiredWorkerKind,
     });
   }
 

@@ -99,6 +99,8 @@ function createRecoveryScheduler(
     container.taskExecution,
     container.durableMemory,
     container.dispatchAttempts,
+    undefined,
+    container.capabilityRouter,
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,

@@ -7,6 +7,8 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { DurableMemory } from "@/core/context/durable-memory";
 import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
 
+import type { CapabilityRouter } from "@/server/routing/capability-router";
+
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
@@ -22,7 +24,51 @@ export class SupervisorService {
     private readonly durableMemory: DurableMemory,
     private readonly dispatchAttempts?: DispatchAttemptRepository,
     private readonly workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator,
+    /**
+     * M4 capability routing (decision 0031). Optional: when absent, dispatch
+     * behaves exactly as it did before M4 and `tasks.required_capabilities`
+     * routes nothing.
+     */
+    private readonly capabilityRouter?: CapabilityRouter,
   ) {}
+
+  /**
+   * Resolves the routing decision for one ready MissionTask.
+   *
+   * requiredCapabilities is read from the DURABLE CANONICAL Task
+   * (tasks.required_capabilities, migration 0041) via taskId — not from the
+   * MissionTask and not from planner output held in memory. That is the whole
+   * point of M4: the value that survived the restart is the value that routes.
+   */
+  private async routeReadyTask(
+    missionTask: { taskId: string; workerKind?: string | null },
+  ): Promise<{ blocked: boolean; workerKind?: string; reason?: string }> {
+    if (!this.capabilityRouter) {
+      return { blocked: false };
+    }
+
+    const canonicalTask = await this.taskRepository.getById(missionTask.taskId);
+    const requiredCapabilities = canonicalTask?.requiredCapabilities ?? [];
+
+    const routing = this.capabilityRouter.route({
+      requiredCapabilities,
+      workerKind: missionTask.workerKind ?? undefined,
+    });
+
+    if (routing.decision === "NO_ELIGIBLE_WORKER") {
+      // FAIL CLOSED: refuse the dispatch rather than hand the task to whatever
+      // worker happens to be first. A blocked task is recoverable; work done by
+      // an under-qualified worker is not.
+      return { blocked: true, reason: routing.reason };
+    }
+
+    if (routing.decision === "ROUTED" && routing.worker) {
+      return { blocked: false, workerKind: routing.worker.workerKind };
+    }
+
+    // ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour.
+    return { blocked: false };
+  }
 
   /**
    * Explicit restart recovery.
@@ -145,10 +191,17 @@ export class SupervisorService {
     for (const task of readyTasks) {
       signal?.throwIfAborted();
 
+      const routing = await this.routeReadyTask(task);
+      if (routing.blocked) {
+        await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "blocked");
+        continue;
+      }
+      const routedWorkerKind = routing.workerKind ?? task.workerKind ?? undefined;
+
       const prompt = task.description || task.title;
 
       // Phase 8D: Use WorkspaceExecutionCoordinator for workspace-aware execution
-      if (this.workspaceExecutionCoordinator && task.workerKind) {
+      if (this.workspaceExecutionCoordinator && routedWorkerKind) {
         let allocated = false;
         try {
           if (!this.dispatchAttempts) {
@@ -165,7 +218,7 @@ export class SupervisorService {
             attempt: attemptNumber,
             workflowId,
             prompt,
-            workerKind: task.workerKind,
+            workerKind: routedWorkerKind,
             capability: task.capability || undefined,
           });
           if (!prepared.acquired) continue;
@@ -174,7 +227,7 @@ export class SupervisorService {
           await this.workspaceExecutionCoordinator.allocateWorkspace(
             mission.id,
             task.taskId,
-            task.workerKind,
+            routedWorkerKind,
             task.title
               .toLowerCase()
               .replace(/[^a-z0-9]+/g, "-")
@@ -189,7 +242,7 @@ export class SupervisorService {
             taskId: task.taskId,
             taskTitle: task.title,
             prompt,
-            workerKind: task.workerKind || undefined,
+            workerKind: routedWorkerKind,
             capability: task.capability || undefined,
             digitalosFacadePath,
             signal,
@@ -233,7 +286,7 @@ export class SupervisorService {
           attempt: attemptNumber,
           workflowId,
           prompt,
-          workerKind: task.workerKind || undefined,
+          workerKind: routedWorkerKind,
           capability: task.capability || undefined,
         });
 
@@ -255,7 +308,7 @@ export class SupervisorService {
             taskTitle: task.title,
             prompt,
             workflowId: attempt.workflowId,
-            workerKind: task.workerKind || undefined,
+            workerKind: routedWorkerKind,
             capability: task.capability || undefined,
             digitalosFacadePath,
             signal,
@@ -290,7 +343,7 @@ export class SupervisorService {
         taskId: task.taskId,
         taskTitle: task.title,
         prompt,
-        workerKind: task.workerKind || undefined,
+        workerKind: routedWorkerKind,
         capability: task.capability || undefined,
         digitalosFacadePath,
         signal,

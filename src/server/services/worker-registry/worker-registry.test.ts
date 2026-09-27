@@ -100,15 +100,42 @@ describe("InMemoryWorkerRegistry", () => {
     expect(registry.snapshot().length).toBe(testWorkers.length);
   });
 
-  test("registry -> WorkerCandidate mapping", () => {
+  /*
+   * M4 / decision 0031 — BEHAVIOUR CHANGE, DELIBERATE.
+   *
+   * This test previously asserted that all three fixtures with a base-catalog
+   * entry were runnable, even though every fixture carries health "unknown"
+   * and availability "unknown" (the fixtures say so explicitly: "Fail-closed:
+   * we don't probe health"). It passed only because
+   * AdaptedAIResourceCatalog.isRunnable() was a third, looser matcher that
+   * accepted `health !== "unhealthy" && availability !== "unavailable"` — it
+   * failed OPEN on exactly the value the registry defaults to.
+   *
+   * The adapter now uses the canonical matcher, so the assertion is inverted:
+   * unprobed means ineligible. The positive case below proves the mapping
+   * itself still works once workers are actually probed.
+   */
+  test("registry -> WorkerCandidate mapping: unprobed workers fail closed", () => {
     registry = new InMemoryWorkerRegistry(testWorkers);
     const baseCatalog = new AIResourceCatalog();
     const adapter = new AdaptedAIResourceCatalog(registry, baseCatalog);
+
+    expect(adapter.listWorkers()).toHaveLength(0);
+  });
+
+  test("registry -> WorkerCandidate mapping: probed workers are mapped", () => {
+    const probed = testWorkers.map((w) => ({
+      ...w,
+      health: "healthy" as const,
+      availability: "available" as const,
+    }));
+    registry = new InMemoryWorkerRegistry(probed);
+    const baseCatalog = new AIResourceCatalog();
+    const adapter = new AdaptedAIResourceCatalog(registry, baseCatalog);
     const catalog = adapter.listWorkers();
-    // Only workers that are both runnable and have base catalog entry:
+    // Only workers that are both runnable and have a base catalog entry:
     // agent, other, hermes (openhands and digitalos missing from base catalog)
     expect(catalog).toHaveLength(3);
-    // find the hermes worker
     const hermes = catalog.find(w => w.workerKind === "hermes");
     expect(hermes).toBeDefined();
     expect(hermes?.workerKind).toBe("hermes");

@@ -28,6 +28,10 @@ import { InMemoryTaskRepository } from "@/server/services/in-memory/task-reposit
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
+import { CapabilityRouter } from "@/server/routing/capability-router";
+import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
+import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
+import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
 import { WorkspaceManager } from "@/server/workspace-manager/manager";
 import { InMemoryWorkspaceRegistry } from "@/server/workspace-manager/registry";
 import { InMemoryGit } from "@/server/workspace-manager/in-memory-git";
@@ -158,6 +162,18 @@ export interface Container {
   goalNormalizer: GoalNormalizer;
   goalPlanner: GoalPlanner;
   goalPreviewStore: GoalPreviewStore;
+  /**
+   * Durable worker registry (M4, decision 0031). Registering or probing a
+   * worker here is what makes capability routing authoritative — see
+   * `capabilityRouter`.
+   */
+  workerRegistryStore: WorkerRegistryStore;
+  /**
+   * Capability routing over the worker registry hydrated at container build
+   * (M4, decision 0031). With an empty registry it reports
+   * ROUTING_UNCONFIGURED and dispatch behaves exactly as before M4.
+   */
+  capabilityRouter: CapabilityRouter;
   /** AI Selection Engine (Phase 8B) */
   aiResourceCatalog: AIResourceCatalogPort;
   aiSelectionEngine: AISelectionEngine;
@@ -264,8 +280,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const goalRepository = new InMemoryGoalRepository(auditLog);
   const goalPreviewStore = new GoalPreviewStore(goalRepository);
 
-  // Worker Registry (Phase 8C)
+  // Worker Registry (Phase 8C) — durable store + hydrated read model (M4).
+  // buildMemoryContainer is synchronous by contract, and a fresh in-memory
+  // store is empty by construction, so there is nothing to hydrate.
+  const workerRegistryStore = new InMemoryWorkerRegistryStore();
   const workerRegistry = new InMemoryWorkerRegistry([]);
+  const capabilityRouter = new CapabilityRouter(workerRegistry);
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -342,6 +362,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     goalPlanner,
     goalPreviewStore,
     // AI Selection Engine (Phase 8B)
+    workerRegistryStore,
+    capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine,
   };
@@ -459,7 +481,14 @@ export async function buildPostgresContainer(
     new PostgresMessageRepository(handle.db),
   );
 
-  const workerRegistry = new InMemoryWorkerRegistry([]);
+  /*
+   * M4: the registry read model is HYDRATED FROM POSTGRES at container build.
+   * That is what makes routing survive a process restart — a new process reads
+   * the same `workers` rows and reaches the same routing decision.
+   */
+  const workerRegistryStore = new PostgresWorkerRegistryStore(handle.db);
+  const workerRegistry = new InMemoryWorkerRegistry(await workerRegistryStore.list());
+  const capabilityRouter = new CapabilityRouter(workerRegistry);
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
 
@@ -544,6 +573,8 @@ export async function buildPostgresContainer(
     goalPlanner,
     goalPreviewStore,
     // AI Selection Engine (Phase 8B)
+    workerRegistryStore,
+    capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine: new AISelectionEngine(aiResourceCatalog),
     // Workspace Manager (Phase 8D)
