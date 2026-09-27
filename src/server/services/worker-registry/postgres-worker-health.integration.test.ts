@@ -34,7 +34,10 @@ const healthyAdapter: WorkerHealthProbePort = {
 };
 
 /** A fresh process: new handle, new store, new service instances. */
-function restart(clock: { now: () => Date }, adapters: Record<string, WorkerHealthProbePort> = {}) {
+function restart(
+  clock: { now: () => Date },
+  adapters: Partial<Record<"node" | "docker" | "binary" | "wasm" | "unknown", WorkerHealthProbePort>> = {},
+) {
   const handle = createDatabase(DATABASE_URL);
   handles.push(handle);
   const store = new PostgresWorkerRegistryStore(handle.db);
@@ -107,7 +110,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("HEALTH_PROBING_PROVEN: probing makes a registered worker routable, durably", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
 
     // Registered but unprobed: fail closed, with the reason recorded.
@@ -126,7 +129,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("PROBE_EVIDENCE_IS_DURABLE: the timestamp and outcome survive the process", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
     await a.prober.probeAll();
 
@@ -137,7 +140,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("STALE_HEALTH_FAIL_CLOSED: a healthy worker stops being routed once evidence ages out", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
     await a.prober.probeAll();
     expect((await a.router.route({ requiredCapabilities: [CAPABILITY] })).decision).toBe("ROUTED");
@@ -152,7 +155,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("CRASHED_WORKER_IS_DURABLY_INVALIDATED: expiry rewrites the stored row, not just a verdict", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
     await a.prober.probeAll();
 
@@ -168,7 +171,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("PROCESS_RESTART_CANNOT_RESTORE_HEALTHY: a cold process refuses aged evidence", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
     await a.prober.probeAll();
 
@@ -185,7 +188,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
   it("PROBE_FAILURE_DOES_NOT_SILENTLY_PASS: a failing runtime is stored unhealthy + failed", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
     const a = restart(clock, {
-      agent: {
+      node: {
         probe: async () => {
           throw new Error("RUNTIME_UNREACHABLE");
         },
@@ -200,9 +203,9 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
     expect(reread.lastProbeOutcome).toBe("failed");
   });
 
-  it("UNPROBEABLE_KIND_FAILS_CLOSED: no adapter means unsupported, never routable", async () => {
+  it("UNPROBEABLE_RUNTIME_FAILS_CLOSED: no adapter means unsupported, never routable", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, {}); // the container's real default: no adapters yet
+    const a = restart(clock, {}); // no adapter for any runtime
     await register(a.registration, W1, "hermes");
     await a.prober.probeAll();
 
@@ -236,7 +239,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
 
   it("selective expiry: a refreshed worker keeps its evidence while a dead one loses its", async () => {
     const clock = clockAt("2026-09-27T12:00:00.000Z");
-    const a = restart(clock, { agent: healthyAdapter });
+    const a = restart(clock, { node: healthyAdapter });
     await register(a.registration, W1);
     await register(a.registration, W2);
     await a.prober.probeAll();
@@ -244,7 +247,7 @@ describe("M5.2 worker health probing on PostgreSQL", () => {
     // W2's runtime disappears; only W1 can still be probed.
     clock.set("2026-09-27T12:05:00.000Z");
     const partial = restart(clock, {
-      agent: {
+      node: {
         probe: async (worker) => {
           if (worker.id === W2) throw new Error("GONE");
           return { health: "healthy", availability: "available" };

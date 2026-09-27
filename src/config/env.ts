@@ -36,6 +36,14 @@ const envSchema = z.object({
   SKILLSMP_API_KEY: optionalSecret,
   // DigitalOS facade path (optional)
   DIGITALOS_FACADE_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * Worker health probe commands, per RUNTIME, as JSON (M6, defect 16). Example:
+   *   {"binary":{"command":"/usr/local/bin/some-worker","args":["--version"]}}
+   * Absent means only the `node` runtime is probeable; every other runtime is
+   * recorded `unsupported` and routes nothing. No executable name is committed:
+   * a deployment decides what "running" means for its runtimes.
+   */
+  ICOS_WORKER_PROBE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,

@@ -1,4 +1,8 @@
-import type { WorkerProbeOutcome, WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import type {
+  WorkerProbeOutcome,
+  WorkerRegistryEntry,
+  WorkerRuntimeDescriptor,
+} from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import type { WorkerRegistrationService } from "./worker-registration-service";
 import { HEALTH_EVIDENCE_MAX_AGE_MS } from "@/core/workers/worker-eligibility";
@@ -28,17 +32,25 @@ import { HEALTH_EVIDENCE_MAX_AGE_MS } from "@/core/workers/worker-eligibility";
  * and lost on restart, reintroducing the M4 snapshot bug that decision 0032
  * closed.
  *
- * NO PROVIDER HARDWIRE
- * Probe adapters are DATA, injected and keyed by worker kind. This module names
- * no provider, no model and no account, and a new worker kind becomes probeable
- * by registering an adapter — not by editing this file. A kind with NO adapter
- * is recorded `unsupported` and routes nothing: we cannot verify it, so we do
- * not pretend to. Silently treating "unprobeable" as "fine" is the fail-open
- * hole decision 0031 exists to prevent.
+ * KEYED BY RUNTIME, NOT BY WORKER KIND
+ * Probe adapters are DATA, injected and keyed by `runtime` — the axis that
+ * actually determines HOW you check something: you probe a binary by running it,
+ * a container runtime by asking the daemon. A worker KIND says what the worker is
+ * FOR, which tells you nothing about how to verify it.
  *
- * SCOPE — this probes WORKERS (execution units). Model, provider, account and
- * capacity-slot health are different axes and belong to the Resource Manager;
- * an adapter may consult them internally but must answer only for the worker.
+ * The practical consequence is that a brand-new worker kind is probeable with NO
+ * new adapter and NO code change here, as long as its runtime is already
+ * covered. Keying by kind would have required one registration per kind — which
+ * is how a "routing" layer slowly accumulates a list of provider names.
+ *
+ * A runtime with NO adapter is recorded `unsupported` and routes nothing: we
+ * cannot verify it, so we do not pretend to. Silently treating "unprobeable" as
+ * "fine" is the fail-open hole decision 0031 exists to prevent.
+ *
+ * SCOPE — this probes WORKERS (execution units) THROUGH their runtime. Model,
+ * provider, account and capacity-slot health are different axes and belong to the
+ * Resource Manager; an adapter may consult them internally but must answer only
+ * for the worker.
  */
 
 /** What an adapter observed. Deliberately just the two routing gates. */
@@ -58,8 +70,8 @@ export interface WorkerHealthProbePort {
 }
 
 export interface WorkerHealthProberOptions {
-  /** Adapters keyed by worker kind. A kind absent here is `unsupported`. */
-  adapters?: Readonly<Record<string, WorkerHealthProbePort>>;
+  /** Adapters keyed by RUNTIME. A runtime absent here is `unsupported`. */
+  adapters?: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
   /** How long probe evidence stays valid. Defaults to the canonical horizon. */
   maxEvidenceAgeMs?: number;
   now?: () => Date;
@@ -82,7 +94,7 @@ export interface WorkerHealthSweepReport {
 }
 
 export class WorkerHealthProber {
-  private readonly adapters: Readonly<Record<string, WorkerHealthProbePort>>;
+  private readonly adapters: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
   private readonly maxEvidenceAgeMs: number;
   private readonly now: () => Date;
 
@@ -115,10 +127,10 @@ export class WorkerHealthProber {
   }
 
   private async probeOne(worker: WorkerRegistryEntry): Promise<WorkerProbeRecord> {
-    const adapter = this.adapters[worker.workerKind];
+    const adapter = this.adapters[worker.runtime];
 
     if (!adapter) {
-      // We cannot verify this kind. Say exactly that, and route nothing to it.
+      // We cannot verify this runtime. Say exactly that, and route nothing to it.
       await this.registration.probe(worker.id, {
         health: "unknown",
         availability: "unknown",

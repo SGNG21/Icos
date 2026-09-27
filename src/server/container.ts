@@ -31,6 +31,12 @@ import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted
 import { CapabilityRouter } from "@/server/routing/capability-router";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
+import { CommandWorkerProbe } from "@/server/workers/probes/command-worker-probe";
+import {
+  createWorkerProbeResolver,
+  parseWorkerProbeCommands,
+  probeableRuntimes,
+} from "@/server/workers/probes/probe-command-config";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
@@ -182,10 +188,16 @@ export interface Container {
    * evidence nothing refreshed, which is what makes a crashed worker or a dead
    * session fail CLOSED instead of leaving a stale `healthy` behind.
    *
-   * No probe adapter is registered yet: until M6 ships non-interactive external
-   * workers there is nothing real to probe, so every worker kind reads
-   * `unsupported` — we cannot verify it, so we do not route to it. Adapters are
-   * DATA keyed by worker kind; adding one needs no change here or in the prober.
+   * Wired with the REAL command probe (M6): it runs each worker's runtime
+   * non-interactively, with no stdin and a hard timeout, and reports what
+   * actually happened. Adapters are keyed by RUNTIME, so a new worker KIND needs
+   * no adapter at all.
+   *
+   * Out of the box only the `node` runtime is probeable — it is the runtime this
+   * process already executes in, so the check needs no configured path. Every
+   * other runtime must be declared in ICOS_WORKER_PROBE_COMMANDS; an
+   * unconfigured runtime is recorded `unsupported` and routes nothing, which is
+   * the honest "we have no way to check this" state rather than a silent pass.
    */
   workerHealthProber: WorkerHealthProber;
   /**
@@ -318,7 +330,11 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
-  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
+  const workerHealthProber = new WorkerHealthProber(
+    workerRegistryStore,
+    workerRegistration,
+    { adapters: buildWorkerProbeAdapters() },
+  );
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -532,7 +548,11 @@ export async function buildPostgresContainer(
     activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
-  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
+  const workerHealthProber = new WorkerHealthProber(
+    workerRegistryStore,
+    workerRegistration,
+    { adapters: buildWorkerProbeAdapters() },
+  );
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
 
@@ -716,4 +736,23 @@ export async function resetContainer(): Promise<void> {
   } catch {
     // Une initialisation ayant échoué n'a pas de ressource à libérer.
   }
+}
+
+/**
+ * Builds the runtime-keyed probe adapters from configuration (M6, defect 16).
+ *
+ * ONE adapter instance serves every probeable runtime: the resolver, not the
+ * adapter, decides what a given runtime's check is. Registering an adapter per
+ * runtime name would be the first step towards a hardcoded list of them.
+ *
+ * A runtime that is NOT probeable is deliberately left OUT of the map rather than
+ * mapped to something permissive. The prober then records `unsupported` — "we
+ * have no way to check this" — which is a different and more useful fact than
+ * "we checked and it failed".
+ */
+function buildWorkerProbeAdapters(): Record<string, CommandWorkerProbe> {
+  const configured = parseWorkerProbeCommands(loadEnv().ICOS_WORKER_PROBE_COMMANDS);
+  const probe = new CommandWorkerProbe(createWorkerProbeResolver(configured));
+
+  return Object.fromEntries(probeableRuntimes(configured).map((runtime) => [runtime, probe]));
 }

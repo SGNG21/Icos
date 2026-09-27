@@ -36,13 +36,22 @@ function harness(iso = "2026-09-27T12:00:00.000Z") {
   return { clock, store, registration };
 }
 
-async function registerAgent(registration: WorkerRegistrationService, id: string, kind = "agent") {
+async function registerAgent(registration: WorkerRegistrationService, id: string) {
+  return registerRuntime(registration, id, "agent", "node");
+}
+
+async function registerRuntime(
+  registration: WorkerRegistrationService,
+  id: string,
+  kind: string,
+  runtime: "node" | "docker" | "binary" | "wasm" | "unknown",
+) {
   return registration.register({
     id,
     workerKind: kind,
     displayName: id,
     capabilities: ["code-generation"],
-    runtime: "node",
+    runtime,
     runtimeSupport: "SUPPORTED_RUNTIME",
   });
 }
@@ -64,7 +73,7 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(eligibleAt((await store.get(W1))!, clock.now().toISOString())).toBe(false);
 
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       now: clock.now,
     });
     const records = await prober.probeAll();
@@ -96,7 +105,7 @@ describe("M5.2 WorkerHealthProber", () => {
 
     const prober = new WorkerHealthProber(store, registration, {
       adapters: {
-        agent: {
+        node: {
           probe: async () => {
             throw new Error("RUNTIME_UNREACHABLE");
           },
@@ -118,12 +127,12 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(eligibleAt(entry, clock.now().toISOString())).toBe(false);
   });
 
-  it("UNPROBEABLE_FAILS_CLOSED: a worker kind with no adapter is 'unsupported', never healthy", async () => {
+  it("UNPROBEABLE_FAILS_CLOSED: a RUNTIME with no adapter is 'unsupported', never healthy", async () => {
     const { clock, store, registration } = harness();
-    await registerAgent(registration, W1, "hermes");
+    await registerRuntime(registration, W1, "hermes", "docker");
 
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() }, // nothing can probe 'hermes'
+      adapters: { node: healthy() }, // nothing can probe the 'docker' runtime
       now: clock.now,
     });
     const [record] = await prober.probeAll();
@@ -134,12 +143,13 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(eligibleAt(entry, clock.now().toISOString())).toBe(false);
   });
 
-  it("NO_PROVIDER_HARDWIRE: an unknown worker kind becomes probeable by DATA alone", async () => {
+  it("NO_PROVIDER_HARDWIRE: a NOVEL worker kind needs no new adapter at all", async () => {
     const { clock, store, registration } = harness();
-    await registerAgent(registration, W1, "openhands");
+    // A worker kind this prober has never heard of, on an already-covered runtime.
+    await registerRuntime(registration, W1, "openhands", "node");
 
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { openhands: healthy() },
+      adapters: { node: healthy() }, // unchanged: keyed by runtime, not by kind
       now: clock.now,
     });
 
@@ -152,7 +162,7 @@ describe("M5.2 WorkerHealthProber", () => {
     await registerAgent(registration, W1);
 
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       maxEvidenceAgeMs: 60_000,
       now: clock.now,
     });
@@ -174,7 +184,7 @@ describe("M5.2 WorkerHealthProber", () => {
     const { clock, store, registration } = harness();
     await registerAgent(registration, W1);
     await new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       now: clock.now,
     }).probeAll();
 
@@ -201,7 +211,7 @@ describe("M5.2 WorkerHealthProber", () => {
     const { clock, store, registration } = harness();
     await registerAgent(registration, W1);
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       maxEvidenceAgeMs: 60_000,
       now: clock.now,
     });
@@ -234,7 +244,7 @@ describe("M5.2 WorkerHealthProber", () => {
     const { clock, store, registration } = harness();
     await registerAgent(registration, W1);
     const prober = new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       maxEvidenceAgeMs: 60_000,
       now: clock.now,
     });
@@ -255,7 +265,7 @@ describe("M5.2 WorkerHealthProber", () => {
   it("PROBE_DOES_NOT_INVENT_WORKERS: probing an empty registry writes nothing", async () => {
     const { store, registration } = harness();
     const report = await new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
     }).sweep();
 
     expect(report).toEqual({ probed: [], expired: [] });
@@ -268,7 +278,7 @@ describe("M5.2 WorkerHealthProber", () => {
     await registerAgent(registration, W1);
 
     const records = await new WorkerHealthProber(store, registration, {
-      adapters: { agent: healthy() },
+      adapters: { node: healthy() },
       now: clock.now,
     }).probeAll();
 
@@ -281,7 +291,7 @@ describe("M5.2 WorkerHealthProber", () => {
 
     await new WorkerHealthProber(store, registration, {
       adapters: {
-        agent: { probe: async () => ({ health: "degraded", availability: "available" }) },
+        node: { probe: async () => ({ health: "degraded", availability: "available" }) },
       },
       now: clock.now,
     }).probeAll();
