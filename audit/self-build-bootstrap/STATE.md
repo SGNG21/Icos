@@ -1,12 +1,20 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-27
+Updated: 2026-09-28
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M6 — non-interactive external workers (NEXT, not started)
-M5 — multi-worker orchestration: COMPLETE and CERTIFIED.
+M6 — non-interactive external workers: IN PROGRESS.
+       M6.1 real runtime-keyed probe  — decision 0036, commit 9e808dc
+       M6.2 autonomous probe sweep    — decision 0037, commit c1ca85c
+       DEFECT 16 IS CLOSED: probing is real AND something calls it, durably.
+       M6.3 EXECUTION ADAPTER — NOT STARTED, and it is the bulk of M6. See
+       NEXT_ACTION. M6.1/M6.2 make a worker's HEALTH real; they do not yet make a
+       worker DO a task. Do not read "M6 in progress" as "M6 nearly done".
+M5 — multi-worker orchestration: COMPLETE and CERTIFIED (certification was
+       WITHDRAWN by decision 0036 pending a scheduled prober; 0037 landed it, so
+       M5 certification is RESTORED — the probe loop is no longer fake-only).
        M5.2 health probing            — decision 0033, commit a090bf0
        M5.3 durable distribution      — decision 0034, commit 7daf6c2
        M5.4 orchestration proofs      — decision 0035, commit 56a79ea
@@ -21,7 +29,10 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-56a79ea  M5.4 concurrent multi-worker orchestration certification
+c1ca85c  M6.2 autonomous probe sweep as a durable job (defect 16 CLOSED)
+  9e808dc  M6.1 real non-interactive worker probe, keyed by runtime
+  a6cd8f9  M5 certification + post-phase audit + M6 entry state
+  56a79ea  M5.4 concurrent multi-worker orchestration certification
   7daf6c2  M5.3 + M5.5 durable load distribution + capacity model
   a090bf0  M5.2 dated, expirable worker health evidence
   90649f3  M5.1 worker registration + live routing
@@ -33,11 +44,40 @@ Preceding milestones:
   8b93ab2  M0/M1 immutable plan lineage
 M1 freeze facts: M1-FREEZE.md §1. M1 implementation: 8b93ab2.
 
-NOTE: this field was STALE at M4 entry — it read 5bb5a2b while HEAD was 716c6b8,
-and the M4 section below still declared CERT-1 a blocker that 716c6b8 had
-already cleared. Verify CURRENT_HEAD against `git rev-parse HEAD` every phase.
+NOTE: this field goes STALE. It happened at M4 entry (it read 5bb5a2b while HEAD
+was 716c6b8, and the M4 section still called CERT-1 a blocker that 716c6b8 had
+cleared), and AGAIN at M6.2 entry: it read 56a79ea and CURRENT_MILESTONE said
+"M6 NEXT, not started" while 9e808dc had already shipped M6.1 and 0036 had
+WITHDRAWN M5 certification — none of which STATE.md recorded, because 9e808dc did
+not touch this file. Verify CURRENT_HEAD against `git rev-parse HEAD` AND read the
+HEAD commit message every phase; a commit that changes certification status but not
+STATE.md leaves this file actively misleading.
 
 ## CERTIFIED_MILESTONES
+
+### M6 PROGRESS (not a certification — M6.3 is unstarted)
+- M6.1 real runtime-keyed probe — decision 0036, commit 9e808dc.
+  PROVEN: adapters keyed by RUNTIME not kind; a real process is spawned
+  (stdin `ignore`, killing timeout, no shell, bounded stderr); commands come from
+  ICOS_WORKER_PROBE_COMMANDS with only `node` built in via process.execPath;
+  malformed config REFUSES TO BOOT; `unsupported` (no adapter) stays distinct from
+  `failed` (wired but unresolvable); the container WIRING is under test — the
+  mutation "pass {}" fails a test.
+- M6.2 autonomous probe sweep — decision 0037, commit c1ca85c.
+  PROVEN (5 PostgreSQL proofs + 12 unit, 6 mutations verified):
+  IGNITION_IS_DURABLE (seeded occurrence readable from another connection),
+  CHAIN_RUNS_FOR_REAL (scheduler sweep really probes; verdict survives a new
+  connection; successor lands ON the grid),
+  RESTART_DOES_NOT_FORK_THE_CHAIN (boots 7s apart share ONE occurrence; exactly one
+  link is claimable), ONCE_PER_FLEET (two processes race the real atomic PostgreSQL
+  claim; the fleet is probed once), ALLOW_LIST_STILL_CLOSED ('probe_wrkers' rejected
+  by scheduled_jobs_kind_check), INTERVAL_DERIVED_AND_BOUNDED (>= horizon refused at
+  composition time), GRID_ALIGNMENT (unaligned now snaps to the bucket boundary),
+  REPLAY_IS_HARMLESS, LOST_RECURRENCE_IS_A_DEAD_JOB, FAILING_SWEEP_IS_RETRIED (no
+  successor scheduled), NO_PROBER_COMPOSED_IS_A_PERMANENT_ERROR,
+  FAILED_IGNITION_ABORTS_STARTUP.
+  NOT PROVEN by M6.2, do not overclaim: nothing here makes a worker EXECUTE a task.
+
 - M5 multi-worker orchestration — decisions 0033/0034/0035,
   audit in M5-POST-PHASE-AUDIT.md. All 15 required certification items PASS:
   CAPABILITY_ROUTING_PRESERVED, HEALTH_PROBING_PROVEN, STALE_HEALTH_FAIL_CLOSED,
@@ -300,7 +340,23 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M5, all MEASURED this session):
+Current (at M6.2 / c1ca85c, all MEASURED — re-measure, never inherit):
+- `pnpm run typecheck`: PASS
+- `pnpm run build`: PASS (next build, full route manifest)
+- `pnpm run test` (unit): PASS — 137 files, 1701 tests (M6.1: 1683, M5: 1667)
+- `pnpm run test:integration`: 388 passed / 3 FAILED / 0 skipped (M6.1: 383/3)
+- the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING. The count has never
+  moved across M4, M5, M6.1, M6.2. NOT skipped, must never be re-skipped.
+- migration 0045 applied 3x via psql, exit 0 each time
+- `pnpm db:verify-ledger <url>`: LEDGER_OK, 43 rows match the journal
+  (NOTE: this script REQUIRES the url as argv; bare `pnpm db:verify-ledger` exits 1)
+- lint: 0 errors, 289 warnings — EQUAL to the M3/M4/M5 baseline
+- `git diff --check`: PASS
+- format:check: still FAIL on 243 files — PRE-EXISTING, NOT addressed
+- psql evidence: `scheduled_jobs_kind_check` accepts 'probe_workers' and REJECTS
+  'probe_wrkers', so widening the allow-list did not make `kind` free text
+
+Previous (at M5, kept for drift comparison):
 - `pnpm run typecheck`: PASS
 - `pnpm run build`: PASS (next build, full route manifest)
 - `pnpm run test` (unit): PASS — 135 files, 1667 tests
@@ -386,13 +442,16 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     worker id), derived from non-terminal dispatch_attempts. Restart-safe
     because it is a pure function of durable rows.
 
-16. (M5.2) NO PROBE ADAPTER EXISTS. `WorkerHealthProber` is proven, but
-    `container.workerHealthProber` is constructed with NO adapters, so every
-    worker kind reads `unsupported` and the fleet routes nothing. This is the
-    correct fail-closed state, not a bug — but it means the probe loop is
-    certified against fakes only. M6 must supply real adapters (Hermes,
-    Nemotron-backed Hermes, Codex) AND a scheduled caller: nothing invokes
-    probeAll()/expireStaleEvidence() on a timer yet either.
+16. RESOLVED — M6.1 (decision 0036) + M6.2 (decision 0037), defect CLOSED.
+    0036: adapters are keyed by RUNTIME (not worker kind), `CommandWorkerProbe`
+    really runs a runtime with stdin `ignore` and a killing timeout, commands come
+    from ICOS_WORKER_PROBE_COMMANDS, and malformed config REFUSES TO BOOT.
+    0037: `probe_workers` is a durable `scheduled_jobs` kind (migration 0045), the
+    interval is derived from the evidence horizon and refused if it exceeds it,
+    occurrences are snapped to a shared GRID, and `startProductionServices`
+    IGNITES the chain unconditionally (a self-perpetuating chain still needs a
+    first link — defect 16 one level up).
+    NOT covered by either: making a worker EXECUTE A TASK. See M6.3 in NEXT_ACTION.
 
 17. (M5) NO WORKER-DEATH RECOVERY. A worker that dies MID-EXECUTION is DETECTED
     — its probe evidence expires and it becomes ineligible — but the task it was
@@ -522,55 +581,64 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — M6 (non-interactive external workers)
+## NEXT_ACTION — M6.3 (external worker EXECUTION adapter)
 
-M5 proved the orchestration machinery against FAKE workers. M6 has to make it
-carry REAL ones, non-interactively. Two prerequisites are already named as
-defects and must be built together, because either alone is useless:
+M6.1 + M6.2 closed defect 16: worker HEALTH is now real and autonomously
+maintained. That is the smaller half of M6. What remains is the bulk of it, and
+nothing below is done yet:
 
-1. PROBE ADAPTERS (defect 16). `WorkerHealthProber` takes
-   `adapters: Record<workerKind, WorkerHealthProbePort>` and the container
-   currently passes `{}`, so every kind is `unsupported`. M6 must supply real
-   adapters for Hermes, Nemotron-backed Hermes workers and Codex.
-   HARD CONSTRAINTS:
-   - an adapter answers ONLY for the WORKER. Model, provider, account and
-     capacity-slot health are separate axes (decision 0031 §Context) — an
-     adapter may consult them internally but must not leak them into the
-     registry;
-   - a probe that cannot verify MUST NOT return healthy. Throwing is correct and
-     is recorded as unhealthy/failed;
-   - no provider name may enter the matcher, the router, the prober or the
-     schema. Adapters are registered as data.
+1. PROGRAMMATIC TASK EXECUTION. A worker must be LAUNCHED to do a task, not just
+   pinged. `CommandWorkerProbe` proves the non-interactive process discipline that
+   an executor must reuse — stdin `ignore`, a timeout that KILLS, no shell, bounded
+   stderr, never-rejects-always-returns — but it answers "are you alive", not
+   "do this work".
+2. TASK CONTRACT INJECTION. The prompt / task contract must reach the worker
+   automatically, with no human pasting anything. `autonomousTaskSpecSchema`
+   (src/core/contracts/task.ts) is the existing contract — REUSE it.
+3. OUTPUT AND RESULT CAPTURE. stdout/stderr, exit status, and the commit / artifact
+   / evidence the worker produced. `dispatch_attempts` and
+   `task_execution_results` already exist; check what they can already carry before
+   adding columns.
+4. FAILURE CLASSIFICATION. Session exhaustion, provider failure, and retryable vs
+   permanent must be DISTINCT. A retryable failure has to resume the SAME logical
+   task, not fork a new one. Note the precedent from 0037: "cannot verify" must
+   never be allowed to look like "verified fine".
+5. NO PROVIDER HARDWIRE. Adapters register as DATA, keyed by runtime (0036). No
+   provider name may enter the matcher, router, prober, executor or schema.
+   Worker != Runtime != Model != Provider != Account != CapacitySlot.
+6. ISOLATION. Writer workers get their own worktree; readers may share a checkout
+   only if strictly read-only. `WorktreeManager` already exists — check it first,
+   and note the known worktree-collision history in project memory.
 
-2. A SCHEDULED PROBER (also defect 16). NOTHING calls probeAll() or
-   expireStaleEvidence() on a timer. A durable scheduler already exists
-   (ADR-0025, `scheduled_jobs`) — REUSE it rather than adding a setInterval,
-   which would not survive a restart and would run once per process instead of
-   once per fleet.
+STILL OPEN from M5 for selection (defect 10): `AIResourceCatalog` is a SECOND
+hardcoded source of capability truth with hardcoded provider/model names, and
+`AdaptedAIResourceCatalog` intersects the durable registry with it. Not on the
+dispatch path (`AISelectionEngine` has zero consumers), so "no provider hardwire"
+is PROVEN for routing/probing and OPEN for selection. It belongs to M6.3 or the
+Resource Manager, and it must not be allowed to leak provider names into execution.
 
-3. NON-INTERACTIVE EXECUTION. A worker adapter must run without a TTY, without
-   an interactive login and without a human answering a prompt. Anything that
-   blocks on stdin is a hang, not a failure, and a hang consumes a capacity slot
-   forever (see defect 17).
-
-Then M7 — AUTOMATIC RECOVERY — which is now the largest hole (defect 17): a
-worker that dies mid-execution is detected but its task is never reassigned, so
-its capacity slot is lost permanently. M7 needs a durable execution lease with an
-expiry, so an abandoned attempt can be reclaimed and rerouted. `dispatch_attempts`
-already has claim_token / claim_until for RECOVERY claims — decide deliberately
-whether to reuse them for execution leases or to add a separate concept, and
-record it as a decision.
+Then M7 — AUTOMATIC RECOVERY — defect 17, now the largest structural hole: a worker
+that dies mid-execution IS detected (its evidence expires, it becomes ineligible)
+but its task is never reassigned, so the dispatch attempt stays `dispatched` and its
+capacity slot is lost permanently. Detection without reassignment. M7 needs a
+durable execution lease with an expiry; `dispatch_attempts` already has
+claim_token / claim_until for RECOVERY claims — decide DELIBERATELY whether to reuse
+them for execution leases or add a separate concept, and record it as a decision.
 
 Already available and proven:
 - `container.workerRegistration` — register / probe / deactivate / deregister,
   fail-closed on registration, capacity declarable at registration;
-- `container.workerHealthProber` — probeAll / expireStaleEvidence / sweep;
+- `container.workerHealthProber` — probeAll / expireStaleEvidence / sweep, composed
+  with REAL runtime-keyed adapters (0036) and swept autonomously (0037);
 - `container.workerRegistryStore` — durable truth;
 - `container.capabilityRouter` — live reads, imposed evidence horizon, derived
   load, per-candidate refusal evidence;
 - `dispatchAttempts.listActiveWorkerAssignments()` — the durable load signal;
 - fail-closed dispatch: no eligible worker -> MissionTask `blocked`; full worker
-  -> back-pressure, task stays ready.
+  -> back-pressure, task stays ready;
+- the durable scheduler as a recurrence primitive: an allow-listed `kind`, a
+  grid-aligned idempotency key, and unconditional ignition at startup (0037) — the
+  pattern to REUSE for any future periodic sweep, instead of a timer.
 
 Critical path after M6:
   M7 automatic recovery -> CORE3 chaos certification ->
@@ -630,3 +698,24 @@ Then M3 durable readiness/dependency gating (mission N13).
   failures were wrong assumptions about production behaviour (the completion
   path continues the mission itself; claimPrepared rejects a non-positive
   lease), not defects. Read the implementation before editing it.
+- A green suite under mutation can be green BY ACCIDENT. Replacing the occurrence
+  grid with `now + interval` (M6.2) left everything passing, because the
+  composition-level tests boot twice inside the same second and the idempotency key
+  is second-granular. The bug was real and the coincidence hid it. When a mutation
+  survives, ask what is masking it before concluding the property is enforced —
+  here the answer was "test clock granularity", and the fix was an INJECTED clock.
+- Distinguish "the code is wrong" from "my assertion is wrong" (again, twice in
+  M6.2). A fixed test clock set to a past instant makes a seeded job immediately
+  DUE in wall-clock terms, so "exactly one claimable job" failed for a reason that
+  had nothing to do with the code; and drizzle WRAPS PostgreSQL errors, so a CHECK
+  constraint name travels in `error.cause`, not `error.message`.
+- A self-perpetuating chain needs IGNITION, and that is a separate defect from the
+  recurrence itself. M6.1 fixed "the probe is fake"; M6.2 had to fix both "nothing
+  calls it on a timer" AND "nothing creates the first occurrence". Whenever a
+  design says "it schedules its own successor", ask who creates link zero.
+- `pnpm db:verify-ledger` REQUIRES the database url as argv; bare invocation exits 1
+  with a usage line. Test DB url is `postgres://$(whoami)@localhost:5432/icos_test`.
+- An under-specified test stub is not a supported composition. Two Container stubs
+  omitted the non-optional `scheduledJobs`, which only surfaced when startup began
+  using it. Casting with `as unknown as Container` defers that discovery to the next
+  person; prefer a real in-memory implementation so wiring is observed through rows.
