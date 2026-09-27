@@ -14,6 +14,7 @@ import type {
 } from "@/server/mission/mission-plan";
 import {
   fingerprintMissionPlan,
+  resolvePlanTaskMetadata,
   validateMissionPlan,
 } from "@/server/mission/mission-plan";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -315,18 +316,12 @@ export class PostgresMissionRepository implements MissionRepository {
             planId: planId,
             title: task.title,
             description: task.description ?? undefined,
-            objective: task.title, // or maybe we should get from goal? but for now use title
-            instructions: task.description ?? '',
+            /*
+             * Planning metadata comes from the planner, not from literals here.
+             * resolvePlanTaskMetadata() owns the documented fallbacks.
+             */
+            ...resolvePlanTaskMetadata(task),
             dependencies: [],
-            successCriteria: [],
-            requiredCapabilities: [],
-            riskClass: 'reversible',
-            allowedFileScope: [],
-            expectedArtifacts: [],
-            priority: 3,
-            attemptBudget: 3,
-            reviewPolicy: 'if_risky',
-            integrationPolicy: '',
             assignedAgentId: undefined,
           });
 
@@ -574,18 +569,12 @@ export class PostgresMissionRepository implements MissionRepository {
             planId: planId,
             title: task.title,
             description: task.description ?? undefined,
-            objective: task.title, // or maybe we should get from goal? but for now use title
-            instructions: task.description ?? '',
+            /*
+             * Planning metadata comes from the planner, not from literals here.
+             * resolvePlanTaskMetadata() owns the documented fallbacks.
+             */
+            ...resolvePlanTaskMetadata(task),
             dependencies: [],
-            successCriteria: [],
-            requiredCapabilities: [],
-            riskClass: 'reversible',
-            allowedFileScope: [],
-            expectedArtifacts: [],
-            priority: 3,
-            attemptBudget: 3,
-            reviewPolicy: 'if_risky',
-            integrationPolicy: '',
             assignedAgentId: undefined,
           });
 

@@ -267,6 +267,13 @@
       "when": 1790454400287,
       "tag": "0040_autonomous_plan_lineage",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790454401287,
+      "tag": "0041_task_core3_planning_metadata",
+      "breakpoints": true
     }
   ]
 }

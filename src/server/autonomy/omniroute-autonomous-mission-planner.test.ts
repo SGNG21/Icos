@@ -95,6 +95,140 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
     expect(body.messages[1].content).toContain("Planning reason: initial");
   });
 
+  it("carries planner-supplied execution envelopes through to the MissionPlan", async () => {
+    /*
+     * The task schema is `.strict()`. Before CORE3 M2 it declared only
+     * key/title/description/dependsOn/workerKind/capability, so a planner that
+     * DID specify a risk class or attempt budget had its entire plan rejected —
+     * planning metadata could never originate from planner output.
+     */
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        JSON.stringify({
+          version: 1,
+          tasks: [
+            {
+              key: "inspect",
+              title: "Inspect repository",
+              dependsOn: [],
+              objective: "Understand the module",
+              instructions: "Read only",
+              successCriteria: ["findings recorded"],
+              requiredCapabilities: ["repository-inspection"],
+              riskClass: "read_only",
+              allowedFileScope: ["src/**"],
+              expectedArtifacts: ["report.md"],
+              priority: 1,
+              attemptBudget: 2,
+              reviewPolicy: "never",
+              integrationPolicy: "none",
+            },
+            {
+              key: "implement",
+              title: "Implement change",
+              dependsOn: ["inspect"],
+              riskClass: "sensitive",
+              reviewPolicy: "always",
+              priority: 5,
+              attemptBudget: 4,
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await planner(fetchMock).plan({
+      mission,
+      tasks: [],
+      reason: "initial",
+    });
+
+    expect(result.tasks[0]).toMatchObject({
+      key: "inspect",
+      objective: "Understand the module",
+      instructions: "Read only",
+      successCriteria: ["findings recorded"],
+      requiredCapabilities: ["repository-inspection"],
+      riskClass: "read_only",
+      allowedFileScope: ["src/**"],
+      expectedArtifacts: ["report.md"],
+      priority: 1,
+      attemptBudget: 2,
+      reviewPolicy: "never",
+      integrationPolicy: "none",
+    });
+
+    expect(result.tasks[1]).toMatchObject({
+      key: "implement",
+      riskClass: "sensitive",
+      reviewPolicy: "always",
+      priority: 5,
+      attemptBudget: 4,
+    });
+  });
+
+  it("asks the provider for the execution envelope", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        JSON.stringify({
+          version: 1,
+          tasks: [{ key: "a", title: "A", dependsOn: [] }],
+        }),
+      ),
+    );
+
+    await planner(fetchMock).plan({
+      mission,
+      tasks: [],
+      reason: "initial",
+    });
+
+    const [, request] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(request?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = body.messages
+      .map((m) => m.content)
+      .join("\n");
+
+    expect(prompt).toContain("riskClass");
+    expect(prompt).toContain("reviewPolicy");
+    expect(prompt).toContain("attemptBudget");
+    expect(prompt).toContain("successCriteria");
+    expect(prompt).toContain("allowedFileScope");
+  });
+
+  it("fails closed when a planner-supplied envelope is semantically unsafe", async () => {
+    /*
+     * Schema-valid (sensitive and never are both legal values) but rejected by
+     * validateMissionPlan: the semantic gate is not duplicated in the schema.
+     */
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        JSON.stringify({
+          version: 1,
+          tasks: [
+            {
+              key: "risky",
+              title: "Risky",
+              dependsOn: [],
+              riskClass: "sensitive",
+              reviewPolicy: "never",
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      planner(fetchMock).plan({
+        mission,
+        tasks: [],
+        reason: "initial",
+      }),
+    ).rejects.toThrow(/AUTONOMY_PLANNER_/);
+  });
+
   it("fails closed when provider output is not valid JSON", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response("not-json"));
 

@@ -82,15 +82,58 @@ export const tasks = pgTable(
     assignedAgentId: text("assigned_agent_id").references(() => agents.id, {
       onDelete: "restrict",
     }),
+    /*
+     * CORE3 planning metadata (migration 0041).
+     *
+     * Before 0041 these existed only in the Task domain contract: they were
+     * built by prepareTaskCreation, validated, then silently DROPPED by
+     * taskToRow, so nothing survived a restart. Persisted here so planner
+     * output is durable and readable back.
+     *
+     * Nullable / defaulted: a generic (non-autonomous) Task carries no
+     * mission, goal or plan lineage.
+     */
+    missionId: text("mission_id"),
+    goalId: text("goal_id"),
+    planId: text("plan_id"),
+    objective: text("objective"),
+    instructions: text("instructions"),
+    dependencies: jsonb("dependencies").default([]).notNull(),
+    successCriteria: jsonb("success_criteria").default([]).notNull(),
+    requiredCapabilities: jsonb("required_capabilities").default([]).notNull(),
+    riskClass: text("risk_class").default("reversible").notNull(),
+    allowedFileScope: jsonb("allowed_file_scope").default([]).notNull(),
+    expectedArtifacts: jsonb("expected_artifacts").default([]).notNull(),
+    priority: integer("priority").default(3).notNull(),
+    attemptBudget: integer("attempt_budget").default(3).notNull(),
+    reviewPolicy: text("review_policy").default("if_risky").notNull(),
+    integrationPolicy: text("integration_policy").default("").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (t) => [
     check(
       "tasks_status_check",
-      sql`${t.status} in ('draft','queued','awaiting_approval','running','review_pending','succeeded','failed','cancelled')`,
+      sql`${t.status} in ('draft','queued','awaiting_approval','running','review_pending','succeeded','failed','cancelled','superseded')`,
     ),
+    /*
+     * Fail closed at the database boundary too: an unknown risk class or
+     * review policy cannot be stored, even by a caller that bypasses
+     * validateMissionPlan.
+     */
+    check(
+      "tasks_risk_class_check",
+      sql`${t.riskClass} in ('read_only','reversible','sensitive')`,
+    ),
+    check(
+      "tasks_review_policy_check",
+      sql`${t.reviewPolicy} in ('never','if_risky','always')`,
+    ),
+    check("tasks_priority_check", sql`${t.priority} between 1 and 5`),
+    check("tasks_attempt_budget_check", sql`${t.attemptBudget} >= 1`),
     index("tasks_assigned_agent_idx").on(t.assignedAgentId),
+    index("tasks_mission_id_idx").on(t.missionId),
+    index("tasks_plan_id_idx").on(t.planId),
   ],
 );
 

@@ -18,6 +18,31 @@ const missionPlanSchema = z
             dependsOn: z.array(z.string().trim().min(1)),
             workerKind: z.string().trim().min(1).optional(),
             capability: z.string().trim().min(1).optional(),
+
+            /*
+             * Canonical planning metadata (mission N11).
+             *
+             * The object is `.strict()`, so before these were declared an
+             * otherwise-valid plan that DID specify a risk class or an attempt
+             * budget was rejected outright — planner-supplied metadata could
+             * never reach the repository.
+             *
+             * Shapes are deliberately permissive here (enum + range only).
+             * validateMissionPlan() below remains the single semantic gate, so
+             * cross-field rules such as "a sensitive task may not be
+             * unreviewed" are not duplicated in this schema.
+             */
+            objective: z.string().trim().min(1).optional(),
+            instructions: z.string().trim().min(1).optional(),
+            successCriteria: z.array(z.string().trim().min(1)).optional(),
+            requiredCapabilities: z.array(z.string().trim().min(1)).optional(),
+            riskClass: z.enum(["read_only", "reversible", "sensitive"]).optional(),
+            allowedFileScope: z.array(z.string().trim().min(1)).optional(),
+            expectedArtifacts: z.array(z.string().trim().min(1)).optional(),
+            priority: z.number().int().min(1).max(5).optional(),
+            attemptBudget: z.number().int().min(1).optional(),
+            reviewPolicy: z.enum(["never", "if_risky", "always"]).optional(),
+            integrationPolicy: z.string().optional(),
           })
           .strict(),
       )
@@ -184,8 +209,14 @@ export class OmniRouteAutonomousMissionPlanner implements AutonomousMissionPlann
       "Produce a minimal executable acyclic task graph for the stated objective.",
       "Every dependency must reference another task key in the same response.",
       "Use stable concise keys, non-empty titles, and version 1.",
-      "Required schema:",
-      '{"version":1,"tasks":[{"key":"string","title":"string","description":"string (optional)","dependsOn":["task-key"],"workerKind":"string (optional)","capability":"string (optional)"}]}',
+      "Declare each task's execution envelope explicitly instead of relying on defaults:",
+      "- riskClass: read_only for inspection, reversible for ordinary edits, sensitive for risky or hard-to-undo work.",
+      "- reviewPolicy: always for sensitive work. A sensitive task may never use never.",
+      "- priority: 1 (highest) to 5 (lowest). attemptBudget: at least 1.",
+      "- successCriteria: how completion is verified. allowedFileScope: the paths the task may touch.",
+      "- expectedArtifacts: what the task must produce. requiredCapabilities: the skills a worker needs.",
+      "Required schema (fields marked optional may be omitted, but omitting an envelope field accepts the default):",
+      '{"version":1,"tasks":[{"key":"string","title":"string","description":"string (optional)","dependsOn":["task-key"],"workerKind":"string (optional)","capability":"string (optional)","objective":"string (optional)","instructions":"string (optional)","successCriteria":["string"],"requiredCapabilities":["string"],"riskClass":"read_only|reversible|sensitive","allowedFileScope":["string"],"expectedArtifacts":["string"],"priority":1,"attemptBudget":3,"reviewPolicy":"never|if_risky|always","integrationPolicy":"string (optional)"}]}',
     ].join("\n");
   }
 

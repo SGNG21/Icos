@@ -8,6 +8,7 @@ import type {
 } from "@/server/mission/mission-plan";
 import {
   fingerprintMissionPlan,
+  resolvePlanTaskMetadata,
   validateMissionPlan,
 } from "@/server/mission/mission-plan";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -227,18 +228,9 @@ export class InMemoryMissionRepository implements MissionRepository {
         planId: planId,
         title: task.title,
         description: task.description ?? undefined,
-        objective: task.title, // or maybe we should get from goal? but for now use title
-        instructions: task.description ?? '',
+        // Planner-supplied metadata; fallbacks owned by resolvePlanTaskMetadata.
+        ...resolvePlanTaskMetadata(task),
         dependencies: [],
-        successCriteria: [],
-        requiredCapabilities: [],
-        riskClass: 'reversible',
-        allowedFileScope: [],
-        expectedArtifacts: [],
-        priority: 3,
-        attemptBudget: 3,
-        reviewPolicy: 'if_risky',
-        integrationPolicy: '',
         assignedAgentId: undefined,
       });
       if (!created.ok) {
@@ -379,18 +371,9 @@ export class InMemoryMissionRepository implements MissionRepository {
         planId: planId,
         title: task.title,
         description: task.description,
-        objective: task.title, // or maybe we should get from goal? but for now use title
-        instructions: task.description ?? '',
+        // Planner-supplied metadata; fallbacks owned by resolvePlanTaskMetadata.
+        ...resolvePlanTaskMetadata(task),
         dependencies: [],
-        successCriteria: [],
-        requiredCapabilities: [],
-        riskClass: 'reversible',
-        allowedFileScope: [],
-        expectedArtifacts: [],
-        priority: 3,
-        attemptBudget: 3,
-        reviewPolicy: 'if_risky',
-        integrationPolicy: '',
         assignedAgentId: undefined,
       });
       if (!canonical.ok) throw new Error("MISSION_REPLAN_TASK_CREATION_FAILED");

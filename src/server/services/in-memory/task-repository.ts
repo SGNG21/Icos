@@ -70,21 +70,30 @@ export class InMemoryTaskRepository implements TaskRepository {
       id: `task-${randomUUID()}`,
       title: input.title,
       description: input.description,
-      missionId: "", // will be filled by caller if needed
-      goalId: "",
-      planId: "",
-      objective: "",
-      instructions: "",
-      dependencies: [],
-      successCriteria: [],
-      requiredCapabilities: [],
-      riskClass: "reversible",
-      allowedFileScope: [],
-      expectedArtifacts: [],
-      priority: 3,
-      attemptBudget: 3,
-      reviewPolicy: "if_risky",
-      integrationPolicy: "",
+      /*
+       * Honour the caller's CORE3 planning metadata.
+       *
+       * This previously hardcoded empty strings and defaults, DISCARDING every
+       * planning field the caller passed — including missionId/goalId/planId,
+       * which were overwritten with "". Planner output must reach the canonical
+       * Task in the in-memory implementation exactly as it does in PostgreSQL,
+       * otherwise the two disagree and in-memory tests prove nothing.
+       */
+      missionId: input.missionId,
+      goalId: input.goalId,
+      planId: input.planId,
+      objective: input.objective,
+      instructions: input.instructions,
+      dependencies: input.dependencies ?? [],
+      successCriteria: input.successCriteria ?? [],
+      requiredCapabilities: input.requiredCapabilities ?? [],
+      riskClass: input.riskClass ?? "reversible",
+      allowedFileScope: input.allowedFileScope ?? [],
+      expectedArtifacts: input.expectedArtifacts ?? [],
+      priority: input.priority ?? 3,
+      attemptBudget: input.attemptBudget ?? 3,
+      reviewPolicy: input.reviewPolicy ?? "if_risky",
+      integrationPolicy: input.integrationPolicy ?? "",
       assignedAgentId: input.assignedAgentId,
       status: "draft",
       actionIds: [],

@@ -100,6 +100,22 @@ export function rowToTask(row: TaskRow, actionIds: string[]): Task {
     description: row.description ?? undefined,
     assignedAgentId: row.assignedAgentId ?? undefined,
     status: row.status,
+    // CORE3 planning metadata, readable back after a restart (migration 0041).
+    missionId: row.missionId ?? undefined,
+    goalId: row.goalId ?? undefined,
+    planId: row.planId ?? undefined,
+    objective: row.objective ?? undefined,
+    instructions: row.instructions ?? undefined,
+    dependencies: row.dependencies ?? [],
+    successCriteria: row.successCriteria ?? [],
+    requiredCapabilities: row.requiredCapabilities ?? [],
+    riskClass: row.riskClass,
+    allowedFileScope: row.allowedFileScope ?? [],
+    expectedArtifacts: row.expectedArtifacts ?? [],
+    priority: row.priority,
+    attemptBudget: row.attemptBudget,
+    reviewPolicy: row.reviewPolicy,
+    integrationPolicy: row.integrationPolicy,
     actionIds,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
@@ -173,6 +189,13 @@ export function agentToRow(agent: Agent): AgentInsert {
   };
 }
 
+/*
+ * CORE3 planning metadata is persisted, not dropped.
+ *
+ * Before migration 0041 this mapper silently discarded every planning field,
+ * so planner output never survived a restart. Defaults mirror the column
+ * defaults so a generic Task round-trips unchanged.
+ */
 export function taskToRow(task: Task): TaskInsert {
   return {
     id: task.id,
@@ -180,6 +203,21 @@ export function taskToRow(task: Task): TaskInsert {
     description: task.description ?? null,
     status: task.status,
     assignedAgentId: task.assignedAgentId ?? null,
+    missionId: task.missionId ?? null,
+    goalId: task.goalId ?? null,
+    planId: task.planId ?? null,
+    objective: task.objective ?? null,
+    instructions: task.instructions ?? null,
+    dependencies: task.dependencies ?? [],
+    successCriteria: task.successCriteria ?? [],
+    requiredCapabilities: task.requiredCapabilities ?? [],
+    riskClass: task.riskClass ?? "reversible",
+    allowedFileScope: task.allowedFileScope ?? [],
+    expectedArtifacts: task.expectedArtifacts ?? [],
+    priority: task.priority ?? 3,
+    attemptBudget: task.attemptBudget ?? 3,
+    reviewPolicy: task.reviewPolicy ?? "if_risky",
+    integrationPolicy: task.integrationPolicy ?? "",
     createdAt: new Date(task.createdAt),
     updatedAt: new Date(task.updatedAt),
   };
