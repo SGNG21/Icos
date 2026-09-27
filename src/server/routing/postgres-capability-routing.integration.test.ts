@@ -77,6 +77,8 @@ function worker(over: Partial<WorkerRegistryEntry> & Pick<WorkerRegistryEntry, "
     availability: "available",
     tags: [],
     metadata: {},
+    lastProbeAt: new Date().toISOString(),
+    lastProbeOutcome: "ok",
     updatedAt: new Date().toISOString(),
     ...over,
   };
@@ -193,6 +195,8 @@ describe("M4 capability routing on PostgreSQL", () => {
         "RUNTIME_NOT_SUPPORTED",
         "HEALTH_NOT_HEALTHY",
         "NOT_AVAILABLE",
+        // M5.2: such a row also carries no probe evidence.
+        "HEALTH_EVIDENCE_MISSING",
       ]);
     });
   });
@@ -348,7 +352,11 @@ describe("M4 capability routing on PostgreSQL", () => {
       // Registered but unprobed: the registry is now authoritative and refuses.
       const unprobed = await a.router.route({ requiredCapabilities: ["deep-research"] });
       expect(unprobed.decision).toBe("NO_ELIGIBLE_WORKER");
-      expect(unprobed.candidates[0].reasons).toEqual(["HEALTH_NOT_HEALTHY", "NOT_AVAILABLE"]);
+      expect(unprobed.candidates[0].reasons).toEqual([
+        "HEALTH_NOT_HEALTHY",
+        "NOT_AVAILABLE",
+        "HEALTH_EVIDENCE_MISSING",
+      ]);
 
       await a.registration.probe(RESEARCHER, { health: "healthy", availability: "available" });
       expect((await a.router.route({ requiredCapabilities: ["deep-research"] })).worker?.id).toBe(

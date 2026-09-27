@@ -2,6 +2,7 @@ import {
   workerRegistryEntrySchema,
   type WorkerAvailability,
   type WorkerHealth,
+  type WorkerProbeOutcome,
   type WorkerRegistryEntry,
 } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
@@ -42,6 +43,15 @@ export interface WorkerRegistrationInput {
 export interface WorkerProbe {
   health: WorkerHealth;
   availability: WorkerAvailability;
+  /**
+   * What the probe did (M5.2). Defaults to "ok" because the only caller that
+   * omits it is a caller reporting a successful observation. A FAILED probe
+   * must say so: collapsing a failure into "no evidence" hides the difference
+   * between "we could not reach it" and "we have not looked yet", and a
+   * provider/runtime probe failure that reads as absence is a failure that
+   * passed silently.
+   */
+  outcome?: WorkerProbeOutcome;
 }
 
 export class WorkerRegistrationService {
@@ -53,9 +63,9 @@ export class WorkerRegistrationService {
   /**
    * Registers or re-registers a worker in the fail-closed state.
    *
-   * Re-registering an existing worker RESETS its health and availability to
-   * unknown: the declaration changed, so previous probe evidence no longer
-   * describes the thing that is registered now.
+   * Re-registering an existing worker RESETS its health, availability AND its
+   * probe evidence: the declaration changed, so previous probe evidence no
+   * longer describes the thing that is registered now.
    */
   async register(input: WorkerRegistrationInput): Promise<WorkerRegistryEntry> {
     const entry = workerRegistryEntrySchema.parse({
@@ -71,6 +81,8 @@ export class WorkerRegistrationService {
       runtimeSupport: input.runtimeSupport ?? "UNKNOWN",
       health: "unknown",
       availability: "unknown",
+      lastProbeAt: null,
+      lastProbeOutcome: "never",
       tags: input.tags ?? [],
       metadata: input.metadata ?? {},
       updatedAt: this.now().toISOString(),
@@ -80,9 +92,14 @@ export class WorkerRegistrationService {
   }
 
   /**
-   * Records probe evidence. Returns null for an unregistered worker rather
-   * than inventing one — a probe result for a worker nobody registered is a
-   * bug upstream, not a registration.
+   * Records DATED probe evidence. Returns null for an unregistered worker
+   * rather than inventing one — a probe result for a worker nobody registered
+   * is a bug upstream, not a registration.
+   *
+   * `lastProbeAt` is stamped here and nowhere else. That is what makes health
+   * evidence ageable, and therefore expirable: see
+   * WorkerHealthProber.expireStaleEvidence and the HEALTH_EVIDENCE_STALE gate
+   * in the canonical matcher.
    */
   async probe(workerId: string, probe: WorkerProbe): Promise<WorkerRegistryEntry | null> {
     const existing = await this.workers.get(workerId);
@@ -90,11 +107,15 @@ export class WorkerRegistrationService {
       return null;
     }
 
+    const at = this.now().toISOString();
+
     return this.workers.upsert({
       ...existing,
       health: probe.health,
       availability: probe.availability,
-      updatedAt: this.now().toISOString(),
+      lastProbeAt: at,
+      lastProbeOutcome: probe.outcome ?? "ok",
+      updatedAt: at,
     });
   }
 

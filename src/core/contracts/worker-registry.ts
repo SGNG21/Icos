@@ -15,6 +15,19 @@ export type WorkerHealth = z.infer<typeof workerHealthSchema>;
 export const workerAvailabilitySchema = z.enum(["available", "unavailable", "unknown"]);
 export type WorkerAvailability = z.infer<typeof workerAvailabilitySchema>;
 
+/**
+ * Outcome of the last health probe (M5.2).
+ *
+ * `never`       — registered, never probed. The fail-closed start state.
+ * `ok`          — the probe ran and reported.
+ * `failed`      — the probe ran and threw/refused. NOT the same as never.
+ * `unsupported` — no probe adapter exists for this worker. We cannot know, so
+ *                 we must not pretend: fail closed, do not silently pass.
+ * `stale`       — evidence expired and was durably invalidated by the sweeper.
+ */
+export const workerProbeOutcomeSchema = z.enum(["never", "ok", "failed", "unsupported", "stale"]);
+export type WorkerProbeOutcome = z.infer<typeof workerProbeOutcomeSchema>;
+
 /** Descriptor of a worker's capability (we reuse the capability key). */
 export type WorkerCapabilityDescriptor = z.infer<typeof capabilityKeySchema>;
 
@@ -60,6 +73,19 @@ export const workerRegistryEntrySchema = z.object({
   tags: z.array(workerTagSchema).default([]),
   /** Additional metadata. */
   metadata: workerMetadataSchema.default({}),
+  /**
+   * When health/availability evidence was last RECORDED BY A PROBE (M5.2).
+   * null means "never probed": registration does not produce evidence.
+   * Evidence without a timestamp cannot be aged, and evidence that cannot be
+   * aged cannot be trusted — the canonical matcher refuses it.
+   */
+  lastProbeAt: isoDateTimeSchema.nullable().default(null),
+  /**
+   * What the last probe actually did. Distinguishing `failed` from
+   * `unsupported` from `stale` matters: a provider/runtime probe that failed
+   * must be visible as a failure, never collapse into "we have not looked".
+   */
+  lastProbeOutcome: workerProbeOutcomeSchema.default("never"),
   /** Last update timestamp. */
   updatedAt: isoDateTimeSchema,
 });

@@ -3,6 +3,7 @@ import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import {
   evaluateWorkerPool,
   selectWorker,
+  HEALTH_EVIDENCE_MAX_AGE_MS,
   type WorkerEligibilityVerdict,
   type WorkerRequirement,
 } from "@/core/workers/worker-eligibility";
@@ -23,6 +24,13 @@ import {
  * registered or re-probed mid-process kept its stale eligibility until the next
  * container build — which meant a worker that had just gone unhealthy kept
  * receiving work. Reading the authority is both simpler and correct.
+ *
+ * M5.2: every decision carries a HEALTH EVIDENCE HORIZON. The router refuses a
+ * worker whose probe evidence is missing or older than the horizon, so a
+ * crashed worker stops receiving work at the moment of the decision rather than
+ * whenever the next expiry sweep happens to run. The clock is injected, so the
+ * decision stays a pure function of (durable rows, now) and remains
+ * reproducible — a stored `now` replays to the same verdict.
  *
  * THE ONE PERMISSIVE PATH, STATED PLAINLY
  * An EMPTY registry yields ROUTING_UNCONFIGURED and the caller dispatches as it
@@ -49,11 +57,40 @@ export interface CapabilityRoutingResult {
   reason: string;
 }
 
-export class CapabilityRouter {
-  constructor(private readonly workers: WorkerRegistryStore) {}
+export interface CapabilityRouterOptions {
+  /** Injected clock. Kept out of the matcher so eligibility stays pure. */
+  now?: () => Date;
+  /** Health-evidence horizon. Defaults to the canonical one. */
+  healthEvidenceMaxAgeMs?: number;
+}
 
-  async route(requirement: WorkerRequirement): Promise<CapabilityRoutingResult> {
+export class CapabilityRouter {
+  private readonly now: () => Date;
+  private readonly healthEvidenceMaxAgeMs: number;
+
+  constructor(
+    private readonly workers: WorkerRegistryStore,
+    options: CapabilityRouterOptions = {},
+  ) {
+    this.now = options.now ?? (() => new Date());
+    this.healthEvidenceMaxAgeMs = options.healthEvidenceMaxAgeMs ?? HEALTH_EVIDENCE_MAX_AGE_MS;
+  }
+
+  async route(incoming: WorkerRequirement): Promise<CapabilityRoutingResult> {
     const pool = await this.workers.list();
+
+    /*
+     * The horizon is imposed HERE, not trusted from the caller: a caller that
+     * forgot it would silently route on undated health evidence. A caller may
+     * still tighten it deliberately by passing its own.
+     */
+    const requirement: WorkerRequirement = {
+      ...incoming,
+      evidenceHorizon: incoming.evidenceHorizon ?? {
+        now: this.now().toISOString(),
+        maxAgeMs: this.healthEvidenceMaxAgeMs,
+      },
+    };
 
     if (pool.length === 0) {
       return {

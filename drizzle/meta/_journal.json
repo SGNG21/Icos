@@ -281,6 +281,13 @@
       "when": 1790454402287,
       "tag": "0042_worker_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790540802287,
+      "tag": "0043_worker_probe_evidence",
+      "breakpoints": true
     }
   ]
 }

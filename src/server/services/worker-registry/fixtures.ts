@@ -28,6 +28,9 @@ export const hermesWorker: WorkerRegistryEntry = {
     source: "hermes-binary",
     description: "Hermes CLI agent for information gathering"
   },
+  // Never probed: these fixtures assert the fail-closed start state (M5.2).
+  lastProbeAt: null,
+  lastProbeOutcome: "never",
   updatedAt: isoDateTimeSchema.parse(new Date().toISOString())
 };
 
@@ -53,6 +56,9 @@ export const openhandsWorker: WorkerRegistryEntry = {
     source: "openhands-agent",
     description: "OpenHands AI agent for software engineering tasks"
   },
+  // Never probed: these fixtures assert the fail-closed start state (M5.2).
+  lastProbeAt: null,
+  lastProbeOutcome: "never",
   updatedAt: isoDateTimeSchema.parse(new Date().toISOString())
 };
 
@@ -78,6 +84,9 @@ export const digitalosWorker: WorkerRegistryEntry = {
     source: "digitalos-facade",
     description: "DigitalOS execution facade for website operations"
   },
+  // Never probed: these fixtures assert the fail-closed start state (M5.2).
+  lastProbeAt: null,
+  lastProbeOutcome: "never",
   updatedAt: isoDateTimeSchema.parse(new Date().toISOString())
 };
 
@@ -103,6 +112,9 @@ export const agentWorker: WorkerRegistryEntry = {
     source: "generic-agent",
     description: "Generic AI agent for text-based tasks"
   },
+  // Never probed: these fixtures assert the fail-closed start state (M5.2).
+  lastProbeAt: null,
+  lastProbeOutcome: "never",
   updatedAt: isoDateTimeSchema.parse(new Date().toISOString())
 };
 
@@ -128,6 +140,9 @@ export const otherWorker: WorkerRegistryEntry = {
     source: "local-dispatcher",
     description: "Worker for validation and review tasks"
   },
+  // Never probed: these fixtures assert the fail-closed start state (M5.2).
+  lastProbeAt: null,
+  lastProbeOutcome: "never",
   updatedAt: isoDateTimeSchema.parse(new Date().toISOString())
 };
 

@@ -35,6 +35,16 @@ export const ELIGIBLE_WORKER_HEALTH = "healthy" as const;
 /** The ONLY availability value that may receive work. unavailable/unknown cannot. */
 export const ELIGIBLE_WORKER_AVAILABILITY = "available" as const;
 
+/**
+ * How long health evidence stays valid, by default (M5.2).
+ *
+ * ONE value, imported by both the producer (WorkerHealthProber) and the
+ * consumer (CapabilityRouter). Two independent horizons would create a window
+ * where the router still trusts evidence the prober has already given up on,
+ * or the reverse.
+ */
+export const HEALTH_EVIDENCE_MAX_AGE_MS = 120_000;
+
 export type WorkerIneligibilityReason =
   | "EXCLUDED_WORKER"
   | "STATUS_NOT_ACTIVE"
@@ -42,7 +52,27 @@ export type WorkerIneligibilityReason =
   | "HEALTH_NOT_HEALTHY"
   | "NOT_AVAILABLE"
   | "WORKER_KIND_MISMATCH"
-  | "MISSING_REQUIRED_CAPABILITIES";
+  | "MISSING_REQUIRED_CAPABILITIES"
+  /** Never probed: `healthy` written by anything other than a probe is not evidence. */
+  | "HEALTH_EVIDENCE_MISSING"
+  /** Probed, but too long ago to still describe the worker. */
+  | "HEALTH_EVIDENCE_STALE";
+
+/**
+ * How old health evidence may be and still count (M5.2).
+ *
+ * The clock arrives as DATA, never as a `Date.now()` call inside this module.
+ * That is what lets a freshness rule live in a pure matcher: the same
+ * (worker, now, maxAgeMs) triple always produces the same verdict, so a
+ * routing decision is still reproducible after a restart — which is exactly
+ * the property decision 0031 certified and must not lose.
+ */
+export interface HealthEvidenceHorizon {
+  /** ISO instant the decision is being made at. */
+  now: string;
+  /** Maximum age of probe evidence, in milliseconds. Must be > 0. */
+  maxAgeMs: number;
+}
 
 export interface WorkerRequirement {
   /** Every one of these must be present on the worker. Empty/absent = no capability constraint. */
@@ -51,6 +81,19 @@ export interface WorkerRequirement {
   workerKind?: string | null;
   /** Worker ids that must not be selected (self-review, repair retry on a burnt worker). */
   excludeWorkerIds?: readonly string[];
+  /**
+   * Health-evidence freshness policy (M5.2).
+   *
+   * Omitted means the caller cannot date the evidence, so the age gates do not
+   * run. That is NOT a fail-open hole: `health` itself still has to be exactly
+   * `healthy`, and the durable sweeper
+   * (WorkerHealthProber.expireStaleEvidence) independently resets expired
+   * evidence to `unknown` in the database, so a stale worker stops being
+   * eligible for every consumer, horizon or not. Passing a horizon makes the
+   * refusal immediate instead of eventual, and the capability router always
+   * passes one.
+   */
+  evidenceHorizon?: HealthEvidenceHorizon;
 }
 
 export interface WorkerEligibilityVerdict {
@@ -96,6 +139,15 @@ export function evaluateWorkerEligibility(
 
   if (requirement.workerKind && worker.workerKind !== requirement.workerKind) {
     reasons.push("WORKER_KIND_MISMATCH");
+  }
+
+  if (requirement.evidenceHorizon) {
+    const { now, maxAgeMs } = requirement.evidenceHorizon;
+    if (!worker.lastProbeAt) {
+      reasons.push("HEALTH_EVIDENCE_MISSING");
+    } else if (isEvidenceStale(worker.lastProbeAt, now, maxAgeMs)) {
+      reasons.push("HEALTH_EVIDENCE_STALE");
+    }
   }
 
   const owned = new Set(worker.capabilities);
@@ -147,4 +199,22 @@ export function selectWorker(
   requirement: WorkerRequirement = {},
 ): WorkerRegistryEntry | null {
   return selectEligibleWorkers(workers, requirement)[0] ?? null;
+}
+
+/**
+ * True when probe evidence is older than the horizon allows.
+ *
+ * An unparseable timestamp is STALE, not fresh: garbage in a freshness field
+ * must not buy a worker eligibility. Evidence dated in the future is accepted
+ * as fresh (clock skew between a worker host and the router is not the
+ * worker's fault, and treating skew as staleness would take a healthy fleet
+ * offline).
+ */
+function isEvidenceStale(lastProbeAt: string, now: string, maxAgeMs: number): boolean {
+  const probed = Date.parse(lastProbeAt);
+  const reference = Date.parse(now);
+  if (Number.isNaN(probed) || Number.isNaN(reference)) {
+    return true;
+  }
+  return reference - probed > maxAgeMs;
 }

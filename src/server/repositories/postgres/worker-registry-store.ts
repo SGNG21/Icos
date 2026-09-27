@@ -71,6 +71,8 @@ function workerToRow(worker: WorkerRegistryEntry): typeof workers.$inferInsert {
     availability: parsed.availability,
     tags: parsed.tags,
     metadata: parsed.metadata,
+    lastProbeAt: parsed.lastProbeAt ? new Date(parsed.lastProbeAt) : null,
+    lastProbeOutcome: parsed.lastProbeOutcome,
     updatedAt: new Date(parsed.updatedAt),
   };
 }
@@ -91,6 +93,8 @@ function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
     availability: row.availability,
     tags: row.tags,
     metadata: row.metadata,
+    lastProbeAt: row.lastProbeAt ? row.lastProbeAt.toISOString() : null,
+    lastProbeOutcome: row.lastProbeOutcome,
     updatedAt: row.updatedAt.toISOString(),
   });
 

@@ -14,6 +14,8 @@ import { CapabilityRouter } from "@/server/routing/capability-router";
 
 function worker(over: Partial<WorkerRegistryEntry> = {}): WorkerRegistryEntry {
   return {
+    lastProbeAt: new Date().toISOString(),
+    lastProbeOutcome: "ok",
     id: "worker-b",
     workerKind: "agent",
     displayName: "Worker",

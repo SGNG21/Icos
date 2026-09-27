@@ -30,6 +30,7 @@ import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-mem
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
 import { CapabilityRouter } from "@/server/routing/capability-router";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
+import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
@@ -176,6 +177,18 @@ export interface Container {
    */
   workerRegistration: WorkerRegistrationService;
   /**
+   * Autonomous health probing (M5.2, defect 14). `probeAll()` refreshes
+   * evidence for active workers; `expireStaleEvidence()` durably invalidates
+   * evidence nothing refreshed, which is what makes a crashed worker or a dead
+   * session fail CLOSED instead of leaving a stale `healthy` behind.
+   *
+   * No probe adapter is registered yet: until M6 ships non-interactive external
+   * workers there is nothing real to probe, so every worker kind reads
+   * `unsupported` — we cannot verify it, so we do not route to it. Adapters are
+   * DATA keyed by worker kind; adding one needs no change here or in the prober.
+   */
+  workerHealthProber: WorkerHealthProber;
+  /**
    * Capability routing over the worker registry hydrated at container build
    * (M4, decision 0031). With an empty registry it reports
    * ROUTING_UNCONFIGURED and dispatch behaves exactly as before M4.
@@ -294,6 +307,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const workerRegistry = new InMemoryWorkerRegistry([]);
   const capabilityRouter = new CapabilityRouter(workerRegistryStore);
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
+  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -372,6 +386,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
     workerRegistration,
+    workerHealthProber,
     capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine,
@@ -499,6 +514,7 @@ export async function buildPostgresContainer(
   const workerRegistry = new InMemoryWorkerRegistry(await workerRegistryStore.list());
   const capabilityRouter = new CapabilityRouter(workerRegistryStore);
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
+  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
 
@@ -585,6 +601,7 @@ export async function buildPostgresContainer(
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
     workerRegistration,
+    workerHealthProber,
     capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine: new AISelectionEngine(aiResourceCatalog),

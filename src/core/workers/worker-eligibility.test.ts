@@ -17,12 +17,17 @@ import {
  * deliberately removed from worker-eligibility.ts and the test failed.
  */
 
+/** Fresh probe evidence. M5.2: `healthy` alone is not eligibility. */
+const PROBED_AT = "2026-09-27T12:00:00.000Z";
+
 /** A worker that passes every gate. Tests degrade it one field at a time. */
 function worker(overrides: Partial<WorkerRegistryEntry> = {}): WorkerRegistryEntry {
   return {
     id: "worker-b",
     workerKind: "agent",
     displayName: "Eligible Worker",
+    lastProbeAt: PROBED_AT,
+    lastProbeOutcome: "ok",
     capabilities: ["code-generation", "testing"],
     features: [],
     supportsTools: true,
@@ -237,5 +242,93 @@ describe("canonical worker eligibility", () => {
         selectWorker([unknownFuture], { requiredCapabilities: ["quantum.compile"] })?.id,
       ).toBe("worker-from-the-future");
     });
+  });
+});
+
+/*
+ * M5.2 HEALTH EVIDENCE FRESHNESS.
+ *
+ * `health: "healthy"` is a CLAIM. What makes it evidence is a probe timestamp
+ * that can be aged. These gates were mutation-verified: deleting the
+ * evidenceHorizon block from worker-eligibility.ts makes every test below fail.
+ */
+describe("M5.2 health evidence freshness", () => {
+  const NOW = "2026-09-27T12:00:00.000Z";
+  const horizon = { now: NOW, maxAgeMs: 60_000 };
+
+  it("HEALTH_EVIDENCE_MISSING: a healthy worker that was never probed is refused", () => {
+    const verdict = evaluateWorkerEligibility(
+      worker({ health: "healthy", lastProbeAt: null, lastProbeOutcome: "never" }),
+      { evidenceHorizon: horizon },
+    );
+
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.reasons).toContain("HEALTH_EVIDENCE_MISSING");
+  });
+
+  it("HEALTH_EVIDENCE_STALE: evidence older than the horizon is refused", () => {
+    const verdict = evaluateWorkerEligibility(
+      worker({ lastProbeAt: "2026-09-27T11:58:59.000Z" }),
+      { evidenceHorizon: horizon },
+    );
+
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.reasons).toContain("HEALTH_EVIDENCE_STALE");
+  });
+
+  it("evidence exactly at the horizon is still fresh; one millisecond past is not", () => {
+    const atLimit = evaluateWorkerEligibility(worker({ lastProbeAt: "2026-09-27T11:59:00.000Z" }), {
+      evidenceHorizon: horizon,
+    });
+    const pastLimit = evaluateWorkerEligibility(
+      worker({ lastProbeAt: "2026-09-27T11:58:59.999Z" }),
+      { evidenceHorizon: horizon },
+    );
+
+    expect(atLimit.eligible).toBe(true);
+    expect(pastLimit.reasons).toContain("HEALTH_EVIDENCE_STALE");
+  });
+
+  it("an unparseable probe timestamp is STALE, never fresh", () => {
+    const verdict = evaluateWorkerEligibility(worker({ lastProbeAt: "not-a-date" }), {
+      evidenceHorizon: horizon,
+    });
+
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.reasons).toContain("HEALTH_EVIDENCE_STALE");
+  });
+
+  it("fresh evidence plus every other gate passing is eligible", () => {
+    expect(
+      evaluateWorkerEligibility(worker({ lastProbeAt: NOW }), { evidenceHorizon: horizon })
+        .eligible,
+    ).toBe(true);
+  });
+
+  it("freshness NEVER rescues an unhealthy worker: the gates are cumulative", () => {
+    const verdict = evaluateWorkerEligibility(
+      worker({ health: "unhealthy", lastProbeAt: NOW }),
+      { evidenceHorizon: horizon },
+    );
+
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.reasons).toContain("HEALTH_NOT_HEALTHY");
+  });
+
+  it("stale evidence is refused by selectWorker, not merely reported", () => {
+    const fresh = worker({ id: "worker-fresh", lastProbeAt: NOW });
+    const stale = worker({ id: "worker-aaa-stale", lastProbeAt: "2026-01-01T00:00:00.000Z" });
+
+    // worker-aaa-stale sorts FIRST by id: without the gate it would win.
+    expect(selectWorker([stale, fresh], { evidenceHorizon: horizon })?.id).toBe("worker-fresh");
+    expect(selectWorker([stale], { evidenceHorizon: horizon })).toBeNull();
+  });
+
+  it("is a pure function of (worker, now): the same inputs replay identically", () => {
+    const w = worker({ lastProbeAt: "2026-09-27T11:59:30.000Z" });
+    const first = evaluateWorkerEligibility(w, { evidenceHorizon: horizon });
+    const second = evaluateWorkerEligibility(w, { evidenceHorizon: horizon });
+
+    expect(second).toEqual(first);
   });
 });

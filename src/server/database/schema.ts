@@ -1080,6 +1080,14 @@ export const workers = pgTable(
     availability: text("availability").default("unknown").notNull(),
     tags: jsonb("tags").default([]).notNull(),
     metadata: jsonb("metadata").default({}).notNull(),
+    /*
+     * Health-probe EVIDENCE (migration 0043, M5.2). null = never probed.
+     * Registration deliberately leaves it null: a worker announcing itself is
+     * evidence that it exists, not evidence that it works. Undated evidence
+     * cannot be aged, and evidence that cannot be aged does not route work.
+     */
+    lastProbeAt: timestamp("last_probe_at", { withTimezone: true }),
+    lastProbeOutcome: text("last_probe_outcome").default("never").notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -1098,8 +1106,18 @@ export const workers = pgTable(
       "workers_availability_check",
       sql`${t.availability} in ('available','unavailable','unknown')`,
     ),
+    check(
+      "workers_last_probe_outcome_check",
+      sql`${t.lastProbeOutcome} in ('never','ok','failed','unsupported','stale')`,
+    ),
+    /* An 'ok'/'failed' probe with no timestamp would be undatable evidence. */
+    check(
+      "workers_probe_evidence_dated_check",
+      sql`${t.lastProbeOutcome} = 'never' or ${t.lastProbeAt} is not null`,
+    ),
     index("workers_worker_kind_idx").on(t.workerKind),
     index("workers_status_idx").on(t.status),
+    index("workers_last_probe_at_idx").on(t.lastProbeAt),
   ],
 );
 

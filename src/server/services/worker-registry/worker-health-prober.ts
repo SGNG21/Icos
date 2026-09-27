@@ -1,0 +1,217 @@
+import type { WorkerProbeOutcome, WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
+import type { WorkerRegistrationService } from "./worker-registration-service";
+import { HEALTH_EVIDENCE_MAX_AGE_MS } from "@/core/workers/worker-eligibility";
+
+/**
+ * Autonomous worker health probing (M5.2, defect 14).
+ *
+ * M5.1 built a write side that could RECORD probe evidence
+ * (WorkerRegistrationService.probe) but nothing PRODUCED any, so every
+ * registered worker stayed `unknown` forever and the whole fleet was
+ * permanently ineligible. Correct failure direction, but not orchestration.
+ * This is the loop.
+ *
+ * TWO MOVEMENTS, BOTH REQUIRED
+ *   probeAll()            — refreshes evidence for active workers.
+ *   expireStaleEvidence() — invalidates evidence that nothing refreshed.
+ * The second is what makes a crashed worker, a dead session or a stopped prober
+ * fail CLOSED rather than leave a stale `healthy` behind. Probing alone cannot
+ * do it: a worker that has stopped answering also stops being probed, so
+ * without expiry its last good verdict would survive forever — including across
+ * a process restart, which is exactly how a restart "magically restores
+ * HEALTHY".
+ *
+ * EVIDENCE IS DURABLE, NEVER CACHED
+ * Every verdict goes through the registration service into the `workers` table.
+ * There is no in-memory health map: one would be invisible to other processes
+ * and lost on restart, reintroducing the M4 snapshot bug that decision 0032
+ * closed.
+ *
+ * NO PROVIDER HARDWIRE
+ * Probe adapters are DATA, injected and keyed by worker kind. This module names
+ * no provider, no model and no account, and a new worker kind becomes probeable
+ * by registering an adapter — not by editing this file. A kind with NO adapter
+ * is recorded `unsupported` and routes nothing: we cannot verify it, so we do
+ * not pretend to. Silently treating "unprobeable" as "fine" is the fail-open
+ * hole decision 0031 exists to prevent.
+ *
+ * SCOPE — this probes WORKERS (execution units). Model, provider, account and
+ * capacity-slot health are different axes and belong to the Resource Manager;
+ * an adapter may consult them internally but must answer only for the worker.
+ */
+
+/** What an adapter observed. Deliberately just the two routing gates. */
+export interface WorkerHealthObservation {
+  health: WorkerRegistryEntry["health"];
+  availability: WorkerRegistryEntry["availability"];
+}
+
+/**
+ * Observes one worker.
+ *
+ * Throwing is a legitimate, expected outcome: it is recorded as a FAILED probe
+ * (unhealthy + unavailable), never swallowed and never read as "no evidence".
+ */
+export interface WorkerHealthProbePort {
+  probe(worker: WorkerRegistryEntry): Promise<WorkerHealthObservation>;
+}
+
+export interface WorkerHealthProberOptions {
+  /** Adapters keyed by worker kind. A kind absent here is `unsupported`. */
+  adapters?: Readonly<Record<string, WorkerHealthProbePort>>;
+  /** How long probe evidence stays valid. Defaults to the canonical horizon. */
+  maxEvidenceAgeMs?: number;
+  now?: () => Date;
+}
+
+export interface WorkerProbeRecord {
+  workerId: string;
+  outcome: WorkerProbeOutcome;
+  health: WorkerRegistryEntry["health"];
+  availability: WorkerRegistryEntry["availability"];
+  /** Present only for a failed probe. */
+  error?: string;
+}
+
+export interface WorkerHealthSweepReport {
+  /** One record per worker acted on, sorted by worker id. Deterministic evidence. */
+  probed: WorkerProbeRecord[];
+  /** Workers whose evidence expired and was durably invalidated, sorted by id. */
+  expired: string[];
+}
+
+export class WorkerHealthProber {
+  private readonly adapters: Readonly<Record<string, WorkerHealthProbePort>>;
+  private readonly maxEvidenceAgeMs: number;
+  private readonly now: () => Date;
+
+  constructor(
+    private readonly workers: WorkerRegistryStore,
+    private readonly registration: WorkerRegistrationService,
+    options: WorkerHealthProberOptions = {},
+  ) {
+    this.adapters = options.adapters ?? {};
+    this.maxEvidenceAgeMs = options.maxEvidenceAgeMs ?? HEALTH_EVIDENCE_MAX_AGE_MS;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  /**
+   * Probes every ACTIVE worker once and records the result durably.
+   *
+   * Inactive workers are skipped on purpose: they are already out of rotation,
+   * and rewriting their evidence would destroy the audit trail `deactivate()`
+   * deliberately preserves.
+   */
+  async probeAll(): Promise<WorkerProbeRecord[]> {
+    const pool = await this.workers.list();
+    const records: WorkerProbeRecord[] = [];
+
+    for (const worker of pool.filter((w) => w.status === "active")) {
+      records.push(await this.probeOne(worker));
+    }
+
+    return records.sort((a, b) => a.workerId.localeCompare(b.workerId));
+  }
+
+  private async probeOne(worker: WorkerRegistryEntry): Promise<WorkerProbeRecord> {
+    const adapter = this.adapters[worker.workerKind];
+
+    if (!adapter) {
+      // We cannot verify this kind. Say exactly that, and route nothing to it.
+      await this.registration.probe(worker.id, {
+        health: "unknown",
+        availability: "unknown",
+        outcome: "unsupported",
+      });
+      return {
+        workerId: worker.id,
+        outcome: "unsupported",
+        health: "unknown",
+        availability: "unknown",
+      };
+    }
+
+    try {
+      const observed = await adapter.probe(worker);
+      await this.registration.probe(worker.id, { ...observed, outcome: "ok" });
+      return {
+        workerId: worker.id,
+        outcome: "ok",
+        health: observed.health,
+        availability: observed.availability,
+      };
+    } catch (error) {
+      /*
+       * A probe that threw is a NEGATIVE observation, not a missing one. The
+       * runtime or provider behind this worker did not answer, so the worker is
+       * unhealthy and unavailable until it does. This is the branch that stops
+       * a transport error from silently passing as health.
+       */
+      await this.registration.probe(worker.id, {
+        health: "unhealthy",
+        availability: "unavailable",
+        outcome: "failed",
+      });
+      return {
+        workerId: worker.id,
+        outcome: "failed",
+        health: "unhealthy",
+        availability: "unavailable",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Durably invalidates evidence older than the horizon.
+   *
+   * This is the crash/session-death path. A worker that stops answering also
+   * stops being probed, so nothing would otherwise overwrite its last
+   * `healthy`. After expiry the row reads unknown/unknown/`stale` and the
+   * canonical matcher refuses it — including in a fresh process that never saw
+   * the worker healthy, which is what makes "restart cannot restore HEALTHY"
+   * true of the STORED STATE and not merely of one router instance.
+   *
+   * Already-`stale` rows are not rewritten: expiry is idempotent and must not
+   * churn `updated_at` on every sweep.
+   */
+  async expireStaleEvidence(): Promise<string[]> {
+    const reference = this.now().getTime();
+    const expired: string[] = [];
+
+    for (const worker of await this.workers.list()) {
+      if (worker.status !== "active" || worker.lastProbeOutcome === "stale") {
+        continue;
+      }
+
+      const probedAt = worker.lastProbeAt ? Date.parse(worker.lastProbeAt) : Number.NaN;
+      const undatable = Number.isNaN(probedAt);
+      const tooOld = !undatable && reference - probedAt > this.maxEvidenceAgeMs;
+
+      // Never-probed rows are already fail-closed (unknown/unknown/never);
+      // leave them, so "never looked" stays distinguishable from "expired".
+      if (worker.lastProbeOutcome === "never" && !worker.lastProbeAt) {
+        continue;
+      }
+
+      if (undatable || tooOld) {
+        await this.registration.probe(worker.id, {
+          health: "unknown",
+          availability: "unknown",
+          outcome: "stale",
+        });
+        expired.push(worker.id);
+      }
+    }
+
+    return expired.sort((a, b) => a.localeCompare(b));
+  }
+
+  /** Refresh first, then invalidate whatever the refresh did not touch. */
+  async sweep(): Promise<WorkerHealthSweepReport> {
+    const probed = await this.probeAll();
+    const expired = await this.expireStaleEvidence();
+    return { probed, expired };
+  }
+}

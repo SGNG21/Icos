@@ -63,6 +63,8 @@ function worker(id: string, workerKind: WorkerKind): WorkerRegistryEntry {
     availability: "available",
     tags: [],
     metadata: { source: "phase8e-e2e-fixture" },
+    lastProbeAt: NOW,
+    lastProbeOutcome: "ok",
     updatedAt: NOW,
   };
 }

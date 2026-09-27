@@ -39,10 +39,17 @@ describe("worker registration", () => {
     const registered = await service.register(declaration(WORKER_A, ["code-generation"]));
     expect(registered.health).toBe("unknown");
     expect(registered.availability).toBe("unknown");
+    // M5.2: registration also produces no EVIDENCE, not merely no health value.
+    expect(registered.lastProbeAt).toBeNull();
+    expect(registered.lastProbeOutcome).toBe("never");
 
     const routed = await router.route({ requiredCapabilities: ["code-generation"] });
     expect(routed.decision).toBe("NO_ELIGIBLE_WORKER");
-    expect(routed.candidates[0].reasons).toEqual(["HEALTH_NOT_HEALTHY", "NOT_AVAILABLE"]);
+    expect(routed.candidates[0].reasons).toEqual([
+      "HEALTH_NOT_HEALTHY",
+      "NOT_AVAILABLE",
+      "HEALTH_EVIDENCE_MISSING",
+    ]);
   });
 
   it("a caller cannot smuggle a health claim through registration", async () => {
