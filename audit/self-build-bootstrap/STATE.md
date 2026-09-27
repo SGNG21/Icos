@@ -5,13 +5,14 @@ Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M3 — durable dependency/readiness engine (NEXT, not started)
+M4 — capability routing (NEXT, not started)
+M3 — canonical dependency/readiness authority: COMPLETE, committed 5bb5a2b
 M2 — canonical plan contract + task planning metadata: COMPLETE, committed 71ee3aa
 M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-71ee3aaa29d06dce305ea838fecefef104c9905f  (M2)
+5bb5a2b294f8bd90a42578cf8946db75c8591119  (M3)
 M1 freeze facts: M1-FREEZE.md §1. M1 implementation: 8b93ab2.
 
 ## CERTIFIED_MILESTONES
@@ -19,6 +20,22 @@ M1 freeze facts: M1-FREEZE.md §1. M1 implementation: 8b93ab2.
 - M1 immutable plan lineage — FROZEN, evidence in M1-FREEZE.md (commit 8b93ab2)
 - M2 canonical plan contract + task planning metadata — commit 71ee3aa,
   audit in M2-POST-PHASE-AUDIT.md
+- M3 canonical dependency/readiness authority — commit 5bb5a2b,
+  decision 0030, audit in M3-POST-PHASE-AUDIT.md
+
+### M3 proofs (all mutation-verified)
+NO_UNLOCK_BEFORE_ALL_DEPS_COMPLETE  PROVEN (unit + postgres)
+DOWNSTREAM_UNLOCK_EXACTLY_ONCE      PROVEN (pure derivation; dispatched task
+                                     stops being offered)
+RESTART_PRESERVES_READINESS         PROVEN (container closed; readiness AND task
+                                     order identical after restart)
+STALE_WORKER_CANNOT_ADVANCE_DAG     PROVEN (a `running` dependency unlocks nothing)
+REPLAN_CANNOT_UNLOCK_SUPERSEDED     PROVEN (postgres)
+PARALLEL_ROOTS_REMAIN_PARALLEL      PROVEN (all roots returned at once)
+DETERMINISTIC_ORDER_STABLE          PROVEN (stable across reads, status churn,
+                                     restart)
+DEPENDENCIES_IS_NON_AUTHORITATIVE   PROVEN (contradictory tasks.dependencies
+                                     written straight to the DB changes nothing)
 
 ### M2 proofs
 PARALLEL_ROOTS_PROVEN        PROVEN (planExecutionOrder roots + levels)
@@ -81,7 +98,7 @@ MIGRATION_LEGACY_UPGRADE     PROVEN (pre-0040 table + row upgraded, no loss)
 CORE1_REGRESSION             PASS (integration 0 failures)
 CORE2_REGRESSION             PASS (integration 0 failures)
 TYPECHECK                    PASS
-TESTS                        PASS (1560 unit + 219 integration)
+TESTS                        PASS (1585 unit + 227 integration)
 DIFF_CHECK                   PASS
 
 ## TEST_BASELINE
@@ -91,12 +108,12 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at 71ee3aa):
+Current (at 5bb5a2b):
 - `pnpm run typecheck`: PASS
 - `pnpm run test` (unit): PASS — 129 files, 1525 tests
 - integration: PASS — 38 files / 212 tests, 0 failed, 10 files / 77 tests skipped
 - `git diff --check`: PASS
-- lint: 0 errors, 290 warnings (unchanged, all pre-existing)
+- lint: 0 errors, 289 warnings (one BELOW the pre-existing 290 baseline)
 - format:check: still FAIL on 243 files — PRE-EXISTING, NOT addressed. Running
   prettier --write would reformat the whole repository; that needs its own
   decision, not a drive-by commit.
@@ -188,24 +205,34 @@ real contract.
 Locked by src/server/supervisor/readiness-superseded.test.ts, mutation-verified.
 Do NOT add `superseded` to any readiness/ready/active set.
 
-## NEXT_ACTION — M3 (durable dependency / readiness engine, mission N13)
+## CANONICAL AUTHORITIES (decision 0030) — do not add a second one
+DAG EDGES    : mission_tasks.depends_on          (tasks.dependencies is NOT authoritative)
+READINESS    : src/server/supervisor/readiness.ts computeReadyTasks  (ONE engine)
+COMPLETION   : CANONICAL_COMPLETION_STATUS = "succeeded" only
+ELIGIBILITY  : READY_ELIGIBLE_STATUSES = {draft}  — ALLOW-list, fail closed
+PLAN CONTENT : fingerprintMissionPlan()           (planId != planFingerprint)
+PLAN LINEAGE : autonomous_plans, predecessorPlanId -> plan_id (never surrogate id)
+MISSION REPO : src/server/repositories/postgres/mission-repository.ts
+Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
+derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-M3 must resolve M2 audit finding S2 FIRST: the task DAG has two
-representations. `mission_tasks.depends_on` holds the real edges and drives
-`computeReadyTasks`; `tasks.dependencies` is persisted but every writer passes
-`[]`, so the canonical Task's own edge list is permanently empty. Mission N13
-requires readiness to derive from CANONICAL dependency completion, so decide
-which is authoritative and stop writing the other. Do not backfill one from the
-other (audit R1).
+## NEXT_ACTION — M4 (capability routing, mission N15)
 
-Then:
-1. exactly-once DAG advancement — a dependency must be canonically completed,
-   never merely claimed by a worker;
-2. wire `planExecutionOrder().levels` into the readiness/parallelism path
-   instead of recomputing readiness ad hoc;
-3. prove: C depends on A+B advances ONLY when both are canonically succeeded;
-   a superseded dependency never advances it (already locked by
-   readiness-superseded.test.ts); concurrent advancement cannot double-advance.
+BLOCKER TO DECLARE UP FRONT: CERT-1 (11 Docker-gated capability tests —
+capability-schema + postgres-capability-uow) must run before CAPABILITY_ROUTING
+can be called PROVEN. Either start Docker and run them, or state plainly that the
+claim is unproven. Do not certify M4 on unit tests alone.
+
+M4 must route on data that ALREADY exists and is now durable:
+- `tasks.required_capabilities` is persisted (M2) but feeds NOTHING. Wire it in.
+- `MissionTask.workerKind` / `capability` already exist and are already passed to
+  the dispatcher.
+- `reviewer-independence.ts` already has its own capability matching for reviewer
+  selection — REUSE or generalize it; do not write a second matcher.
+- there is an existing worker registry (see FIRST-AUTO-1B/1C history and
+  `workerRegistry` in governed-self-development-coordinator).
+Requirements: never hardwire a provider; tolerate unavailable providers; selection
+must be deterministic given identical inputs, and durable/observable.
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
