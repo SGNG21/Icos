@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
-import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
+import {
+  WorkerCapacityExceededError,
+  type DispatchAttemptRepository,
+} from "@/core/contracts/dispatch-attempt";
 import type { DurableMemory } from "@/core/context/durable-memory";
 import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
 
@@ -42,7 +45,7 @@ export class SupervisorService {
    */
   private async routeReadyTask(
     missionTask: { taskId: string; workerKind?: string | null },
-  ): Promise<{ blocked: boolean; workerKind?: string; reason?: string }> {
+  ): Promise<{ blocked: boolean; workerKind?: string; workerId?: string; reason?: string }> {
     if (!this.capabilityRouter) {
       return { blocked: false };
     }
@@ -63,7 +66,16 @@ export class SupervisorService {
     }
 
     if (routing.decision === "ROUTED" && routing.worker) {
-      return { blocked: false, workerKind: routing.worker.workerKind };
+      /*
+       * M5.3: the selected worker's IDENTITY travels with the dispatch, not just
+       * its kind. It is what makes durable load countable and what gives the
+       * attempt a real producer for attribution and reviewer independence.
+       */
+      return {
+        blocked: false,
+        workerKind: routing.worker.workerKind,
+        workerId: routing.worker.id,
+      };
     }
 
     // ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour.
@@ -211,17 +223,21 @@ export class SupervisorService {
           }
           const attemptNumber = 1;
           const workflowId = workflowIdForAttempt(task.taskId, attemptNumber);
-          const prepared = await this.dispatchAttempts.prepare({
-            missionId: mission.id,
-            missionTaskId: task.id,
-            taskId: task.taskId,
-            attempt: attemptNumber,
-            workflowId,
-            prompt,
-            workerKind: routedWorkerKind,
-            capability: task.capability || undefined,
-          });
-          if (!prepared.acquired) continue;
+          const prepared = await this.dispatchAttempts
+            .prepare({
+              missionId: mission.id,
+              missionTaskId: task.id,
+              taskId: task.taskId,
+              attempt: attemptNumber,
+              workflowId,
+              prompt,
+              workerKind: routedWorkerKind,
+              workerId: routing.workerId,
+              capability: task.capability || undefined,
+            })
+            .catch(rethrowUnlessCapacity);
+          // Back-pressure, not failure: the task stays ready for a later tick.
+          if (!prepared || !prepared.acquired) continue;
 
           // Allocate workspace for this task
           await this.workspaceExecutionCoordinator.allocateWorkspace(
@@ -279,21 +295,32 @@ export class SupervisorService {
 
         // PostgreSQL implementation makes these two state changes atomic:
         //   DispatchAttempt=prepared + MissionTask=queued
-        const prepared = await this.dispatchAttempts.prepare({
-          missionId: mission.id,
-          missionTaskId: task.id,
-          taskId: task.taskId,
-          attempt: attemptNumber,
-          workflowId,
-          prompt,
-          workerKind: routedWorkerKind,
-          capability: task.capability || undefined,
-        });
+        const prepared = await this.dispatchAttempts
+          .prepare({
+            missionId: mission.id,
+            missionTaskId: task.id,
+            taskId: task.taskId,
+            attempt: attemptNumber,
+            workflowId,
+            prompt,
+            workerKind: routedWorkerKind,
+            workerId: routing.workerId,
+            capability: task.capability || undefined,
+          })
+          .catch(rethrowUnlessCapacity);
 
-        // Only the transaction which created the durable intent owns the
-        // initial external dispatch side effect. Concurrent Supervisors that
-        // observe the same ready task receive acquired=false and must stop.
-        if (!prepared.acquired) {
+        /*
+         * Only the transaction which created the durable intent owns the initial
+         * external dispatch side effect. Concurrent Supervisors that observe the
+         * same ready task receive acquired=false and must stop.
+         *
+         * A null result is the M5.3 capacity refusal: the assigned worker filled
+         * up between the routing decision and the transaction. Nothing durable
+         * changed, the task is still ready, and a later tick will route it —
+         * possibly to a different worker. Deliberately NOT `blocked`: blocking
+         * would turn transient back-pressure into an operator-visible fault.
+         */
+        if (!prepared || !prepared.acquired) {
           continue;
         }
 
@@ -376,4 +403,18 @@ export class SupervisorService {
       return;
     }
   }
+}
+
+/**
+ * Swallows ONLY the capacity refusal, which is back-pressure rather than an
+ * error: the assigned worker filled up between the routing decision (taken
+ * outside the transaction) and the atomic guard inside it. Every other failure
+ * still propagates — a prepare that fails for any other reason must not be
+ * mistaken for a full worker.
+ */
+function rethrowUnlessCapacity(error: unknown): null {
+  if (error instanceof WorkerCapacityExceededError) {
+    return null;
+  }
+  throw error;
 }

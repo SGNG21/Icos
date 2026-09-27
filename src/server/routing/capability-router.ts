@@ -1,6 +1,7 @@
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import {
+  computeWorkerLoad,
   evaluateWorkerPool,
   selectWorker,
   HEALTH_EVIDENCE_MAX_AGE_MS,
@@ -32,6 +33,13 @@ import {
  * decision stays a pure function of (durable rows, now) and remains
  * reproducible — a stored `now` replays to the same verdict.
  *
+ * M5.3: each decision also carries a DURABLE LOAD SNAPSHOT, counted from the
+ * dispatch ledger. That is what turns "first eligible by id" into real
+ * distribution, and what lets a saturated worker be refused. Load is DERIVED,
+ * never counted in memory: an in-memory round-robin cursor would distribute too,
+ * and would silently break ROUTING_SURVIVES_RESTART (decision 0031) because a
+ * fresh process would start the rotation over.
+ *
  * THE ONE PERMISSIVE PATH, STATED PLAINLY
  * An EMPTY registry yields ROUTING_UNCONFIGURED and the caller dispatches as it
  * did before M4. This is not a fail-open matcher — it is the honest
@@ -62,11 +70,19 @@ export interface CapabilityRouterOptions {
   now?: () => Date;
   /** Health-evidence horizon. Defaults to the canonical one. */
   healthEvidenceMaxAgeMs?: number;
+  /**
+   * Durable worker assignments — one entry per active execution (M5.3).
+   * Normally `dispatchAttempts.listActiveWorkerAssignments`. Absent means load
+   * is unknown, ordering falls back to worker id, and the capacity gates do not
+   * run: exactly the pre-M5.3 behaviour.
+   */
+  activeAssignments?: () => Promise<readonly string[]>;
 }
 
 export class CapabilityRouter {
   private readonly now: () => Date;
   private readonly healthEvidenceMaxAgeMs: number;
+  private readonly activeAssignments?: () => Promise<readonly string[]>;
 
   constructor(
     private readonly workers: WorkerRegistryStore,
@@ -74,6 +90,7 @@ export class CapabilityRouter {
   ) {
     this.now = options.now ?? (() => new Date());
     this.healthEvidenceMaxAgeMs = options.healthEvidenceMaxAgeMs ?? HEALTH_EVIDENCE_MAX_AGE_MS;
+    this.activeAssignments = options.activeAssignments;
   }
 
   async route(incoming: WorkerRequirement): Promise<CapabilityRoutingResult> {
@@ -90,6 +107,11 @@ export class CapabilityRouter {
         now: this.now().toISOString(),
         maxAgeMs: this.healthEvidenceMaxAgeMs,
       },
+      load:
+        incoming.load ??
+        (this.activeAssignments
+          ? computeWorkerLoad(await this.activeAssignments(), pool)
+          : undefined),
     };
 
     if (pool.length === 0) {
@@ -122,7 +144,9 @@ export class CapabilityRouter {
       worker,
       requirement,
       candidates,
-      reason: `Routed to worker ${worker.id} (${worker.workerKind}).`,
+      reason: `Routed to worker ${worker.id} (${worker.workerKind})${
+        requirement.load ? ` carrying ${requirement.load.byWorkerId[worker.id] ?? 0}` : ""
+      }.`,
     };
   }
 }

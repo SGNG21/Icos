@@ -283,7 +283,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
 
   const tasksRepository = new InMemoryTaskRepository(auditLog, tasks);
   const mission = new InMemoryMissionRepository(tasksRepository);
-  const dispatchAttempts = new InMemoryDispatchAttemptRepository(mission, tasksRepository);
+  const workerRegistryStore = new InMemoryWorkerRegistryStore();
+  const dispatchAttempts = new InMemoryDispatchAttemptRepository(
+    mission,
+    tasksRepository,
+    workerRegistryStore,
+  );
   const executionResults = new InMemoryTaskExecutionResultRepository(auditLog, tasksRepository);
   const reviewDecisions = new InMemoryReviewDecisionRepository();
   const autonomousRuntime = new InMemoryAutonomousMissionRuntimeRepository();
@@ -303,9 +308,15 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   // Worker Registry (Phase 8C) — durable store + hydrated read model (M4).
   // buildMemoryContainer is synchronous by contract, and a fresh in-memory
   // store is empty by construction, so there is nothing to hydrate.
-  const workerRegistryStore = new InMemoryWorkerRegistryStore();
   const workerRegistry = new InMemoryWorkerRegistry([]);
-  const capabilityRouter = new CapabilityRouter(workerRegistryStore);
+  const capabilityRouter = new CapabilityRouter(workerRegistryStore, {
+    /*
+     * M5.3: durable load, derived from the dispatch ledger. Passing the reader
+     * (not a snapshot) means every decision counts the rows as they are now,
+     * and a restart recounts them identically.
+     */
+    activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
+  });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
@@ -512,7 +523,14 @@ export async function buildPostgresContainer(
    */
   const workerRegistryStore = new PostgresWorkerRegistryStore(handle.db);
   const workerRegistry = new InMemoryWorkerRegistry(await workerRegistryStore.list());
-  const capabilityRouter = new CapabilityRouter(workerRegistryStore);
+  const capabilityRouter = new CapabilityRouter(workerRegistryStore, {
+    /*
+     * M5.3: durable load, derived from the dispatch ledger. Passing the reader
+     * (not a snapshot) means every decision counts the rows as they are now,
+     * and a restart recounts them identically.
+     */
+    activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
+  });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration);
   const baseCatalog = new AIResourceCatalog();

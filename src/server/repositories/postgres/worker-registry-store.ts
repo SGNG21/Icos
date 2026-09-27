@@ -73,6 +73,9 @@ function workerToRow(worker: WorkerRegistryEntry): typeof workers.$inferInsert {
     metadata: parsed.metadata,
     lastProbeAt: parsed.lastProbeAt ? new Date(parsed.lastProbeAt) : null,
     lastProbeOutcome: parsed.lastProbeOutcome,
+    maxConcurrency: parsed.maxConcurrency,
+    capacityPool: parsed.capacityPool,
+    capacityPoolLimit: parsed.capacityPoolLimit,
     updatedAt: new Date(parsed.updatedAt),
   };
 }
@@ -95,6 +98,9 @@ function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
     metadata: row.metadata,
     lastProbeAt: row.lastProbeAt ? row.lastProbeAt.toISOString() : null,
     lastProbeOutcome: row.lastProbeOutcome,
+    maxConcurrency: row.maxConcurrency,
+    capacityPool: row.capacityPool,
+    capacityPoolLimit: row.capacityPoolLimit,
     updatedAt: row.updatedAt.toISOString(),
   });
 

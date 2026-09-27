@@ -1,18 +1,29 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 
-import type {
-  AuthorizeDispatchStartResult,
-  DispatchAttempt,
-  DispatchAttemptRepository,
-  PrepareDispatchAttemptInput,
-  PrepareDispatchAttemptResult,
+import {
+  WorkerCapacityExceededError,
+  type AuthorizeDispatchStartResult,
+  type DispatchAttempt,
+  type DispatchAttemptRepository,
+  type PrepareDispatchAttemptInput,
+  type PrepareDispatchAttemptResult,
 } from "@/core/contracts/dispatch-attempt";
 import type { AuditEntry } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
-import { actions, auditEntries, dispatchAttempts, missionTasks, tasks } from "@/server/database/schema";
+import {
+  actions,
+  auditEntries,
+  dispatchAttempts,
+  missionTasks,
+  tasks,
+  workers,
+} from "@/server/database/schema";
 import { transitionTask } from "@/core/tasks/lifecycle";
 import { auditToRow, rowToTask } from "@/server/database/mappers";
+
+/** The two non-terminal states. An active execution is exactly one of these. */
+const ACTIVE_ATTEMPT_STATES = ["prepared", "dispatched"] as const;
 
 function mapRow(row: typeof dispatchAttempts.$inferSelect): DispatchAttempt {
   return {
@@ -24,6 +35,7 @@ function mapRow(row: typeof dispatchAttempts.$inferSelect): DispatchAttempt {
     workflowId: row.workflowId,
     prompt: row.prompt,
     workerKind: row.workerKind ?? undefined,
+    workerId: row.workerId ?? undefined,
     capability: row.capability ?? undefined,
     state: row.state as DispatchAttempt["state"],
     createdAt: row.createdAt,
@@ -37,6 +49,113 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
   private startAuthorizationHookForTest?: () => Promise<void>;
 
   constructor(private readonly db: Database) {}
+
+  /** Worker ids on non-terminal attempts: one entry per active execution. */
+  async listActiveWorkerAssignments(): Promise<string[]> {
+    const rows = await this.db
+      .select({ workerId: dispatchAttempts.workerId })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          isNotNull(dispatchAttempts.workerId),
+          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
+        ),
+      );
+
+    return rows.map((row) => row.workerId as string).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Fails closed when the assigned worker, or its shared capacity pool, is
+   * already fully committed. Must run inside the prepare transaction, after the
+   * worker rows have been locked.
+   *
+   * An UNREGISTERED worker id is rejected: assigning work to a worker that is
+   * not in the registry means the decision was made against state that no longer
+   * exists, and letting it through would create an attempt whose load nothing
+   * bounds.
+   */
+  private async assertWorkerCapacity(
+    tx: Database,
+    workerId: string,
+    missionTaskId: string,
+  ): Promise<void> {
+    const assigned = await tx
+      .select()
+      .from(workers)
+      .where(eq(workers.id, workerId))
+      .limit(1)
+      .for("update");
+    const worker = assigned[0];
+
+    if (!worker) {
+      throw new WorkerCapacityExceededError(workerId, "is not registered");
+    }
+
+    // Lock every peer in the pool, ordered by id: same order for everyone, so
+    // no deadlock, and no peer can commit an attempt while we are counting.
+    const poolMembers = worker.capacityPool
+      ? await tx
+          .select({ id: workers.id, limit: workers.capacityPoolLimit })
+          .from(workers)
+          .where(eq(workers.capacityPool, worker.capacityPool))
+          .orderBy(asc(workers.id))
+          .for("update")
+      : [];
+
+    const active = await tx
+      .select({ workerId: dispatchAttempts.workerId })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          isNotNull(dispatchAttempts.workerId),
+          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
+        ),
+      );
+
+    // This task's own live attempt is not competing demand: a retry of the same
+    // logical work must not be blocked by the attempt it is superseding.
+    const ownAttempts = await tx
+      .select({ id: dispatchAttempts.id })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          eq(dispatchAttempts.missionTaskId, missionTaskId),
+          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
+        ),
+      );
+    const ownActive = ownAttempts.length;
+
+    const mine = active.filter((row) => row.workerId === workerId).length;
+    if (mine - Math.min(mine, ownActive) >= worker.maxConcurrency) {
+      throw new WorkerCapacityExceededError(
+        workerId,
+        `already holds ${mine} of ${worker.maxConcurrency} concurrent executions`,
+      );
+    }
+
+    if (worker.capacityPool && poolMembers.length > 0) {
+      const declared = poolMembers
+        .map((member) => member.limit)
+        .filter((limit): limit is number => limit !== null);
+
+      if (declared.length > 0) {
+        // A quota is a ceiling: when members disagree, the SMALLEST wins.
+        const limit = Math.min(...declared);
+        const memberIds = new Set(poolMembers.map((member) => member.id));
+        const poolActive = active.filter(
+          (row) => row.workerId !== null && memberIds.has(row.workerId),
+        ).length;
+
+        if (poolActive - Math.min(poolActive, ownActive) >= limit) {
+          throw new WorkerCapacityExceededError(
+            workerId,
+            `capacity pool ${worker.capacityPool} holds ${poolActive} of ${limit}`,
+          );
+        }
+      }
+    }
+  }
 
   async prepare(input: PrepareDispatchAttemptInput): Promise<PrepareDispatchAttemptResult> {
     return this.db.transaction(async (tx) => {
@@ -70,6 +189,23 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
       const task = taskRows[0];
       if (!task) throw new Error(`Task not found: ${input.taskId}`);
 
+      /*
+       * ATOMIC CAPACITY GUARD (M5.3).
+       *
+       * Routing chose this worker from a load snapshot read OUTSIDE any
+       * transaction, so two supervisors can both see "worker W is free" and both
+       * pick it. Re-checking here, after taking a row lock on the worker (and on
+       * every peer sharing its capacity pool), serialises those deciders: the
+       * second one sees the first one's committed intent and is rejected instead
+       * of oversubscribing.
+       *
+       * Locks are taken in worker-id order so two transactions touching the same
+       * pool can never deadlock by acquiring the same rows in opposite orders.
+       */
+      if (input.workerId) {
+        await this.assertWorkerCapacity(tx, input.workerId, input.missionTaskId);
+      }
+
       const currentAttempts = await tx
         .select()
         .from(dispatchAttempts)
@@ -90,6 +226,7 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
           workflowId: input.workflowId,
           prompt: input.prompt,
           workerKind: input.workerKind ?? null,
+          workerId: input.workerId ?? null,
           capability: input.capability ?? null,
           state: "prepared",
           createdAt: now,

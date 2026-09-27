@@ -28,6 +28,9 @@ export const hermesWorker: WorkerRegistryEntry = {
     source: "hermes-binary",
     description: "Hermes CLI agent for information gathering"
   },
+  maxConcurrency: 1,
+  capacityPool: null,
+  capacityPoolLimit: null,
   // Never probed: these fixtures assert the fail-closed start state (M5.2).
   lastProbeAt: null,
   lastProbeOutcome: "never",
@@ -56,6 +59,9 @@ export const openhandsWorker: WorkerRegistryEntry = {
     source: "openhands-agent",
     description: "OpenHands AI agent for software engineering tasks"
   },
+  maxConcurrency: 1,
+  capacityPool: null,
+  capacityPoolLimit: null,
   // Never probed: these fixtures assert the fail-closed start state (M5.2).
   lastProbeAt: null,
   lastProbeOutcome: "never",
@@ -84,6 +90,9 @@ export const digitalosWorker: WorkerRegistryEntry = {
     source: "digitalos-facade",
     description: "DigitalOS execution facade for website operations"
   },
+  maxConcurrency: 1,
+  capacityPool: null,
+  capacityPoolLimit: null,
   // Never probed: these fixtures assert the fail-closed start state (M5.2).
   lastProbeAt: null,
   lastProbeOutcome: "never",
@@ -112,6 +121,9 @@ export const agentWorker: WorkerRegistryEntry = {
     source: "generic-agent",
     description: "Generic AI agent for text-based tasks"
   },
+  maxConcurrency: 1,
+  capacityPool: null,
+  capacityPoolLimit: null,
   // Never probed: these fixtures assert the fail-closed start state (M5.2).
   lastProbeAt: null,
   lastProbeOutcome: "never",
@@ -140,6 +152,9 @@ export const otherWorker: WorkerRegistryEntry = {
     source: "local-dispatcher",
     description: "Worker for validation and review tasks"
   },
+  maxConcurrency: 1,
+  capacityPool: null,
+  capacityPoolLimit: null,
   // Never probed: these fixtures assert the fail-closed start state (M5.2).
   lastProbeAt: null,
   lastProbeOutcome: "never",

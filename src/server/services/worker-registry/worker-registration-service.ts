@@ -38,6 +38,17 @@ export interface WorkerRegistrationInput {
   runtimeSupport?: WorkerRegistryEntry["runtimeSupport"];
   tags?: string[];
   metadata?: Record<string, string>;
+  /**
+   * Declared concurrency (M5.5). Defaults to 1 — a worker is not an unlimited
+   * execution slot. This IS a legitimate self-declaration, unlike health: how
+   * many jobs a worker can hold is a property of its configuration, not an
+   * observation about whether it currently works.
+   */
+  maxConcurrency?: number;
+  /** Shared capacity pool this worker draws from, e.g. one provider account. */
+  capacityPool?: string | null;
+  /** Concurrent executions the whole pool may hold. */
+  capacityPoolLimit?: number | null;
 }
 
 export interface WorkerProbe {
@@ -85,6 +96,9 @@ export class WorkerRegistrationService {
       lastProbeOutcome: "never",
       tags: input.tags ?? [],
       metadata: input.metadata ?? {},
+      maxConcurrency: input.maxConcurrency ?? 1,
+      capacityPool: input.capacityPool ?? null,
+      capacityPoolLimit: input.capacityPoolLimit ?? null,
       updatedAt: this.now().toISOString(),
     });
 

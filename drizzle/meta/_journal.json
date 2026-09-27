@@ -288,6 +288,13 @@
       "when": 1790540802287,
       "tag": "0043_worker_probe_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790627202287,
+      "tag": "0044_worker_capacity_and_assignment",
+      "breakpoints": true
     }
   ]
 }

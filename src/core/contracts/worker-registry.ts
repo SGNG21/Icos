@@ -86,6 +86,32 @@ export const workerRegistryEntrySchema = z.object({
    * must be visible as a failure, never collapse into "we have not looked".
    */
   lastProbeOutcome: workerProbeOutcomeSchema.default("never"),
+  /**
+   * Concurrent executions this worker may hold at once (M5.5).
+   *
+   * Defaults to 1 because the alternative — treating a worker as an unlimited
+   * execution slot — is the assumption that makes a "distribution" policy
+   * meaningless. Load is counted from the durable dispatch ledger, never from an
+   * in-memory counter.
+   */
+  maxConcurrency: z.number().int().positive().default(1),
+  /**
+   * Optional name of a SHARED capacity pool this worker draws from (M5.5).
+   *
+   * This is the axis that keeps Worker != Model != Provider != Account !=
+   * CapacitySlot honest: several DISTINCT workers may compete for ONE
+   * provider/account quota, and a per-worker limit cannot express that. The pool
+   * is an opaque string — no provider is named here, and routing never
+   * interprets it beyond counting against it.
+   */
+  capacityPool: z.string().min(1).nullable().default(null),
+  /**
+   * Concurrent executions the whole pool may hold. null = this worker declares
+   * no pool bound. When several workers in one pool declare different limits the
+   * SMALLEST wins: a quota is a ceiling, and disagreement must resolve
+   * downwards, never upwards.
+   */
+  capacityPoolLimit: z.number().int().positive().nullable().default(null),
   /** Last update timestamp. */
   updatedAt: isoDateTimeSchema,
 });

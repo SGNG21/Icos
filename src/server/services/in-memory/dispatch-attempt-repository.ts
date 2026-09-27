@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  AuthorizeDispatchStartResult,
-  DispatchAttempt,
-  DispatchAttemptRepository,
-  PrepareDispatchAttemptInput,
-  PrepareDispatchAttemptResult,
+import {
+  WorkerCapacityExceededError,
+  type AuthorizeDispatchStartResult,
+  type DispatchAttempt,
+  type DispatchAttemptRepository,
+  type PrepareDispatchAttemptInput,
+  type PrepareDispatchAttemptResult,
 } from "@/core/contracts/dispatch-attempt";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
+import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { canTransition } from "@/core/tasks/lifecycle";
 
 export class InMemoryDispatchAttemptRepository implements DispatchAttemptRepository {
@@ -26,7 +28,18 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
     }
   >();
 
-  constructor(private readonly missions: MissionRepository, private readonly tasks: TaskRepository) {}
+  constructor(
+    private readonly missions: MissionRepository,
+    private readonly tasks: TaskRepository,
+    /**
+     * Optional registry, so capacity can be enforced against the worker's
+     * DECLARED maximum rather than a hardcoded one (M5.3/M5.5). Absent means no
+     * capacity enforcement here: the durable repository is the authority, and
+     * inventing a limit this one cannot read would be worse than admitting it
+     * does not know.
+     */
+    private readonly workerRegistry?: WorkerRegistryStore,
+  ) {}
 
   async prepare(input: PrepareDispatchAttemptInput): Promise<PrepareDispatchAttemptResult> {
     return this.inPrepareCriticalSection(() => this.prepareLocked(input));
@@ -63,6 +76,15 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       if (existing.state !== "prepared") {
         throw new Error(`DISPATCH_ATTEMPT_CONFLICT: ${input.missionTaskId}/${input.attempt}`);
       }
+    }
+
+    /*
+     * Capacity parity with PostgreSQL (M5.3). prepareLocked already runs in a
+     * serialised critical section, which is this implementation's equivalent of
+     * the row lock the durable repository takes.
+     */
+    if (input.workerId) {
+      await this.assertWorkerCapacity(input.workerId, input.missionTaskId);
     }
 
     const authoritative = Array.from(this.attempts.values())
@@ -180,6 +202,7 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       workflowId: input.workflowId,
       prompt: input.prompt,
       workerKind: input.workerKind,
+      workerId: input.workerId,
       capability: input.capability,
       state: "prepared",
       createdAt: now,
@@ -194,6 +217,80 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       attempt,
       acquired: true,
     };
+  }
+
+  /** Worker ids on non-terminal attempts: one entry per active execution. */
+  async listActiveWorkerAssignments(): Promise<string[]> {
+    return Array.from(this.attempts.values())
+      .filter(
+        (attempt) =>
+          attempt.workerId !== undefined &&
+          (attempt.state === "prepared" || attempt.state === "dispatched"),
+      )
+      .map((attempt) => attempt.workerId as string)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Capacity enforcement parity, for the single-process in-memory root.
+   *
+   * Enforces the worker's DECLARED maximum and its capacity pool, read from the
+   * injected registry. With no registry nothing is enforced here — see the
+   * constructor.
+   */
+  private async assertWorkerCapacity(workerId: string, missionTaskId: string): Promise<void> {
+    if (!this.workerRegistry) {
+      return;
+    }
+
+    const worker = await this.workerRegistry.get(workerId);
+    if (!worker) {
+      throw new WorkerCapacityExceededError(workerId, "is not registered");
+    }
+
+    const active = Array.from(this.attempts.values()).filter(
+      (attempt) => attempt.state === "prepared" || attempt.state === "dispatched",
+    );
+    // A retry of the same logical work must not be blocked by its own predecessor.
+    const own = active.filter((attempt) => attempt.missionTaskId === missionTaskId).length;
+    const discount = (count: number) => count - Math.min(count, own);
+
+    const mine = active.filter((attempt) => attempt.workerId === workerId).length;
+    if (discount(mine) >= worker.maxConcurrency) {
+      throw new WorkerCapacityExceededError(
+        workerId,
+        `already holds ${mine} of ${worker.maxConcurrency} concurrent executions`,
+      );
+    }
+
+    if (!worker.capacityPool) {
+      return;
+    }
+
+    const pool = (await this.workerRegistry.list()).filter(
+      (candidate) => candidate.capacityPool === worker.capacityPool,
+    );
+    const declared = pool
+      .map((member) => member.capacityPoolLimit)
+      .filter((limit): limit is number => limit !== null);
+
+    if (declared.length === 0) {
+      return;
+    }
+
+    // A quota is a ceiling: when members disagree, the SMALLEST wins.
+    const limit = Math.min(...declared);
+    const memberIds = new Set(pool.map((member) => member.id));
+    const poolActive = active.filter(
+      (attempt) => attempt.workerId !== undefined && memberIds.has(attempt.workerId),
+    ).length;
+
+    if (discount(poolActive) >= limit) {
+      throw new WorkerCapacityExceededError(
+        workerId,
+        `capacity pool ${worker.capacityPool} holds ${poolActive} of ${limit}`,
+      );
+    }
   }
 
   private async inPrepareCriticalSection<T>(operation: () => Promise<T>): Promise<T> {

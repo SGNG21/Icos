@@ -56,7 +56,11 @@ export type WorkerIneligibilityReason =
   /** Never probed: `healthy` written by anything other than a probe is not evidence. */
   | "HEALTH_EVIDENCE_MISSING"
   /** Probed, but too long ago to still describe the worker. */
-  | "HEALTH_EVIDENCE_STALE";
+  | "HEALTH_EVIDENCE_STALE"
+  /** Already holding its declared concurrent maximum. */
+  | "AT_CAPACITY"
+  /** The SHARED pool this worker draws from is fully committed. */
+  | "CAPACITY_POOL_SATURATED";
 
 /**
  * How old health evidence may be and still count (M5.2).
@@ -72,6 +76,30 @@ export interface HealthEvidenceHorizon {
   now: string;
   /** Maximum age of probe evidence, in milliseconds. Must be > 0. */
   maxAgeMs: number;
+}
+
+/**
+ * Durable load, derived — never a counter (M5.3).
+ *
+ * Both maps are COUNTS OF NON-TERMINAL DISPATCH ATTEMPTS, read from the ledger
+ * that already certifies exactly-once dispatch per task. Passing them as data
+ * keeps the matcher pure, and deriving them from durable rows is what makes the
+ * resulting distribution survive a restart. An in-memory round-robin counter
+ * would produce a different assignment after a restart and silently break
+ * ROUTING_SURVIVES_RESTART (decision 0031).
+ */
+export interface WorkerLoadSnapshot {
+  /** workerId -> active executions currently assigned to it. */
+  byWorkerId: Readonly<Record<string, number>>;
+  /** capacityPool -> active executions currently charged to that pool. */
+  byCapacityPool?: Readonly<Record<string, number>>;
+  /**
+   * capacityPool -> the EFFECTIVE ceiling for that pool, i.e. the smallest limit
+   * any member declares (see effectiveCapacityPoolLimits). Derived once by the
+   * caller so the per-worker gate cannot be fooled by one member declaring a
+   * larger quota than its peers.
+   */
+  capacityPoolLimits?: Readonly<Record<string, number>>;
 }
 
 export interface WorkerRequirement {
@@ -94,6 +122,16 @@ export interface WorkerRequirement {
    * passes one.
    */
   evidenceHorizon?: HealthEvidenceHorizon;
+  /**
+   * Durable load (M5.3). Omitted means "load unknown", in which case the
+   * capacity gates do not run and ordering falls back to worker id — exactly
+   * the pre-M5.3 behaviour. That is safe for the synchronous consumers
+   * (reviewer selection, bounded repair), which pick ONE worker for ONE
+   * decision and cannot oversubscribe a fleet; the dispatch path always passes
+   * it, and the atomic guard in the dispatch ledger is what actually enforces
+   * capacity under concurrency.
+   */
+  load?: WorkerLoadSnapshot;
 }
 
 export interface WorkerEligibilityVerdict {
@@ -150,6 +188,38 @@ export function evaluateWorkerEligibility(
     }
   }
 
+  if (requirement.load) {
+    const active = requirement.load.byWorkerId[worker.id] ?? 0;
+    if (active >= worker.maxConcurrency) {
+      reasons.push("AT_CAPACITY");
+    }
+
+    /*
+     * A pool is a SHARED ceiling: several distinct workers may be drawing on one
+     * provider/account quota, so a worker can be idle and still have nowhere to
+     * run. Without this, per-worker limits would silently multiply the quota by
+     * the number of workers pointed at it.
+     */
+    if (worker.capacityPool) {
+      const declared = worker.capacityPoolLimit;
+      const effective = requirement.load.capacityPoolLimits?.[worker.capacityPool];
+      // The pool ceiling is the SMALLEST limit anyone declared for it.
+      const limit =
+        declared === null || declared === undefined
+          ? effective
+          : effective === undefined
+            ? declared
+            : Math.min(declared, effective);
+
+      if (limit !== undefined) {
+        const poolActive = requirement.load.byCapacityPool?.[worker.capacityPool] ?? 0;
+        if (poolActive >= limit) {
+          reasons.push("CAPACITY_POOL_SATURATED");
+        }
+      }
+    }
+  }
+
   const owned = new Set(worker.capabilities);
   const missingCapabilities = [
     ...new Set((requirement.requiredCapabilities ?? []).filter((cap) => !owned.has(cap))),
@@ -180,17 +250,88 @@ export function evaluateWorkerPool(
 /**
  * The eligible subset, in deterministic order.
  *
- * Ordering is by worker id and nothing else. No scoring, no load balancing, no
- * "most recently healthy" — anything derived from a clock or a counter would
- * make the same inputs produce different routes across a restart.
+ * ORDERING IS THE DISTRIBUTION POLICY (M5.3): least durable load first, worker
+ * id as the tie-break. Nothing else. That is the simplest rule that actually
+ * distributes, and — crucially — it is a pure function of durable rows, so two
+ * processes, or the same process before and after a restart, derive the SAME
+ * order from the same database. A clock, a random pick or an in-memory
+ * round-robin cursor would each distribute too, and each would destroy
+ * ROUTING_SURVIVES_RESTART (decision 0031).
+ *
+ * With no load snapshot the order is by id alone — the pre-M5.3 behaviour, kept
+ * for the synchronous single-decision consumers.
  */
 export function selectEligibleWorkers(
   workers: readonly WorkerRegistryEntry[],
   requirement: WorkerRequirement = {},
 ): WorkerRegistryEntry[] {
+  const load = requirement.load;
+
   return workers
     .filter((worker) => evaluateWorkerEligibility(worker, requirement).eligible)
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => {
+      if (load) {
+        const delta = (load.byWorkerId[a.id] ?? 0) - (load.byWorkerId[b.id] ?? 0);
+        if (delta !== 0) {
+          return delta;
+        }
+      }
+      return a.id.localeCompare(b.id);
+    });
+}
+
+/**
+ * Derives a load snapshot from durable worker assignments (M5.3).
+ *
+ * `assignments` is the list of worker ids on NON-TERMINAL dispatch attempts —
+ * one entry per active execution, duplicates included. The pool tally needs the
+ * registry too, because which pool an assignment is charged to is a property of
+ * the worker, not of the attempt.
+ *
+ * Kept here, next to the gates that consume it, so there is exactly one
+ * definition of "load" for the whole system.
+ */
+export function computeWorkerLoad(
+  assignments: readonly string[],
+  workers: readonly WorkerRegistryEntry[],
+): WorkerLoadSnapshot {
+  const poolOf = new Map(workers.map((worker) => [worker.id, worker.capacityPool] as const));
+  const byWorkerId: Record<string, number> = {};
+  const byCapacityPool: Record<string, number> = {};
+
+  for (const workerId of assignments) {
+    byWorkerId[workerId] = (byWorkerId[workerId] ?? 0) + 1;
+    const pool = poolOf.get(workerId);
+    if (pool) {
+      byCapacityPool[pool] = (byCapacityPool[pool] ?? 0) + 1;
+    }
+  }
+
+  return { byWorkerId, byCapacityPool, capacityPoolLimits: effectiveCapacityPoolLimits(workers) };
+}
+
+/**
+ * The smallest pool ceiling declared by any worker in a pool (M5.5).
+ *
+ * Workers in one pool may disagree about its size. A quota is a CEILING, so
+ * disagreement resolves DOWNWARDS: taking the largest, or the first seen, would
+ * let one misdeclared worker raise everyone else's limit.
+ */
+export function effectiveCapacityPoolLimits(
+  workers: readonly WorkerRegistryEntry[],
+): Record<string, number> {
+  const limits: Record<string, number> = {};
+
+  for (const worker of workers) {
+    if (!worker.capacityPool || worker.capacityPoolLimit === null) {
+      continue;
+    }
+    const current = limits[worker.capacityPool];
+    limits[worker.capacityPool] =
+      current === undefined ? worker.capacityPoolLimit : Math.min(current, worker.capacityPoolLimit);
+  }
+
+  return limits;
 }
 
 /** The single winner, or null when nothing is eligible. Never throws, never guesses. */

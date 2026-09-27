@@ -13,6 +13,14 @@ export interface DispatchAttempt {
   workflowId: string;
   prompt: string;
   workerKind?: string;
+  /**
+   * WHICH worker this attempt was assigned to (M5.3, defect 12).
+   *
+   * Durable attribution: it is what makes per-worker load countable, and what
+   * gives reviewer independence a real producer identity. Absent on attempts
+   * prepared before M5.3 and on paths that route no worker.
+   */
+  workerId?: string;
   capability?: string;
   state: DispatchAttemptState;
   createdAt: Date;
@@ -44,7 +52,37 @@ export interface PrepareDispatchAttemptInput {
   workflowId: string;
   prompt: string;
   workerKind?: string;
+  /**
+   * The worker this dispatch is assigned to (M5.3).
+   *
+   * When present, `prepare()` ALSO enforces that worker's declared concurrency
+   * and its capacity pool INSIDE the same transaction that creates the intent.
+   * The load-aware routing decision is made outside the transaction and is
+   * therefore advisory: two supervisors can both read "worker W is free" and
+   * both decide to use it. This is the guard that makes the outcome correct
+   * anyway — it rejects with WORKER_CAPACITY_EXCEEDED rather than
+   * oversubscribing.
+   */
+  workerId?: string;
   capability?: string;
+}
+
+/**
+ * Thrown by `prepare()` when the assigned worker (or its capacity pool) is
+ * already at its declared limit.
+ *
+ * A distinct error type because the caller's correct response is distinct: this
+ * is not a failure of the task and not a corrupt state, it is back-pressure.
+ * The task stays ready and is retried on a later tick, when capacity has freed.
+ */
+export class WorkerCapacityExceededError extends Error {
+  constructor(
+    readonly workerId: string,
+    readonly detail: string,
+  ) {
+    super(`WORKER_CAPACITY_EXCEEDED: ${workerId} ${detail}`);
+    this.name = "WorkerCapacityExceededError";
+  }
 }
 
 export type AuthorizeDispatchStartResult =
@@ -114,4 +152,15 @@ export interface DispatchAttemptRepository {
    * Results are sorted by attempt number descending, then by createdAt descending.
    */
   listNonTerminalByMissionTaskId(missionTaskId: string): Promise<DispatchAttempt[]>;
+
+  /**
+   * Worker ids carried by every NON-TERMINAL attempt — one entry per active
+   * execution, duplicates included (M5.3).
+   *
+   * This is the DURABLE load signal behind distribution. It is derived from the
+   * same ledger that certifies exactly-once dispatch per task, so there is no
+   * separate counter that could drift from it, and it reproduces identically
+   * after a restart.
+   */
+  listActiveWorkerAssignments(): Promise<string[]>;
 }

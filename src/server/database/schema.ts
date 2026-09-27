@@ -725,6 +725,14 @@ export const dispatchAttempts = pgTable(
     workflowId: text("workflow_id").notNull(),
     prompt: text("prompt").notNull(),
     workerKind: text("worker_kind"),
+    /*
+     * WHICH worker this attempt was assigned to (migration 0044, defect 12).
+     * Deliberately NOT a foreign key: attribution must outlive the worker, and a
+     * reference would either block deregistration or erase the historical record
+     * of who did the work. Routing reads it only to COUNT load, never to decide
+     * eligibility.
+     */
+    workerId: text("worker_id"),
     capability: text("capability"),
     state: text("state").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -749,6 +757,8 @@ export const dispatchAttempts = pgTable(
     ),
     index("dispatch_attempts_mission_idx").on(t.missionId),
     index("dispatch_attempts_state_idx").on(t.state),
+    /* Durable load is a count of non-terminal attempts per worker. */
+    index("dispatch_attempts_worker_active_idx").on(t.workerId, t.state),
   ],
 );
 
@@ -1088,6 +1098,20 @@ export const workers = pgTable(
      */
     lastProbeAt: timestamp("last_probe_at", { withTimezone: true }),
     lastProbeOutcome: text("last_probe_outcome").default("never").notNull(),
+    /*
+     * CAPACITY (migration 0044, M5.5). A worker is NOT an unlimited execution
+     * slot, hence the default of 1. There is deliberately no `current_load`
+     * column: load is DERIVED by counting non-terminal dispatch_attempts, so it
+     * cannot drift from the ledger and survives a restart for free.
+     *
+     * `capacityPool` is how several DISTINCT workers competing for ONE
+     * provider/account quota is expressed without conflating Worker with Model,
+     * Provider, Account or CapacitySlot. It is opaque: routing counts against it
+     * and never interprets it.
+     */
+    maxConcurrency: integer("max_concurrency").default(1).notNull(),
+    capacityPool: text("capacity_pool"),
+    capacityPoolLimit: integer("capacity_pool_limit"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -1114,6 +1138,11 @@ export const workers = pgTable(
     check(
       "workers_probe_evidence_dated_check",
       sql`${t.lastProbeOutcome} = 'never' or ${t.lastProbeAt} is not null`,
+    ),
+    check("workers_max_concurrency_check", sql`${t.maxConcurrency} >= 1`),
+    check(
+      "workers_capacity_pool_limit_check",
+      sql`(${t.capacityPoolLimit} is null) or (${t.capacityPool} is not null and ${t.capacityPoolLimit} >= 1)`,
     ),
     index("workers_worker_kind_idx").on(t.workerKind),
     index("workers_status_idx").on(t.status),

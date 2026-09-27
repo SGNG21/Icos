@@ -14,6 +14,9 @@ import { CapabilityRouter } from "@/server/routing/capability-router";
 
 function worker(over: Partial<WorkerRegistryEntry> = {}): WorkerRegistryEntry {
   return {
+    maxConcurrency: 1,
+    capacityPool: null,
+    capacityPoolLimit: null,
     lastProbeAt: new Date().toISOString(),
     lastProbeOutcome: "ok",
     id: "worker-b",
