@@ -890,7 +890,23 @@ export class PostgresMissionRepository implements MissionRepository {
         updatedAt: missionTasks.updatedAt,
       })
       .from(missionTasks)
-      .where(eq(missionTasks.missionId, missionId));
+      .where(eq(missionTasks.missionId, missionId))
+      /*
+       * Deterministic ordering is REQUIRED, not cosmetic.
+       *
+       * computeReadyTasks() preserves input order and the supervisor dispatches
+       * ready tasks in that order, so an unordered SELECT made dispatch order
+       * unspecified — and PostgreSQL genuinely reorders heap rows as statuses
+       * are UPDATEd during a mission, so the order changed under us mid-run.
+       *
+       * createdAt alone is not enough: applyPlan() inserts every task of a plan
+       * with the same timestamp, so id is the tiebreaker that makes the order
+       * total and stable across calls and restarts.
+       */
+      .orderBy(
+        asc(missionTasks.createdAt),
+        asc(missionTasks.id),
+      );
     return missionTaskRows.map(rowToMissionTask);
   }
 

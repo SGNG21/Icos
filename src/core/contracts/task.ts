@@ -59,6 +59,20 @@ export const taskSchema = baseTaskSchema.extend({
   planId: z.string().optional(),
   objective: z.string().optional(),
   instructions: z.string().optional(),
+  /**
+   * NON-AUTHORITATIVE advisory dependencies (decision 0030).
+   *
+   * The canonical autonomous DAG lives in `MissionTask.dependsOn`
+   * (`mission_tasks.depends_on`) and is the ONLY thing `computeReadyTasks`
+   * consults. This field is advisory metadata a caller may set through
+   * `POST /api/tasks` for a generic task; it never gates readiness, never
+   * unlocks a task, and contradictory content here changes no scheduling
+   * decision. The autonomous plan path always writes it empty.
+   *
+   * Do not build readiness or unlock logic on this field. If a second
+   * authority is ever genuinely needed, replace the canonical one — do not
+   * add to it.
+   */
   dependencies: z.array(z.object({
     taskId: idSchema,
     type: dependencyTypeSchema,

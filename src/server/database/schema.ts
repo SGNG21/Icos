@@ -98,6 +98,10 @@ export const tasks = pgTable(
     planId: text("plan_id"),
     objective: text("objective"),
     instructions: text("instructions"),
+    /*
+     * NON-AUTHORITATIVE (decision 0030). The canonical autonomous DAG is
+     * mission_tasks.depends_on. Advisory only; never consulted for readiness.
+     */
     dependencies: jsonb("dependencies").default([]).notNull(),
     successCriteria: jsonb("success_criteria").default([]).notNull(),
     requiredCapabilities: jsonb("required_capabilities").default([]).notNull(),
@@ -404,6 +408,11 @@ export const missionTasks = pgTable(
       .references(() => missions.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
+    /*
+     * CANONICAL autonomous DAG edges (decision 0030): MissionTask.id values
+     * resolved from planner keys. The single authority for task readiness;
+     * computeReadyTasks() reads only this.
+     */
     dependsOn: jsonb("depends_on").default([]).notNull(),
     status: text("status").notNull(),
     workerKind: text("worker_kind"),

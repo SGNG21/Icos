@@ -414,12 +414,24 @@ export class InMemoryMissionRepository implements MissionRepository {
 
   async listTasks(missionId: string): Promise<MissionTask[]> {
     const tasks: MissionTask[] = [];
-    for (const [taskId, task] of this.missionTasks) {
+    for (const task of this.missionTasks.values()) {
       if (task.missionId === missionId) {
         tasks.push(task);
       }
     }
-    return tasks;
+
+    /*
+     * Same total order as PostgreSQL listTasks (decision 0030): dispatch order
+     * must not depend on Map insertion order, so the two implementations cannot
+     * disagree about which ready task goes first.
+     *
+     * MissionTask carries no createdAt, so id is the stable total order here;
+     * PostgreSQL orders by (createdAt, id) and applyPlan writes one identical
+     * timestamp per plan, which reduces to the same thing within a plan.
+     */
+    return tasks.sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
   }
 
   async getMissionIdByTaskId(taskId: string): Promise<string | null> {

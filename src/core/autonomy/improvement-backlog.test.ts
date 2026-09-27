@@ -483,8 +483,32 @@ describe('ImprovementBacklog', () => {
       };
       const candidate1 = createImprovementCandidate(input);
       const candidate2 = createImprovementCandidate(input);
-      // They should be equal but not the same object
-      expect(candidate1).toEqual(candidate2);
+
+      /*
+       * Compare WITHOUT createdAt/updatedAt.
+       *
+       * createImprovementCandidate() stamps `new Date().toISOString()` per call,
+       * so two calls that straddle a millisecond boundary produce different
+       * timestamps. Comparing them made this test intermittently fail in the
+       * full suite while passing in isolation — a flaky gate proves nothing.
+       *
+       * Wall-clock timestamps differing between two separate calls is correct
+       * behaviour, not the property under test. The defensive-copy property is
+       * still asserted below (distinct objects, independent mutation), and the
+       * content-derived id is still compared.
+       */
+      const ignoringTimestamps = (
+        candidate: typeof candidate1,
+      ) => ({
+        ...candidate,
+        createdAt: "<when>",
+        updatedAt: "<when>",
+      });
+
+      expect(ignoringTimestamps(candidate1)).toEqual(
+        ignoringTimestamps(candidate2),
+      );
+      expect(candidate1.id).toBe(candidate2.id);
       expect(candidate1).not.toBe(candidate2);
       // Mutating one should not affect the other
       candidate1.title = 'Mutated';

@@ -1,6 +1,7 @@
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 
 import type { MissionRepository } from "@/server/mission/ports";
+import { computeReadyTasks } from "@/server/supervisor/readiness";
 
 import type { MissionPlan } from "@/server/mission/mission-plan";
 
@@ -118,18 +119,6 @@ function fingerprintTasks(mission: Mission, tasks: MissionTask[]): string {
 
 function hasActiveWork(tasks: MissionTask[]): boolean {
   return tasks.some((task) => ACTIVE_TASK_STATES.has(task.status));
-}
-
-function readyDraftTasks(tasks: MissionTask[]): MissionTask[] {
-  const byId = new Map(tasks.map((task) => [task.id, task]));
-
-  return tasks.filter((task) => {
-    if (task.status !== "draft") {
-      return false;
-    }
-
-    return task.dependsOn.every((dependencyId) => byId.get(dependencyId)?.status === "succeeded");
-  });
 }
 
 function hasDraftTasks(tasks: MissionTask[]): boolean {
@@ -386,7 +375,15 @@ export class AutonomousMissionRunner {
           return this.result(runtime, "waiting", "AUTONOMY_EXTERNAL_WORK_PENDING");
         }
 
-        const ready = readyDraftTasks(afterTasks);
+        /*
+         * Readiness comes from the ONE canonical engine (decision 0030).
+         * This used to call a private readyDraftTasks() with duplicated
+         * semantics, so the runner and the supervisor could drift apart.
+         */
+        const ready = computeReadyTasks(
+          afterMission,
+          afterTasks,
+        );
 
         /*
          * Non-terminal + remaining draft work + no active
