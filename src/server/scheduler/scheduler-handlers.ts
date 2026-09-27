@@ -5,11 +5,23 @@ import {
   igniteAutonomousMission,
   type IgniteAutonomousMissionDeps,
 } from "@/server/usecases/ignite-autonomous-mission";
+import {
+  createWorkerProbeHandler,
+  type WorkerProbeHandlerDeps,
+} from "@/server/workers/probes/worker-probe-schedule";
 
 export interface SchedulerHandlerDeps {
   ignite: IgniteAutonomousMissionDeps;
   missions: Pick<MissionRepository, "findById">;
   wakeup: { wake(missionId: string): Promise<unknown> };
+  /**
+   * Autonomous worker probing (M6, defect 16). Without it the `probe_workers`
+   * handler refuses the job as a PERMANENT error rather than silently succeeding:
+   * a deployment that scheduled probing but composed no prober has a
+   * configuration defect, and a fleet whose evidence quietly expires looks like a
+   * routing bug instead.
+   */
+  workerProbe?: WorkerProbeHandlerDeps;
 }
 
 const text = (value: unknown): string | null =>
@@ -51,5 +63,11 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
       }
       await deps.wakeup.wake(missionId);
     },
+
+    probe_workers: deps.workerProbe
+      ? createWorkerProbeHandler(deps.workerProbe)
+      : async () => {
+          throw new PermanentJobError("SCHEDULER_WORKER_PROBE_UNAVAILABLE");
+        },
   };
 }

@@ -897,7 +897,8 @@ export const scheduledJobs = pgTable(
     unique("scheduled_jobs_idempotency_key_unique").on(t.idempotencyKey),
     check(
       "scheduled_jobs_kind_check",
-      sql`${t.kind} in ('start_mission','wake_mission')`,
+      /* ALLOW-list. `probe_workers` added by migration 0045 (M6, defect 16). */
+      sql`${t.kind} in ('start_mission','wake_mission','probe_workers')`,
     ),
     check(
       "scheduled_jobs_state_check",

@@ -44,6 +44,12 @@ const envSchema = z.object({
    * a deployment decides what "running" means for its runtimes.
    */
   ICOS_WORKER_PROBE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
+   * quarter of the health-evidence horizon, so evidence never expires between
+   * sweeps. A value at or above the horizon is REFUSED at composition time.
+   */
+  ICOS_WORKER_PROBE_INTERVAL_MS: optionalPositiveInteger,
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,

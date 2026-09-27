@@ -10,6 +10,7 @@ import { CombinedAutonomyRecoverySweeper } from "@/server/autonomy/combined-auto
 import { loadEnv } from "@/config/env";
 import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
+import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
 import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
@@ -135,6 +136,16 @@ function createRecoveryScheduler(
     },
     missions: container.mission,
     wakeup,
+    /*
+     * M6: autonomous worker probing. The recurrence lives in `scheduled_jobs`, so
+     * exactly one process sweeps at a time and it survives a restart — a
+     * setInterval here would probe once per replica and vanish on restart.
+     */
+    workerProbe: {
+      prober: container.workerHealthProber,
+      jobs: container.scheduledJobs,
+      intervalMs: loadEnv().ICOS_WORKER_PROBE_INTERVAL_MS,
+    },
   });
   const durableScheduler = new DurableScheduler(container.scheduledJobs, handlers, {
     leaseMs: loadEnv().SCHEDULER_LEASE_MS,
@@ -189,6 +200,19 @@ export async function startProductionServices(
           options.env.AUTONOMY_RECOVERY_INTERVAL_MS ?? DEFAULT_AUTONOMY_RECOVERY_INTERVAL_MS,
       });
       scheduler.start();
+
+      /*
+       * M6 defect 16: IGNITE worker probing. The `probe_workers` chain perpetuates
+       * itself, but only once a first occurrence exists — without this, a fresh
+       * deployment never probes, all health evidence expires, and the whole fleet
+       * refuses every task while looking like a routing bug. Grid-aligned, so this
+       * is a no-op when a chain is already alive and safe on every replica's boot.
+       * A failure here must abort startup: silently running a fleet that can never
+       * take work is worse than not starting.
+       */
+      await seedWorkerProbeSweep(container.scheduledJobs, {
+        intervalMs: options.env.ICOS_WORKER_PROBE_INTERVAL_MS,
+      });
     }
   } catch (error) {
     await container.close();

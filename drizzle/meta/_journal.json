@@ -295,6 +295,13 @@
       "when": 1790627202287,
       "tag": "0044_worker_capacity_and_assignment",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790713602287,
+      "tag": "0045_scheduler_probe_workers",
+      "breakpoints": true
     }
   ]
 }

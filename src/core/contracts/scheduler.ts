@@ -2,7 +2,7 @@
  * Durable Scheduler (ADR-0025). PostgreSQL est la source de vérité ; ces types
  * décrivent une file de jobs différés revendiqués par lease (jeton par claim).
  */
-export const SCHEDULED_JOB_KINDS = ["start_mission", "wake_mission"] as const;
+export const SCHEDULED_JOB_KINDS = ["start_mission", "wake_mission", "probe_workers"] as const;
 export type ScheduledJobKind = (typeof SCHEDULED_JOB_KINDS)[number];
 
 export type ScheduledJobState = "scheduled" | "running" | "succeeded" | "dead" | "expired";

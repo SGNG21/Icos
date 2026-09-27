@@ -2,7 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Env } from "@/config/env";
 import type { Container } from "@/server/container";
+import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
 import { startProductionServices } from "@/server/system/production-services";
+import {
+  enqueueWorkerProbeSweep,
+  nextOccurrenceAt,
+  resolveProbeIntervalMs,
+} from "@/server/workers/probes/worker-probe-schedule";
+
+/*
+ * The real container always constructs `scheduledJobs` (non-optional in Container),
+ * so a stub without it is under-specified, not a supported composition. A REAL
+ * in-memory repository is used rather than a mock so that M6 ignition is observed
+ * through durable rows instead of through a call assertion.
+ */
+const jobs = () => new InMemoryScheduledJobRepository();
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
@@ -28,6 +42,7 @@ describe("production services bootstrap", () => {
     const schedulerFactory = vi.fn().mockReturnValue({ start, stop });
     const container = {
       autonomousRuntime: {},
+      scheduledJobs: jobs(),
       close,
     } as unknown as Container;
 
@@ -60,6 +75,7 @@ describe("production services bootstrap", () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const container = {
       autonomousRuntime: {},
+      scheduledJobs: jobs(),
       close,
     } as unknown as Container;
 
@@ -87,6 +103,7 @@ describe("production services bootstrap", () => {
     } as unknown as Container;
     const developmentContainer = {
       autonomousRuntime: {},
+      scheduledJobs: jobs(),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as Container;
 
@@ -137,6 +154,7 @@ describe("production services bootstrap", () => {
       env: env(),
       createContainer: vi.fn().mockResolvedValue({
         autonomousRuntime: {},
+        scheduledJobs: jobs(),
         close,
       } as unknown as Container),
       schedulerFactory: vi.fn().mockReturnValue({ start, stop }),
@@ -157,6 +175,89 @@ describe("production services bootstrap", () => {
 
     await services.stop();
     expect(stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * M6 IGNITION — defect 16, one level up.
+   *
+   * The `probe_workers` chain perpetuates itself, but a self-perpetuating chain with
+   * no first link never runs. Before this, `createSchedulerHandlers` was wired with a
+   * prober and NOTHING ever enqueued a probe_workers job, so a fresh deployment never
+   * probed: all health evidence expired, every worker became ineligible, and the fleet
+   * refused every task while looking like a routing defect.
+   */
+  it("IGNITES worker probing: a fresh deployment has a due first sweep", async () => {
+    const scheduledJobs = jobs();
+    const close = vi.fn().mockResolvedValue(undefined);
+
+    await startProductionServices({
+      env: env(),
+      createContainer: vi
+        .fn()
+        .mockResolvedValue({ autonomousRuntime: {}, scheduledJobs, close } as unknown as Container),
+      schedulerFactory: vi.fn().mockReturnValue({ start: vi.fn(), stop: vi.fn() }),
+      signals,
+    });
+
+    // The occurrence exists, at the grid instant — re-enqueueing it creates nothing.
+    const at = nextOccurrenceAt(new Date(), resolveProbeIntervalMs(undefined));
+    expect((await enqueueWorkerProbeSweep(scheduledJobs, at)).created).toBe(false);
+  });
+
+  it("IGNITION IS IDEMPOTENT: two boots (or two replicas) yield ONE chain", async () => {
+    const scheduledJobs = jobs();
+    const boot = () =>
+      startProductionServices({
+        env: env(),
+        createContainer: vi.fn().mockResolvedValue({
+          autonomousRuntime: {},
+          scheduledJobs,
+          close: vi.fn().mockResolvedValue(undefined),
+        } as unknown as Container),
+        schedulerFactory: vi.fn().mockReturnValue({ start: vi.fn(), stop: vi.fn() }),
+        signals,
+      });
+
+    await boot();
+    await boot();
+
+    /*
+     * Grid alignment is what makes this hold: both boots computed the SAME instant and
+     * therefore the same idempotency key. With a `now + interval` successor the second
+     * boot would have minted a second, slightly offset chain, doubling probing forever
+     * with neither chain able to detect the other.
+     */
+    const at = nextOccurrenceAt(new Date(), resolveProbeIntervalMs(undefined));
+    expect((await enqueueWorkerProbeSweep(scheduledJobs, at)).created).toBe(false);
+
+    // And exactly ONE occurrence is claimable, not two.
+    await enqueueWorkerProbeSweep(scheduledJobs, new Date(Date.now() - 1_000));
+    expect(await scheduledJobs.claimDue("a", 30_000)).not.toBeNull();
+    expect(await scheduledJobs.claimDue("b", 30_000)).toBeNull();
+  });
+
+  it("a FAILED ignition aborts startup rather than running a fleet that cannot take work", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      startProductionServices({
+        env: env(),
+        createContainer: vi.fn().mockResolvedValue({
+          autonomousRuntime: {},
+          scheduledJobs: {
+            enqueue: vi.fn(async () => {
+              throw new Error("DB_DOWN");
+            }),
+          },
+          close,
+        } as unknown as Container),
+        schedulerFactory: vi.fn().mockReturnValue({ start: vi.fn(), stop }),
+        signals,
+      }),
+    ).rejects.toThrow("DB_DOWN");
+
     expect(close).toHaveBeenCalledTimes(1);
   });
 });

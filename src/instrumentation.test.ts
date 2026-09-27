@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Env } from "@/config/env";
 import type { Container } from "@/server/container";
+import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
 import type {
   ProductionServices,
   ProductionServiceSignals,
@@ -71,6 +72,8 @@ describe("Next.js server instrumentation", () => {
     });
     const createContainer = vi.fn().mockResolvedValue({
       autonomousRuntime: {},
+      // The real container always builds this; M6 ignition enqueues the first probe sweep.
+      scheduledJobs: new InMemoryScheduledJobRepository(),
       close,
     } as unknown as Container);
     const schedulerFactory = vi.fn().mockReturnValue({ start, stop });
