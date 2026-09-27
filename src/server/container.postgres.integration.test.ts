@@ -116,6 +116,16 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
         DATABASE_URL: ctx.container.getConnectionUri(),
         BETTER_AUTH_SECRET: "x".repeat(40),
         BETTER_AUTH_URL: "http://localhost",
+        /*
+         * buildPostgresContainer() requires an OmniRoute reviewer for the PostgreSQL
+         * backend (container.ts PersistenceConfigError). These suites are Docker-gated,
+         * so while no Docker daemon was available they were skipped and this missing
+         * configuration went unnoticed. Unreachable loopback port + dummy key: nothing
+         * here performs a real provider call.
+         */
+        OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
+        OMNIROUTE_API_KEY: "integration-test-key",
+        ICOS_REVIEWER_MODEL: "integration-test-reviewer",
       }),
     });
     (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
