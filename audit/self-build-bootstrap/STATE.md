@@ -5,7 +5,13 @@ Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M5.2 — worker probing + load distribution (NEXT, not started)
+M6 — non-interactive external workers (NEXT, not started)
+M5 — multi-worker orchestration: COMPLETE and CERTIFIED.
+       M5.2 health probing            — decision 0033, commit a090bf0
+       M5.3 durable distribution      — decision 0034, commit 7daf6c2
+       M5.4 orchestration proofs      — decision 0035, commit 56a79ea
+       M5.5 capacity model            — decision 0034, commit 7daf6c2
+       audit in M5-POST-PHASE-AUDIT.md (15/15 certification requirements PASS)
 M5.1 — worker registration + live routing: COMPLETE, decision 0032,
        audit in M5-1-POST-PHASE-AUDIT.md
 M4 — capability routing: COMPLETE, decision 0031, audit in M4-POST-PHASE-AUDIT.md
@@ -15,7 +21,12 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-M4 commit (see `git log -1`). Preceding milestones:
+56a79ea  M5.4 concurrent multi-worker orchestration certification
+  7daf6c2  M5.3 + M5.5 durable load distribution + capacity model
+  a090bf0  M5.2 dated, expirable worker health evidence
+  90649f3  M5.1 worker registration + live routing
+  79c6c2e  M4 capability routing on durable worker state
+Preceding milestones:
   716c6b8  CERT-1..CERT-4 Docker unblock (77 gated integration tests)
   5bb5a2b  M3 canonical dependency/readiness authority
   71ee3aa  M2 canonical plan contract + task planning metadata
@@ -27,6 +38,14 @@ and the M4 section below still declared CERT-1 a blocker that 716c6b8 had
 already cleared. Verify CURRENT_HEAD against `git rev-parse HEAD` every phase.
 
 ## CERTIFIED_MILESTONES
+- M5 multi-worker orchestration — decisions 0033/0034/0035,
+  audit in M5-POST-PHASE-AUDIT.md. All 15 required certification items PASS:
+  CAPABILITY_ROUTING_PRESERVED, HEALTH_PROBING_PROVEN, STALE_HEALTH_FAIL_CLOSED,
+  DURABLE_WORKER_LOAD_PROVEN, MULTIWORKER_DISTRIBUTION_PROVEN,
+  ATOMIC_MULTIWORKER_DISPATCH_PROVEN, SAFE_PARALLELISM_PROVEN,
+  DEPENDENCY_GATING_PROVEN, EXACTLY_ONCE_DAG_ADVANCEMENT_PROVEN,
+  PROCESS_RESTART_PROVEN, CORE1_REGRESSION_PASS, CORE2_REGRESSION_PASS,
+  TYPECHECK_PASS, BUILD_PASS, DIFF_CHECK_PASS.
 - M5.1 worker registration + live routing — decision 0032,
   audit in M5-1-POST-PHASE-AUDIT.md
 - M4 capability routing — decision 0031, audit in M4-POST-PHASE-AUDIT.md
@@ -36,6 +55,108 @@ already cleared. Verify CURRENT_HEAD against `git rev-parse HEAD` every phase.
   audit in M2-POST-PHASE-AUDIT.md
 - M3 canonical dependency/readiness authority — commit 5bb5a2b,
   decision 0030, audit in M3-POST-PHASE-AUDIT.md
+
+### M5 proofs (all mutation-verified; 16 mutations applied and reverted)
+
+M5.2 — HEALTH PROBING (defect 14 CLOSED, decision 0033)
+HEALTH_PROBING_PROVEN               PROVEN (13 unit + 11 postgres: a registered
+                                    worker is ineligible until probed; probing
+                                    makes it routable; another process agrees
+                                    from the durable rows alone)
+EVIDENCE_IS_DATED                   PROVEN (last_probe_at stamped only by
+                                    probe(); register() leaves it NULL. DB CHECK
+                                    workers_probe_evidence_dated_check refuses
+                                    any dated outcome without a timestamp)
+STALE_HEALTH_FAIL_CLOSED            PROVEN at BOTH boundaries: the router refuses
+                                    HEALTH_EVIDENCE_STALE at decision time, AND
+                                    expireStaleEvidence() rewrites the row to
+                                    unknown/unknown/stale so the STORED state
+                                    converges. Either alone leaves a hole.
+PROBE_FAILURE_DOES_NOT_PASS         PROVEN (a throwing adapter is recorded
+                                    unhealthy/unavailable/failed — never as an
+                                    absence of evidence)
+UNPROBEABLE_FAILS_CLOSED            PROVEN (a worker kind with no adapter is
+                                    `unsupported` and routes nothing)
+RESTART_CANNOT_RESTORE_HEALTHY      PROVEN (postgres: a cold process reads the
+                                    stored `healthy` and still refuses it once
+                                    aged; a sweep then makes the row agree)
+NO_PROVIDER_HARDWIRE                PROVEN (adapters are DATA keyed by worker
+                                    kind; a novel kind becomes probeable with no
+                                    code change in the prober)
+DEACTIVATE_PRESERVES_AUDIT          STILL PROVEN (inactive workers are neither
+                                    probed nor expired)
+MIGRATION_0043_RERUNNABLE           PROVEN (psql exit 0 three times)
+MIGRATION_0043_LEGACY_SAFE          PROVEN (a pre-0043 row reads back
+                                    never-probed = fail closed)
+
+M5.3 / M5.5 — DISTRIBUTION + CAPACITY (defects 15 and 12 CLOSED, decision 0034)
+MULTIWORKER_DISTRIBUTION_PROVEN     PROVEN (postgres: 10 ready tasks + 3
+                                    single-slot workers -> 3 distinct workers
+                                    occupied, 7 tasks left ready. Before M5.3 all
+                                    10 went to one worker.)
+DURABLE_WORKER_LOAD_PROVEN          PROVEN (load DERIVED by counting
+                                    non-terminal dispatch_attempts; a fresh
+                                    process derives the identical tally. There is
+                                    NO current_load column and no counter.)
+DISTRIBUTION_IS_RESTART_SAFE        PROVEN (pure function of durable rows; a
+                                    fresh process continues the same assignment
+                                    instead of restarting a rotation)
+AT_CAPACITY_ENFORCED                PROVEN (unit + postgres; maxConcurrency
+                                    defaults to 1 — a worker is NOT an unlimited
+                                    execution slot)
+CAPACITY_POOL_ENFORCED              PROVEN (two DISTINCT workers sharing one
+                                    quota cannot multiply it; an idle member of a
+                                    saturated pool is refused)
+POOL_CEILING_RESOLVES_DOWNWARDS     PROVEN (when members disagree the SMALLEST
+                                    limit governs; one misdeclaring worker cannot
+                                    raise its peers' ceiling)
+ATOMIC_MULTIWORKER_DISPATCH_PROVEN  PROVEN (postgres: two concurrent prepares on
+                                    one single-slot worker -> exactly 1 acquired,
+                                    1 WorkerCapacityExceededError, and NO durable
+                                    trace of the loser)
+CAPACITY_REFUSAL_IS_BACKPRESSURE    PROVEN (the task stays `draft`/ready for a
+                                    later tick — deliberately NOT `blocked`)
+UNREGISTERED_WORKER_REFUSED         PROVEN (an assignment to a worker absent from
+                                    the registry is refused, not left unbounded)
+MIGRATION_0044_RERUNNABLE           PROVEN (psql exit 0 three times)
+
+M5.4 — ORCHESTRATION (decision 0035)
+CONCURRENT_MULTIWORKER_DISPATCH     PROVEN (postgres: A and B dispatched to
+                                    DIFFERENT workers in one pass)
+DEPENDENCY_GATING_PROVEN            PROVEN (C never offered while one parent is
+                                    in flight)
+EXACTLY_ONCE_DAG_ADVANCEMENT_PROVEN PROVEN (C dispatched once across 3 extra
+                                    supervisor runs, 3 concurrent supervisors,
+                                    and replayed completions)
+DURABLE_WORKER_ASSIGNMENT           PROVEN (another process reads which worker
+                                    holds which task — defect 12 closed)
+ATOMIC_CLAIMS                       PROVEN (one owner per logical dispatch)
+LEASES                              PROVEN (exclusive while live, reacquirable
+                                    once expired)
+FENCING                             PROVEN (unknown / cross-task / duplicate
+                                    start callbacks all refused; duplicate
+                                    reports alreadyRunning)
+NO_STALE_MUTATION                   PROVEN (DISPATCH_ATTEMPT_STALE refuses an
+                                    attempt below the authoritative one)
+NO_DUPLICATE_INTEGRATION            PROVEN (replayed completions do not
+                                    re-advance the DAG)
+PROCESS_RESTART_PROVEN              PROVEN (restart mid-execution -> byte-
+                                    identical attempt rows; an orphaned
+                                    `prepared` attempt replays under the SAME
+                                    deterministic workflow id)
+SAFE_PARALLELISM_PROVEN             PROVEN (full diamond completes with exactly
+                                    one attempt per node)
+
+### REDUNDANT ENFORCEMENT — do not delete one half as dead code
+Two properties are enforced by TWO independent layers. Mutation testing showed
+removing either layer ALONE changes nothing; removing BOTH breaks the proofs.
+- POOL LIMITS   : matcher gate + the prepare() transaction guard.
+                  Both removed -> 2 proofs fail.
+- WORKER SEPARATION : least-loaded ordering + AT_CAPACITY gate.
+                  Both removed -> 6 proofs fail.
+The read boundary spreads work in the normal case; the write boundary is what
+holds when the load snapshot is stale — and it ALWAYS can be, because it is read
+outside the transaction.
 
 ### M5.1 proofs (all mutation-verified)
 REGISTRATION_IS_NOT_A_HEALTH_CLAIM  PROVEN (unit + postgres: register() cannot
@@ -179,15 +300,28 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M4):
+Current (at M5, all MEASURED this session):
 - `pnpm run typecheck`: PASS
-- `pnpm run test` (unit): PASS — 133 files, 1619 tests (M3 was 1585; +34 from M4)
-- `pnpm run test:integration`: 321 passed / 3 FAILED / 0 skipped
-  (M3-era was 227 passing + 77 skipped; 716c6b8 unblocked the skips to 301/3/0;
-  M4 adds 20 → 321/3/0). The 3 failures are auth-bootstrap-cli, pre-existing,
-  tracked below as D1 — NOT skipped, and must never be re-skipped.
+- `pnpm run build`: PASS (next build, full route manifest)
+- `pnpm run test` (unit): PASS — 135 files, 1667 tests
+- `pnpm run test:integration`: 369 passed / 3 FAILED / 0 skipped
+- CORE1 regression: 1/1 PASS (src/test/n1-restart-recovery.test.ts)
+- CORE2 regression: 64/64 PASS across 15 files (dispatch-race,
+  concurrent-dispatch-recovery, multiworker-concurrent, dag-multibranch,
+  mission-restart, dispatch-recovery, autonomous-mission-runner-restart,
+  dispatch-attempt-repository, mission atomicity/apply-plan/runtime)
+- migrations 0043 and 0044 each applied 3x via psql, exit 0 each time
+- `pnpm db:verify-ledger`: LEDGER_OK, 42 rows match the journal
+
+BASELINE DRIFT, MEASURED: at session start the integration suite was
+327 passed / 3 failed / 0 skipped. The handoff note claimed 301 and the
+CURRENT section above claimed 321. NEITHER was current — always re-measure.
+M5 added 42 proofs (11 health + 16 distribution/capacity + 15 orchestration).
+
+The 3 failures are auth-bootstrap-cli, pre-existing, tracked below as D1 —
+NOT skipped, and must never be re-skipped.
 - `git diff --check`: PASS
-- lint: 0 errors, 289 warnings (EQUAL to the M3 baseline; the one warning M4
+- lint: 0 errors, 289 warnings (EQUAL to the M3/M4 baseline; the one warning M5
   briefly introduced was removed)
 - format:check: still FAIL on 243 files — PRE-EXISTING, NOT addressed. Running
   prettier --write would reformat the whole repository; that needs its own
@@ -199,19 +333,21 @@ How to reproduce:
   pnpm run test:db:setup
   pnpm run typecheck && pnpm run test
   pnpm run test:integration
-  npx vitest run src/core/workers src/server/routing
-  npx vitest run --config vitest.integration.config.ts src/server/routing
+  npx vitest run src/core/workers src/server/routing src/server/services/worker-registry
+  npx vitest run --config vitest.integration.config.ts src/server/routing \
+    src/server/services/worker-registry src/server/supervisor
 
 ## OPEN_DEFECTS
 
 ### MUST_NOW
 NONE.
 
-### MUST_BEFORE_CERTIFICATION (mandatory defect, not a blocker for M5)
+### MUST_BEFORE_FINAL_CERTIFICATION (mandatory defect, not a blocker for M6)
 D1 — `src/server/auth/auth-bootstrap-cli.integration.test.ts`: 3 tests fail by
      60s timeout. Pre-existing (CERT-4), first surfaced by 716c6b8. Confirmed
-     NOT caused by M4: `git status` for the M4 commit touches no file under
-     src/server/auth/, no CLI and no bootstrap path.
+     NOT caused by M4 and NOT caused by M5: neither milestone touches any file
+     under src/server/auth/, no CLI and no bootstrap path. Still 3 failures at
+     M5, exactly as at M4 — the count has never moved.
      These tests are NOT skipped and MUST NOT be re-skipped.
      They block final ICOS_SELF_BUILD_E2E certification.
 
@@ -242,18 +378,28 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     deactivate / deregister.
     SUCCESSOR DEFECT 14 below: nothing PROBES yet.
 
-14. (M5.1) NOTHING PROBES. WorkerRegistrationService RECORDS probe evidence but
-    no loop PRODUCES it, so without an operator calling probe() every worker
-    stays ineligible. Correct failure direction, but not orchestration. M5.2.
+14. RESOLVED in M5.2 (decision 0033) — WorkerHealthProber.probeAll() produces
+    evidence and expireStaleEvidence() invalidates what nothing refreshed.
+    SUCCESSOR DEFECT 16 below: no adapter exists yet, so nothing REAL is probed.
 
-15. (M5.1) SELECTION DOES NOT DISTRIBUTE. selectWorker returns
-    first-eligible-by-id, so ten ready tasks with three healthy workers all go
-    to the same worker. Exactly-once dispatch PER TASK is already certified
-    (CORE2 dispatch-race / concurrent-recovery / multiworker-concurrent) — the
-    gap is load distribution. Core of M5.2.
-    ANY distribution policy MUST stay a pure function of durable state, or
-    ROUTING_SURVIVES_RESTART (decision 0031) stops holding. An in-memory
-    round-robin counter would silently break it.
+15. RESOLVED in M5.3 (decision 0034) — selection orders by (durable load,
+    worker id), derived from non-terminal dispatch_attempts. Restart-safe
+    because it is a pure function of durable rows.
+
+16. (M5.2) NO PROBE ADAPTER EXISTS. `WorkerHealthProber` is proven, but
+    `container.workerHealthProber` is constructed with NO adapters, so every
+    worker kind reads `unsupported` and the fleet routes nothing. This is the
+    correct fail-closed state, not a bug — but it means the probe loop is
+    certified against fakes only. M6 must supply real adapters (Hermes,
+    Nemotron-backed Hermes, Codex) AND a scheduled caller: nothing invokes
+    probeAll()/expireStaleEvidence() on a timer yet either.
+
+17. (M5) NO WORKER-DEATH RECOVERY. A worker that dies MID-EXECUTION is DETECTED
+    — its probe evidence expires and it becomes ineligible — but the task it was
+    holding is never reassigned: the dispatch attempt stays `dispatched` and its
+    capacity stays consumed forever, so that slot is permanently lost.
+    Detection without reassignment. This is M7 (automatic recovery) and it is
+    the single largest remaining hole in CORE3.
 
 3. Duplicate authority: TWO Postgres mission repositories exist —
    `src/server/repositories/postgres/mission-repository.ts` (wired in
@@ -346,63 +492,90 @@ WORKER REGISTRATION : src/server/services/worker-registry/worker-registration-se
                structurally cannot accept health/availability from the caller;
                a new worker is unknown/unknown/UNKNOWN and routes nothing until
                probe() records real evidence. Do NOT add a "trusted" register.)
+WORKER HEALTH  : src/server/services/worker-registry/worker-health-prober.ts
+               (decision 0033. HEALTH IS EVIDENCE, NOT A FLAG: it is dated by
+               probe() and by nothing else, and it EXPIRES. probeAll() refreshes,
+               expireStaleEvidence() durably invalidates what nothing refreshed.
+               Adapters are DATA keyed by worker kind — no provider is named. A
+               kind with no adapter is `unsupported` and routes nothing; a probe
+               that THROWS is unhealthy/failed, never "no evidence".
+               Do NOT add an in-memory health cache — that is the M4 snapshot bug.)
+WORKER LOAD    : DERIVED by counting non-terminal dispatch_attempts per
+               worker_id (decision 0034). There is deliberately NO
+               workers.current_load column and NO round-robin cursor: a counter
+               is a second authority that can disagree with the ledger, and an
+               in-memory cursor silently breaks ROUTING_SURVIVES_RESTART.
+               computeWorkerLoad() is the ONE definition of "load".
+WORKER CAPACITY: workers.max_concurrency (default 1 — a worker is NOT an
+               unlimited execution slot) + capacity_pool / capacity_pool_limit
+               for a SHARED provider/account quota (decision 0034). A pool
+               ceiling resolves DOWNWARDS when members disagree. Enforced at the
+               read boundary (matcher gates) AND inside prepare()'s transaction
+               under a row lock — see REDUNDANT ENFORCEMENT above.
 CAPABILITY ROUTING : src/server/routing/capability-router.ts
                Reads the DURABLE STORE per decision (0032), not a snapshot.
+               IMPOSES the health-evidence horizon rather than trusting callers
+               with it, and derives the load snapshot per decision (0033/0034).
                ROUTED | NO_ELIGIBLE_WORKER (fail closed, task -> blocked) |
                ROUTING_UNCONFIGURED (registry EMPTY only — pre-M4 behaviour).
                A NON-EMPTY registry is authoritative and fails closed.
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — M5.2 (worker probing + load distribution)
+## NEXT_ACTION — M6 (non-interactive external workers)
 
-M4 built the routing table and the matcher. M5.1 made it live and gave it a
-write side. M5.2 has to make it carry CONCURRENT work across MULTIPLE workers.
+M5 proved the orchestration machinery against FAKE workers. M6 has to make it
+carry REAL ones, non-interactively. Two prerequisites are already named as
+defects and must be built together, because either alone is useless:
 
-Two gaps, both named in M5-1-POST-PHASE-AUDIT.md:
+1. PROBE ADAPTERS (defect 16). `WorkerHealthProber` takes
+   `adapters: Record<workerKind, WorkerHealthProbePort>` and the container
+   currently passes `{}`, so every kind is `unsupported`. M6 must supply real
+   adapters for Hermes, Nemotron-backed Hermes workers and Codex.
+   HARD CONSTRAINTS:
+   - an adapter answers ONLY for the WORKER. Model, provider, account and
+     capacity-slot health are separate axes (decision 0031 §Context) — an
+     adapter may consult them internally but must not leak them into the
+     registry;
+   - a probe that cannot verify MUST NOT return healthy. Throwing is correct and
+     is recorded as unhealthy/failed;
+   - no provider name may enter the matcher, the router, the prober or the
+     schema. Adapters are registered as data.
 
-1. NOTHING PROBES (defect 14). `WorkerRegistrationService.probe()` records
-   evidence; no loop produces it. Without an operator calling probe() by hand,
-   every registered worker stays ineligible. Options: a supervisor-side prober,
-   a worker heartbeat that calls probe() itself, or both. Probe evidence MUST
-   stay durable — an in-memory health cache reintroduces the M4 snapshot bug.
+2. A SCHEDULED PROBER (also defect 16). NOTHING calls probeAll() or
+   expireStaleEvidence() on a timer. A durable scheduler already exists
+   (ADR-0025, `scheduled_jobs`) — REUSE it rather than adding a setInterval,
+   which would not survive a restart and would run once per process instead of
+   once per fleet.
 
-2. SELECTION DOES NOT DISTRIBUTE (defect 15). `selectWorker` returns
-   first-eligible-by-id, so N ready tasks with M healthy workers all go to one
-   worker. Exactly-once dispatch PER TASK is already certified by CORE2
-   (postgres-supervisor-dispatch-race, postgres-concurrent-dispatch-recovery,
-   postgres-multiworker-concurrent) — do NOT rebuild that. The gap is purely
-   distribution.
+3. NON-INTERACTIVE EXECUTION. A worker adapter must run without a TTY, without
+   an interactive login and without a human answering a prompt. Anything that
+   blocks on stdin is a hang, not a failure, and a hang consumes a capacity slot
+   forever (see defect 17).
 
-   HARD CONSTRAINT: any distribution policy MUST be a pure function of durable
-   state. An in-memory round-robin counter would silently break
-   ROUTING_SURVIVES_RESTART (decision 0031), which is currently PROVEN.
-   A deterministic derivation (e.g. from the durable task identity and the
-   sorted eligible set) keeps both properties. Extend `WorkerRequirement` and
-   the canonical matcher — do NOT add a fourth eligibility filter.
-
-Then, still open for M5/M6:
-3. `dispatch_attempts` has no `worker_id` (defect 12) — needed for multi-worker
-   attribution and for a real producer identity in reviewer independence.
-   Additive column + additive migration.
-4. Resource Manager: still deliberately not built. When it arrives it should
-   subsume `AIResourceCatalog` (defect 10), which hardcodes worker kinds with
-   capabilities, model ids and providers, and whose engine has zero consumers.
-   Worker != Model != Provider != Account != Capacity Slot is established in
-   decision 0031 §Context; keep those axes separate.
+Then M7 — AUTOMATIC RECOVERY — which is now the largest hole (defect 17): a
+worker that dies mid-execution is detected but its task is never reassigned, so
+its capacity slot is lost permanently. M7 needs a durable execution lease with an
+expiry, so an abandoned attempt can be reclaimed and rerouted. `dispatch_attempts`
+already has claim_token / claim_until for RECOVERY claims — decide deliberately
+whether to reuse them for execution leases or to add a separate concept, and
+record it as a decision.
 
 Already available and proven:
 - `container.workerRegistration` — register / probe / deactivate / deregister,
-  fail-closed on registration;
+  fail-closed on registration, capacity declarable at registration;
+- `container.workerHealthProber` — probeAll / expireStaleEvidence / sweep;
 - `container.workerRegistryStore` — durable truth;
-- `container.capabilityRouter` — live reads, per-candidate refusal evidence;
-- fail-closed dispatch: no eligible worker -> MissionTask `blocked`, dispatcher
-  not called.
+- `container.capabilityRouter` — live reads, imposed evidence horizon, derived
+  load, per-candidate refusal evidence;
+- `dispatchAttempts.listActiveWorkerAssignments()` — the durable load signal;
+- fail-closed dispatch: no eligible worker -> MissionTask `blocked`; full worker
+  -> back-pressure, task stays ready.
 
-Critical path after M5:
-  M6 non-interactive external workers -> M7 automatic recovery ->
-  CORE3 chaos certification -> Self-Development Supervisor ->
-  ICOS_SELF_BUILD_E2E PASS
+Critical path after M6:
+  M7 automatic recovery -> CORE3 chaos certification ->
+  Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
+  (D1 must be fixed before that final PASS.)
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -442,3 +615,18 @@ Then M3 durable readiness/dependency gating (mission N13).
 - A Drizzle schema column with no migration is a silent, total persistence
   failure. Always verify against a real database with psql \d, never against
   the schema file.
+- RE-MEASURE the baseline; never inherit it. At M5 entry the handoff said 301
+  integration tests and STATE.md said 321; the truth was 327. A stale baseline
+  makes every later delta a guess.
+- `recover()` replays the latest checkpoint. An integration suite that truncates
+  missions and tasks but NOT `checkpoints` (and `context_items`) inherits the
+  previous test's DAG state, and the symptom looks exactly like a routing
+  defect. Dump the durable rows before blaming the code.
+- When a green test suite survives a mutation, that is information, not a pass.
+  Twice in M5 it meant the property was enforced REDUNDANTLY by a second layer;
+  the useful mutation was then removing BOTH. A single mutation that changes
+  nothing has proven nothing.
+- Distinguish "the code is wrong" from "my assertion is wrong". Two M5.4
+  failures were wrong assumptions about production behaviour (the completion
+  path continues the mission itself; claimPrepared rejects a non-positive
+  lease), not defects. Read the implementation before editing it.
