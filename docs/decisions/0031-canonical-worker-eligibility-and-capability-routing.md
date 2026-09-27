@@ -100,10 +100,11 @@ Postgres container hydrates the read model from the store at build time. Making
 `WorkerRegistryPort` async instead would have rippled through three consumers
 for no routing benefit.
 
-**Known limitation, accepted for M4:** the read model is a *boot-time snapshot*.
-A worker registered or re-probed mid-process is not visible to routing until the
-next hydration. This is sufficient to prove restart survival and is what keeps
-the blast radius small; live refresh belongs to M5/M6.
+**Known limitation, accepted for M4 — SUPERSEDED by decision 0032 (M5):** the
+read model was a *boot-time snapshot*, so a worker registered or re-probed
+mid-process was not visible to routing until the next hydration. 0032 makes
+`CapabilityRouter` read the durable store directly. The sync read model remains
+for the three synchronous consumers.
 
 ### 3. Capability routing
 
@@ -152,7 +153,7 @@ routing.
   unprobed workers being "runnable" will now select nothing until health and
   availability are actually probed. This is intended; the previous behaviour
   was the defect.
-- Routing sees a boot-time registry snapshot (see limitation above).
+- Routing saw a boot-time registry snapshot. RESOLVED by decision 0032.
 - `dispatch_attempts` records the routed `worker_kind` but not the selected
   worker **id**. Sufficient for M4; M5 multi-worker orchestration will want the
   id, and adding the column is additive.

@@ -29,6 +29,7 @@ import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capabi
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
 import { CapabilityRouter } from "@/server/routing/capability-router";
+import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
@@ -169,6 +170,12 @@ export interface Container {
    */
   workerRegistryStore: WorkerRegistryStore;
   /**
+   * Write side of the worker registry (M5): registration, probing,
+   * deactivation. Registration is NOT a health claim — a registered worker
+   * routes nothing until a probe proves it healthy AND available.
+   */
+  workerRegistration: WorkerRegistrationService;
+  /**
    * Capability routing over the worker registry hydrated at container build
    * (M4, decision 0031). With an empty registry it reports
    * ROUTING_UNCONFIGURED and dispatch behaves exactly as before M4.
@@ -285,7 +292,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   // store is empty by construction, so there is nothing to hydrate.
   const workerRegistryStore = new InMemoryWorkerRegistryStore();
   const workerRegistry = new InMemoryWorkerRegistry([]);
-  const capabilityRouter = new CapabilityRouter(workerRegistry);
+  const capabilityRouter = new CapabilityRouter(workerRegistryStore);
+  const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -363,6 +371,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     goalPreviewStore,
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
+    workerRegistration,
     capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine,
@@ -488,7 +497,8 @@ export async function buildPostgresContainer(
    */
   const workerRegistryStore = new PostgresWorkerRegistryStore(handle.db);
   const workerRegistry = new InMemoryWorkerRegistry(await workerRegistryStore.list());
-  const capabilityRouter = new CapabilityRouter(workerRegistry);
+  const capabilityRouter = new CapabilityRouter(workerRegistryStore);
+  const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
 
@@ -574,6 +584,7 @@ export async function buildPostgresContainer(
     goalPreviewStore,
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
+    workerRegistration,
     capabilityRouter,
     aiResourceCatalog,
     aiSelectionEngine: new AISelectionEngine(aiResourceCatalog),

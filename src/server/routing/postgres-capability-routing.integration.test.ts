@@ -12,6 +12,7 @@ import { PostgresTaskRepository } from "@/server/repositories/postgres/task-repo
 import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-durable-memory";
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { CapabilityRouter } from "@/server/routing/capability-router";
+import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { IndependentReviewerSelector } from "@/server/autonomy/reviewer-independence";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import type {
@@ -46,12 +47,19 @@ async function restart(): Promise<{
   registry: InMemoryWorkerRegistry;
   router: CapabilityRouter;
   store: PostgresWorkerRegistryStore;
+  registration: WorkerRegistrationService;
 }> {
   const handle = createDatabase(DATABASE_URL);
   handles.push(handle);
   const store = new PostgresWorkerRegistryStore(handle.db);
   const registry = new InMemoryWorkerRegistry(await store.list());
-  return { handle, registry, router: new CapabilityRouter(registry), store };
+  return {
+    handle,
+    registry,
+    router: new CapabilityRouter(store),
+    store,
+    registration: new WorkerRegistrationService(store),
+  };
 }
 
 function worker(over: Partial<WorkerRegistryEntry> & Pick<WorkerRegistryEntry, "id">): WorkerRegistryEntry {
@@ -122,7 +130,7 @@ describe("M4 capability routing on PostgreSQL", () => {
 
     it("routes to the worker holding the required capability", async () => {
       const { router } = await restart();
-      const result = router.route({ requiredCapabilities: ["deep-research"] });
+      const result = await router.route({ requiredCapabilities: ["deep-research"] });
 
       expect(result.decision).toBe("ROUTED");
       expect(result.worker?.id).toBe(RESEARCHER);
@@ -130,7 +138,7 @@ describe("M4 capability routing on PostgreSQL", () => {
 
     it("MISSING_CAPABILITY: refuses a capability nobody holds", async () => {
       const { router } = await restart();
-      const result = router.route({ requiredCapabilities: ["deep-research", "code-generation"] });
+      const result = await router.route({ requiredCapabilities: ["deep-research", "code-generation"] });
 
       expect(result.decision).toBe("NO_ELIGIBLE_WORKER");
       expect(result.candidates[0].missingCapabilities).toEqual(["code-generation"]);
@@ -151,7 +159,7 @@ describe("M4 capability routing on PostgreSQL", () => {
         );
 
         const { router } = await restart();
-        expect(router.route({ requiredCapabilities: ["deep-research"] }).decision).toBe(
+        expect((await router.route({ requiredCapabilities: ["deep-research"] })).decision).toBe(
           "NO_ELIGIBLE_WORKER",
         );
       });
@@ -178,7 +186,7 @@ describe("M4 capability routing on PostgreSQL", () => {
       expect(stored?.availability).toBe("unknown");
       expect(stored?.runtimeSupport).toBe("UNKNOWN");
 
-      const result = router.route({ requiredCapabilities: ["code-generation"] });
+      const result = await router.route({ requiredCapabilities: ["code-generation"] });
       expect(result.decision).toBe("NO_ELIGIBLE_WORKER");
       expect(result.candidates[0].reasons).toEqual([
         "STATUS_NOT_ACTIVE",
@@ -198,7 +206,7 @@ describe("M4 capability routing on PostgreSQL", () => {
 
       for (let i = 0; i < 3; i += 1) {
         const { router } = await restart();
-        expect(router.route({ requiredCapabilities: ["code-generation"] }).worker?.id).toBe(TWIN_A);
+        expect((await router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(TWIN_A);
       }
     });
   });
@@ -213,12 +221,12 @@ describe("M4 capability routing on PostgreSQL", () => {
       // boot-time snapshot by design, so the first authoritative read is the
       // next restart.
       const first = await restart();
-      const before = first.router.route({ requiredCapabilities: ["code-generation"] });
+      const before = await first.router.route({ requiredCapabilities: ["code-generation"] });
       await first.handle.close();
       await a.handle.close();
 
       const b = await restart();
-      const after = b.router.route({ requiredCapabilities: ["code-generation"] });
+      const after = await b.router.route({ requiredCapabilities: ["code-generation"] });
 
       expect(after.decision).toBe(before.decision);
       expect(after.worker?.id).toBe(before.worker?.id);
@@ -229,8 +237,7 @@ describe("M4 capability routing on PostgreSQL", () => {
       const a = await restart();
       await a.store.upsert(worker({ id: TWIN_A, capabilities: ["code-generation"] }));
       await a.store.upsert(worker({ id: TWIN_B, capabilities: ["code-generation"] }));
-      const first = await restart();
-      expect(first.router.route({ requiredCapabilities: ["code-generation"] }).worker?.id).toBe(
+      expect((await a.router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(
         TWIN_A,
       );
 
@@ -239,7 +246,61 @@ describe("M4 capability routing on PostgreSQL", () => {
       );
 
       const b = await restart();
-      expect(b.router.route({ requiredCapabilities: ["code-generation"] }).worker?.id).toBe(TWIN_B);
+      expect((await b.router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(TWIN_B);
+    });
+  });
+
+  describe("LIVE_REGISTRY_READS (M5)", () => {
+    it("a worker registered mid-process is routable immediately, with no restart", async () => {
+      const a = await restart();
+
+      expect((await a.router.route({ requiredCapabilities: ["deep-research"] })).decision).toBe(
+        "ROUTING_UNCONFIGURED",
+      );
+
+      await a.store.upsert(
+        worker({ id: RESEARCHER, workerKind: "hermes", capabilities: ["deep-research"] }),
+      );
+
+      // In M4 the router held a boot-time snapshot and this still said
+      // ROUTING_UNCONFIGURED until the next container build.
+      const after = await a.router.route({ requiredCapabilities: ["deep-research"] });
+      expect(after.decision).toBe("ROUTED");
+      expect(after.worker?.id).toBe(RESEARCHER);
+    });
+
+    it("a worker that goes unhealthy mid-process stops receiving work immediately", async () => {
+      const a = await restart();
+      await a.store.upsert(worker({ id: TWIN_A, capabilities: ["code-generation"] }));
+      await a.store.upsert(worker({ id: TWIN_B, capabilities: ["code-generation"] }));
+      expect((await a.router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(
+        TWIN_A,
+      );
+
+      await a.store.upsert(
+        worker({ id: TWIN_A, capabilities: ["code-generation"], health: "unhealthy" }),
+      );
+
+      // Same process, same router instance: the reroute is immediate.
+      expect((await a.router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(
+        TWIN_B,
+      );
+    });
+
+    it("the last healthy worker going down fails the route closed, in-process", async () => {
+      const a = await restart();
+      await a.store.upsert(worker({ id: TWIN_A, capabilities: ["code-generation"] }));
+      expect((await a.router.route({ requiredCapabilities: ["code-generation"] })).decision).toBe(
+        "ROUTED",
+      );
+
+      await a.store.upsert(
+        worker({ id: TWIN_A, capabilities: ["code-generation"], availability: "unavailable" }),
+      );
+
+      expect((await a.router.route({ requiredCapabilities: ["code-generation"] })).decision).toBe(
+        "NO_ELIGIBLE_WORKER",
+      );
     });
   });
 
@@ -263,6 +324,69 @@ describe("M4 capability routing on PostgreSQL", () => {
       const refused = new IndependentReviewerSelector(solo.registry, TWIN_A, ["review"]).select();
       expect(refused.decision).toBe("NO_ELIGIBLE_REVIEWERS");
       expect(refused.reviewerWorkerId).toBeUndefined();
+    });
+  });
+
+  describe("REGISTRATION_MAKES_ROUTING_LIVE (M5)", () => {
+    it("register -> probe -> route, durably, and a restart keeps the result", async () => {
+      const a = await restart();
+
+      // Before anything registers, routing is genuinely not configured.
+      expect((await a.router.route({ requiredCapabilities: ["deep-research"] })).decision).toBe(
+        "ROUTING_UNCONFIGURED",
+      );
+
+      await a.registration.register({
+        id: RESEARCHER,
+        workerKind: "hermes",
+        displayName: "Hermes CLI Worker",
+        capabilities: ["deep-research"],
+        runtime: "binary",
+        runtimeSupport: "SUPPORTED_RUNTIME",
+      });
+
+      // Registered but unprobed: the registry is now authoritative and refuses.
+      const unprobed = await a.router.route({ requiredCapabilities: ["deep-research"] });
+      expect(unprobed.decision).toBe("NO_ELIGIBLE_WORKER");
+      expect(unprobed.candidates[0].reasons).toEqual(["HEALTH_NOT_HEALTHY", "NOT_AVAILABLE"]);
+
+      await a.registration.probe(RESEARCHER, { health: "healthy", availability: "available" });
+      expect((await a.router.route({ requiredCapabilities: ["deep-research"] })).worker?.id).toBe(
+        RESEARCHER,
+      );
+
+      // A different process reads the same rows and agrees.
+      await a.handle.close();
+      const b = await restart();
+      expect((await b.router.route({ requiredCapabilities: ["deep-research"] })).worker?.id).toBe(
+        RESEARCHER,
+      );
+    });
+
+    it("deactivate and deregister durably remove a worker from rotation", async () => {
+      const a = await restart();
+      await a.registration.register({
+        id: RESEARCHER,
+        workerKind: "hermes",
+        displayName: "Hermes",
+        capabilities: ["deep-research"],
+        runtimeSupport: "SUPPORTED_RUNTIME",
+      });
+      await a.registration.probe(RESEARCHER, { health: "healthy", availability: "available" });
+
+      await a.registration.deactivate(RESEARCHER);
+      const afterDeactivate = await restart();
+      expect(
+        (await afterDeactivate.router.route({ requiredCapabilities: ["deep-research"] })).decision,
+      ).toBe("NO_ELIGIBLE_WORKER");
+      // The declaration and last probe survive for audit.
+      expect((await afterDeactivate.store.get(RESEARCHER))?.health).toBe("healthy");
+
+      expect(await a.registration.deregister(RESEARCHER)).toBe(true);
+      const afterDeregister = await restart();
+      expect(
+        (await afterDeregister.router.route({ requiredCapabilities: ["deep-research"] })).decision,
+      ).toBe("ROUTING_UNCONFIGURED");
     });
   });
 
@@ -376,6 +500,33 @@ describe("M4 capability routing on PostgreSQL", () => {
       await supervisor.run(missionId);
 
       expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("M5 end to end: a registered+probed worker is what the supervisor dispatches to", async () => {
+      await seedMission(["deep-research"], null);
+      const a = await restart();
+      await a.registration.register({
+        id: RESEARCHER,
+        workerKind: "hermes",
+        displayName: "Hermes",
+        capabilities: ["deep-research"],
+        runtimeSupport: "SUPPORTED_RUNTIME",
+      });
+
+      const blocked = await supervisorOn(a.router, a.handle);
+      await blocked.supervisor.run(missionId);
+      // Registered but unprobed -> fail closed, no dispatch.
+      expect(blocked.dispatch).not.toHaveBeenCalled();
+      expect((await seed.db.select().from(missionTasks))[0].status).toBe("blocked");
+
+      // Probe it, reset the task, and the same supervisor now dispatches.
+      await a.registration.probe(RESEARCHER, { health: "healthy", availability: "available" });
+      await seed.db.execute(sql.raw("UPDATE mission_tasks SET status = 'draft'"));
+
+      const routed = await supervisorOn(a.router, a.handle);
+      await routed.supervisor.run(missionId);
+      expect(routed.dispatch).toHaveBeenCalledTimes(1);
+      expect(routed.dispatch.mock.calls[0]?.[0].workerKind).toBe("hermes");
     });
 
     it("ROUTING_UNCONFIGURED: an empty registry dispatches exactly as before M4", async () => {

@@ -50,7 +50,7 @@ export class SupervisorService {
     const canonicalTask = await this.taskRepository.getById(missionTask.taskId);
     const requiredCapabilities = canonicalTask?.requiredCapabilities ?? [];
 
-    const routing = this.capabilityRouter.route({
+    const routing = await this.capabilityRouter.route({
       requiredCapabilities,
       workerKind: missionTask.workerKind ?? undefined,
     });

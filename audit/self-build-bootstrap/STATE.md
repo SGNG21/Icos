@@ -5,7 +5,9 @@ Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M5 — multi-worker orchestration (NEXT, not started)
+M5.2 — worker probing + load distribution (NEXT, not started)
+M5.1 — worker registration + live routing: COMPLETE, decision 0032,
+       audit in M5-1-POST-PHASE-AUDIT.md
 M4 — capability routing: COMPLETE, decision 0031, audit in M4-POST-PHASE-AUDIT.md
 M3 — canonical dependency/readiness authority: COMPLETE, committed 5bb5a2b
 M2 — canonical plan contract + task planning metadata: COMPLETE, committed 71ee3aa
@@ -25,6 +27,8 @@ and the M4 section below still declared CERT-1 a blocker that 716c6b8 had
 already cleared. Verify CURRENT_HEAD against `git rev-parse HEAD` every phase.
 
 ## CERTIFIED_MILESTONES
+- M5.1 worker registration + live routing — decision 0032,
+  audit in M5-1-POST-PHASE-AUDIT.md
 - M4 capability routing — decision 0031, audit in M4-POST-PHASE-AUDIT.md
 - M0 repository recovery — evidence in M0-RECOVERY-REPORT.md
 - M1 immutable plan lineage — FROZEN, evidence in M1-FREEZE.md (commit 8b93ab2)
@@ -32,6 +36,29 @@ already cleared. Verify CURRENT_HEAD against `git rev-parse HEAD` every phase.
   audit in M2-POST-PHASE-AUDIT.md
 - M3 canonical dependency/readiness authority — commit 5bb5a2b,
   decision 0030, audit in M3-POST-PHASE-AUDIT.md
+
+### M5.1 proofs (all mutation-verified)
+REGISTRATION_IS_NOT_A_HEALTH_CLAIM  PROVEN (unit + postgres: register() cannot
+                                     accept health/availability from the
+                                     caller; registered-but-unprobed routes
+                                     nothing. This keeps 0031's fail-closed
+                                     read boundary from being bypassed at the
+                                     WRITE boundary.)
+RUNTIME_SUPPORT_DEFAULTS_CLOSED     PROVEN (declaring a runtime != being able
+                                     to run it)
+RE_REGISTRATION_RESETS_PROBE        PROVEN (a changed declaration invalidates
+                                     old evidence)
+PROBE_DOES_NOT_INVENT_WORKERS       PROVEN (returns null, stores nothing)
+DEACTIVATE_PRESERVES_AUDIT          PROVEN (stops routing, keeps declaration
+                                     and last probe)
+LIVE_REGISTRATION_VISIBLE           PROVEN (postgres: routable mid-process, no
+                                     restart — the M4 snapshot limitation is
+                                     gone)
+LIVE_UNHEALTHY_REROUTES             PROVEN (postgres: same router instance)
+LIVE_LAST_WORKER_FAILS_CLOSED       PROVEN (postgres, in-process)
+SUPERVISOR_END_TO_END               PROVEN (postgres: registered-unprobed ->
+                                     task blocked, dispatcher NOT called;
+                                     after probe -> dispatched to hermes)
 
 ### M4 proofs (all mutation-verified; 10/10 required proofs PROVEN)
 REQUIRED_CAPS_FROM_CANONICAL_TASK   PROVEN (postgres: MissionTask declares no
@@ -202,19 +229,31 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     consumers. Requirement "no provider hardwire" is PROVEN for routing and OPEN
     for selection. Belongs to the M5/M6 Resource Manager.
 
-11. (M4) The worker registry read model is a BOOT-TIME SNAPSHOT. A worker
-    registered or re-probed mid-process is invisible to routing until the next
-    container build. Accepted for M4; M5 wants live refresh or a per-route read.
+11. RESOLVED in M5.1 (decision 0032) — CapabilityRouter reads the durable
+    store per decision. The sync read model remains only for the three
+    synchronous consumers.
 
 12. (M4) `dispatch_attempts` records the routed `worker_kind` but not the
     selected worker `id`. M5 needs the id to attribute work and to give reviewer
     independence a real producer identity. Additive column.
 
-13. (M4) NOTHING REGISTERS WORKERS YET. The `workers` table is durable and
-    authoritative-when-populated, but no production code path writes to it.
-    Every deployment is therefore ROUTING_UNCONFIGURED and routing changes
-    nothing until workers are registered. Intended for M4 (reversibility);
-    this is M5/M6's entry point.
+13. RESOLVED in M5.1 (decision 0032) — `WorkerRegistrationService`
+    (container.workerRegistration) is the write side: register / probe /
+    deactivate / deregister.
+    SUCCESSOR DEFECT 14 below: nothing PROBES yet.
+
+14. (M5.1) NOTHING PROBES. WorkerRegistrationService RECORDS probe evidence but
+    no loop PRODUCES it, so without an operator calling probe() every worker
+    stays ineligible. Correct failure direction, but not orchestration. M5.2.
+
+15. (M5.1) SELECTION DOES NOT DISTRIBUTE. selectWorker returns
+    first-eligible-by-id, so ten ready tasks with three healthy workers all go
+    to the same worker. Exactly-once dispatch PER TASK is already certified
+    (CORE2 dispatch-race / concurrent-recovery / multiworker-concurrent) — the
+    gap is load distribution. Core of M5.2.
+    ANY distribution policy MUST stay a pure function of durable state, or
+    ROUTING_SURVIVES_RESTART (decision 0031) stops holding. An in-memory
+    round-robin counter would silently break it.
 
 3. Duplicate authority: TWO Postgres mission repositories exist —
    `src/server/repositories/postgres/mission-repository.ts` (wired in
@@ -302,51 +341,61 @@ WORKER ELIGIBILITY : src/core/workers/worker-eligibility.ts  (ONE matcher —
                Do NOT hand-roll a fourth filter.)
 WORKER REGISTRY : `workers` table (migration 0042) is durable truth;
                InMemoryWorkerRegistry is a hydrated READ MODEL, never authority.
+WORKER REGISTRATION : src/server/services/worker-registry/worker-registration-service.ts
+               (decision 0032. REGISTRATION IS NOT A HEALTH CLAIM: register()
+               structurally cannot accept health/availability from the caller;
+               a new worker is unknown/unknown/UNKNOWN and routes nothing until
+               probe() records real evidence. Do NOT add a "trusted" register.)
 CAPABILITY ROUTING : src/server/routing/capability-router.ts
+               Reads the DURABLE STORE per decision (0032), not a snapshot.
                ROUTED | NO_ELIGIBLE_WORKER (fail closed, task -> blocked) |
                ROUTING_UNCONFIGURED (registry EMPTY only — pre-M4 behaviour).
                A NON-EMPTY registry is authoritative and fails closed.
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — M5 (multi-worker orchestration)
+## NEXT_ACTION — M5.2 (worker probing + load distribution)
 
-M4 built the routing table and the matcher. M5 has to make it carry real,
-concurrent work. Entry state is honest about what M4 did NOT do:
+M4 built the routing table and the matcher. M5.1 made it live and gave it a
+write side. M5.2 has to make it carry CONCURRENT work across MULTIPLE workers.
 
-1. NOTHING REGISTERS WORKERS (SHOULD_NEXT 13). `workers` is durable and
-   authoritative-when-populated, but empty in every deployment, so every
-   deployment is ROUTING_UNCONFIGURED and routing currently changes nothing in
-   production. M5's first job is a real registration + health/availability
-   probe path. Until that exists, capability routing is proven but inert.
+Two gaps, both named in M5-1-POST-PHASE-AUDIT.md:
 
-2. The registry read model is a BOOT-TIME SNAPSHOT (SHOULD_NEXT 11). Concurrent
-   orchestration needs a worker marked unhealthy mid-run to stop receiving work
-   without a container rebuild.
+1. NOTHING PROBES (defect 14). `WorkerRegistrationService.probe()` records
+   evidence; no loop produces it. Without an operator calling probe() by hand,
+   every registered worker stays ineligible. Options: a supervisor-side prober,
+   a worker heartbeat that calls probe() itself, or both. Probe evidence MUST
+   stay durable — an in-memory health cache reintroduces the M4 snapshot bug.
 
-3. `dispatch_attempts` has no `worker_id` (SHOULD_NEXT 12). Multi-worker
-   attribution and a real producer identity for reviewer independence both need
-   it. Additive column + additive migration.
+2. SELECTION DOES NOT DISTRIBUTE (defect 15). `selectWorker` returns
+   first-eligible-by-id, so N ready tasks with M healthy workers all go to one
+   worker. Exactly-once dispatch PER TASK is already certified by CORE2
+   (postgres-supervisor-dispatch-race, postgres-concurrent-dispatch-recovery,
+   postgres-multiworker-concurrent) — do NOT rebuild that. The gap is purely
+   distribution.
 
-4. Selection is `first eligible by id`. That is correct and deliberate for M4
-   (determinism beats cleverness), but it is not load distribution. Any M5
-   scheduling policy MUST stay a pure function of durable state, or
-   ROUTING_SURVIVES_RESTART stops holding.
+   HARD CONSTRAINT: any distribution policy MUST be a pure function of durable
+   state. An in-memory round-robin counter would silently break
+   ROUTING_SURVIVES_RESTART (decision 0031), which is currently PROVEN.
+   A deterministic derivation (e.g. from the durable task identity and the
+   sorted eligible set) keeps both properties. Extend `WorkerRequirement` and
+   the canonical matcher — do NOT add a fourth eligibility filter.
 
-5. Do NOT add a fourth eligibility filter. Extend `WorkerRequirement` and the
-   canonical matcher instead (decision 0031).
+Then, still open for M5/M6:
+3. `dispatch_attempts` has no `worker_id` (defect 12) — needed for multi-worker
+   attribution and for a real producer identity in reviewer independence.
+   Additive column + additive migration.
+4. Resource Manager: still deliberately not built. When it arrives it should
+   subsume `AIResourceCatalog` (defect 10), which hardcodes worker kinds with
+   capabilities, model ids and providers, and whose engine has zero consumers.
+   Worker != Model != Provider != Account != Capacity Slot is established in
+   decision 0031 §Context; keep those axes separate.
 
-6. Resource Manager: still not built, deliberately. When it arrives it should
-   subsume `AIResourceCatalog` (SHOULD_NEXT 10), which today hardcodes worker
-   kinds with capabilities, model ids and providers, and whose engine has zero
-   consumers. Worker != Model != Provider != Account != Capacity Slot is
-   established in decision 0031 §Context; keep those axes separate.
-
-Already available to M5 and proven:
-- `CapabilityRouter.route(requirement)` with per-candidate refusal evidence;
-- `WorkerRegistryStore` (async, durable) + `InMemoryWorkerRegistry` (sync read
-  model), in both Postgres and in-memory composition roots;
-- `container.workerRegistryStore` / `container.capabilityRouter`;
+Already available and proven:
+- `container.workerRegistration` — register / probe / deactivate / deregister,
+  fail-closed on registration;
+- `container.workerRegistryStore` — durable truth;
+- `container.capabilityRouter` — live reads, per-candidate refusal evidence;
 - fail-closed dispatch: no eligible worker -> MissionTask `blocked`, dispatcher
   not called.
 

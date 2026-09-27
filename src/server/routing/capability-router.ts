@@ -1,4 +1,5 @@
-import type { WorkerRegistryEntry, WorkerRegistryPort } from "@/core/contracts/worker-registry";
+import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import {
   evaluateWorkerPool,
   selectWorker,
@@ -16,6 +17,12 @@ import {
  * the canonical authority in src/core/workers/worker-eligibility.ts, which is
  * also what IndependentReviewerSelector and BoundedRepairController use. One
  * question, one answer.
+ *
+ * M5: the router reads the DURABLE STORE directly, not a boot-time snapshot.
+ * In M4 it consumed the hydrated `WorkerRegistryPort` read model, so a worker
+ * registered or re-probed mid-process kept its stale eligibility until the next
+ * container build — which meant a worker that had just gone unhealthy kept
+ * receiving work. Reading the authority is both simpler and correct.
  *
  * THE ONE PERMISSIVE PATH, STATED PLAINLY
  * An EMPTY registry yields ROUTING_UNCONFIGURED and the caller dispatches as it
@@ -43,10 +50,10 @@ export interface CapabilityRoutingResult {
 }
 
 export class CapabilityRouter {
-  constructor(private readonly registry: WorkerRegistryPort) {}
+  constructor(private readonly workers: WorkerRegistryStore) {}
 
-  route(requirement: WorkerRequirement): CapabilityRoutingResult {
-    const pool = this.registry.listWorkers();
+  async route(requirement: WorkerRequirement): Promise<CapabilityRoutingResult> {
+    const pool = await this.workers.list();
 
     if (pool.length === 0) {
       return {
