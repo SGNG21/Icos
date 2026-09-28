@@ -25,7 +25,8 @@ STATE_VERSIONING_CERTIFIED=TRUE
 RUNTIME_CONTROL_FLAGS_CERTIFIED=TRUE
 REAUTH_CERTIFIED=TRUE
 CONTROL_FOUNDATION_CERTIFIED=TRUE
-MERGE_READY=FALSE   # migration 0047 collision with CORE3 9444447 — see "Migrations"
+MERGE_READY=FALSE   # on feat/control-foundation alone (0047 collision with CORE3 9444447)
+RECONCILED=TRUE     # on integration/core3-control-foundation: CORE3 0047 kept, control -> 0048 — see INTEGRATION.md
 ```
 
 `CONTROL_FOUNDATION_CERTIFIED=TRUE` covers exactly the seven commands below, on PostgreSQL:
@@ -54,6 +55,8 @@ correctly but not re-driven after release.
 ## Migrations
 
 Introduced: `drizzle/0047_control_plane.sql` + journal entry idx 44 (`when` 1790800003287). Nothing else.
+**Superseded on `integration/core3-control-foundation`:** renumbered to `0048_control_plane.sql`, journal idx
+45, allow-list = union with CORE3 0047 — see `INTEGRATION.md`. The rule below has been applied there.
 
 Collision status — **REAL COLLISION as of CORE3 `18a51b8`** (checked 2026-09-28, at closure):
 CORE3 commit `9444447` (M12) added `drizzle/0047_audit_goal_events.sql` at journal **idx 44**
