@@ -4,6 +4,11 @@ import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-swe
 import { AutonomyWakeupService } from "@/server/autonomy/autonomy-wakeup-service";
 import { createContainer as createApplicationContainer, type Container } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
+import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
+import { SelfDevelopmentChain } from "@/server/autonomy/self-development-chain";
+import { GovernedSelfDevelopmentCoordinator } from "@/server/autonomy/governed-self-development-coordinator";
+import { CertifiedRuntimeExecutionHandoff } from "@/server/autonomy/certified-runtime-execution-handoff";
+import { CanonicalIndependentReview } from "@/server/autonomy/canonical-independent-review";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
 import { QualityControlRecoverySweeper } from "@/server/autonomy/quality-control-recovery-sweeper";
 import { CombinedAutonomyRecoverySweeper } from "@/server/autonomy/combined-autonomy-recovery-sweeper";
@@ -74,6 +79,9 @@ export function composeAutonomyRuntime(container: Container): {
   supervisor: SupervisorService;
   qualityControl: QualityControlService;
   wakeup: AutonomyWakeupService;
+  backlog: DurableImprovementBacklog;
+  selfDevelopmentChain: SelfDevelopmentChain;
+  selfDevelopment: GovernedSelfDevelopmentCoordinator;
 } {
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
@@ -138,7 +146,62 @@ export function composeAutonomyRuntime(container: Container): {
     undefined,
     container.autonomousPlanner,
   );
-  return { supervisor, qualityControl, wakeup };
+  /*
+   * SELF-DEVELOPMENT, composed in the REAL runtime (M11, defect 25 link 3).
+   *
+   * This is the FOURTH capability that was fully built, fully proven, and never wired — so it
+   * is composed HERE, in the same function that builds the supervisor, and asserted by a
+   * composition test rather than left to care.
+   *
+   * Every authority it uses is the canonical one: the durable backlog, the canonical goal
+   * repository, `igniteAutonomousMission` for mission + plan + DAG, and — critically — an
+   * execution handoff that ENTERS this very supervisor. There is no second planner, mission
+   * engine, dispatcher, reviewer or integration authority anywhere in this graph.
+   */
+  const backlog = new DurableImprovementBacklog(container.durableMemory);
+
+  const selfDevelopmentChain = new SelfDevelopmentChain({
+    backlog,
+    goals: container.goalRepository,
+    ignite: {
+      missions: container.mission,
+      runtimeRepository: container.autonomousRuntime,
+      supervisor,
+      planner: container.autonomousPlanner ?? {
+        async plan() {
+          /* Fail closed: never invent a plan for work ICOS proposed to itself. */
+          throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
+        },
+      },
+    },
+  });
+
+  const selfDevelopment = new GovernedSelfDevelopmentCoordinator({
+    backlog,
+    missions: container.mission,
+    dispatchAttempts: container.dispatchAttempts,
+    workerRegistry: container.workerRegistry,
+    /* THE adapter that enters the certified path — not a parallel execution handoff. */
+    execution: new CertifiedRuntimeExecutionHandoff({
+      supervisor,
+      workspaces: container.workspaceManager!,
+      dispatchAttempts: container.dispatchAttempts,
+      executionResults: container.executionResults,
+    }),
+    /* The canonical reviewer, with the existing independence rule. Not a second authority. */
+    review: new CanonicalIndependentReview({
+      reviewer: container.reviewer,
+      workerRegistry: container.workerRegistry,
+      missions: container.mission,
+      tasks: container.tasks,
+    }),
+    integrationGate: container.integrationGate!,
+    integrationApplier: container.integrationApplier,
+    workspaces: container.workspaceManager,
+    durableMemory: container.durableMemory,
+  });
+
+  return { supervisor, qualityControl, wakeup, backlog, selfDevelopmentChain, selfDevelopment };
 }
 
 function createRecoveryScheduler(

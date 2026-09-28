@@ -49,6 +49,8 @@ import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/extern
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
+import type { GoalRepository } from "@/server/repositories/ports";
+import type { WorkerRegistryPort } from "@/core/contracts/worker-registry";
 import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
 import { WorkspaceManager } from "@/server/workspace-manager/manager";
@@ -182,6 +184,10 @@ export interface Container {
   goalNormalizer: GoalNormalizer;
   goalPlanner: GoalPlanner;
   goalPreviewStore: GoalPreviewStore;
+  /** The canonical goal store. Self-development creates its goals through it (M11). */
+  goalRepository: GoalRepository;
+  /** Read model over the durable registry; reviewer independence resolves identities here. */
+  workerRegistry: WorkerRegistryPort;
   /**
    * Durable worker registry (M4, decision 0031). Registering or probing a
    * worker here is what makes capability routing authoritative — see
@@ -433,6 +439,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     goalNormalizer,
     goalPlanner,
     goalPreviewStore,
+    goalRepository,
+    workerRegistry,
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
     workerRegistration,
@@ -755,6 +763,8 @@ export async function buildPostgresContainer(
     goalNormalizer,
     goalPlanner,
     goalPreviewStore,
+    goalRepository,
+    workerRegistry,
     // AI Selection Engine (Phase 8B)
     workerRegistryStore,
     workerRegistration,
