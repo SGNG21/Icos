@@ -426,7 +426,18 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
       .where(eq(dispatchAttempts.id, id))
       .limit(1);
 
-    if (current[0]?.state !== "dispatched") {
+    /*
+     * A SYNCHRONOUS dispatcher has already moved past `dispatched` by the time it returns
+     * (M9). The external worker executor runs the process, records the result and settles
+     * the attempt inside `dispatch()`, so the caller's acknowledgement arrives when the
+     * attempt is already `completed` or `failed`. That is evidence the dispatch happened,
+     * not evidence it failed — the pre-existing check assumed Temporal's fire-and-forget
+     * shape, where the ack always precedes completion.
+     *
+     * `prepared` remains invalid: reaching here in that state means the transition was lost.
+     */
+    const state = current[0]?.state;
+    if (state !== "dispatched" && state !== "completed" && state !== "failed") {
       throw new Error("DISPATCH_ATTEMPT_INVALID_ACKNOWLEDGEMENT");
     }
   }

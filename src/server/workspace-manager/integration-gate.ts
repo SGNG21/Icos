@@ -414,3 +414,50 @@ export class IntegrationGate {
     return {};
   }
 }
+
+/**
+ * Parses deployment-configured gate commands (M9).
+ *
+ * THROWS on malformed configuration rather than silently keeping the pnpm defaults: a gate
+ * that runs the wrong verification commands still reports PASS, which is the most dangerous
+ * possible failure mode for the component that authorises integration.
+ */
+export function parseGateCommands(raw?: string | null): Partial<GateCommands> | undefined {
+  if (!raw || raw.trim() === "") return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `GATE_COMMANDS_INVALID_JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  /*
+   * The EXECUTABLE must be non-empty; later arguments may legitimately be empty strings
+   * (`node -e ""` is a valid command), so only the first element is constrained.
+   */
+  const isArgv = (v: unknown): v is string[] =>
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every((x) => typeof x === "string") &&
+    typeof v[0] === "string" &&
+    v[0].length > 0;
+
+  const out: Partial<GateCommands> = {};
+  const record = parsed as Record<string, unknown>;
+  for (const key of ["install", "typecheck", "lint", "unit", "build"] as const) {
+    if (record[key] === undefined) continue;
+    if (!isArgv(record[key])) throw new Error(`GATE_COMMANDS_INVALID: ${key} must be a non-empty argv array`);
+    out[key] = record[key] as string[];
+  }
+  if (record.postgres !== undefined) {
+    const list = record.postgres;
+    if (!Array.isArray(list) || !list.every(isArgv)) {
+      throw new Error("GATE_COMMANDS_INVALID: postgres must be an array of argv arrays");
+    }
+    out.postgres = list as string[][];
+  }
+  return out;
+}

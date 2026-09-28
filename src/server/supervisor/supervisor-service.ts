@@ -16,6 +16,10 @@ import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import {
+  decideWorkspaceAllocation,
+  type WorkspaceAllocationDecision,
+} from "./workspace-allocation-policy";
 
 const RECOVERY_DISPATCH_LEASE_MS = 5 * 60_000;
 
@@ -212,8 +216,39 @@ export class SupervisorService {
 
       const prompt = task.description || task.title;
 
-      // Phase 8D: Use WorkspaceExecutionCoordinator for workspace-aware execution
-      if (this.workspaceExecutionCoordinator && routedWorkerKind) {
+      /*
+       * GOVERNED WORKSPACE ALLOCATION (M9, defect 23).
+       *
+       * Decided from the CANONICAL Task — `riskClass` and `allowedFileScope` — not from
+       * the routed worker kind. The previous condition here was `routedWorkerKind`, which
+       * meant an unrouted task silently skipped governance entirely, and which made WHO
+       * executes decide whether the work is governed. What the work may TOUCH decides that.
+       */
+      /* Only read the canonical Task when a coordinator exists to act on the decision. */
+      const canonicalTask = this.workspaceExecutionCoordinator
+        ? await this.taskRepository.getById(task.taskId)
+        : null;
+      const allocation: WorkspaceAllocationDecision = this.workspaceExecutionCoordinator
+        ? decideWorkspaceAllocation({
+            taskId: task.taskId,
+            title: task.title,
+            riskClass: canonicalTask?.riskClass,
+            allowedFileScope: canonicalTask?.allowedFileScope,
+          })
+        : { kind: "NOT_REQUIRED", reason: "no workspace coordinator composed" };
+
+      if (this.workspaceExecutionCoordinator && allocation.kind === "REFUSED") {
+        /*
+         * FAIL CLOSED. A writer we cannot govern must not fall through to the ungoverned
+         * path: that path provisions an ad-hoc worktree whose branch nothing ever reviews,
+         * integrates or reaps. `blocked` is recoverable and visible; an orphan branch is
+         * neither.
+         */
+        await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "blocked");
+        continue;
+      }
+
+      if (this.workspaceExecutionCoordinator && allocation.kind === "GOVERNED") {
         let allocated = false;
         try {
           if (!this.dispatchAttempts) {
@@ -239,16 +274,22 @@ export class SupervisorService {
           // Back-pressure, not failure: the task stays ready for a later tick.
           if (!prepared || !prepared.acquired) continue;
 
-          // Allocate workspace for this task
+          /*
+           * Allocate the governed workspace BEFORE any external execution, keyed by the
+           * canonical workflow id. The manager is idempotent on that key, so a retry of
+           * the same logical attempt reuses its workspace instead of forking a second one.
+           *
+           * The worker identity passed here is the ROUTED WORKER'S ID — an execution-unit
+           * identity used for attribution and for the gate's self-review refusal. It is
+           * not a routing input, and no kind, provider or model reaches this call.
+           */
           await this.workspaceExecutionCoordinator.allocateWorkspace(
             mission.id,
             task.taskId,
-            routedWorkerKind,
-            task.title
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .slice(0, 30),
+            routing.workerId ?? routedWorkerKind ?? "unassigned",
+            allocation.slug,
             prepared.attempt.workflowId,
+            allocation.fileScope,
           );
           allocated = true;
 

@@ -69,6 +69,15 @@ const envSchema = z.object({
   ICOS_WORKER_WORKSPACE_ROOT: z.preprocess(emptyAsUndefined, z.string().optional()),
   /** The canonical repository. A writer worker is guaranteed NOT to run here. */
   ICOS_REPO_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * The Integration Gate's verification commands, as JSON (M9).
+   *
+   * The gate hardcodes `pnpm install/typecheck/lint/test/build`. A deployment using a
+   * different package manager or different script names could not run the gate at all, so
+   * this is configuration rather than a constant. Partial: anything omitted keeps its
+   * default.
+   */
+  ICOS_GATE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,

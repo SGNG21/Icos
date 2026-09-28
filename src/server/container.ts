@@ -55,7 +55,7 @@ import { WorkspaceManager } from "@/server/workspace-manager/manager";
 import { InMemoryWorkspaceRegistry } from "@/server/workspace-manager/registry";
 import { InMemoryGit } from "@/server/workspace-manager/in-memory-git";
 import { InMemoryTestDatabaseProvisioner } from "@/server/workspace-manager/in-memory-test-database-provisioner";
-import { IntegrationGate } from "@/server/workspace-manager/integration-gate";
+import { IntegrationGate, parseGateCommands } from "@/server/workspace-manager/integration-gate";
 import { IntegrationApplier } from "@/server/workspace-manager/integration-applier";
 import { InMemoryCommandRunner } from "@/server/workspace-manager/in-memory-gate-deps";
 import { InMemoryGateDatabase } from "@/server/workspace-manager/in-memory-gate-deps";
@@ -583,13 +583,30 @@ export async function buildPostgresContainer(
   const pgWorkspaceRegistry = new PostgresWorkspaceRegistry(env.DATABASE_URL);
   await pgWorkspaceRegistry.initialize();
   const pgProvisioner = new PostgresTestDatabaseProvisioner(env.DATABASE_URL);
-  const pgGit = new PostgresGit(env.DATABASE_URL);
-  const workspaceManager = new WorkspaceManager({ git: pgGit, registry: pgWorkspaceRegistry, provisioner: pgProvisioner });
+  /*
+   * The canonical repository the workspace manager branches from (M9, defect 23).
+   *
+   * `WorkspaceManager` otherwise falls back to DEFAULT_MASTER_REPO / DEFAULT_WORKTREE_ROOT,
+   * which are one developer's absolute paths — so any deployment elsewhere, and any test,
+   * would create worktrees against a repository it does not own. `ICOS_REPO_PATH` is
+   * already the declared canonical repository for external execution; the same declaration
+   * governs workspaces, so there is one answer to "which repo" rather than two.
+   */
+  const pgGit = new PostgresGit(env.DATABASE_URL, env.ICOS_REPO_PATH);
+  const workspaceManager = new WorkspaceManager({
+    git: pgGit,
+    registry: pgWorkspaceRegistry,
+    provisioner: pgProvisioner,
+    masterRepo: env.ICOS_REPO_PATH,
+    worktreeRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
+  });
   const integrationGate = new IntegrationGate({
     git: pgGit,
     manager: workspaceManager,
     runner: new PostgresCommandRunner(),
     database: new PostgresGateDatabase(),
+    /* A deployment may verify with something other than pnpm; omitted keys keep defaults. */
+    commands: parseGateCommands(env.ICOS_GATE_COMMANDS),
   });
   /*
    * TASK EXECUTION (M8, defect 22).

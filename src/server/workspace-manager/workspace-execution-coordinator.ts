@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
+import type { FileScope } from "./types";
 import type { IntegrationGate } from "./integration-gate";
 import type { IntegrationApplier, IntegrationApplyOutcome } from "./integration-applier";
 
@@ -155,6 +156,15 @@ export class WorkspaceExecutionCoordinator {
     workerId: string,
     slugHint?: string,
     workflowId?: string,
+    /**
+     * The task's DECLARED file scope (M9, defect 23).
+     *
+     * Not cosmetic: the Integration Gate REJECTS every changed file outside `owns`, so a
+     * workspace built from a generic default would turn each governed run into a
+     * rejection. The scope the planner declared is the scope the gate enforces — one
+     * source of truth, not two.
+     */
+    fileScope?: FileScope,
   ): Promise<ExecutionWorkspace> {
     const existing = this.executionWorkspaces.get(taskId);
     if (existing && existing.status !== "released") {
@@ -179,7 +189,7 @@ export class WorkspaceExecutionCoordinator {
       taskId,
       workflowId,
       integrationTarget: this.defaultIntegrationTarget,
-      fileScope: this.defaultFileScope,
+      fileScope: fileScope ?? this.defaultFileScope,
       migrations: 0,
     });
 

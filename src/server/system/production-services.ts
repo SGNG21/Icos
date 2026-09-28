@@ -59,10 +59,22 @@ const PROCESS_SIGNALS: ProductionServiceSignals = {
   },
 };
 
-function createRecoveryScheduler(
-  container: Container,
-  options: { intervalMs: number },
-): ProductionServiceScheduler {
+/**
+ * THE production autonomy composition (M9, defect 23).
+ *
+ * Extracted from `createRecoveryScheduler` so that the runtime and its proofs use the SAME
+ * function. Before this, the supervisor existed only inside the scheduler factory, so any
+ * end-to-end proof had to hand-build one — and a hand-built composition is exactly how
+ * defects 22 and 23 stayed invisible: the test wired what the container did not.
+ *
+ * Nothing here is test-only. `createRecoveryScheduler` calls it, and so does the
+ * certification proof.
+ */
+export function composeAutonomyRuntime(container: Container): {
+  supervisor: SupervisorService;
+  qualityControl: QualityControlService;
+  wakeup: AutonomyWakeupService;
+} {
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
   }
@@ -107,7 +119,16 @@ function createRecoveryScheduler(
     container.taskExecution,
     container.durableMemory,
     container.dispatchAttempts,
-    undefined,
+    /*
+     * M9, defect 23: the GOVERNED path is now the default in production.
+     *
+     * This argument was `undefined`, so the supervisor's workspace branch was dead code in
+     * every real deployment: an ordinary autonomous writer task dispatched with no
+     * registered workspace, the external executor fell back to an ad-hoc worktree, and its
+     * branch was never reviewed, integrated or reaped. Passing the coordinator is what
+     * makes allocation happen during normal attempt preparation.
+     */
+    container.workspaceExecutionCoordinator,
     container.capabilityRouter,
   );
   const wakeup = new AutonomyWakeupService(
@@ -117,6 +138,18 @@ function createRecoveryScheduler(
     undefined,
     container.autonomousPlanner,
   );
+  return { supervisor, qualityControl, wakeup };
+}
+
+function createRecoveryScheduler(
+  container: Container,
+  options: { intervalMs: number },
+): ProductionServiceScheduler {
+  const { supervisor, qualityControl, wakeup } = composeAutonomyRuntime(container);
+  if (!container.autonomousRuntime) {
+    throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
+  }
+
   const autonomySweeper = new AutonomyRecoverySweeper(container.autonomousRuntime, wakeup);
   const qualitySweeper = new QualityControlRecoverySweeper(
     qualityControl,

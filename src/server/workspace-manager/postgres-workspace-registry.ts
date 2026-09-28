@@ -4,6 +4,7 @@ import {
   TEST_DATABASE_URL,
   assertSafeTestDatabaseUrl,
 } from "@/server/database/test-database-guard";
+import { testDatabaseName } from "./guards";
 import { WorkspaceError, type Workspace } from "./types";
 
 /** Registry state persisted to PostgreSQL. */
@@ -206,7 +207,19 @@ export class PostgresWorkspaceRegistry {
       updatedAt: row.updated_at,
       releasedAt: row.released_at ?? null,
       sourceCommit: row.source_commit ?? null,
-      testDatabase: "", // Will be set by manager
+      /*
+       * DERIVED from the slug, not stored (M9).
+       *
+       * This was hardcoded to `""` with a note saying the manager would set it — but the
+       * manager READS the workspace back from here, so `ws.testDatabase` was always empty
+       * and `WorkspaceManager.create` failed every time with DATABASE_FORBIDDEN. The
+       * PostgreSQL workspace path could therefore never allocate anything; nothing noticed
+       * because nothing reached it until governed allocation became the default.
+       *
+       * Deriving rather than adding a column keeps one source of truth: the name is a pure
+       * function of the slug (`testDatabaseName`), so a stored copy could only drift from it.
+       */
+      testDatabase: testDatabaseName(row.slug),
     };
   }
 
