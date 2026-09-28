@@ -1,6 +1,6 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M9 — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED)
+Updated: 2026-09-28 (D1 FIXED — integration failures = 0)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
@@ -64,7 +64,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-a9aa3d7  M9 governed workspace allocation is the DEFAULT path (defect 23 CLOSED)
+1ab958b  D1 root cause fixed — the container leaked two PostgreSQL clients
+  3c47cf0  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED; defect 24 named
+  a9aa3d7  M9 governed workspace allocation is the DEFAULT path (defect 23 CLOSED)
   0d3f4c8  M8 recorded — defects 22 + 19 closed, defect 23 named
   1bac102  M8 governed external worker integration, end to end
   4b570ec  M8 governed worker result integration + reaping (defect 19)
@@ -656,7 +658,15 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M9 / a9aa3d7, all MEASURED, DOCKER CONFIRMED RUNNING):
+Current (at D1 fix / 1ab958b, all MEASURED, DOCKER CONFIRMED RUNNING):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 144 files, 1788 tests
+- `pnpm run test:integration`: 443 passed / 0 FAILED / 2 SKIPPED
+- INTEGRATION FAILURES ARE NOW ZERO. The 2 skips are ONLY the opt-in live Hermes proof.
+- the suite also dropped from ~290s to ~107s: three 60s timeouts and leaked connections gone
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 44 rows
+
+Previous (at M9 / a9aa3d7, before the D1 fix):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
 - `pnpm run test` (unit): PASS — 144 files, 1788 tests
 - `pnpm run test:integration`: 438 passed / 3 FAILED / 2 SKIPPED
@@ -769,7 +779,26 @@ How to reproduce:
 ### MUST_NOW
 NONE.
 
-### MUST_BEFORE_FINAL_CERTIFICATION (mandatory defect, not a blocker for M7)
+### MUST_BEFORE_FINAL_CERTIFICATION
+NONE. D1 is FIXED (decision 0043, commit 1ab958b).
+
+D1 — RESOLVED. It was NEVER an auth defect: `buildPostgresContainer` opens THREE PostgreSQL
+     clients (the shared drizzle handle, `PostgresWorkspaceRegistry`, `PostgresGit`) and
+     `close` was `handle.close`, so two `postgres.js` pools outlived it and kept the Node
+     event loop alive. The bootstrap CLI did its work, printed `owner_already_present`, and
+     then never exited — so `execFile` never resolved and each test waited out its 60s
+     timeout. Invisible for a long-lived server; fatal for a CLI. Introduced with the Phase
+     8D workspace manager.
+     FIXED by closing every client the container opened. Nothing skipped, nothing
+     quarantined, no timeout weakened — the tests now pass in 10.7s, and a MUTATION
+     restoring the old close reproduces all three 60s timeouts exactly.
+     LESSON: a failure that is STABLE is not thereby understood. "Pre-existing, count
+     unchanged, not my milestone" was true every time it was written, and it let a one-line
+     lifecycle bug survive six milestones and block certification. The useful question was
+     never "whose change caused this?" but "what is the process actually doing when it times
+     out?" — one direct run answered it.
+
+ORIGINAL TEXT (kept for the record):
 D1 — `src/server/auth/auth-bootstrap-cli.integration.test.ts`: 3 tests fail by
      60s timeout. Pre-existing (CERT-4), first surfaced by 716c6b8. Confirmed
      NOT caused by M4 and NOT caused by M5: neither milestone touches any file
@@ -1270,3 +1299,14 @@ Then M3 durable readiness/dependency gating (mission N13).
   optional and mostly empty; now an unscoped writer blocks. That is correct, and it instantly
   exposed that `PostgresMissionRepository.create()` hardcodes constants (defect 24). Expect a
   fail-closed rule to surface every place the data was never really filled in.
+- A STABLE FAILURE IS NOT AN UNDERSTOOD FAILURE. D1 sat for six milestones behind an
+  accurate sentence — "pre-existing, count has never moved, this milestone does not touch
+  src/server/auth/" — that was true every single time and explained nothing. The bug was a
+  container closing one of the three PostgreSQL clients it opened, so a CLI finished its work
+  and never exited. One direct run of the CLI showed it printing the right answer and hanging.
+  When a failure is stable, stop proving it is not yours and ask what the process is doing.
+- A LEAKED HANDLE IS INVISIBLE IN A SERVER AND FATAL IN A CLI. The same defect had existed
+  since Phase 8D without symptom, because every other consumer was long-lived. Any component
+  that opens a connection must be closed by whoever composed it — and the regression proof
+  counts real backends in `pg_stat_activity` rather than naming the clients, so it catches the
+  next one too.
