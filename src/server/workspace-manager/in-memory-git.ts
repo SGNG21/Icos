@@ -37,6 +37,28 @@ export class InMemoryGit extends Git {
     return this.commits.has(ref);
   }
 
+  /**
+   * Real compare-and-swap semantics against the in-memory branch map.
+   *
+   * Inheriting the base implementation would be worse than useless here: the overridden
+   * `exec` always reports success, so every swap would "win" — including a stale one, which
+   * is precisely the case the CAS exists to reject.
+   */
+  async compareAndSwapBranch(branch: string, expectedOld: string, next: string): Promise<boolean> {
+    if (this.branches.get(branch) !== expectedOld) return false;
+    this.branches.set(branch, next);
+    this.commits.set(branch, next);
+    return true;
+  }
+
+  async deleteBranchMergedInto(branch: string, target: string): Promise<boolean> {
+    const tip = this.branches.get(branch);
+    if (!tip) return false;
+    if (!(await this.isAncestor(tip, target))) return false;
+    this.branches.delete(branch);
+    return true;
+  }
+
   async branchExists(branch: string): Promise<boolean> {
     return this.branches.has(branch);
   }

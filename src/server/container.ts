@@ -56,6 +56,7 @@ import { InMemoryWorkspaceRegistry } from "@/server/workspace-manager/registry";
 import { InMemoryGit } from "@/server/workspace-manager/in-memory-git";
 import { InMemoryTestDatabaseProvisioner } from "@/server/workspace-manager/in-memory-test-database-provisioner";
 import { IntegrationGate } from "@/server/workspace-manager/integration-gate";
+import { IntegrationApplier } from "@/server/workspace-manager/integration-applier";
 import { InMemoryCommandRunner } from "@/server/workspace-manager/in-memory-gate-deps";
 import { InMemoryGateDatabase } from "@/server/workspace-manager/in-memory-gate-deps";
 import { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
@@ -262,6 +263,14 @@ export interface Container {
   workspaceManager?: WorkspaceManager;
   /** Integration Gate (Phase 8D) */
   integrationGate?: IntegrationGate;
+  /**
+   * APPLIES an accepted worker result to the integration target (M8, defect 19).
+   *
+   * Separate from the gate because the responsibilities are genuinely different: the gate
+   * DECIDES, the applier ACTS, and only on a decision the gate already granted. Sharing the
+   * same manager, Git port and lease keeps it one authority rather than two.
+   */
+  integrationApplier?: IntegrationApplier;
   /** Workspace Execution Coordinator (Phase 8D) */
   workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
@@ -362,6 +371,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     runner: new InMemoryCommandRunner(),
     database: new InMemoryGateDatabase(),
   });
+  const integrationApplier = new IntegrationApplier({ git, manager: workspaceManager });
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git,
     manager: workspaceManager,
@@ -416,6 +426,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     close: async () => {},
     workspaceManager,
     integrationGate,
+    integrationApplier,
     workspaceExecutionCoordinator,
     // Goal intake services
     goalNormalizer,
@@ -621,6 +632,7 @@ export async function buildPostgresContainer(
       })
     : temporalDispatcher;
 
+  const integrationApplier = new IntegrationApplier({ git: pgGit, manager: workspaceManager });
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git: pgGit,
     manager: workspaceManager,
@@ -686,6 +698,7 @@ export async function buildPostgresContainer(
     // Workspace Manager (Phase 8D)
     workspaceManager,
     integrationGate,
+    integrationApplier,
     workspaceExecutionCoordinator,
   };
 }

@@ -414,9 +414,13 @@ export class WorkspaceManager {
       await writeFile(archivePath, JSON.stringify(ws, null, 2));
 
       if (hasWorktree) await this.git.removeWorktree(ws.worktreePath);
-      const branchDeleted = (await this.git.branchExists(ws.branch))
-        ? await this.git.deleteBranchIfMerged(ws.branch)
-        : false;
+      /*
+       * Reap against the INTEGRATION TARGET, not HEAD (M8, defect 19). `branch -d` asks
+       * whether the branch is merged into HEAD, which for a worker branch integrated into
+       * `integrationTarget` is the wrong question — it answered "not merged" and kept every
+       * branch forever.
+       */
+      const branchDeleted = await this.git.deleteBranchMergedInto(ws.branch, ws.integrationTarget);
       await this.provisioner.drop(ws.testDatabase);
       ws.releasedAt = now.toISOString();
       ws.leaseOwner = null;

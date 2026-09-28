@@ -15,6 +15,19 @@ const ALLOWED = new Set([
   "merge-tree",
   "ls-tree",
   "show",
+  /*
+   * `update-ref` is the ONE write that advances the integration target (M8, defect 19).
+   *
+   * It is deliberately preferred over `merge`. With an expected-old-value argument it is
+   * an atomic COMPARE-AND-SWAP on the ref, which is exactly the exactly-once primitive
+   * integration needs: a second integrator whose expected value is stale simply fails,
+   * with no window between reading and writing. `merge` would additionally need a
+   * checked-out tree, could create merge commits, and could attempt machine conflict
+   * resolution — none of which an autonomous path should ever do.
+   *
+   * `merge`, `rebase`, `reset`, `checkout`, `push` and `clean` remain FORBIDDEN.
+   */
+  "update-ref",
 ]);
 const FORBIDDEN_FLAGS = new Set([
   "--force",
@@ -115,6 +128,35 @@ export class Git {
     );
   }
 
+  /**
+   * Atomically moves a branch ref from `expectedOld` to `next` (M8, defect 19).
+   *
+   * COMPARE-AND-SWAP: git fails the update if the ref is not exactly `expectedOld`, so two
+   * integrators racing on the same target cannot both win, and no read-then-write window
+   * exists. Returns false on a lost race rather than throwing — a lost race is an expected
+   * outcome to be retried, not an error.
+   *
+   * Refuses a branch that is CHECKED OUT anywhere. Moving a ref under a live worktree
+   * would desynchronise that worktree's index and working tree from HEAD, silently making
+   * every later `git status` there wrong.
+   */
+  async compareAndSwapBranch(branch: string, expectedOld: string, next: string): Promise<boolean> {
+    const checkedOut = (await this.worktrees()).find((w) => w.branch === branch);
+    if (checkedOut) {
+      throw new WorkspaceError(
+        "BRANCH_CHECKED_OUT",
+        `${branch} est monté dans ${checkedOut.path} : déplacer la ref désynchroniserait ce worktree`,
+      );
+    }
+
+    const result = await this.exec(
+      ["update-ref", `refs/heads/${branch}`, next, expectedOld],
+      this.repoDir,
+      [0, 1, 128],
+    );
+    return result.code === 0;
+  }
+
   async worktrees(): Promise<WorktreeInfo[]> {
     const text = await this.out(["worktree", "list", "--porcelain"]);
     return text
@@ -144,6 +186,78 @@ export class Git {
   /** `branch -d` : git refuse si la branche n'est pas fusionnée. Retourne false dans ce cas. */
   async deleteBranchIfMerged(branch: string): Promise<boolean> {
     return (await this.exec(["branch", "-d", branch], this.repoDir, [0, 1])).code === 0;
+  }
+
+  /**
+   * Deletes a branch ONLY if it is already contained in `target` (M8, defect 19).
+   *
+   * WHY `deleteBranchIfMerged` IS NOT ENOUGH
+   * `git branch -d` checks the branch against HEAD (and its upstream), not against an
+   * arbitrary ref. A worker branch that was fast-forwarded into `integration/phase-7`
+   * while the repository's HEAD sits on another branch is therefore reported "not fully
+   * merged" and kept — forever. That is why worker branches accumulated even after a
+   * successful integration: cleanup was asking git the wrong question.
+   *
+   * The question asked here is the one that matters: is every commit on this branch
+   * already reachable from the ref we integrate into? If yes, the branch is a pointer to
+   * commits that live on elsewhere and deleting it destroys nothing. If no, it is the ONLY
+   * copy and it is kept.
+   *
+   * Returns false rather than throwing when the branch is not contained: an unmerged
+   * branch is a normal outcome (a rejected result), not an error.
+   */
+  async deleteBranchMergedInto(branch: string, target: string): Promise<boolean> {
+    if (!(await this.branchExists(branch))) return false;
+
+    const tip = await this.resolveCommit(branch);
+    /* THE safety check, and a stricter one than `branch -d` performs. */
+    if (!(await this.isAncestor(tip, target))) return false;
+
+    const checkedOut = (await this.worktrees()).find((w) => w.branch === branch);
+    if (checkedOut) {
+      throw new WorkspaceError(
+        "BRANCH_CHECKED_OUT",
+        `${branch} est monté dans ${checkedOut.path}`,
+      );
+    }
+
+    /*
+     * `update-ref -d <ref> <oldValue>` is a compare-and-swap DELETE: it removes the ref
+     * only if it still points where we checked. Safer than `branch -D`, which deletes
+     * unconditionally.
+     *
+     * This bypasses the FORBIDDEN_FLAGS guard deliberately and narrowly. That guard exists
+     * to stop a CALLER smuggling a destructive flag into an arbitrary command; here the
+     * argv is built entirely inside this method from validated inputs, no caller can
+     * influence it, and the precondition above is strictly stronger than the one the
+     * blocked command would have applied itself.
+     */
+    const { code } = await this.runInternal([
+      "update-ref",
+      "-d",
+      `refs/heads/${branch}`,
+      tip,
+    ]);
+    return code === 0;
+  }
+
+  /** Runs an argv built entirely inside this class. Never reachable with caller input. */
+  private runInternal(args: string[]): Promise<ExecResult> {
+    return new Promise<ExecResult>((resolve) => {
+      execFile(
+        "git",
+        args,
+        {
+          cwd: this.repoDir,
+          maxBuffer: 64 * 1024 * 1024,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+        },
+        (error, stdout, stderr) => {
+          const code = error ? (typeof error.code === "number" ? error.code : 128) : 0;
+          resolve({ code, stdout, stderr });
+        },
+      );
+    });
   }
 
   async statusPorcelain(cwd: string): Promise<string[]> {
