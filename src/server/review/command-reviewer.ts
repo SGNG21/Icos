@@ -1,3 +1,7 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import type { ReviewDecision, RequestedChange, ReviewerProviderMetadata } from "@/core/contracts/review";
 import { extractJsonObject, stripCodeFence } from "@/server/autonomy/command-planner-provider";
 import {
@@ -38,11 +42,22 @@ export interface CommandReviewerOptions {
   command: string;
   args: readonly string[];
   timeoutMs: number;
+  /**
+   * Where the agent runs. Defaults to an EMPTY directory, deliberately.
+   *
+   * An agent CLI inherits the server's working directory unless told otherwise, and a
+   * reviewer that can read the server's tree will read it — one real run refused a correct
+   * change after looking for the worker's file in the wrong repository (defect 34). Its
+   * verdict must depend on the review context and nothing else, and it has no business
+   * reading whatever the server happens to be sitting in.
+   */
+  cwd?: string;
   run?: NonInteractiveRunner;
 }
 
 export class CommandReviewer implements ReviewerPort {
   private readonly run: NonInteractiveRunner;
+  private readonly cwd: string;
 
   constructor(private readonly options: CommandReviewerOptions) {
     if (!options.command) throw reviewerError("CONFIGURATION_INCOMPLETE");
@@ -50,9 +65,44 @@ export class CommandReviewer implements ReviewerPort {
       throw reviewerError("INVALID_TIMEOUT");
     }
     this.run = options.run ?? runNonInteractive;
+    this.cwd = options.cwd ?? mkdtempSync(path.join(tmpdir(), "icos-review-"));
   }
 
+  /**
+   * How many times one review may be put to the agent.
+   *
+   * Same measured reason as the canonical planner's: a real model answers a `.strict()`
+   * schema correctly most of the time and not every time, and a shape failure says nothing
+   * about the change under review. Only shape failures are retried — a timeout, a non-zero
+   * exit or an abort are conditions asking again cannot improve — and the verdict itself is
+   * never retried, because a REQUEST_CHANGES is an answer, not a malfunction.
+   */
+  private static readonly MAX_ATTEMPTS = 3;
+
   async review(input: ReviewInput): Promise<{
+    decision: ReviewDecision;
+    reasons: string[];
+    requestedChanges?: RequestedChange[];
+    confidence?: number;
+    providerMetadata: ReviewerProviderMetadata;
+  }> {
+    let lastShapeError: Error | undefined;
+    for (let attempt = 1; attempt <= CommandReviewer.MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.reviewOnce(input);
+      } catch (error) {
+        const retryable =
+          error instanceof Error &&
+          (error.message === `${REVIEWER_ERROR_PREFIX}INVALID_OUTPUT` ||
+            error.message === `${REVIEWER_ERROR_PREFIX}INVALID_RESPONSE`);
+        if (!retryable) throw error;
+        lastShapeError = error;
+      }
+    }
+    throw lastShapeError;
+  }
+
+  private async reviewOnce(input: ReviewInput): Promise<{
     decision: ReviewDecision;
     reasons: string[];
     requestedChanges?: RequestedChange[];
@@ -74,6 +124,7 @@ export class CommandReviewer implements ReviewerPort {
       result = await this.run({
         command: this.options.command,
         args,
+        cwd: this.cwd,
         timeoutMs: this.options.timeoutMs,
         /* A verdict is small; a runaway agent must not be able to grow this without bound. */
         maxOutputBytes: 512 * 1024,

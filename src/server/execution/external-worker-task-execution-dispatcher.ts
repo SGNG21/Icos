@@ -345,6 +345,27 @@ function evidenceOf(outcome: WorkerExecutionOutcome): Evidence[] | undefined {
     },
   ];
 
+  /*
+   * THE CHANGE ITSELF (defect 35). Identity and process observations say WHO ran and HOW it
+   * exited; a reviewer judging quality needs to see WHAT changed. Without this the reviewer
+   * receives file names and a commit hash, and a real run correctly escalated rather than
+   * approve a change it could not see.
+   */
+  if (outcome.evidence?.diff) {
+    items.push({
+      type: "change-diff",
+      source: outcome.identity.workerId,
+      timestamp,
+      metadata: {
+        branch: outcome.evidence.branch,
+        commitHash: outcome.evidence.commitHash,
+        diff: outcome.evidence.diff,
+        /* Says whether this is the whole change or part of it. */
+        truncated: outcome.evidence.diffTruncated ?? false,
+      },
+    });
+  }
+
   const process = outcome.process;
   if (process) {
     items.push({

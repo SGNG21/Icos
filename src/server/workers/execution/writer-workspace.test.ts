@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runNonInteractive } from "@/server/workers/process/run-process";
 import {
   WORKER_BRANCH_PREFIX,
+  MAX_DIFF_BYTES,
   collectCommitEvidence,
   provisionWorkspace,
   type WorkerWorkspace,
@@ -177,6 +178,40 @@ describe("M6.3 writer worktree isolation", () => {
     await expect(stat(workspace.path)).rejects.toThrow();
     // ...and the commit is still reachable by branch name from the canonical repo.
     expect(await git(repo, ["rev-parse", workspace.branch!])).toBe(head);
+  });
+
+  it("DEFECT 35 — THE EVIDENCE CARRIES THE CHANGE ITSELF, bounded and honestly flagged", async () => {
+    const workspace = await provisionWorkspace({ repoPath: repo, mode: "writer", attemptKey: "d" });
+    await writeFile(join(workspace.path, "note.md"), "hello reviewer\n");
+    await git(workspace.path, ["add", "."]);
+    await git(workspace.path, ["commit", "-m", "add note"]);
+
+    const evidence = await collectCommitEvidence(workspace);
+
+    /*
+     * File names and a hash say THAT something changed, not WHAT. A reviewer given only
+     * those can do nothing but escalate — and did, against a perfectly good change.
+     */
+    expect(evidence?.diff).toContain("hello reviewer");
+    expect(evidence?.diff).toContain("note.md");
+    expect(evidence?.diffTruncated).toBeUndefined();
+    expect(evidence!.diff!.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
+
+    await workspace.dispose();
+  });
+
+  it("DEFECT 35 — a runaway diff is TRUNCATED and says so, rather than filling a prompt", async () => {
+    const workspace = await provisionWorkspace({ repoPath: repo, mode: "writer", attemptKey: "big" });
+    await writeFile(join(workspace.path, "big.txt"), "x\n".repeat(MAX_DIFF_BYTES));
+    await git(workspace.path, ["add", "."]);
+    await git(workspace.path, ["commit", "-m", "big"]);
+
+    const evidence = await collectCommitEvidence(workspace);
+
+    expect(evidence!.diff!.length).toBe(MAX_DIFF_BYTES);
+    expect(evidence?.diffTruncated).toBe(true);
+
+    await workspace.dispose();
   });
 
   it("A READER SHARES the canonical checkout and creates NO branch", async () => {

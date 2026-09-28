@@ -169,6 +169,9 @@ export async function provisionWorkspace(
  * A worker reporting "committed the fix" is a claim. `git rev-parse HEAD` is
  * evidence. When they disagree, this is the one that counts.
  */
+/** Enough for an ordinary reviewable change; a runaway agent cannot grow a prompt past it. */
+export const MAX_DIFF_BYTES = 64 * 1024;
+
 export async function collectCommitEvidence(
   workspace: WorkerWorkspace,
   options: { run?: NonInteractiveRunner } = {},
@@ -203,12 +206,25 @@ export async function collectCommitEvidence(
         .filter(Boolean)
     : [];
 
+  /*
+   * THE CHANGE ITSELF (defect 35). Without it the reviewer receives file names and a hash
+   * and cannot judge content, which is most of what a review is. Bounded, because a runaway
+   * agent's diff must not be able to fill a prompt or a row, and truncation is RECORDED so
+   * the reviewer knows whether it saw the whole change.
+   */
+  const diffRaw = commits.length
+    ? await git(run, workspace.path, ["diff", "--unified=3", range])
+    : "";
+  const diff = diffRaw.slice(0, MAX_DIFF_BYTES);
+
   return {
     branch: workspace.branch,
     /* Null when nothing was committed: HEAD would otherwise imply work was done. */
     commitHash: commits.length ? head : null,
     commits,
     changedFiles: [...new Set([...committedFiles, ...dirtyFiles])].sort(),
+    diff: diff.length ? diff : undefined,
+    diffTruncated: diffRaw.length > diff.length ? true : undefined,
     dirty: dirtyFiles.length > 0,
   };
 }

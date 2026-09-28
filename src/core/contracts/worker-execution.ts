@@ -210,6 +210,20 @@ export const workerCommitEvidenceSchema = z
     /** Commits created by this run, oldest first. */
     commits: z.array(z.string().min(1)).default([]),
     changedFiles: z.array(z.string()).default([]),
+    /**
+     * The change ITSELF, bounded (defect 35).
+     *
+     * File names and a commit hash say that something changed; they do not say WHAT, so a
+     * reviewer asked to judge quality from them can only escalate — and did, in a real run:
+     * "Cannot verify the existence or content of the documentation file". A review of a
+     * change that nobody can see is not a review.
+     *
+     * Truncated rather than omitted when large, and flagged as such, so the reviewer knows
+     * it is seeing part of the change rather than all of it.
+     */
+    diff: z.string().optional(),
+    /** True when `diff` was cut short. Evidence about the evidence. */
+    diffTruncated: z.boolean().optional(),
     /** True when the worker left uncommitted changes — evidence, not a verdict. */
     dirty: z.boolean(),
   })

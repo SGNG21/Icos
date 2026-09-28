@@ -46,6 +46,32 @@ describe("CommandReviewer", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("DEFECT 34 — runs in an EMPTY directory, never the server's working tree", async () => {
+    let seen: string | undefined;
+    const run = vi.fn(async (spec: { cwd?: string }) => {
+      seen = spec.cwd;
+      return ran({ stdout: JSON.stringify({ decision: "APPROVE", reasons: ["ok"] }) });
+    });
+
+    await reviewer(run as never).review(input);
+
+    /*
+     * An agent CLI inherits the server's cwd unless told otherwise, and a reviewer that can
+     * read the server's tree will read it: one real run refused a correct change after
+     * looking for the worker's file in the wrong repository.
+     */
+    expect(seen).toBeDefined();
+    expect(seen).not.toBe(process.cwd());
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(seen!)).toHaveLength(0);
+  });
+
+  it("DEFECT 34 — the canonical policy tells the reviewer it cannot see a repository", () => {
+    const policy = reviewerSystemPrompt();
+    expect(policy).toContain("Judge ONLY from the review context");
+    expect(policy).toContain("never treat something you");
+  });
+
   it("undoes the CLI's own formatting — a fence and narration are transport, not meaning", async () => {
     const decision = await reviewer(async () =>
       ran({
@@ -56,12 +82,49 @@ describe("CommandReviewer", () => {
     expect(decision.decision).toBe("APPROVE");
   });
 
-  it("FAILS CLOSED on a verdict that is not the canonical schema", async () => {
-    await expect(
-      reviewer(async () => ran({ stdout: '{"decision":"LOOKS_GOOD","reasons":["x"]}' })).review(
-        input,
-      ),
-    ).rejects.toThrow("QUALITY_REVIEWER_INVALID_OUTPUT");
+  it("FAILS CLOSED on a verdict that is not the canonical schema, after a BOUNDED retry", async () => {
+    const run = vi.fn(async () => ran({ stdout: '{"decision":"LOOKS_GOOD","reasons":["x"]}' }));
+
+    await expect(reviewer(run as never).review(input)).rejects.toThrow(
+      "QUALITY_REVIEWER_INVALID_OUTPUT",
+    );
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
+  it("RETRIES a malformed answer, and NEVER retries a verdict it dislikes", async () => {
+    const shape = vi
+      .fn()
+      .mockResolvedValueOnce(ran({ stdout: "I think it is fine, honestly" }))
+      .mockResolvedValueOnce(ran({ stdout: JSON.stringify({ decision: "APPROVE", reasons: ["ok"] }) }));
+    await expect(reviewer(shape as never).review(input)).resolves.toMatchObject({
+      decision: "APPROVE",
+    });
+    expect(shape).toHaveBeenCalledTimes(2);
+
+    /* REQUEST_CHANGES is an ANSWER. Asking again until it says yes would not be a review. */
+    const refusal = vi.fn(async () =>
+      ran({
+        stdout: JSON.stringify({
+          decision: "REQUEST_CHANGES",
+          reasons: ["no"],
+          requestedChanges: [{ field: "f", reason: "r" }],
+        }),
+      }),
+    );
+    await expect(reviewer(refusal as never).review(input)).resolves.toMatchObject({
+      decision: "REQUEST_CHANGES",
+    });
+    expect(refusal).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry a timeout or a non-zero exit: asking again cannot help", async () => {
+    const timeout = vi.fn(async () => ran({ timedOut: true }));
+    await expect(reviewer(timeout as never).review(input)).rejects.toThrow("TIMEOUT");
+    expect(timeout).toHaveBeenCalledTimes(1);
+
+    const exited = vi.fn(async () => ran({ exitCode: 3 }));
+    await expect(reviewer(exited as never).review(input)).rejects.toThrow("PROVIDER_EXIT:3");
+    expect(exited).toHaveBeenCalledTimes(1);
   });
 
   it("FAILS CLOSED on timeout, empty output and a non-zero exit", async () => {

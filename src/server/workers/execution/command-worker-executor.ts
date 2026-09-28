@@ -101,6 +101,21 @@ export function composeWorkerPrompt(contract: WorkerTaskContract): string {
   if (contract.allowedFileScope.length) {
     lines.push("", "## You may write ONLY these paths");
     for (const scope of contract.allowedFileScope) lines.push(`- ${scope}`);
+    /*
+     * SAY TO COMMIT (defect 33). The contract described the work, the workspace and the
+     * scope, and never asked for the one act that makes the work exist outside the worktree.
+     * A real agent obligingly edited files and stopped; `writerWorkspaceEvidence` then
+     * reported `commitHash: null`, the reviewer had nothing to review and refused, and the
+     * gate had nothing to integrate. Every layer behaved correctly and the run produced
+     * nothing, because nobody had said the word "commit".
+     */
+    lines.push(
+      "",
+      "## Finish by COMMITTING your work",
+      "Stage and commit your changes in this workspace, on the branch already checked out",
+      "there. Do not push, do not merge, do not switch branch. Uncommitted work cannot be",
+      "reviewed or integrated and will be discarded.",
+    );
   } else {
     lines.push("", "## READ-ONLY", "Do not modify any file.");
   }

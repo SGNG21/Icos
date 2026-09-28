@@ -225,6 +225,20 @@ describe("M6.3 command worker executor", () => {
     expect(writer).toContain("- src/");
   });
 
+  it("DEFECT 33 — A WRITER IS TOLD TO COMMIT; a reader is not", () => {
+    /*
+     * The contract described the work, the workspace and the scope, and never asked for the
+     * one act that makes the work exist outside the worktree. A real agent edited files and
+     * stopped, so the reviewer had nothing to review and the gate had nothing to integrate.
+     */
+    const writer = composeWorkerPrompt(contract({ allowedFileScope: ["src/"] }));
+    expect(writer).toContain("COMMITTING your work");
+    expect(writer).toContain("Uncommitted work cannot be");
+
+    const reader = composeWorkerPrompt(contract({ allowedFileScope: [] }));
+    expect(reader).not.toContain("COMMITTING your work");
+  });
+
   it("RESUME IS A CONTINUATION: handoff is injected and the worker is told not to restart", () => {
     const prompt = composeWorkerPrompt(
       contract({ resumeToken: "sess-9", handoff: { done: ["step A"] } }),
