@@ -1,17 +1,21 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28
+Updated: 2026-09-28 (M6.3)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M6 — non-interactive external workers: IN PROGRESS.
+M7 — automatic recovery (NEXT, not started). See NEXT_ACTION.
+M6 — non-interactive external workers: COMPLETE.
        M6.1 real runtime-keyed probe  — decision 0036, commit 9e808dc
        M6.2 autonomous probe sweep    — decision 0037, commit c1ca85c
-       DEFECT 16 IS CLOSED: probing is real AND something calls it, durably.
-       M6.3 EXECUTION ADAPTER — NOT STARTED, and it is the bulk of M6. See
-       NEXT_ACTION. M6.1/M6.2 make a worker's HEALTH real; they do not yet make a
-       worker DO a task. Do not read "M6 in progress" as "M6 nearly done".
+       M6.3 external worker EXECUTION — decision 0038, commit 58fa884
+       DEFECT 16 CLOSED (M6.1+M6.2). A REAL Hermes agent has been launched
+       non-interactively by ICOS, given the composed task contract, and its output
+       captured — all nine M6.3 proof targets met (list below).
+       DEFECT 17 (worker-death recovery) IS UNCHANGED and is the last structural
+       hole: the execution lease makes an abandoned run RECLAIMABLE, but nothing
+       sweeps for expired leases and re-routes the task. That is M7.
 M5 — multi-worker orchestration: COMPLETE and CERTIFIED (certification was
        WITHDRAWN by decision 0036 pending a scheduled prober; 0037 landed it, so
        M5 certification is RESTORED — the probe loop is no longer fake-only).
@@ -29,7 +33,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-c1ca85c  M6.2 autonomous probe sweep as a durable job (defect 16 CLOSED)
+58fa884  M6.3 real non-interactive external worker execution
+  d468a67  M6.2 state + defect 16 closed + M6.3 entry state
+  c1ca85c  M6.2 autonomous probe sweep as a durable job (defect 16 CLOSED)
   9e808dc  M6.1 real non-interactive worker probe, keyed by runtime
   a6cd8f9  M5 certification + post-phase audit + M6 entry state
   56a79ea  M5.4 concurrent multi-worker orchestration certification
@@ -77,6 +83,59 @@ STATE.md leaves this file actively misleading.
   successor scheduled), NO_PROBER_COMPOSED_IS_A_PERMANENT_ERROR,
   FAILED_IGNITION_ABORTS_STARTUP.
   NOT PROVEN by M6.2, do not overclaim: nothing here makes a worker EXECUTE a task.
+- M6.3 external worker EXECUTION — decision 0038, commit 58fa884.
+  ALL NINE REQUIRED PROOF TARGETS MET (49 unit + 19 PostgreSQL, 6 mutations verified):
+  WORKER_PROCESS_LAUNCH_PROVEN        — a real OS process runs; real duration, real exit
+  TASK_CONTRACT_INJECTION_PROVEN      — the worker ECHOES BACK goalId/missionId/planId/
+                                        missionTaskId/taskId/attempt/workflowId from BOTH
+                                        env and the JSON contract file; assertions read the
+                                        child's own view, not ours
+  STDOUT_STDERR_CAPTURE_PROVEN        — both streams captured SEPARATELY (a classifier that
+                                        cannot tell them apart cannot prioritise stderr)
+  EXIT_CLASSIFICATION_PROVEN          — configured exit codes, patterns, timeout, signal,
+                                        never-started; exit 0 + failure verdict IS a failure
+  SESSION_EXHAUSTION_PROVEN           — from configured stderr patterns AND from the worker's
+                                        own verdict; stays retryable
+  RETRYABLE_RESUME_PROVEN             — attempt 2 inherits attempt 1's session token and
+                                        ECHOES IT into its own real commit
+  WRITER_WORKTREE_ISOLATION_PROVEN    — writer never gets the canonical checkout (REFUSED,
+                                        not merely avoided); a real commit leaves canonical
+                                        HEAD, branch and status untouched
+  COMMIT_EVIDENCE_CAPTURE_PROVEN      — commit hash/commits/changedFiles read from GIT, not
+                                        from the worker's claim; dirty-without-commit still
+                                        reported; commitHash null when nothing committed
+  PROCESS_RESTART_CONTINUATION_PROVEN — failure class, resume token and handoff survive on
+                                        new connections with new service instances
+  PLUS: NO_DUPLICATE_INTEGRATION (a runner without the lease executes and records NOTHING),
+  FENCED_SUCCESS (a run that lost its lease mid-flight is recorded LEASE_EXPIRED even though
+  it SUCCEEDED), LEASE_INDEPENDENT_OF_RECOVERY_CLAIM (both fences held at once by different
+  owners), ALL_EIGHT_CLASSES_STORABLE + unknown class refused by the DATABASE,
+  NO_PROVIDER_HARDWIRE (unconfigured runtime invents nothing; novel worker KIND needs no
+  adapter), IDENTITY_AXES_DISTINCT (worker/runtime/model/provider/account/capacitySlot all
+  six recorded separately), REVIEW_NOT_SELF_INTEGRATION (a success advances the task to
+  `review_pending`, never to `succeeded`).
+
+  LIVE PROVIDER PROOF — a REAL Hermes agent, not a stub:
+    /Users/coco/.local/bin/hermes, Nemotron-class model via a custom endpoint, launched
+    with `-z` (one-shot, no TTY), received the ICOS-composed contract, echoed a unique
+    per-run token, left its isolated branch clean, canonical checkout untouched.
+    5.3s of real network round-trip. Codex is present on the same machine and needs a
+    config entry only — NO code change.
+    IT IS OPT-IN, and that is deliberate, NOT a re-skip: it spends model credits on every
+    run and a third-party outage would present as an ICOS regression. Every code path it
+    exercises is also covered deterministically. It is the ONLY skipped thing in the
+    integration suite (1 file / 2 tests).
+    REPRODUCE:
+      ICOS_LIVE_WORKER_PROOF=1 npx vitest run --config vitest.integration.config.ts \
+        src/server/workers/execution/live-external-worker.integration.test.ts
+
+  NOT PROVEN by M6.3, do not overclaim:
+    - nothing INTEGRATES a worker's branch. A run leaves a branch and stops; merging is a
+      separate decision. This is intentional (an executor that could merge could land
+      unreviewed work), and it means the loop is not yet closed end to end.
+    - nothing sweeps for EXPIRED execution leases. The fence makes an abandoned run
+      reclaimable; no caller reclaims it yet. That is defect 17 / M7.
+    - only the `node` and (by configuration) `binary` runtimes have been exercised.
 
 - M5 multi-worker orchestration — decisions 0033/0034/0035,
   audit in M5-POST-PHASE-AUDIT.md. All 15 required certification items PASS:
@@ -340,11 +399,22 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M6.2 / c1ca85c, all MEASURED — re-measure, never inherit):
+Current (at M6.3 / 58fa884, all MEASURED — re-measure, never inherit):
 - `pnpm run typecheck`: PASS
 - `pnpm run build`: PASS (next build, full route manifest)
-- `pnpm run test` (unit): PASS — 137 files, 1701 tests (M6.1: 1683, M5: 1667)
-- `pnpm run test:integration`: 388 passed / 3 FAILED / 0 skipped (M6.1: 383/3)
+- `pnpm run test` (unit): PASS — 140 files, 1750 tests (M6.2: 1701, M6.1: 1683, M5: 1667)
+- `pnpm run test:integration`: 407 passed / 3 FAILED / 2 SKIPPED (M6.2: 388/3/0)
+- the 2 skips are the OPT-IN live Hermes proof (1 file), gated on
+  ICOS_LIVE_WORKER_PROOF=1. It PASSES when run — see the M6.3 proofs above for the
+  repro command. It is NOT a re-skip of anything previously running, and it is the
+  only skipped thing in the suite.
+- migration 0046 applied 3x via psql exit 0, then through `migrate()`
+- `pnpm db:verify-ledger <url>`: LEDGER_OK, 44 rows match the journal
+- lint: 0 errors, 289 warnings — EQUAL to the M3/M4/M5/M6.2 baseline (M6.3 briefly
+  introduced one unused-import warning; it was removed before commit)
+
+Previous (at M6.2 / c1ca85c):
+- unit 1701 / integration 388 pass / 3 fail / 0 skipped; ledger 43 rows
 - the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING. The count has never
   moved across M4, M5, M6.1, M6.2. NOT skipped, must never be re-skipped.
 - migration 0045 applied 3x via psql, exit 0 each time
@@ -398,7 +468,7 @@ How to reproduce:
 ### MUST_NOW
 NONE.
 
-### MUST_BEFORE_FINAL_CERTIFICATION (mandatory defect, not a blocker for M6)
+### MUST_BEFORE_FINAL_CERTIFICATION (mandatory defect, not a blocker for M7)
 D1 — `src/server/auth/auth-bootstrap-cli.integration.test.ts`: 3 tests fail by
      60s timeout. Pre-existing (CERT-4), first surfaced by 716c6b8. Confirmed
      NOT caused by M4 and NOT caused by M5: neither milestone touches any file
@@ -453,12 +523,39 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     first link — defect 16 one level up).
     NOT covered by either: making a worker EXECUTE A TASK. See M6.3 in NEXT_ACTION.
 
+18. (M6.3) THE OLD EXECUTION PATH STILL HARDWIRES PROVIDERS. Two places, both
+    PRE-EXISTING and NOT introduced by M6.3:
+    `CompositeTaskExecutionDispatcher` branches on the literal worker kinds
+    "hermes" / "openhands" / "digitalos", and `task_execution_results.worker_kind`
+    has a CHECK allow-list containing those same names. M6.3 routes AROUND this —
+    external workers record `workerKind: 'agent'` and carry provider identity in the
+    six identity axes — so the new path adds no hardwiring, but the old one is
+    untouched. Removing it needs a migration widening/neutralising that CHECK plus
+    retiring the kind-based branch, which is its own decision. Related to defect 10
+    (AIResourceCatalog), same root cause: provider names used as routing keys.
+
+19. (M6.3) NOTHING INTEGRATES A WORKER BRANCH. A successful external run leaves a
+    commit on `icos/worker/<missionTask>-a<attempt>-<uniq>` and the task advances to
+    `review_pending`. That is deliberate — an executor able to merge could land
+    unreviewed work — but it means the self-build loop is NOT closed end to end:
+    no reviewer consumes the branch and no integrator merges it. Needs a decision on
+    who merges, under what review evidence, and what happens to abandoned branches
+    (they currently accumulate; only the worktree is cleaned up, never the branch).
+
 17. (M5) NO WORKER-DEATH RECOVERY. A worker that dies MID-EXECUTION is DETECTED
     — its probe evidence expires and it becomes ineligible — but the task it was
     holding is never reassigned: the dispatch attempt stays `dispatched` and its
     capacity stays consumed forever, so that slot is permanently lost.
     Detection without reassignment. This is M7 (automatic recovery) and it is
     the single largest remaining hole in CORE3.
+    M6.3 UPDATE: half the mechanism now exists. `dispatch_attempts` carries
+    `execution_lease_owner` / `execution_lease_until` (migration 0046), an expired
+    lease CAN be taken over, and the old owner is provably fenced out of reporting.
+    What is still missing is the CALLER: nothing sweeps for expired execution leases,
+    so an abandoned attempt stays `dispatched` and its capacity stays consumed. M7 is
+    now "write the sweeper", not "design the lease" — and the M6.2 pattern applies
+    directly: an allow-listed `scheduled_jobs` kind, a grid-aligned idempotency key,
+    and unconditional ignition at startup (decision 0037).
 
 3. Duplicate authority: TWO Postgres mission repositories exist —
    `src/server/repositories/postgres/mission-repository.ts` (wired in
@@ -581,68 +678,60 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — M6.3 (external worker EXECUTION adapter)
+## NEXT_ACTION — M7 (automatic recovery)
 
-M6.1 + M6.2 closed defect 16: worker HEALTH is now real and autonomously
-maintained. That is the smaller half of M6. What remains is the bulk of it, and
-nothing below is done yet:
+M6.3 built the fence; M7 builds the CALLER that uses it. Defect 17 is now half
+solved, and the remaining half is small and well-shaped:
 
-1. PROGRAMMATIC TASK EXECUTION. A worker must be LAUNCHED to do a task, not just
-   pinged. `CommandWorkerProbe` proves the non-interactive process discipline that
-   an executor must reuse — stdin `ignore`, a timeout that KILLS, no shell, bounded
-   stderr, never-rejects-always-returns — but it answers "are you alive", not
-   "do this work".
-2. TASK CONTRACT INJECTION. The prompt / task contract must reach the worker
-   automatically, with no human pasting anything. `autonomousTaskSpecSchema`
-   (src/core/contracts/task.ts) is the existing contract — REUSE it.
-3. OUTPUT AND RESULT CAPTURE. stdout/stderr, exit status, and the commit / artifact
-   / evidence the worker produced. `dispatch_attempts` and
-   `task_execution_results` already exist; check what they can already carry before
-   adding columns.
-4. FAILURE CLASSIFICATION. Session exhaustion, provider failure, and retryable vs
-   permanent must be DISTINCT. A retryable failure has to resume the SAME logical
-   task, not fork a new one. Note the precedent from 0037: "cannot verify" must
-   never be allowed to look like "verified fine".
-5. NO PROVIDER HARDWIRE. Adapters register as DATA, keyed by runtime (0036). No
-   provider name may enter the matcher, router, prober, executor or schema.
-   Worker != Runtime != Model != Provider != Account != CapacitySlot.
-6. ISOLATION. Writer workers get their own worktree; readers may share a checkout
-   only if strictly read-only. `WorktreeManager` already exists — check it first,
-   and note the known worktree-collision history in project memory.
+1. AN EXPIRED-LEASE SWEEPER. `dispatch_attempts` carries `execution_lease_owner` /
+   `execution_lease_until`. A `dispatched` attempt whose lease has expired has been
+   ABANDONED: its runner died mid-execution. Nothing looks for those rows, so the
+   attempt stays `dispatched` forever and the worker's capacity stays consumed.
+   REUSE THE M6.2 PATTERN rather than inventing one: an allow-listed `scheduled_jobs`
+   kind, a grid-aligned idempotency key, self-perpetuating recurrence, and
+   unconditional ignition at startup (decision 0037). Do NOT add a setInterval.
+2. RE-ROUTING. A reclaimed attempt must become a NEW attempt for the same
+   missionTaskId, inheriting `resume_token` and `handoff` via
+   `latestResumableState()` — the machinery exists and is proven, it just has no
+   caller on this path. The failure class to record is LEASE_EXPIRED, which already
+   maps to the fail-closed UNKNOWN_EFFECT.
+3. THE ATTEMPT BUDGET MUST BOUND IT. A worker that dies deterministically must not be
+   retried forever. `attemptBudget` (default 3, set by applyPlan) is the existing
+   bound — check it is actually enforced on this path before relying on it.
+4. CHAOS EVIDENCE. Kill a worker mid-execution, for real, and prove the task
+   completes on another worker exactly once. That is the CORE3 chaos certification,
+   and it is the first proof that the whole chain survives a real fault.
 
-STILL OPEN from M5 for selection (defect 10): `AIResourceCatalog` is a SECOND
-hardcoded source of capability truth with hardcoded provider/model names, and
-`AdaptedAIResourceCatalog` intersects the durable registry with it. Not on the
-dispatch path (`AISelectionEngine` has zero consumers), so "no provider hardwire"
-is PROVEN for routing/probing and OPEN for selection. It belongs to M6.3 or the
-Resource Manager, and it must not be allowed to leak provider names into execution.
+THEN — and this is NOT M7, it needs its own decision (defect 19): NOTHING INTEGRATES
+A WORKER BRANCH. A successful external run leaves a commit on
+`icos/worker/<missionTask>-a<attempt>-<uniq>` and advances the task to
+`review_pending`. Deliberate, but it means the self-build loop is not closed: no
+reviewer consumes the branch, no integrator merges it, and abandoned branches
+accumulate (only the worktree is cleaned up). Decide who merges, on what review
+evidence, and how stale worker branches are reaped.
 
-Then M7 — AUTOMATIC RECOVERY — defect 17, now the largest structural hole: a worker
-that dies mid-execution IS detected (its evidence expires, it becomes ineligible)
-but its task is never reassigned, so the dispatch attempt stays `dispatched` and its
-capacity slot is lost permanently. Detection without reassignment. M7 needs a
-durable execution lease with an expiry; `dispatch_attempts` already has
-claim_token / claim_until for RECOVERY claims — decide DELIBERATELY whether to reuse
-them for execution leases or add a separate concept, and record it as a decision.
+ALSO OPEN, from M6.3 (defect 18) and M5 (defect 10): provider names are still used as
+routing keys in the OLD execution path — `CompositeTaskExecutionDispatcher` branches on
+"hermes"/"openhands"/"digitalos" and `task_execution_results.worker_kind` has a CHECK
+allow-list with the same names. M6.3 routes around it; it did not remove it.
 
 Already available and proven:
-- `container.workerRegistration` — register / probe / deactivate / deregister,
-  fail-closed on registration, capacity declarable at registration;
-- `container.workerHealthProber` — probeAll / expireStaleEvidence / sweep, composed
-  with REAL runtime-keyed adapters (0036) and swept autonomously (0037);
-- `container.workerRegistryStore` — durable truth;
-- `container.capabilityRouter` — live reads, imposed evidence horizon, derived
-  load, per-candidate refusal evidence;
-- `dispatchAttempts.listActiveWorkerAssignments()` — the durable load signal;
-- fail-closed dispatch: no eligible worker -> MissionTask `blocked`; full worker
-  -> back-pressure, task stays ready;
-- the durable scheduler as a recurrence primitive: an allow-listed `kind`, a
-  grid-aligned idempotency key, and unconditional ignition at startup (0037) — the
-  pattern to REUSE for any future periodic sweep, instead of a timer.
+- `container.workerRegistration` / `workerHealthProber` / `workerRegistryStore` /
+  `capabilityRouter` — registration, REAL runtime-keyed probing (0036) swept
+  autonomously (0037), durable truth, live routing with derived load;
+- `WorkerExecutor` + `CommandWorkerExecutor` — the ONE external execution boundary:
+  programmatic launch, contract injection, stdout/stderr/exit capture, the eight-class
+  failure taxonomy, writer worktree isolation, git commit evidence (decision 0038);
+- `dispatchAttempts.acquireExecutionLease` / `holdsExecutionLease` /
+  `recordExecutionFailure` / `latestResumableState` — the fence and the resume state,
+  both certified on real PostgreSQL across restarts;
+- the durable scheduler as a recurrence primitive (0037) — the pattern to reuse for
+  the M7 sweeper;
+- fail-closed dispatch: no eligible worker -> `blocked`; full worker -> back-pressure.
 
-Critical path after M6:
-  M7 automatic recovery -> CORE3 chaos certification ->
-  Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
+Critical path:
+  M7 automatic recovery -> CORE3 chaos certification -> branch integration (defect 19)
+  -> Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
   (D1 must be fixed before that final PASS.)
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
@@ -719,3 +808,30 @@ Then M3 durable readiness/dependency gating (mission N13).
   omitted the non-optional `scheduledJobs`, which only surfaced when startup began
   using it. Casting with `as unknown as Container` defers that discovery to the next
   person; prefer a real in-memory implementation so wiring is observed through rows.
+- AN END-TO-END RUN FINDS DEFECTS UNIT TESTS STRUCTURALLY CANNOT. M6.3's classifier
+  short-circuited on any worker-reported failure, so a classless "I failed" plus
+  "context window exceeded" on stderr was filed as an anonymous FAILED_RETRYABLE. Every
+  unit test passed, because only a REAL worker emitted both signals in the same run.
+  When a component's inputs normally arrive together, test them together.
+- WHEN A TEST FAILS, ASK WHICH OF THE TWO IS WRONG BEFORE EDITING EITHER. In M6.3 the
+  same run produced one wrong assertion (a success advances a task to `review_pending`,
+  not `succeeded` — ICOS does not let work self-integrate) and one real defect (the
+  precedence bug above). Reflexively "fixing" the code would have broken the review
+  invariant; reflexively fixing the test would have shipped the defect.
+- EXTRACT A SHARED RUNNER INSTEAD OF COPYING ONE. M6.3 needed M6.1's non-interactive
+  process discipline plus stdout. Copying would have produced two runners, and the one
+  that drifts is the one that forgets to close stdin — a hang, which is worse than a
+  failure because it holds a capacity slot and never yields a verdict. The probe now
+  delegates; its 31 tests passed unchanged, which is what made the extraction safe.
+- DO NOT WRITE AN OBSERVATION INTO THE THING BEING OBSERVED. The worker task contract
+  was nearly written into the worker's own worktree, where it would have appeared in
+  `git status` and been reported as a file the worker changed.
+- A DRIZZLE `sql` FRAGMENT WITH A `Date` BOUND PARAM FAILS AT RUNTIME, not at compile
+  time (`The "string" argument must be of type string ... Received an instance of
+  Date`). Use the typed operators (`gte`, `lt`) for timestamp comparisons.
+- ADDING A METHOD TO A REPOSITORY CONTRACT IS THE CHEAPEST WAY TO FIND EVERY
+  IMPLEMENTATION. `tsc` named all of them — both repositories and every test stub — so
+  parity was enforced by the compiler rather than by remembering.
+- APPLYING A MIGRATION WITH psql DOES NOT RECORD IT IN THE DRIZZLE LEDGER. psql proves
+  idempotence; `pnpm run test:db:setup` (which calls `migrate()`) is what writes the
+  `__drizzle_migrations` row. Do both, then `db:verify-ledger <url>`.
