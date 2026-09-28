@@ -69,7 +69,9 @@ export class RuntimeControlGuard {
     const flags = await this.flagDecision((f) => f.dispatchEnabled, "DISPATCH_DISABLED");
     if (!flags.allowed || !missionId) return flags;
     try {
-      return (await this.store.isHeld(missionId)) ? { allowed: false, reason: "MISSION_HELD" } : flags;
+      return (await this.store.isHeld(missionId))
+        ? { allowed: false, reason: "MISSION_HELD" }
+        : flags;
     } catch {
       return { allowed: false, reason: "CONTROL_STATE_UNAVAILABLE" };
     }
@@ -115,7 +117,8 @@ export class ControlGatedDispatcher implements TaskExecutionDispatcher {
     digitalosFacadePath?: string,
   ): Promise<TaskExecutionDispatchResult> {
     const decision = await this.guard.dispatch(input.missionId);
-    if (!decision.allowed) throw new ControlHeldError(decision.reason, `dispatch of task ${input.taskId}`);
+    if (!decision.allowed)
+      throw new ControlHeldError(decision.reason, `dispatch of task ${input.taskId}`);
     return this.inner.dispatch(input, digitalosFacadePath);
   }
 }

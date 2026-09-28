@@ -42,7 +42,9 @@ export class PostgresControlStore implements ControlStore {
 
   async transaction<T>(commandId: string, fn: (tx: ControlTx) => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`control:${commandId}`}, 0))`);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`control:${commandId}`}, 0))`,
+      );
       return fn(this.txOps(tx as unknown as Executor));
     });
   }
@@ -69,11 +71,16 @@ export class PostgresControlStore implements ControlStore {
           });
       },
       lockVersion: async (kind, id) => {
-        await tx.insert(controlStateVersions).values({ targetKind: kind, targetId: id, version: 0 }).onConflictDoNothing();
+        await tx
+          .insert(controlStateVersions)
+          .values({ targetKind: kind, targetId: id, version: 0 })
+          .onConflictDoNothing();
         const rows = await tx
           .select({ version: controlStateVersions.version })
           .from(controlStateVersions)
-          .where(and(eq(controlStateVersions.targetKind, kind), eq(controlStateVersions.targetId, id)))
+          .where(
+            and(eq(controlStateVersions.targetKind, kind), eq(controlStateVersions.targetId, id)),
+          )
           .for("update");
         return rows[0].version;
       },
@@ -81,11 +88,15 @@ export class PostgresControlStore implements ControlStore {
         await tx
           .update(controlStateVersions)
           .set({ version, updatedAt: new Date() })
-          .where(and(eq(controlStateVersions.targetKind, kind), eq(controlStateVersions.targetId, id)));
+          .where(
+            and(eq(controlStateVersions.targetKind, kind), eq(controlStateVersions.targetId, id)),
+          );
       },
       isHeld: (missionId) => isHeld(tx, missionId),
       setHold: async (missionId, commandId, at) => {
-        await tx.insert(missionControlHolds).values({ missionId, heldByCommandId: commandId, heldAt: new Date(at) });
+        await tx
+          .insert(missionControlHolds)
+          .values({ missionId, heldByCommandId: commandId, heldAt: new Date(at) });
       },
       clearHold: async (missionId) => {
         await tx.delete(missionControlHolds).where(eq(missionControlHolds.missionId, missionId));
@@ -107,15 +118,24 @@ export class PostgresControlStore implements ControlStore {
         if (updated.length !== 1) throw new Error("RUNTIME_CONTROL_FLAGS_MISSING");
       },
       checkProof: async (tokenHash, userId, sessionId, now): Promise<ProofCheck> => {
-        const [p] = await tx.select().from(controlReauthProofs).where(eq(controlReauthProofs.tokenHash, tokenHash));
-        if (!p || p.userId !== userId || p.sessionId !== sessionId || p.consumedAt) return "invalid";
+        const [p] = await tx
+          .select()
+          .from(controlReauthProofs)
+          .where(eq(controlReauthProofs.tokenHash, tokenHash));
+        if (!p || p.userId !== userId || p.sessionId !== sessionId || p.consumedAt)
+          return "invalid";
         return p.expiresAt.getTime() <= now.getTime() ? "expired" : "valid";
       },
       consumeProof: async (tokenHash, at) => {
         const rows = await tx
           .update(controlReauthProofs)
           .set({ consumedAt: new Date(at) })
-          .where(and(eq(controlReauthProofs.tokenHash, tokenHash), isNull(controlReauthProofs.consumedAt)))
+          .where(
+            and(
+              eq(controlReauthProofs.tokenHash, tokenHash),
+              isNull(controlReauthProofs.consumedAt),
+            ),
+          )
           .returning({ id: controlReauthProofs.id });
         return rows.length === 1;
       },
@@ -143,13 +163,20 @@ export class PostgresControlStore implements ControlStore {
     const rows = await this.db
       .select()
       .from(controlStateVersions)
-      .where(and(eq(controlStateVersions.targetKind, kind), inArray(controlStateVersions.targetId, [...ids])));
+      .where(
+        and(
+          eq(controlStateVersions.targetKind, kind),
+          inArray(controlStateVersions.targetId, [...ids]),
+        ),
+      );
     for (const r of rows) out.set(r.targetId, r.version);
     return out;
   }
 
   async listHeldMissionIds() {
-    return (await this.db.select({ id: missionControlHolds.missionId }).from(missionControlHolds)).map((r) => r.id);
+    return (
+      await this.db.select({ id: missionControlHolds.missionId }).from(missionControlHolds)
+    ).map((r) => r.id);
   }
 
   async insertReauthProof(r: ReauthProofRecord) {
@@ -165,7 +192,10 @@ export class PostgresControlStore implements ControlStore {
 }
 
 async function readCommand(db: Executor, commandId: string): Promise<CommandRecord | null> {
-  const [row] = await db.select().from(controlCommands).where(eq(controlCommands.commandId, commandId));
+  const [row] = await db
+    .select()
+    .from(controlCommands)
+    .where(eq(controlCommands.commandId, commandId));
   return row ? fromRow(row) : null;
 }
 

@@ -70,7 +70,8 @@ export class InMemoryControlStore implements ControlStore {
       setFlags: async (f) => void (s.flags = { ...f }),
       checkProof: async (hash, userId, sessionId, now): Promise<ProofCheck> => {
         const p = s.proofs.get(hash);
-        if (!p || p.userId !== userId || p.sessionId !== sessionId || p.consumedAt) return "invalid";
+        if (!p || p.userId !== userId || p.sessionId !== sessionId || p.consumedAt)
+          return "invalid";
         return Date.parse(p.expiresAt) <= now.getTime() ? "expired" : "valid";
       },
       consumeProof: async (hash, at) => {

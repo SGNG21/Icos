@@ -31,14 +31,26 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
   const a = createDatabase(TEST_DATABASE_URL);
   const b = createDatabase(TEST_DATABASE_URL); // a second "process"
   const USER = "u-control-owner";
-  const session: AuthenticatedSession = { user: { id: USER, email: "owner@icos.test", status: "active" }, roles: ["owner"] };
+  const session: AuthenticatedSession = {
+    user: { id: USER, email: "owner@icos.test", status: "active" },
+    roles: ["owner"],
+  };
   const actor: CommandActor = { session, sessionId: "sess-1", sessionIssuedAt: new Date() };
 
   const missionStatus = new Map<string, Mission["status"]>();
   const effects: ControlEffects = {
     readMission: async (id) => {
       const [row] = await a.db.select().from(missions).where(eq(missions.id, id));
-      return row ? ({ id: row.id, title: row.title, objective: "o", status: missionStatus.get(id) ?? "running", createdAt: new Date(), updatedAt: new Date() } as Mission) : null;
+      return row
+        ? ({
+            id: row.id,
+            title: row.title,
+            objective: "o",
+            status: missionStatus.get(id) ?? "running",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          } as Mission)
+        : null;
     },
     missionInScope: async () => true,
     cancelMission: async (id, from) => {
@@ -81,14 +93,34 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
     await a.db.execute(sql`DELETE FROM "user" WHERE id = ${USER}`);
     await a.db
       .insert(runtimeControlFlags)
-      .values({ id: "global", safeMode: false, dispatchEnabled: true, integrationEnabled: true, externalActionsEnabled: true })
+      .values({
+        id: "global",
+        safeMode: false,
+        dispatchEnabled: true,
+        integrationEnabled: true,
+        externalActionsEnabled: true,
+      })
       .onConflictDoUpdate({
         target: runtimeControlFlags.id,
-        set: { safeMode: false, dispatchEnabled: true, integrationEnabled: true, externalActionsEnabled: true },
+        set: {
+          safeMode: false,
+          dispatchEnabled: true,
+          integrationEnabled: true,
+          externalActionsEnabled: true,
+        },
       });
     await a.db.insert(user).values({ id: USER, name: "Owner", email: "owner@icos.test" });
     const now = new Date();
-    await a.db.insert(missions).values({ id: "mission-ctl", title: "Control", objective: "o", status: "running", createdAt: now, updatedAt: now } as never);
+    await a.db
+      .insert(missions)
+      .values({
+        id: "mission-ctl",
+        title: "Control",
+        objective: "o",
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+      } as never);
     missionStatus.clear();
   });
 
@@ -119,7 +151,10 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
   });
 
   it("persists holds, versions and results across a restart (new pool, new store, new bus)", async () => {
-    const first = await new ControlCommandBus({ store: new PostgresControlStore(a.db), effects }).execute(actor, pause());
+    const first = await new ControlCommandBus({
+      store: new PostgresControlStore(a.db),
+      effects,
+    }).execute(actor, pause());
     expect(first.status).toBe("EXECUTED");
 
     const reborn = createDatabase(TEST_DATABASE_URL);
@@ -127,10 +162,20 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
       const store = new PostgresControlStore(reborn.db);
       expect(await store.isHeld("mission-ctl")).toBe(true);
       expect((await store.readVersions("mission", ["mission-ctl"])).get("mission-ctl")).toBe(1);
-      expect(await new RuntimeControlGuard(store).dispatch("mission-ctl")).toEqual({ allowed: false, reason: "MISSION_HELD" });
+      expect(await new RuntimeControlGuard(store).dispatch("mission-ctl")).toEqual({
+        allowed: false,
+        reason: "MISSION_HELD",
+      });
       const bus = new ControlCommandBus({ store, effects });
-      expect(await bus.get(session, first.commandId)).toMatchObject({ status: "EXECUTED", replayed: true, version: 1 });
-      const resumed = await bus.execute(actor, pause({ type: "RESUME_MISSION", expectedVersion: 1 }));
+      expect(await bus.get(session, first.commandId)).toMatchObject({
+        status: "EXECUTED",
+        replayed: true,
+        version: 1,
+      });
+      const resumed = await bus.execute(
+        actor,
+        pause({ type: "RESUME_MISSION", expectedVersion: 1 }),
+      );
       expect(resumed).toMatchObject({ status: "EXECUTED", version: 2 });
       expect(await store.isHeld("mission-ctl")).toBe(false);
     } finally {
@@ -139,9 +184,19 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
   });
 
   it("writes the audit entry in the same transaction as the command record", async () => {
-    const out = await new ControlCommandBus({ store: new PostgresControlStore(a.db), effects }).execute(actor, pause());
-    const [row] = await a.db.select().from(auditEntries).where(eq(auditEntries.id, out.auditEntryId!));
-    expect(row).toMatchObject({ eventType: "control.command.executed", actorType: "human", actorLabel: USER });
+    const out = await new ControlCommandBus({
+      store: new PostgresControlStore(a.db),
+      effects,
+    }).execute(actor, pause());
+    const [row] = await a.db
+      .select()
+      .from(auditEntries)
+      .where(eq(auditEntries.id, out.auditEntryId!));
+    expect(row).toMatchObject({
+      eventType: "control.command.executed",
+      actorType: "human",
+      actorLabel: USER,
+    });
     expect(row.details).toMatchObject({ commandId: out.commandId, status: "EXECUTED", version: 1 });
 
     // A failure after the audit insert rolls BOTH back.
@@ -160,13 +215,20 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    expect(await a.db.select().from(auditEntries).where(eq(auditEntries.id, rollbackId))).toHaveLength(0);
+    expect(
+      await a.db.select().from(auditEntries).where(eq(auditEntries.id, rollbackId)),
+    ).toHaveLength(0);
   });
 
   it("consumes a re-auth proof exactly once, even under concurrency", async () => {
     const store = new PostgresControlStore(a.db);
     const reauth = new ReauthService(store, { verifyPassword: async () => true });
-    const issued = await reauth.issue({ headers: new Headers(), userId: USER, sessionId: actor.sessionId, password: "x" });
+    const issued = await reauth.issue({
+      headers: new Headers(),
+      userId: USER,
+      sessionId: actor.sessionId,
+      password: "x",
+    });
     if (!issued.ok) throw new Error("issue");
     const cancel = (key = randomUUID()): ControlCommandRequest => ({
       idempotencyKey: key,
@@ -178,7 +240,10 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
     });
     const [x, y] = await Promise.all([
       new ControlCommandBus({ store, effects }).execute(actor, cancel()),
-      new ControlCommandBus({ store: new PostgresControlStore(b.db), effects }).execute(actor, cancel()),
+      new ControlCommandBus({ store: new PostgresControlStore(b.db), effects }).execute(
+        actor,
+        cancel(),
+      ),
     ]);
     expect([x.status, y.status].sort()).toEqual(["EXECUTED", "REJECTED"]);
     const rows = await a.db.execute(sql`select token_hash, consumed_at from control_reauth_proofs`);
@@ -191,8 +256,14 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
     await a.db.delete(runtimeControlFlags);
     const guard = new RuntimeControlGuard(new PostgresControlStore(a.db));
     expect(await guard.dispatch()).toEqual({ allowed: false, reason: "CONTROL_STATE_UNAVAILABLE" });
-    expect(await guard.integration()).toEqual({ allowed: false, reason: "CONTROL_STATE_UNAVAILABLE" });
-    expect(await guard.externalAction()).toEqual({ allowed: false, reason: "CONTROL_STATE_UNAVAILABLE" });
+    expect(await guard.integration()).toEqual({
+      allowed: false,
+      reason: "CONTROL_STATE_UNAVAILABLE",
+    });
+    expect(await guard.externalAction()).toEqual({
+      allowed: false,
+      reason: "CONTROL_STATE_UNAVAILABLE",
+    });
   });
 
   it("enters and leaves safe mode durably", async () => {

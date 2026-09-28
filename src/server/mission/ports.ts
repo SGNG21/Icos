@@ -82,7 +82,21 @@ export interface MissionRepository {
     taskId: string,
     status: MissionTask["status"],
   ): Promise<void>;
+  /**
+   * Unconditional status write. `cancelled` is terminal (machine) and sticky:
+   * implementations never move a mission OUT of `cancelled` (decision 0044).
+   */
   updateMissionStatus(missionId: string, status: Mission["status"]): Promise<void>;
+  /**
+   * Compare-and-set (decision 0044): writes `to` only if the status is still
+   * `from`; false if it changed underneath. Optional like replacePlan: callers
+   * that need it (the control command bus) fail closed without it.
+   */
+  transitionMissionStatusIf?(
+    missionId: string,
+    from: Mission["status"],
+    to: Mission["status"],
+  ): Promise<boolean>;
   deleteMission(missionId: string): Promise<void>;
   updateMission(missionId: string, mission: Mission): Promise<void>;
   updateMissionTaskDependsOn(taskId: string, dependsOn: string[]): Promise<void>;

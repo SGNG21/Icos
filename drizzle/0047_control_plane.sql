@@ -1,6 +1,6 @@
 -- 0047_control_plane
 --
--- Canonical control plane (decision 0043; cockpit BR-10, BR-11, BR-12, BR-18).
+-- Canonical control plane (decision 0044; cockpit BR-10, BR-11, BR-12, BR-18).
 --
 -- WHAT THIS ADDS (all ADDITIVE, all IF NOT EXISTS):
 --   control_commands          one row per control attempt that passed authentication:

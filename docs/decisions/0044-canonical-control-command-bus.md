@@ -1,6 +1,7 @@
 # 0044: One control command bus, durable runtime flags, and admission holds
 
 ## Status
+
 Accepted (owner-validated design, 2026-09-28)
 
 ## Context
@@ -64,12 +65,12 @@ cancelled whatever the version says).
 
 ### 3. Risk and re-authentication (BR-18)
 
-| Risk | Commands | Requirement |
-|---|---|---|
-| LOW | PAUSE_MISSION | authenticated + authorized |
-| MEDIUM | RESUME_MISSION, DISABLE_WORKER, ENTER_SAFE_MODE | session issued < 12 h ago |
-| HIGH | ENABLE_WORKER, CANCEL_MISSION | password re-auth proof ≤ 5 min |
-| CRITICAL | EXIT_SAFE_MODE | re-auth proof ≤ 5 min + typed confirmation of the target |
+| Risk     | Commands                                        | Requirement                                              |
+| -------- | ----------------------------------------------- | -------------------------------------------------------- |
+| LOW      | PAUSE_MISSION                                   | authenticated + authorized                               |
+| MEDIUM   | RESUME_MISSION, DISABLE_WORKER, ENTER_SAFE_MODE | session issued < 12 h ago                                |
+| HIGH     | ENABLE_WORKER, CANCEL_MISSION                   | password re-auth proof ≤ 5 min                           |
+| CRITICAL | EXIT_SAFE_MODE                                  | re-auth proof ≤ 5 min + typed confirmation of the target |
 
 `POST /api/control/reauth` verifies the password server-side (Better Auth `verifyPassword`
 against the CURRENT session) and returns a random 256-bit token. Only its SHA-256 is stored,
@@ -98,7 +99,8 @@ Guards sit where work is ADMITTED, and hold it instead of failing it:
 - `SupervisorService.reconcilePreparedDispatches`: held attempts stay PREPARED;
 - recovery sweeper orphan redispatch: deferred `CONTROL_HELD` (re-examined later);
 - correction dispatch: the attempt is prepared and left PREPARED for reconciliation;
-- `create-and-dispatch-task`: returns `dispatch_held`, the task is not failed.
+- `create-and-dispatch-task`: the dispatcher backstop refuses; the Task stays `draft` (this use case
+  never fails a Task on dispatch refusal) and the caller is told the control plane held it.
 
 The container's `taskExecution` is wrapped by `ControlGatedDispatcher`, which throws
 `ControlHeldError` if a dispatch reaches it while dispatch is not allowed — the last line of

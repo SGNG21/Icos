@@ -10,7 +10,12 @@ import {
   type ReauthStatus,
   type RejectionCode,
 } from "@/core/control/contracts";
-import { authRequirement, evaluateAuthFreshness, requiredPermission, type ProofCheck } from "@/core/control/policy";
+import {
+  authRequirement,
+  evaluateAuthFreshness,
+  requiredPermission,
+  type ProofCheck,
+} from "@/core/control/policy";
 import { hasPermission, type AuthenticatedSession } from "@/core/identity";
 import { isValidMissionTransition } from "@/core/mission/machine";
 
@@ -64,9 +69,14 @@ export class ControlCommandBus {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async execute(actor: CommandActor, request: ControlCommandRequest): Promise<ControlCommandResult> {
+  async execute(
+    actor: CommandActor,
+    request: ControlCommandRequest,
+  ): Promise<ControlCommandResult> {
     const commandId = deriveCommandId(actor.session.user.id, request.idempotencyKey);
-    const admission = await this.deps.store.transaction(commandId, (tx) => this.admit(tx, actor, request, commandId));
+    const admission = await this.deps.store.transaction(commandId, (tx) =>
+      this.admit(tx, actor, request, commandId),
+    );
     if (admission.kind === "done") return admission.result;
     return this.applyExternalEffect(admission.record, admission.target, admission.from);
   }
@@ -115,7 +125,10 @@ export class ControlCommandBus {
           result: {
             ...toResult(existing, false),
             status: "REJECTED",
-            rejection: { code: "IDEMPOTENCY_KEY_REUSED", message: "This idempotency key was already used for a different command." },
+            rejection: {
+              code: "IDEMPOTENCY_KEY_REUSED",
+              message: "This idempotency key was already used for a different command.",
+            },
             auditEntryId: auditId,
           },
         };
@@ -144,7 +157,11 @@ export class ControlCommandBus {
       completedAt: null,
     };
 
-    const reject = async (code: RejectionCode, message: string, extra: Partial<CommandRecord> = {}): Promise<Admission> => {
+    const reject = async (
+      code: RejectionCode,
+      message: string,
+      extra: Partial<CommandRecord> = {},
+    ): Promise<Admission> => {
       const final: CommandRecord = {
         ...record,
         ...extra,
@@ -155,7 +172,9 @@ export class ControlCommandBus {
         completedAt: at,
       };
       await tx.saveCommand(final);
-      await tx.appendAudit(auditEntry(final.auditEntryId!, "control.command.rejected", userId, at, details(final)));
+      await tx.appendAudit(
+        auditEntry(final.auditEntryId!, "control.command.rejected", userId, at, details(final)),
+      );
       return { kind: "done", result: toResult(final, false) };
     };
 
@@ -168,9 +187,13 @@ export class ControlCommandBus {
     }
 
     // Target existence + operational scope (out of scope is indistinguishable from unknown).
-    const mission = target.kind === "mission" ? await this.deps.effects.readMission(target.id) : null;
+    const mission =
+      target.kind === "mission" ? await this.deps.effects.readMission(target.id) : null;
     const worker = target.kind === "worker" ? await this.deps.effects.readWorker(target.id) : null;
-    if (target.kind === "mission" && (!mission || !(await this.deps.effects.missionInScope(target.id, actor.session)))) {
+    if (
+      target.kind === "mission" &&
+      (!mission || !(await this.deps.effects.missionInScope(target.id, actor.session)))
+    ) {
       return reject("TARGET_NOT_FOUND", "Mission not found.");
     }
     if (target.kind === "worker" && !worker) return reject("TARGET_NOT_FOUND", "Worker not found.");
@@ -179,7 +202,9 @@ export class ControlCommandBus {
     const requirement = authRequirement(spec.risk);
     const proofHash = request.reauthProof ? sha256(request.reauthProof) : null;
     const proof: ProofCheck =
-      requirement.reauth && proofHash ? await tx.checkProof(proofHash, userId, actor.sessionId, now) : "missing";
+      requirement.reauth && proofHash
+        ? await tx.checkProof(proofHash, userId, actor.sessionId, now)
+        : "missing";
     const freshness = evaluateAuthFreshness({
       risk: spec.risk,
       sessionIssuedAt: actor.sessionIssuedAt,
@@ -188,14 +213,20 @@ export class ControlCommandBus {
       confirmationOk: request.confirmation === confirmationPhrase(request.type, target),
     });
     if (!freshness.ok) {
-      return reject(freshness.code, rejectionMessage(freshness.code, request.type, target), { reauth: freshness.reauth });
+      return reject(freshness.code, rejectionMessage(freshness.code, request.type, target), {
+        reauth: freshness.reauth,
+      });
     }
     record.reauth = freshness.reauth;
 
     // BR-11: optimistic concurrency on the durable target version, under a row lock.
     const version = await tx.lockVersion(target.kind, target.id);
     if (version !== request.expectedVersion) {
-      return reject("VERSION_CONFLICT", `Target is at version ${version}, not ${request.expectedVersion}.`, { version });
+      return reject(
+        "VERSION_CONFLICT",
+        `Target is at version ${version}, not ${request.expectedVersion}.`,
+        { version },
+      );
     }
 
     // State validation against canonical + control state.
@@ -204,33 +235,44 @@ export class ControlCommandBus {
       case "PAUSE_MISSION":
         if (["succeeded", "failed", "cancelled"].includes(mission!.status))
           return reject("INVALID_TRANSITION", `Mission is ${mission!.status}.`, { version });
-        if (await tx.isHeld(target.id)) return reject("INVALID_TRANSITION", "Mission is already paused.", { version });
+        if (await tx.isHeld(target.id))
+          return reject("INVALID_TRANSITION", "Mission is already paused.", { version });
         break;
       case "RESUME_MISSION":
-        if (!(await tx.isHeld(target.id))) return reject("INVALID_TRANSITION", "Mission is not paused.", { version });
+        if (!(await tx.isHeld(target.id)))
+          return reject("INVALID_TRANSITION", "Mission is not paused.", { version });
         break;
       case "CANCEL_MISSION":
         if (!isValidMissionTransition(mission!.status, "cancelled"))
-          return reject("INVALID_TRANSITION", `A ${mission!.status} mission cannot be cancelled.`, { version });
+          return reject("INVALID_TRANSITION", `A ${mission!.status} mission cannot be cancelled.`, {
+            version,
+          });
         from = mission!.status;
         break;
       case "DISABLE_WORKER":
-        if (worker!.status !== "active") return reject("INVALID_TRANSITION", `Worker is ${worker!.status}.`, { version });
+        if (worker!.status !== "active")
+          return reject("INVALID_TRANSITION", `Worker is ${worker!.status}.`, { version });
         break;
       case "ENABLE_WORKER":
-        if (worker!.status === "active") return reject("INVALID_TRANSITION", "Worker is already active.", { version });
+        if (worker!.status === "active")
+          return reject("INVALID_TRANSITION", "Worker is already active.", { version });
         break;
       case "ENTER_SAFE_MODE":
-        if ((await tx.getFlags()).safeMode) return reject("INVALID_TRANSITION", "Safe mode is already on.", { version });
+        if ((await tx.getFlags()).safeMode)
+          return reject("INVALID_TRANSITION", "Safe mode is already on.", { version });
         break;
       case "EXIT_SAFE_MODE":
-        if (!(await tx.getFlags()).safeMode) return reject("INVALID_TRANSITION", "Safe mode is off.", { version });
+        if (!(await tx.getFlags()).safeMode)
+          return reject("INVALID_TRANSITION", "Safe mode is off.", { version });
         break;
     }
 
     // Single-use proof, consumed only by an admitted command.
     if (requirement.reauth && !(await tx.consumeProof(proofHash!, at))) {
-      return reject("REAUTH_INVALID", "Re-authentication proof was already used.", { version, reauth: "INVALID" });
+      return reject("REAUTH_INVALID", "Re-authentication proof was already used.", {
+        version,
+        reauth: "INVALID",
+      });
     }
 
     const newVersion = version + 1;
@@ -247,14 +289,23 @@ export class ControlCommandBus {
         completedAt: at,
       };
       await tx.saveCommand(final);
-      await tx.appendAudit(auditEntry(final.auditEntryId!, "control.command.executed", userId, at, details(final)));
+      await tx.appendAudit(
+        auditEntry(final.auditEntryId!, "control.command.executed", userId, at, details(final)),
+      );
       return { kind: "done", result: toResult(final, false) };
     }
 
     // Canonical-authority effects: record ADMITTED first, act after commit.
-    const admitted: CommandRecord = { ...record, status: "ADMITTED", version: newVersion, auditEntryId: `ctl-${commandId}-admitted` };
+    const admitted: CommandRecord = {
+      ...record,
+      status: "ADMITTED",
+      version: newVersion,
+      auditEntryId: `ctl-${commandId}-admitted`,
+    };
     await tx.saveCommand(admitted);
-    await tx.appendAudit(auditEntry(admitted.auditEntryId!, "control.command.admitted", userId, at, details(admitted)));
+    await tx.appendAudit(
+      auditEntry(admitted.auditEntryId!, "control.command.admitted", userId, at, details(admitted)),
+    );
     return { kind: "admitted", record: admitted, target, from };
   }
 
@@ -285,7 +336,11 @@ export class ControlCommandBus {
 
   // ---------------------------------------------------------------- execution
 
-  private async applyExternalEffect(record: CommandRecord, target: ControlTarget, from?: string): Promise<ControlCommandResult> {
+  private async applyExternalEffect(
+    record: CommandRecord,
+    target: ControlTarget,
+    from?: string,
+  ): Promise<ControlCommandResult> {
     let applied: boolean;
     try {
       switch (record.type) {
@@ -310,7 +365,11 @@ export class ControlCommandBus {
     return this.complete(record, applied ? "EXECUTED" : "FAILED", false);
   }
 
-  private async complete(record: CommandRecord, status: "EXECUTED" | "FAILED", replayed: boolean): Promise<ControlCommandResult> {
+  private async complete(
+    record: CommandRecord,
+    status: "EXECUTED" | "FAILED",
+    replayed: boolean,
+  ): Promise<ControlCommandResult> {
     const at = this.now().toISOString();
     return this.deps.store.transaction(record.commandId, async (tx) => {
       const current = await tx.getCommand(record.commandId);
@@ -319,13 +378,20 @@ export class ControlCommandBus {
         ...current,
         status,
         rejectionCode: status === "FAILED" ? "INVALID_TRANSITION" : null,
-        rejectionMessage: status === "FAILED" ? "The target changed state before the command could apply." : null,
+        rejectionMessage:
+          status === "FAILED" ? "The target changed state before the command could apply." : null,
         auditEntryId: `ctl-${record.commandId}-${status.toLowerCase()}`,
         completedAt: at,
       };
       await tx.saveCommand(final);
       await tx.appendAudit(
-        auditEntry(final.auditEntryId!, status === "EXECUTED" ? "control.command.executed" : "control.command.failed", final.actorUserId, at, details(final)),
+        auditEntry(
+          final.auditEntryId!,
+          status === "EXECUTED" ? "control.command.executed" : "control.command.failed",
+          final.actorUserId,
+          at,
+          details(final),
+        ),
       );
       return toResult(final, replayed);
     });
@@ -352,7 +418,11 @@ export class ControlCommandBus {
 
 // ---------------------------------------------------------------- helpers
 
-function rejectionMessage(code: RejectionCode, type: ControlCommandRequest["type"], target: ControlTarget): string {
+function rejectionMessage(
+  code: RejectionCode,
+  type: ControlCommandRequest["type"],
+  target: ControlTarget,
+): string {
   switch (code) {
     case "SESSION_TOO_OLD":
       return "This command needs a session younger than 12 hours. Sign in again.";
@@ -392,7 +462,14 @@ function auditEntry(
   at: string,
   detail: Record<string, string | number | null>,
 ): AuditEntry {
-  return { id, eventType, actor: { kind: "human", id: userId }, details: detail, occurredAt: at, createdAt: at };
+  return {
+    id,
+    eventType,
+    actor: { kind: "human", id: userId },
+    details: detail,
+    occurredAt: at,
+    createdAt: at,
+  };
 }
 
 export function toResult(r: CommandRecord, replayed: boolean): ControlCommandResult {
@@ -403,7 +480,9 @@ export function toResult(r: CommandRecord, replayed: boolean): ControlCommandRes
     riskClass: r.riskClass,
     status: r.status === "ADMITTED" ? "UNKNOWN_EXECUTION_STATE" : r.status,
     reauth: r.reauth as ReauthStatus,
-    rejection: r.rejectionCode ? { code: r.rejectionCode, message: r.rejectionMessage ?? r.rejectionCode } : null,
+    rejection: r.rejectionCode
+      ? { code: r.rejectionCode, message: r.rejectionMessage ?? r.rejectionCode }
+      : null,
     expectedVersion: r.expectedVersion,
     version: r.version,
     auditEntryId: r.auditEntryId,

@@ -27,7 +27,12 @@ export class ReauthService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async issue(input: { headers: Headers; userId: string; sessionId: string; password: string }): Promise<ReauthResult> {
+  async issue(input: {
+    headers: Headers;
+    userId: string;
+    sessionId: string;
+    password: string;
+  }): Promise<ReauthResult> {
     let verified = false;
     try {
       verified = await this.verifier.verifyPassword(input.headers, input.password);

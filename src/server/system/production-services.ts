@@ -138,6 +138,8 @@ export function composeAutonomyRuntime(container: Container): {
      */
     container.workspaceExecutionCoordinator,
     container.capabilityRouter,
+    /* Decision 0044: paused missions / safe mode admit no new work. */
+    container.control?.guard,
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,
@@ -268,6 +270,7 @@ function createRecoveryScheduler(
         dispatchAttempts: container.dispatchAttempts,
         digitalosFacadePath: env.DIGITALOS_FACADE_PATH,
         probe: new TemporalWorkflowProbe(env.TEMPORAL_ADDRESS, env.TEMPORAL_DISPATCH_TIMEOUT_MS),
+        control: container.control?.guard,
       })
     : null;
 

@@ -43,13 +43,33 @@ export interface AuthRequirement {
 export function authRequirement(risk: RiskClass): AuthRequirement {
   switch (risk) {
     case "LOW":
-      return { maxSessionAgeMs: null, reauth: false, typedConfirmation: false, secondFactor: "not_enforced" };
+      return {
+        maxSessionAgeMs: null,
+        reauth: false,
+        typedConfirmation: false,
+        secondFactor: "not_enforced",
+      };
     case "MEDIUM":
-      return { maxSessionAgeMs: MEDIUM_MAX_SESSION_AGE_MS, reauth: false, typedConfirmation: false, secondFactor: "not_enforced" };
+      return {
+        maxSessionAgeMs: MEDIUM_MAX_SESSION_AGE_MS,
+        reauth: false,
+        typedConfirmation: false,
+        secondFactor: "not_enforced",
+      };
     case "HIGH":
-      return { maxSessionAgeMs: null, reauth: true, typedConfirmation: false, secondFactor: "not_enforced" };
+      return {
+        maxSessionAgeMs: null,
+        reauth: true,
+        typedConfirmation: false,
+        secondFactor: "not_enforced",
+      };
     case "CRITICAL":
-      return { maxSessionAgeMs: null, reauth: true, typedConfirmation: true, secondFactor: "not_enforced" };
+      return {
+        maxSessionAgeMs: null,
+        reauth: true,
+        typedConfirmation: true,
+        secondFactor: "not_enforced",
+      };
   }
 }
 
@@ -67,11 +87,15 @@ export function evaluateAuthFreshness(input: {
   confirmationOk: boolean;
 }): { ok: true; reauth: ReauthStatus } | { ok: false; code: RejectionCode; reauth: ReauthStatus } {
   const req = authRequirement(input.risk);
-  if (req.maxSessionAgeMs !== null && input.now.getTime() - input.sessionIssuedAt.getTime() > req.maxSessionAgeMs) {
+  if (
+    req.maxSessionAgeMs !== null &&
+    input.now.getTime() - input.sessionIssuedAt.getTime() > req.maxSessionAgeMs
+  ) {
     return { ok: false, code: "SESSION_TOO_OLD", reauth: "NOT_REQUIRED" };
   }
   if (!req.reauth) return { ok: true, reauth: "NOT_REQUIRED" };
-  if (req.secondFactor === "required") return { ok: false, code: "REAUTH_REQUIRED", reauth: "REQUIRED" };
+  if (req.secondFactor === "required")
+    return { ok: false, code: "REAUTH_REQUIRED", reauth: "REQUIRED" };
   switch (input.proof) {
     case "missing":
       return { ok: false, code: "REAUTH_REQUIRED", reauth: "REQUIRED" };
@@ -91,10 +115,20 @@ export function evaluateAuthFreshness(input: {
 /** A missing (unreadable) flags row means everything is off. */
 export function effectiveFlags(stored: RuntimeFlags | null): RuntimeFlags {
   if (!stored) {
-    return { safeMode: true, dispatchEnabled: false, integrationEnabled: false, externalActionsEnabled: false };
+    return {
+      safeMode: true,
+      dispatchEnabled: false,
+      integrationEnabled: false,
+      externalActionsEnabled: false,
+    };
   }
   if (stored.safeMode) {
-    return { safeMode: true, dispatchEnabled: false, integrationEnabled: false, externalActionsEnabled: false };
+    return {
+      safeMode: true,
+      dispatchEnabled: false,
+      integrationEnabled: false,
+      externalActionsEnabled: false,
+    };
   }
   return stored;
 }

@@ -1,3 +1,4 @@
+import { ControlGatedDispatcher } from "@/server/control/runtime-control";
 import { describe, expect, it, vi } from "vitest";
 
 import { demoActions } from "@/features/actions/data";
@@ -15,7 +16,6 @@ import { demoAgents } from "@/features/agents/data";
 import { demoTasks } from "@/features/tasks/data";
 
 import { buildMemoryContainer, composeAdministration, composeAuthentication } from "./container";
-import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
 import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
@@ -39,7 +39,9 @@ describe("buildMemoryContainer", () => {
   it("reconstruit le graphe de services ICOS sur des collaborateurs partagés", async () => {
     const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
 
-    expect(container.taskExecution).toBeInstanceOf(InMemoryTaskExecutionDispatcher);
+    // Decision 0044: the runtime dispatcher sits behind the control backstop.
+    expect(container.taskExecution).toBeInstanceOf(ControlGatedDispatcher);
+    expect(container.control?.guard).toBeDefined();
     expect(container.dispatchAttempts).toBeInstanceOf(InMemoryDispatchAttemptRepository);
     expect(container.executionResults).toBeDefined();
     expect(container.durableMemory).toBeDefined();

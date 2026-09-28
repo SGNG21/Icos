@@ -17,8 +17,21 @@ const WORKER_ID = "6f1c2a10-0000-4000-8000-000000000001";
 
 function world() {
   const missions = new Map<string, Mission>([
-    ["m1", { id: "m1", title: "M1", objective: "o", status: "running", createdAt: NOW, updatedAt: NOW }],
-    ["m-done", { id: "m-done", title: "Done", objective: "o", status: "succeeded", createdAt: NOW, updatedAt: NOW }],
+    [
+      "m1",
+      { id: "m1", title: "M1", objective: "o", status: "running", createdAt: NOW, updatedAt: NOW },
+    ],
+    [
+      "m-done",
+      {
+        id: "m-done",
+        title: "Done",
+        objective: "o",
+        status: "succeeded",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ],
   ]);
   const workers = new Map<string, WorkerRegistryEntry>([
     [
@@ -76,25 +89,44 @@ function world() {
   const store = new InMemoryControlStore();
   const now = { value: NOW };
   const bus = new ControlCommandBus({ store, effects, now: () => now.value });
-  const reauth = new ReauthService(store, { verifyPassword: async (_h, p) => p === "correct horse" }, () => now.value);
+  const reauth = new ReauthService(
+    store,
+    { verifyPassword: async (_h, p) => p === "correct horse" },
+    () => now.value,
+  );
   return { missions, workers, outOfScope, effects, store, bus, reauth, now };
 }
 
 function actor(roles: Role[] = ["owner"], issuedAgoMs = 60_000, userId = "u-owner"): CommandActor {
-  const session: AuthenticatedSession = { user: { id: userId, email: `${userId}@icos.test`, status: "active" }, roles };
-  return { session, sessionId: `s-${userId}`, sessionIssuedAt: new Date(NOW.getTime() - issuedAgoMs) };
+  const session: AuthenticatedSession = {
+    user: { id: userId, email: `${userId}@icos.test`, status: "active" },
+    roles,
+  };
+  return {
+    session,
+    sessionId: `s-${userId}`,
+    sessionIssuedAt: new Date(NOW.getTime() - issuedAgoMs),
+  };
 }
 
-const req = (over: Partial<ControlCommandRequest> & Pick<ControlCommandRequest, "type" | "target">): ControlCommandRequest => ({
+const req = (
+  over: Partial<ControlCommandRequest> & Pick<ControlCommandRequest, "type" | "target">,
+): ControlCommandRequest => ({
   idempotencyKey: randomUUID(),
   expectedVersion: 0,
   reason: "operator decision",
   ...over,
 });
-const pause = (over: Partial<ControlCommandRequest> = {}) => req({ type: "PAUSE_MISSION", target: { kind: "mission", id: "m1" }, ...over });
+const pause = (over: Partial<ControlCommandRequest> = {}) =>
+  req({ type: "PAUSE_MISSION", target: { kind: "mission", id: "m1" }, ...over });
 
 async function proofFor(w: ReturnType<typeof world>, a: CommandActor) {
-  const r = await w.reauth.issue({ headers: new Headers(), userId: a.session.user.id, sessionId: a.sessionId, password: "correct horse" });
+  const r = await w.reauth.issue({
+    headers: new Headers(),
+    userId: a.session.user.id,
+    sessionId: a.sessionId,
+    password: "correct horse",
+  });
   if (!r.ok) throw new Error("reauth failed");
   return r.proof;
 }
@@ -103,26 +135,38 @@ describe("ControlCommandBus — authorization and validation", () => {
   it("rejects a caller without the permission and audits it", async () => {
     const w = world();
     const out = await w.bus.execute(actor(["viewer"]), pause());
-    expect(out).toMatchObject({ status: "REJECTED", rejection: { code: "FORBIDDEN" }, version: null });
+    expect(out).toMatchObject({
+      status: "REJECTED",
+      rejection: { code: "FORBIDDEN" },
+      version: null,
+    });
     expect(w.store.audit.map((e) => e.eventType)).toEqual(["control.command.rejected"]);
     expect(await w.store.isHeld("m1")).toBe(false);
   });
 
   it("requires config.manage for runtime commands even for operators", async () => {
     const w = world();
-    const out = await w.bus.execute(actor(["operator"]), req({ type: "ENTER_SAFE_MODE", target: { kind: "runtime", id: "global" } }));
+    const out = await w.bus.execute(
+      actor(["operator"]),
+      req({ type: "ENTER_SAFE_MODE", target: { kind: "runtime", id: "global" } }),
+    );
     expect(out.rejection?.code).toBe("FORBIDDEN");
   });
 
   it("treats an out-of-scope mission as not found", async () => {
     const w = world();
     w.outOfScope.add("m1");
-    expect((await w.bus.execute(actor(["operator"]), pause())).rejection?.code).toBe("TARGET_NOT_FOUND");
+    expect((await w.bus.execute(actor(["operator"]), pause())).rejection?.code).toBe(
+      "TARGET_NOT_FOUND",
+    );
   });
 
   it("refuses a target of the wrong kind", async () => {
     const w = world();
-    const out = await w.bus.execute(actor(), req({ type: "PAUSE_MISSION", target: { kind: "worker", id: WORKER_ID } }));
+    const out = await w.bus.execute(
+      actor(),
+      req({ type: "PAUSE_MISSION", target: { kind: "worker", id: WORKER_ID } }),
+    );
     expect(out.rejection?.code).toBe("TARGET_KIND_MISMATCH");
   });
 });
@@ -131,14 +175,24 @@ describe("BR-11 state versions", () => {
   it("rejects a stale expectedVersion with a typed conflict and changes nothing", async () => {
     const w = world();
     expect((await w.bus.execute(actor(), pause())).status).toBe("EXECUTED");
-    const stale = await w.bus.execute(actor(), req({ type: "RESUME_MISSION", target: { kind: "mission", id: "m1" }, expectedVersion: 0 }));
-    expect(stale).toMatchObject({ status: "REJECTED", rejection: { code: "VERSION_CONFLICT" }, version: 1 });
+    const stale = await w.bus.execute(
+      actor(),
+      req({ type: "RESUME_MISSION", target: { kind: "mission", id: "m1" }, expectedVersion: 0 }),
+    );
+    expect(stale).toMatchObject({
+      status: "REJECTED",
+      rejection: { code: "VERSION_CONFLICT" },
+      version: 1,
+    });
     expect(await w.store.isHeld("m1")).toBe(true);
   });
 
   it("lets exactly one of two concurrent commands on the same version win", async () => {
     const w = world();
-    const [a, b] = await Promise.all([w.bus.execute(actor(), pause()), w.bus.execute(actor(), pause())]);
+    const [a, b] = await Promise.all([
+      w.bus.execute(actor(), pause()),
+      w.bus.execute(actor(), pause()),
+    ]);
     const statuses = [a.status, b.status].sort();
     expect(statuses).toEqual(["EXECUTED", "REJECTED"]);
     expect([a, b].find((r) => r.status === "REJECTED")!.rejection!.code).toBe("VERSION_CONFLICT");
@@ -148,7 +202,10 @@ describe("BR-11 state versions", () => {
   it("bumps the version on every admitted command", async () => {
     const w = world();
     await w.bus.execute(actor(), pause());
-    const out = await w.bus.execute(actor(), req({ type: "RESUME_MISSION", target: { kind: "mission", id: "m1" }, expectedVersion: 1 }));
+    const out = await w.bus.execute(
+      actor(),
+      req({ type: "RESUME_MISSION", target: { kind: "mission", id: "m1" }, expectedVersion: 1 }),
+    );
     expect(out).toMatchObject({ status: "EXECUTED", version: 2 });
     expect(await w.store.isHeld("m1")).toBe(false);
   });
@@ -176,7 +233,10 @@ describe("idempotency", () => {
     const r = pause();
     await w.bus.execute(actor(), r);
     const other = await w.bus.execute(actor(), { ...r, reason: "something else" });
-    expect(other).toMatchObject({ status: "REJECTED", rejection: { code: "IDEMPOTENCY_KEY_REUSED" } });
+    expect(other).toMatchObject({
+      status: "REJECTED",
+      rejection: { code: "IDEMPOTENCY_KEY_REUSED" },
+    });
     expect(w.store.audit.at(-1)!.eventType).toBe("control.command.rejected");
     expect((await w.store.getCommand(first(r)))!.status).toBe("EXECUTED");
   });
@@ -186,7 +246,12 @@ const first = (r: ControlCommandRequest) => deriveCommandId("u-owner", r.idempot
 describe("BR-18 authentication freshness", () => {
   const disable = () => req({ type: "DISABLE_WORKER", target: { kind: "worker", id: WORKER_ID } });
   const enable = (over: Partial<ControlCommandRequest> = {}) =>
-    req({ type: "ENABLE_WORKER", target: { kind: "worker", id: WORKER_ID }, expectedVersion: 1, ...over });
+    req({
+      type: "ENABLE_WORKER",
+      target: { kind: "worker", id: WORKER_ID },
+      expectedVersion: 1,
+      ...over,
+    });
 
   it("MEDIUM requires a session younger than 12h", async () => {
     const w = world();
@@ -206,23 +271,48 @@ describe("BR-18 authentication freshness", () => {
     const w = world();
     const a = actor();
     await w.bus.execute(a, disable());
-    expect((await w.reauth.issue({ headers: new Headers(), userId: "u-owner", sessionId: a.sessionId, password: "nope" })).ok).toBe(false);
+    expect(
+      (
+        await w.reauth.issue({
+          headers: new Headers(),
+          userId: "u-owner",
+          sessionId: a.sessionId,
+          password: "nope",
+        })
+      ).ok,
+    ).toBe(false);
 
     const expired = await proofFor(w, a);
     w.now.value = new Date(NOW.getTime() + 5 * 60_000 + 1);
-    expect((await w.bus.execute({ ...a, sessionIssuedAt: w.now.value }, enable({ reauthProof: expired }))).rejection?.code).toBe(
-      "REAUTH_EXPIRED",
-    );
+    expect(
+      (
+        await w.bus.execute(
+          { ...a, sessionIssuedAt: w.now.value },
+          enable({ reauthProof: expired }),
+        )
+      ).rejection?.code,
+    ).toBe("REAUTH_EXPIRED");
     w.now.value = NOW;
 
     const foreign = await proofFor(w, { ...a, sessionId: "another-session" });
-    expect((await w.bus.execute(a, enable({ reauthProof: foreign }))).rejection?.code).toBe("REAUTH_INVALID");
+    expect((await w.bus.execute(a, enable({ reauthProof: foreign }))).rejection?.code).toBe(
+      "REAUTH_INVALID",
+    );
 
     const good = await proofFor(w, a);
     expect((await w.bus.execute(a, enable({ reauthProof: good }))).status).toBe("EXECUTED");
-    const reuse = await w.bus.execute(a, req({ type: "DISABLE_WORKER", target: { kind: "worker", id: WORKER_ID }, expectedVersion: 2 }));
+    const reuse = await w.bus.execute(
+      a,
+      req({
+        type: "DISABLE_WORKER",
+        target: { kind: "worker", id: WORKER_ID },
+        expectedVersion: 2,
+      }),
+    );
     expect(reuse.status).toBe("EXECUTED");
-    expect((await w.bus.execute(a, enable({ expectedVersion: 3, reauthProof: good }))).rejection?.code).toBe("REAUTH_INVALID");
+    expect(
+      (await w.bus.execute(a, enable({ expectedVersion: 3, reauthProof: good }))).rejection?.code,
+    ).toBe("REAUTH_INVALID");
   });
 
   it("CRITICAL requires re-auth AND the typed confirmation", async () => {
@@ -231,12 +321,24 @@ describe("BR-18 authentication freshness", () => {
     const rt = { kind: "runtime", id: "global" } as const;
     await w.bus.execute(a, req({ type: "ENTER_SAFE_MODE", target: rt }));
     const proof = await proofFor(w, a);
-    const noConfirm = await w.bus.execute(a, req({ type: "EXIT_SAFE_MODE", target: rt, expectedVersion: 1, reauthProof: proof }));
-    expect(noConfirm).toMatchObject({ rejection: { code: "CONFIRMATION_REQUIRED" }, reauth: "SATISFIED" });
+    const noConfirm = await w.bus.execute(
+      a,
+      req({ type: "EXIT_SAFE_MODE", target: rt, expectedVersion: 1, reauthProof: proof }),
+    );
+    expect(noConfirm).toMatchObject({
+      rejection: { code: "CONFIRMATION_REQUIRED" },
+      reauth: "SATISFIED",
+    });
     // Rejection did not consume the proof: it can be used once, with the phrase.
     const ok = await w.bus.execute(
       a,
-      req({ type: "EXIT_SAFE_MODE", target: rt, expectedVersion: 1, reauthProof: proof, confirmation: confirmationPhrase("EXIT_SAFE_MODE", rt) }),
+      req({
+        type: "EXIT_SAFE_MODE",
+        target: rt,
+        expectedVersion: 1,
+        reauthProof: proof,
+        confirmation: confirmationPhrase("EXIT_SAFE_MODE", rt),
+      }),
     );
     expect(ok.status).toBe("EXECUTED");
     expect((await w.store.readFlags()).safeMode).toBe(false);
@@ -257,26 +359,50 @@ describe("BR-18 authentication freshness", () => {
 describe("mission commands", () => {
   it("refuses to pause a terminal mission or pause twice", async () => {
     const w = world();
-    expect((await w.bus.execute(actor(), req({ type: "PAUSE_MISSION", target: { kind: "mission", id: "m-done" } }))).rejection?.code).toBe(
+    expect(
+      (
+        await w.bus.execute(
+          actor(),
+          req({ type: "PAUSE_MISSION", target: { kind: "mission", id: "m-done" } }),
+        )
+      ).rejection?.code,
+    ).toBe("INVALID_TRANSITION");
+    await w.bus.execute(actor(), pause());
+    expect((await w.bus.execute(actor(), pause({ expectedVersion: 1 }))).rejection?.code).toBe(
       "INVALID_TRANSITION",
     );
-    await w.bus.execute(actor(), pause());
-    expect((await w.bus.execute(actor(), pause({ expectedVersion: 1 }))).rejection?.code).toBe("INVALID_TRANSITION");
   });
 
   it("cancels through the canonical machine with compare-and-set", async () => {
     const w = world();
     const a = actor();
-    const out = await w.bus.execute(a, req({ type: "CANCEL_MISSION", target: { kind: "mission", id: "m1" }, reauthProof: await proofFor(w, a) }));
+    const out = await w.bus.execute(
+      a,
+      req({
+        type: "CANCEL_MISSION",
+        target: { kind: "mission", id: "m1" },
+        reauthProof: await proofFor(w, a),
+      }),
+    );
     expect(out).toMatchObject({ status: "EXECUTED", version: 1 });
     expect(w.missions.get("m1")!.status).toBe("cancelled");
-    expect(w.store.audit.map((e) => e.eventType)).toEqual(["control.command.admitted", "control.command.executed"]);
+    expect(w.store.audit.map((e) => e.eventType)).toEqual([
+      "control.command.admitted",
+      "control.command.executed",
+    ]);
   });
 
   it("refuses to cancel a mission the machine does not allow", async () => {
     const w = world();
     const a = actor();
-    const out = await w.bus.execute(a, req({ type: "CANCEL_MISSION", target: { kind: "mission", id: "m-done" }, reauthProof: await proofFor(w, a) }));
+    const out = await w.bus.execute(
+      a,
+      req({
+        type: "CANCEL_MISSION",
+        target: { kind: "mission", id: "m-done" },
+        reauthProof: await proofFor(w, a),
+      }),
+    );
     expect(out.rejection?.code).toBe("INVALID_TRANSITION");
   });
 
@@ -289,7 +415,10 @@ describe("mission commands", () => {
       w.missions.set(id, { ...w.missions.get(id)!, status: "succeeded" });
       return original(id, from);
     };
-    const out = await w.bus.execute(a, req({ type: "CANCEL_MISSION", target: { kind: "mission", id: "m1" }, reauthProof: proof }));
+    const out = await w.bus.execute(
+      a,
+      req({ type: "CANCEL_MISSION", target: { kind: "mission", id: "m1" }, reauthProof: proof }),
+    );
     expect(out.status).toBe("FAILED");
     expect(w.missions.get("m1")!.status).toBe("succeeded");
   });
@@ -299,10 +428,26 @@ describe("worker commands", () => {
   it("ENABLE resets probe evidence so the worker cannot route before a fresh probe", async () => {
     const w = world();
     const a = actor();
-    await w.bus.execute(a, req({ type: "DISABLE_WORKER", target: { kind: "worker", id: WORKER_ID } }));
+    await w.bus.execute(
+      a,
+      req({ type: "DISABLE_WORKER", target: { kind: "worker", id: WORKER_ID } }),
+    );
     expect(w.workers.get(WORKER_ID)!.status).toBe("inactive");
-    await w.bus.execute(a, req({ type: "ENABLE_WORKER", target: { kind: "worker", id: WORKER_ID }, expectedVersion: 1, reauthProof: await proofFor(w, a) }));
-    expect(w.workers.get(WORKER_ID)).toMatchObject({ status: "active", health: "unknown", lastProbeOutcome: "never", lastProbeAt: null });
+    await w.bus.execute(
+      a,
+      req({
+        type: "ENABLE_WORKER",
+        target: { kind: "worker", id: WORKER_ID },
+        expectedVersion: 1,
+        reauthProof: await proofFor(w, a),
+      }),
+    );
+    expect(w.workers.get(WORKER_ID)).toMatchObject({
+      status: "active",
+      health: "unknown",
+      lastProbeOutcome: "never",
+      lastProbeAt: null,
+    });
   });
 });
 
@@ -311,7 +456,11 @@ describe("crash between admission and outcome (restart)", () => {
     const w = world();
     const a = actor();
     w.effects.failNext = true;
-    const r = req({ type: "CANCEL_MISSION", target: { kind: "mission", id: "m1" }, reauthProof: await proofFor(w, a) });
+    const r = req({
+      type: "CANCEL_MISSION",
+      target: { kind: "mission", id: "m1" },
+      reauthProof: await proofFor(w, a),
+    });
     const out = await w.bus.execute(a, r);
     expect(out.status).toBe("UNKNOWN_EXECUTION_STATE");
     expect(w.missions.get("m1")!.status).toBe("running");

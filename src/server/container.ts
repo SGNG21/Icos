@@ -1,3 +1,7 @@
+import { composeControlPlane, type ControlPlane } from "@/server/control/compose";
+import { InMemoryControlStore } from "@/server/control/in-memory-control-store";
+import { PostgresControlStore } from "@/server/control/postgres-control-store";
+import { ControlGatedDispatcher, RuntimeControlGuard } from "@/server/control/runtime-control";
 import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
@@ -277,6 +281,13 @@ export interface Container {
    * same manager, Git port and lease keeps it one authority rather than two.
    */
   integrationApplier?: IntegrationApplier;
+  /**
+   * Control plane (decision 0044): the ONE command authority (BR-10), durable
+   * runtime flags and mission holds (BR-12), versions (BR-11), re-auth (BR-18).
+   * Optional only so hand-built test containers compile; the control routes
+   * refuse to act without it.
+   */
+  control?: ControlPlane;
   /** Workspace Execution Coordinator (Phase 8D) */
   workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
@@ -371,19 +382,23 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const workspaceRegistry = new InMemoryWorkspaceRegistry();
   const provisioner = new InMemoryTestDatabaseProvisioner();
   const workspaceManager = new WorkspaceManager({ git, registry: workspaceRegistry, provisioner });
+  // Control plane (decision 0044): one guard shared by every enforcement point.
+  const controlStore = new InMemoryControlStore();
+  const controlGuard = new RuntimeControlGuard(controlStore);
   const integrationGate = new IntegrationGate({
     git,
     manager: workspaceManager,
     runner: new InMemoryCommandRunner(),
     database: new InMemoryGateDatabase(),
+    control: controlGuard,
   });
-  const integrationApplier = new IntegrationApplier({ git, manager: workspaceManager });
+  const integrationApplier = new IntegrationApplier({ git, manager: workspaceManager, control: controlGuard });
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git,
     manager: workspaceManager,
     integrationGate,
     integrationApplier,
-    dispatcher: new InMemoryTaskExecutionDispatcher(),
+    dispatcher: new ControlGatedDispatcher(new InMemoryTaskExecutionDispatcher(), controlGuard),
     missions: mission,
     tasks: tasksRepository,
     durableMemory: new InMemoryDurableMemory(),
@@ -408,7 +423,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     skillUow,
     mission,
     missionService,
-    taskExecution: new InMemoryTaskExecutionDispatcher(),
+    taskExecution: new ControlGatedDispatcher(new InMemoryTaskExecutionDispatcher(), controlGuard),
+    control: composeControlPlane({
+      store: controlStore,
+      guard: controlGuard,
+      effects: { missions: mission, tasks: tasksRepository, workers: workerRegistryStore, registration: workerRegistration },
+    }),
     executionCallbackSecret: undefined,
     executionResults,
     durableMemory: new InMemoryDurableMemory(),
@@ -608,11 +628,15 @@ export async function buildPostgresContainer(
     masterRepo: env.ICOS_REPO_PATH,
     worktreeRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
   });
+  // Control plane (decision 0044): one durable store, one guard shared by every enforcement point.
+  const controlStore = new PostgresControlStore(handle.db);
+  const controlGuard = new RuntimeControlGuard(controlStore);
   const integrationGate = new IntegrationGate({
     git: pgGit,
     manager: workspaceManager,
     runner: new PostgresCommandRunner(),
     database: new PostgresGateDatabase(),
+    control: controlGuard,
     /* A deployment may verify with something other than pnpm; omitted keys keep defaults. */
     commands: parseGateCommands(env.ICOS_GATE_COMMANDS),
   });
@@ -637,7 +661,12 @@ export async function buildPostgresContainer(
     env.TEMPORAL_DISPATCH_TIMEOUT_MS,
   );
   const externalExecution = buildWorkerExecutor(env);
-  const taskExecution: TaskExecutionDispatcher = externalExecution
+  /*
+   * CONTROL BACKSTOP (decision 0044): every admission point holds work before it gets
+   * here; this wrapper only refuses a dispatch that slipped past its admission guard.
+   */
+  const taskExecution: TaskExecutionDispatcher = new ControlGatedDispatcher(
+    externalExecution
     ? new RuntimeDispatchRouter({
         dispatchAttempts,
         workers: workerRegistryStore,
@@ -678,9 +707,15 @@ export async function buildPostgresContainer(
         fallback: temporalDispatcher,
         externalRuntimes: externalExecution.runtimes,
       })
-    : temporalDispatcher;
+    : temporalDispatcher,
+    controlGuard,
+  );
 
-  const integrationApplier = new IntegrationApplier({ git: pgGit, manager: workspaceManager });
+  const integrationApplier = new IntegrationApplier({
+    git: pgGit,
+    manager: workspaceManager,
+    control: controlGuard,
+  });
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git: pgGit,
     manager: workspaceManager,
@@ -777,6 +812,18 @@ export async function buildPostgresContainer(
     integrationGate,
     integrationApplier,
     workspaceExecutionCoordinator,
+    control: composeControlPlane({
+      store: controlStore,
+      guard: controlGuard,
+      effects: {
+        missions: mission,
+        tasks,
+        operationalAccess: administration.operationalAccess,
+        workers: workerRegistryStore,
+        registration: workerRegistration,
+      },
+      auth: authentication?.auth,
+    }),
   };
 }
 

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { ControlHeldError, type RuntimeControlGuard } from "@/server/control/runtime-control";
 
 import { checkMigrations, effectiveScope, scanSecrets, scanSecurity } from "./checks";
 import type { Git } from "./git";
@@ -85,6 +86,8 @@ interface GateDeps {
   runner: CommandRunner;
   database: GateDatabase;
   commands?: Partial<GateCommands>;
+  /** Runtime control (decision 0044): integration refused while not allowed. Wired by the container. */
+  control?: Pick<RuntimeControlGuard, "integration">;
 }
 
 /**
@@ -98,12 +101,20 @@ export class IntegrationGate {
   private readonly database: GateDatabase;
   private readonly commands: GateCommands;
 
+  private readonly control?: Pick<RuntimeControlGuard, "integration">;
+
   constructor(deps: GateDeps) {
     ({ git: this.git, manager: this.manager, runner: this.runner, database: this.database } = deps);
     this.commands = { ...DEFAULT_COMMANDS, ...deps.commands };
+    this.control = deps.control;
   }
 
   async integrate(workspaceId: string, options: GateOptions): Promise<IntegrationReport> {
+    // Control plane first: refused before any workspace transition or evaluation (fail closed).
+    if (this.control) {
+      const decision = await this.control.integration();
+      if (!decision.allowed) throw new ControlHeldError(decision.reason, `integration of ${workspaceId}`);
+    }
     let ws = await this.manager.get(workspaceId);
     const precondition = (why: string) =>
       new WorkspaceError("GATE_PRECONDITION", `${workspaceId}: ${why}`);

@@ -65,6 +65,7 @@ export const controlCommandRequestSchema = z
 export type ControlCommandRequest = z.infer<typeof controlCommandRequestSchema>;
 
 export const REJECTION_CODES = [
+  "INVALID_REQUEST",
   "FORBIDDEN",
   "TARGET_KIND_MISMATCH",
   "TARGET_NOT_FOUND",
@@ -87,10 +88,21 @@ export type RejectionCode = z.infer<typeof rejectionCodeSchema>;
  * FAILED: admitted, but the canonical authority refused the effect; nothing changed.
  * UNKNOWN_EXECUTION_STATE: admitted, outcome not yet observable. Never retried implicitly.
  */
-export const commandStatusSchema = z.enum(["EXECUTED", "REJECTED", "FAILED", "UNKNOWN_EXECUTION_STATE"]);
+export const commandStatusSchema = z.enum([
+  "EXECUTED",
+  "REJECTED",
+  "FAILED",
+  "UNKNOWN_EXECUTION_STATE",
+]);
 export type CommandStatus = z.infer<typeof commandStatusSchema>;
 
-export const reauthStatusSchema = z.enum(["NOT_REQUIRED", "SATISFIED", "REQUIRED", "INVALID", "EXPIRED"]);
+export const reauthStatusSchema = z.enum([
+  "NOT_REQUIRED",
+  "SATISFIED",
+  "REQUIRED",
+  "INVALID",
+  "EXPIRED",
+]);
 export type ReauthStatus = z.infer<typeof reauthStatusSchema>;
 
 export const controlCommandResultSchema = z.object({

@@ -40,7 +40,11 @@ describe("effective flags", () => {
   });
 
   it("an unreadable flags row turns everything off", () => {
-    expect(effectiveFlags(null)).toMatchObject({ dispatchEnabled: false, integrationEnabled: false, externalActionsEnabled: false });
+    expect(effectiveFlags(null)).toMatchObject({
+      dispatchEnabled: false,
+      integrationEnabled: false,
+      externalActionsEnabled: false,
+    });
   });
 
   it("does not collapse integration and external actions", async () => {
@@ -66,13 +70,20 @@ describe("RuntimeControlGuard", () => {
   });
 
   it("a held mission does not dispatch, others do", async () => {
-    expect(await guardOver(flags(), true).dispatch("m1")).toEqual({ allowed: false, reason: "MISSION_HELD" });
+    expect(await guardOver(flags(), true).dispatch("m1")).toEqual({
+      allowed: false,
+      reason: "MISSION_HELD",
+    });
     expect(await guardOver(flags(), true).dispatch()).toEqual({ allowed: true });
   });
 
   it("fails closed when flags or holds cannot be read", async () => {
     const down = guardOver(new Error("db down"));
-    for (const d of [await down.dispatch(), await down.integration(), await down.externalAction()]) {
+    for (const d of [
+      await down.dispatch(),
+      await down.integration(),
+      await down.externalAction(),
+    ]) {
       expect(d).toEqual({ allowed: false, reason: "CONTROL_STATE_UNAVAILABLE" });
     }
     expect(await guardOver(flags(), new Error("db down")).dispatch("m1")).toEqual({
@@ -84,11 +95,15 @@ describe("RuntimeControlGuard", () => {
 
 describe("canonical external-action guard", () => {
   it("throws CONTROL_HELD when external actions are off", async () => {
-    await expect(assertExternalActionAllowed(guardOver(flags({ externalActionsEnabled: false })), "publish")).rejects.toMatchObject({
+    await expect(
+      assertExternalActionAllowed(guardOver(flags({ externalActionsEnabled: false })), "publish"),
+    ).rejects.toMatchObject({
       code: "CONTROL_HELD",
       reason: "EXTERNAL_ACTIONS_DISABLED",
     });
-    await expect(assertExternalActionAllowed(guardOver(flags()), "publish")).resolves.toBeUndefined();
+    await expect(
+      assertExternalActionAllowed(guardOver(flags()), "publish"),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -96,14 +111,18 @@ describe("dispatcher backstop", () => {
   it("refuses instead of dispatching when a path missed its admission guard", async () => {
     const inner = { dispatch: vi.fn().mockResolvedValue({ workflowId: "wf" }) };
     const gated = new ControlGatedDispatcher(inner, guardOver(flags({ safeMode: true })));
-    await expect(gated.dispatch({ taskId: "t", prompt: "p", missionId: "m1" })).rejects.toBeInstanceOf(ControlHeldError);
+    await expect(
+      gated.dispatch({ taskId: "t", prompt: "p", missionId: "m1" }),
+    ).rejects.toBeInstanceOf(ControlHeldError);
     expect(inner.dispatch).not.toHaveBeenCalled();
   });
 
   it("passes through when allowed", async () => {
     const inner = { dispatch: vi.fn().mockResolvedValue({ workflowId: "wf" }) };
     const gated = new ControlGatedDispatcher(inner, guardOver(flags()));
-    await expect(gated.dispatch({ taskId: "t", prompt: "p" }, "/facade")).resolves.toEqual({ workflowId: "wf" });
+    await expect(gated.dispatch({ taskId: "t", prompt: "p" }, "/facade")).resolves.toEqual({
+      workflowId: "wf",
+    });
     expect(inner.dispatch).toHaveBeenCalledWith({ taskId: "t", prompt: "p" }, "/facade");
   });
 });
