@@ -8,7 +8,7 @@ Re-verify `CURRENT_HEAD` against `git log` before trusting it.
 See the milestone log below for later heads.
 
 ## CURRENT_MILESTONE
-C0 done → C1/C2/C3 in progress (see log).
+C1–C3 partial (see log: D-04 missing pages is MUST_NOW).
 
 ## EXISTING_COCKPIT_PATHS (C0 forensic audit)
 | Path | What | Verdict |
@@ -71,3 +71,15 @@ See `BACKEND_REQUIREMENTS.md` (BR-01 … BR-20).
 - FILES_CHANGED: `audit/cockpit-control-center/STATE.md`, `BACKEND_REQUIREMENTS.md`
 - TESTS: n/a (baseline `pnpm typecheck` clean at 4b570ec)
 - OPEN_UI_DEFECTS: D-01 `/control-room` synthetic Request auth; D-02 root layout lost `globals.css`; D-03 legacy `/` hardcoded status banners
+
+### C1–C3 (partial) — design system, shell, real overview, missions/DAG, workers
+- FILES_CHANGED: `src/features/cockpit/{truth,dag,snapshot,commands,live,load}.ts` (+ tests), `src/components/cockpit/{primitives,nav-items,cockpit-nav,live-refresh,system-map,command-button,dag-view,node-tone,alert-list,pwa-register}.tsx`, `src/app/cockpit/{layout.tsx,cockpit.css,page.tsx,missions/page.tsx,missions/[id]/page.tsx,workers/page.tsx}`
+- TESTS: `pnpm vitest run src/features/cockpit/` → 41 passed (DAG layout/critical path/blocked/cycles/600 nodes, UNKNOWN propagation, alerts/health, secret metadata filter, 100 workers, command risk confirmation + idempotency + UNKNOWN_EXECUTION_STATE, reconnect backoff/staleness). `pnpm typecheck` clean, eslint clean on cockpit paths.
+- NOT YET DONE / OPEN_UI_DEFECTS:
+  - D-04 nav links 404: `/cockpit/{providers,alerts,autonomy,self-development,audit,system,settings,ask}` pages not written yet (building blocks exist: `AlertList`, `Unavailable`, `CommandButton` with `system.*` actions, `snapshot.timeline`, `loadSources().audit`).
+  - D-05 PWA not wired: `src/app/manifest.ts`, `src/app/icon.svg`, `public/sw.js` (cache only `/_next/static` + `offline.html`, navigations network-only), `public/offline.html` missing; `PwaRegister` already registers `/sw.js` in production. `src/proxy.ts` matcher must exclude `manifest.webmanifest|sw.js|icon.svg|offline.html`.
+  - D-06 no visual verification yet (needs `PERSISTENCE=postgres` + owner session, see memory `icos-owner-login-db-mismatch`); check mobile 390px + desktop 1440px.
+  - D-07 no component render tests yet (repo has no jsdom; use `react-dom/server` renderToStaticMarkup + createElement in `.test.ts`).
+- MUST_NOW: write the 8 missing pages (D-04) so nav doesn't 404.
+- SHOULD_NEXT: D-05 PWA, D-06 visual pass, D-07 render tests, then C5 SSE (BR-01).
+- NEXT_ACTION: create `src/app/cockpit/alerts/page.tsx` (render `snapshot.alerts` grouped by category; preferences = `Unavailable` BR-19), then `system/page.tsx` (emergency CommandButtons + safe-mode state UNKNOWN BR-12).
