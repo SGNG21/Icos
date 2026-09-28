@@ -179,6 +179,13 @@ export function composeAutonomyRuntime(container: Container): {
   const selfDevelopment = new GovernedSelfDevelopmentCoordinator({
     backlog,
     missions: container.mission,
+    tasks: container.tasks,
+    /*
+     * THE JOIN (defect 29). The chain planned and the coordinator governed, and nothing
+     * connected them — so `selfDevelopment.advance()` can now run the whole cycle from an
+     * intent instead of requiring a caller to supply missionId/missionTaskId/taskId by hand.
+     */
+    chain: selfDevelopmentChain,
     dispatchAttempts: container.dispatchAttempts,
     workerRegistry: container.workerRegistry,
     /* THE adapter that enters the certified path — not a parallel execution handoff. */

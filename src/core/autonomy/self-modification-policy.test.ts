@@ -412,6 +412,38 @@ describe('SelfModificationPolicy', () => {
       expect(decision.allowed).toBe(false);
     });
 
+    it('DEFECT 30 — classifies a BACKLOG category, which is a different vocabulary', () => {
+      /*
+       * `ImprovementCandidate.category` never intersected `ALLOWED_IMPROVEMENT_DOMAINS`, so
+       * every candidate ICOS proposed to itself was denied as UNKNOWN and self-modification
+       * was structurally impossible.
+       */
+      for (const category of ['maintainability', 'performance', 'observability', 'cost']) {
+        const decision = evaluateSelfModification({ ...allowedInput, improvementCategory: category });
+        expect(decision.classification, category).toBe('allowed');
+        expect(decision.allowed, category).toBe(true);
+      }
+    });
+
+    it('DEFECT 30 — the map is PARTIAL on purpose: reliability, security and other still deny', () => {
+      for (const category of ['reliability', 'security', 'other']) {
+        const decision = evaluateSelfModification({ ...allowedInput, improvementCategory: category });
+        expect(decision.classification, category).toBe('unknown');
+        expect(decision.allowed, category).toBe(false);
+      }
+    });
+
+    it('DEFECT 30 — a mapped category aimed at a PROTECTED path is still refused', () => {
+      const decision = evaluateSelfModification({
+        ...allowedInput,
+        improvementCategory: 'maintainability',
+        targetPaths: ['src/core/authorization/permissions.ts'],
+      });
+
+      expect(decision.classification).toBe('protected');
+      expect(decision.allowed).toBe(false);
+    });
+
     it('returns the same authorization result for repeated evaluation', () => {
       const first = evaluateSelfModification(allowedInput);
       const second = evaluateSelfModification(allowedInput);

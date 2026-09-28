@@ -120,6 +120,30 @@ export const ALLOWED_IMPROVEMENT_DOMAINS = [
 export type AllowedImprovementDomain = (typeof ALLOWED_IMPROVEMENT_DOMAINS)[number];
 
 /**
+ * How a BACKLOG CATEGORY maps onto an allowed improvement domain (defect 30).
+ *
+ * `ImprovementCandidate.category` and `ALLOWED_IMPROVEMENT_DOMAINS` are two vocabularies that
+ * never intersect — "maintainability" is not "refactoring-non-core" — so every candidate ICOS
+ * proposed to itself classified as UNKNOWN and was denied fail-closed. Autonomous
+ * self-modification was therefore structurally impossible, not merely unproven.
+ *
+ * THIS MAP IS DELIBERATELY PARTIAL. It names only the categories whose meaning is unambiguous
+ * under the existing allow list; `reliability`, `security` and `other` are ABSENT on purpose
+ * and keep classifying as UNKNOWN, because a reliability or security change is exactly the
+ * kind that reaches core authority. A missing entry denies, as before.
+ *
+ * It widens nothing else: the protected-path rules still take precedence, so a mapped
+ * category aimed at a protected path is still `protected`, and the review, the gate and the
+ * real repository gates all still apply.
+ */
+export const BACKLOG_CATEGORY_DOMAINS: Readonly<Record<string, AllowedImprovementDomain>> = {
+  performance: "performance-optimization",
+  observability: "observability-enhancement",
+  maintainability: "refactoring-non-core",
+  cost: "resource-cleanup",
+};
+
+/**
  * Input for policy evaluation.
  */
 export interface SelfModificationPolicyInput {
@@ -260,10 +284,10 @@ export function classifySelfModification(
     return "unknown";
   }
 
-  // Check if explicitly in allowed improvement domains
-  const isAllowedDomain = ALLOWED_IMPROVEMENT_DOMAINS.includes(
-    input.improvementCategory as AllowedImprovementDomain,
-  );
+  // Check if explicitly in allowed improvement domains, directly or by backlog category.
+  const domain =
+    BACKLOG_CATEGORY_DOMAINS[input.improvementCategory] ?? input.improvementCategory;
+  const isAllowedDomain = ALLOWED_IMPROVEMENT_DOMAINS.includes(domain as AllowedImprovementDomain);
 
   if (isAllowedDomain) {
     // Additional check: self-proposed changes need higher scrutiny

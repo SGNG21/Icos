@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -71,6 +73,28 @@ describe("DEFECT 25 LINK 3 — self-development is composed in the REAL runtime"
     expect(runtime.selfDevelopmentChain).toBeInstanceOf(SelfDevelopmentChain);
     /* DURABLE, not in-memory: a restart must not lose what ICOS decided to improve. */
     expect(runtime.backlog).toBeInstanceOf(DurableImprovementBacklog);
+  }, 120_000);
+
+  it("DEFECT 29 — THE CHAIN IS JOINED TO THE COORDINATOR: one call runs the whole cycle", async () => {
+    const container = await productionContainer();
+    const runtime = composeAutonomyRuntime(container);
+
+    /*
+     * The chain planned and the coordinator governed, and NOTHING connected them: the
+     * coordinator demanded missionId/missionTaskId/taskId a caller had to build by hand, so
+     * no production path could reach execution from an intent. The join is what makes
+     * `advance()` exist at all — assert it, because care has failed five times now.
+     */
+    expect(typeof runtime.selfDevelopment.advance).toBe("function");
+
+    /*
+     * And prove the join is WIRED, not merely declared: with an empty backlog the call must
+     * reach the CHAIN and come back with its answer. A coordinator holding no chain throws
+     * SELF_DEVELOPMENT_CHAIN_UNAVAILABLE instead.
+     */
+    await container.db!.execute(sql.raw("TRUNCATE TABLE context_items RESTART IDENTITY CASCADE"));
+    const outcome = await runtime.selfDevelopment.advance();
+    expect(outcome).toMatchObject({ status: "NO_CANDIDATE" });
   }, 120_000);
 
   it("IT REFERENCES THE CANONICAL REPOSITORIES AND SERVICES", async () => {

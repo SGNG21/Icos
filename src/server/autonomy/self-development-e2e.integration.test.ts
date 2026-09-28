@@ -10,13 +10,18 @@ import { buildPostgresContainer, type Container } from "@/server/container";
 import { composeAutonomyRuntime } from "@/server/system/production-services";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { createImprovementCandidate } from "@/core/autonomy/improvement-backlog";
+import { selfDevelopmentIds } from "@/server/autonomy/self-development-chain";
 
 /*
- * SELF_DEVELOPMENT_E2E — from an ImprovementCandidate, through PRODUCTION composition.
+ * SELF_DEVELOPMENT_E2E — from an ImprovementCandidate to an INTEGRATED commit, through
+ * PRODUCTION composition.
  *
- * No missionId, no taskId, no manual plan, no injected execution handoff. The test supplies a
- * candidate and then only OBSERVES: `SelfDevelopmentChain` creates the goal and mission and
- * invokes the canonical planner, and the certified runtime does the rest.
+ * No missionId, no taskId, no manual plan, no injected execution handoff, NO PRE-SEEDED
+ * REVIEW and no manual stage advancement. The test supplies a candidate, makes ONE call —
+ * `runtime.selfDevelopment.advance()` — and then only OBSERVES: the chain creates the goal
+ * and mission and invokes the canonical planner, the certified runtime executes, the
+ * independent reviewer decides, the IntegrationGate runs the REAL repository gates, and the
+ * canonical applier advances the branch exactly once.
  *
  * IT IS OPT-IN (ICOS_SELF_DEV_E2E=1) because it spends real model credits on a real planner
  * and a real worker, and takes minutes. The deterministic paths it composes are covered by
@@ -84,8 +89,8 @@ afterAll(async () => {
   if (worktreeRoot) rmSync(worktreeRoot, { recursive: true, force: true });
 });
 
-describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to plan, via production composition", () => {
-  it("ICOS TURNS A CANDIDATE INTO A GOAL, A MISSION AND A REAL PLAN — no ids supplied", async () => {
+describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit, via production composition", () => {
+  it("ICOS IMPROVES ITSELF FROM A CANDIDATE — no ids, no review, no gates supplied", async () => {
     const container = await productionContainer();
     const runtime = composeAutonomyRuntime(container);
 
@@ -112,31 +117,61 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to plan, via product
     });
     await runtime.backlog.add(candidate);
 
+    /*
+     * THE FLEET. Two workers on the configured runtime, differing on every identity axis, so
+     * the existing independence rule can find a reviewer that is provably not the producer.
+     * Registration is what a real deployment's workers do for themselves at boot; nothing
+     * here decides routing, review outcome or integration.
+     */
+    for (const [id, name, model] of [
+      ["11111111-1111-4111-8111-111111111111", "self-dev-writer", "writer-model"],
+      ["22222222-2222-4222-8222-222222222222", "self-dev-reviewer", "reviewer-model"],
+    ]) {
+      await container.workerRegistration.register({
+        id,
+        workerKind: "agent",
+        displayName: name,
+        capabilities: ["code_editing", "documentation", "writing", "markdown", "analysis"],
+        runtime: "binary",
+        runtimeSupport: "SUPPORTED_RUNTIME",
+        maxConcurrency: 1,
+        metadata: { model, provider: `${name}-provider`, account: `${name}-account` },
+      });
+      await container.workerRegistration.probe(id, {
+        health: "healthy",
+        availability: "available",
+      });
+    }
+
     const beforeTarget = git(REPO, "rev-parse", "integration/phase-7");
+    const { goalId, missionId } = selfDevelopmentIds(candidate);
 
-    /* ICOS selects, creates the goal and mission, and invokes the CANONICAL planner. */
-    const outcome = await runtime.selfDevelopmentChain.advance();
+    /*
+     * THE ONLY CALL. Selection, goal, mission, planning, governed execution, independent
+     * review, the gate, the real gates, integration and learning all happen inside it.
+     */
+    const outcome = await runtime.selfDevelopment.advance();
 
-    expect(outcome.status).toBe("STARTED");
-    if (outcome.status !== "STARTED") throw new Error("unreachable");
-
+    if ("status" in outcome) throw new Error(`NO_CANDIDATE: ${outcome.reason}`);
     console.log(
-      `SELF_DEV lineage: candidate=${outcome.candidate.id} goal=${outcome.goalId} mission=${outcome.missionId}`,
+      `SELF_DEV outcome: state=${outcome.finalState} gate=${outcome.gateDecision} reason=${outcome.reason}` +
+        ` mission=${outcome.missionId} task=${outcome.taskId} workflow=${outcome.workflowId}`,
     );
 
     /* GOAL — created by ICOS, carrying its provenance back to the candidate. */
-    const goal = await container.goalRepository.getById(outcome.goalId);
+    const goal = await container.goalRepository.getById(goalId);
     expect(goal?.goal.metadata).toMatchObject({
       source: "self-development",
       candidateId: candidate.id,
     });
 
     /* MISSION — canonical, linked to the goal. */
-    const mission = await container.mission.findById(outcome.missionId);
-    expect(mission?.goalId).toBe(outcome.goalId);
+    const mission = await container.mission.findById(missionId);
+    expect(mission?.goalId).toBe(goalId);
+    expect(outcome.missionId).toBe(missionId);
 
     /* PLAN + DAG — produced by the REAL planner, materialised as canonical mission tasks. */
-    const missionTasks = await container.mission.listTasks(outcome.missionId);
+    const missionTasks = await container.mission.listTasks(missionId);
     console.log(
       `SELF_DEV plan: ${missionTasks.length} task(s): ${missionTasks.map((t) => t.title).join(" | ")}`,
     );
@@ -149,12 +184,37 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to plan, via product
       `SELF_DEV envelope: riskClass=${canonical?.riskClass} scope=${JSON.stringify(canonical?.allowedFileScope)}`,
     );
 
-    /* The canonical branch has NOT moved: planning alone integrates nothing. */
-    expect(git(REPO, "rev-parse", "integration/phase-7")).toBe(beforeTarget);
+    /* The run reached a landed state, or the reason says why — never a raw query error. */
+    expect(outcome.finalState, outcome.reason).toBe("integrated");
+    expect(outcome.workflowId, outcome.reason).toBeDefined();
 
-    /* DURABLE PROVENANCE: the selection evidence survives in the backlog. */
+    /* EXECUTION — a real worker ran on the certified path and its result is durable. */
+    const executionResult = await container.executionResults.getByWorkflowId(outcome.workflowId!);
+    expect(executionResult).not.toBeNull();
+
+    /*
+     * REVIEW — produced by the INDEPENDENT reviewer during the run. Nothing pre-seeded it;
+     * it exists because the coordinator asked the canonical review authority, and the
+     * reviewer is not the producer.
+     */
+    const review = await container.reviewDecisions.getByWorkflowId(outcome.workflowId!);
+    expect(review).not.toBeNull();
+    console.log(`SELF_DEV review: ${review?.decision} by ${review?.reviewerKind}`);
+
+    /* GATE + INTEGRATION — the canonical branch advanced, exactly once, by ancestry. */
+    expect(outcome.finalState).toBe("integrated");
+    const afterTarget = git(REPO, "rev-parse", "integration/phase-7");
+    expect(afterTarget).not.toBe(beforeTarget);
+    expect(git(REPO, "log", "--oneline", `${beforeTarget}..${afterTarget}`).split("\n")).toHaveLength(1);
+    console.log(`SELF_DEV integrated: ${beforeTarget.slice(0, 8)} -> ${afterTarget.slice(0, 8)}`);
+
+    /* EVALUATION — the candidate reached a decided state, not limbo. */
     const stored = await runtime.backlog.get(candidate.id);
-    expect(stored?.status).toBe("under_review");
-    expect(stored?.reviewNotes).toContain(outcome.missionId);
-  }, 900_000);
+    expect(stored?.status).toBe("approved");
+
+    /* DURABLE LEARNING — the run left a pattern behind for the next one. */
+    const patterns = await container.durableMemory.getPatterns({ limit: 50 });
+    console.log(`SELF_DEV learning: ${patterns.length} durable pattern(s)`);
+    expect(patterns.length).toBeGreaterThan(0);
+  }, 3_600_000);
 });

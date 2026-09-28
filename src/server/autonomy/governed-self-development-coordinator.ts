@@ -20,6 +20,7 @@ import type { TaskExecutionResult } from "@/core/contracts/task-execution";
 import type { WorkerRegistryPort } from "@/core/contracts/worker-registry";
 import type { MissionTask } from "@/core/mission/contracts";
 import type { MissionRepository } from "@/server/mission/ports";
+import type { TaskRepository } from "@/server/repositories/ports";
 import type { IntegrationGate } from "@/server/workspace-manager/integration-gate";
 import type { IntegrationApplier } from "@/server/workspace-manager/integration-applier";
 import type { WorkspaceManager } from "@/server/workspace-manager/manager";
@@ -27,6 +28,7 @@ import type { IntegrationReport } from "@/server/workspace-manager/report";
 
 import { BoundedRepairController, type RepairCandidate } from "./bounded-repair-controller";
 import { ReviewerIndependenceChecker } from "./reviewer-independence";
+import type { SelfDevelopmentChain } from "./self-development-chain";
 
 export interface GovernedSelfDevelopmentRequest {
   candidate: ImprovementCandidate;
@@ -34,6 +36,16 @@ export interface GovernedSelfDevelopmentRequest {
   missionTaskId: string;
   taskId: string;
   policy: SelfModificationPolicyInput;
+  /**
+   * `false` hands the candidate's lifecycle to the CALLER.
+   *
+   * A candidate's lifecycle is `proposed -> under_review -> approved|rejected`, and it is
+   * explicit and one-way. `process()` governs ONE task, so when a plan has several tasks the
+   * first one would finalise the candidate and the second would attempt an illegal
+   * `approved -> under_review`. `advance()` therefore owns the transitions across the whole
+   * plan and sets this to `false`; every other caller keeps the original behaviour.
+   */
+  ownsCandidateLifecycle?: boolean;
 }
 
 export interface CanonicalExecutionRequest {
@@ -126,6 +138,18 @@ export interface GovernedSelfDevelopmentOutcome {
 export interface GovernedSelfDevelopmentDependencies {
   backlog: ImprovementBacklog;
   missions: MissionRepository;
+  /**
+   * Canonical tasks. Needed by `advance()` only, to read the writer's declared
+   * `allowedFileScope` — which IS the self-modification policy's `targetPaths`. The scope is
+   * not re-derived or guessed here; the plan already declared it (decision 0042).
+   */
+  tasks?: Pick<TaskRepository, "getById">;
+  /**
+   * The candidate -> goal -> mission -> plan owner (M11). Supplied, `advance()` can run the
+   * WHOLE self-development cycle from an intent; omitted, only `process()` is available and
+   * a caller must bring its own ids.
+   */
+  chain?: Pick<SelfDevelopmentChain, "advance">;
   dispatchAttempts: DispatchAttemptRepository;
   workerRegistry: WorkerRegistryPort;
   execution: CanonicalExecutionHandoff;
@@ -166,9 +190,113 @@ export class GovernedSelfDevelopmentCoordinator {
     this.now = options.now ?? (() => new Date());
   }
 
+  /**
+   * THE WHOLE CYCLE, FROM AN INTENT (defect 29).
+   *
+   * `SelfDevelopmentChain` owned candidate -> goal -> mission -> plan. This coordinator owned
+   * execution -> review -> gate -> integration -> learning. NOTHING JOINED THEM — the fifth
+   * occurrence of this repository's dominant defect shape, and the reason
+   * SELF_DEVELOPMENT_E2E could only ever be proven as far as planning.
+   *
+   * The join lives HERE rather than in a new service, because a new service would be exactly
+   * the second self-development authority that must not exist. Nothing below plans, reviews,
+   * gates or integrates: the chain plans, `process()` governs one task, and this reads what
+   * the plan declared and walks it.
+   *
+   * IT WALKS THE WHOLE PLAN. A real planner answers a bounded improvement with one task on
+   * one run and two on the next, so processing only the first would silently leave the rest
+   * executed-but-ungated. The candidate's lifecycle is owned HERE for that reason — one
+   * candidate gets one verdict, however many tasks its plan contains.
+   */
+  async advance(options: { candidateId?: string; actor?: string } = {}): Promise<
+    GovernedSelfDevelopmentOutcome | { status: "NO_CANDIDATE"; reason: string }
+  > {
+    const { chain, tasks } = this.dependencies;
+    if (!chain) throw new Error("SELF_DEVELOPMENT_CHAIN_UNAVAILABLE");
+    if (!tasks) throw new Error("SELF_DEVELOPMENT_TASK_REPOSITORY_UNAVAILABLE");
+
+    const started = await chain.advance(options.candidateId);
+    if (started.status !== "STARTED") return started;
+
+    const { candidate, missionId } = started;
+    const actor = options.actor ?? "self-development-coordinator";
+    const planned = await this.dependencies.missions.listTasks(missionId);
+
+    const requestFor = async (
+      missionTaskId: string,
+      taskId: string,
+    ): Promise<GovernedSelfDevelopmentRequest> => ({
+      candidate,
+      missionId,
+      missionTaskId,
+      taskId,
+      /*
+       * THE POLICY JUDGES WHAT THE PLAN DECLARED. `allowedFileScope` is the writer's fenced
+       * scope (decision 0042), so a plan aiming at a protected path is denied by the
+       * EXISTING policy — there is no second notion here of what a change touches.
+       */
+      policy: {
+        targetPaths: [...((await tasks.getById(taskId))?.allowedFileScope ?? [])],
+        changeDescription: candidate.description,
+        improvementCategory: candidate.category,
+        isSelfProposed: true,
+        actor,
+      },
+      ownsCandidateLifecycle: false,
+    });
+
+    if (planned.length === 0) {
+      /*
+       * Planning DEFERRED rather than produced a plan (the ignition usecase swallows a
+       * planner failure and leaves the mission task-less). Fail closed: no plan is not an
+       * empty plan, and it must never look like completed work.
+       */
+      const request = await requestFor("", "");
+      await this.transitionCandidate(candidate.id, "rejected", actor, "PLAN_HAS_NO_TASK");
+      return this.outcome(request, "human_decision_required", "PLAN_HAS_NO_TASK", 0);
+    }
+
+    let last: GovernedSelfDevelopmentOutcome | undefined;
+    for (const missionTask of planned) {
+      const request = await requestFor(missionTask.id, missionTask.taskId);
+      last = await this.process(request);
+      if (last.finalState !== "integrated" && last.finalState !== "merge_ready") {
+        await this.transitionCandidate(candidate.id, "rejected", actor, last.reason);
+        return last;
+      }
+      /*
+       * THE TASK IS DONE AND IT LANDED, so record it — otherwise a dependent task never
+       * becomes ready and the rest of the plan can never run. This is not a second review:
+       * the gate already decided, and this only writes down what it decided.
+       */
+      await this.dependencies.missions.updateMissionTaskStatus(
+        missionId,
+        missionTask.id,
+        "succeeded",
+      );
+    }
+
+    await this.transitionCandidate(candidate.id, "approved", actor, last!.reason);
+    return last!;
+  }
+
   async process(request: GovernedSelfDevelopmentRequest): Promise<GovernedSelfDevelopmentOutcome> {
+    /*
+     * "ALREADY IN THE BACKLOG" STOPPED MEANING "ALREADY PROCESSED" (defect 29).
+     *
+     * This guard was written when the coordinator was the only thing that ever touched the
+     * backlog, so any pre-existing candidate had to be a re-submission. `SelfDevelopmentChain`
+     * now records its SELECTION first and durably — deliberately, so a crash cannot lose which
+     * candidate was chosen — which left every chain-originated candidate `under_review` and
+     * refused by this line. The whole cycle was unreachable from an intent.
+     *
+     * The invariant that actually matters is unchanged: a candidate that has been DECIDED
+     * (approved / rejected / implemented / superseded) is never silently reprocessed. A
+     * `proposed` or `under_review` candidate is new work or a resume, and every downstream
+     * create is idempotent on derived ids, so re-entering is safe.
+     */
     const existing = await this.dependencies.backlog.get(request.candidate.id);
-    if (existing) {
+    if (existing && existing.status !== "proposed" && existing.status !== "under_review") {
       return this.outcome(
         request,
         "human_decision_required",
@@ -177,7 +305,7 @@ export class GovernedSelfDevelopmentCoordinator {
       );
     }
 
-    await this.dependencies.backlog.add(request.candidate);
+    if (!existing) await this.dependencies.backlog.add(request.candidate);
 
     const correlationError = await this.validateRequestCorrelation(request);
     if (correlationError) {
@@ -194,12 +322,14 @@ export class GovernedSelfDevelopmentCoordinator {
       );
     }
 
-    await this.transitionCandidate(
-      request.candidate.id,
-      "under_review",
-      policy.decidedBy,
-      policy.reason,
-    );
+    if (request.ownsCandidateLifecycle !== false) {
+      await this.transitionCandidate(
+        request.candidate.id,
+        "under_review",
+        policy.decidedBy,
+        policy.reason,
+      );
+    }
 
     const missionTask = await this.dependencies.missions.getMissionTaskById(request.missionTaskId);
     if (!missionTask) {
@@ -690,13 +820,22 @@ export class GovernedSelfDevelopmentCoordinator {
     workflowId?: string,
     gateReport?: IntegrationReport,
   ): Promise<GovernedSelfDevelopmentOutcome> {
-    const targetStatus = finalState === "merge_ready" ? "approved" : "rejected";
-    await this.transitionCandidate(
-      request.candidate.id,
-      targetStatus,
-      "phase8e-coordinator",
-      reason,
-    );
+    if (request.ownsCandidateLifecycle !== false) {
+      /*
+       * `integrated` was missing here, so an improvement that REALLY LANDED on the canonical
+       * branch was recorded as `rejected` — the terminal state added by M10 was never added
+       * to this map. The backlog is the durable record of what ICOS has done to itself, and
+       * it said the opposite of the truth.
+       */
+      const landed = finalState === "merge_ready" || finalState === "integrated";
+      const targetStatus = landed ? "approved" : "rejected";
+      await this.transitionCandidate(
+        request.candidate.id,
+        targetStatus,
+        "phase8e-coordinator",
+        reason,
+      );
+    }
     return this.outcome(request, finalState, reason, repairAttemptsUsed, workflowId, gateReport);
   }
 
