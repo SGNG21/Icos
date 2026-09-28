@@ -36,12 +36,7 @@ export class DurableImprovementBacklog implements ImprovementBacklog {
   }
 
   async update(candidate: ImprovementCandidate): Promise<void> {
-    /*
-     * Same id, so a save REPLACES rather than appends. Update and add are deliberately the
-     * same operation: a backlog whose update could silently create a second copy of a
-     * candidate would break the one guarantee the chain owner depends on — that an
-     * improvement has exactly one record.
-     */
+    /* Add and update are the same operation: an append whose latest revision wins. */
     await this.write(candidate);
   }
 
@@ -82,9 +77,18 @@ export class DurableImprovementBacklog implements ImprovementBacklog {
     });
   }
 
+  /**
+   * APPEND-ONLY, because `saveContextItem` inserts and does not upsert.
+   *
+   * Each revision is a new row and `readAll` keeps the latest, so a candidate still has
+   * exactly one effective record. Making the shared `saveContextItem` an upsert instead
+   * would change semantics for every other caller to suit this one — and appending is the
+   * better answer anyway: a candidate's transitions become an audit trail rather than being
+   * overwritten.
+   */
   private async write(candidate: ImprovementCandidate): Promise<void> {
     await this.memory.saveContextItem({
-      id: this.itemId(candidate.id),
+      id: this.revisionId(candidate),
       scope: "global",
       type: IMPROVEMENT_CANDIDATE_TYPE,
       /* The whole record. Small, self-contained, and readable in the store. */
@@ -120,13 +124,23 @@ export class DurableImprovementBacklog implements ImprovementBacklog {
         continue;
       }
       if (removed.has(parsed.id)) continue;
-      /* Last write wins, which is what `update` means. */
-      byId.set(parsed.id, parsed);
+
+      /*
+       * LATEST REVISION WINS, by the candidate's own `updatedAt` rather than by row order:
+       * the store guarantees no ordering, and a candidate's own timestamp is the fact.
+       */
+      const existing = byId.get(parsed.id);
+      if (!existing || parsed.updatedAt >= existing.updatedAt) byId.set(parsed.id, parsed);
     }
     return [...byId.values()];
   }
 
+  /** One row per revision. The candidate id plus its own revision timestamp. */
+  private revisionId(candidate: ImprovementCandidate): string {
+    return `${IMPROVEMENT_CANDIDATE_TYPE}-${candidate.id}-${Date.parse(candidate.updatedAt)}`;
+  }
+
   private itemId(candidateId: string): string {
-    return `${IMPROVEMENT_CANDIDATE_TYPE}-${candidateId}`;
+    return `${IMPROVEMENT_CANDIDATE_TYPE}-removed-${candidateId}`;
   }
 }

@@ -87,8 +87,52 @@ export class CommandPlannerProvider implements PlannerCompletionProvider {
      * inside is returned byte-for-byte, and a non-JSON answer still fails INVALID_OUTPUT in
      * the canonical planner.
      */
-    return stripCodeFence(content);
+    return extractJsonObject(stripCodeFence(content));
   }
+}
+
+/**
+ * Extracts the outermost JSON object from an agent's output.
+ *
+ * TRANSPORT NORMALISATION, not interpretation. A CLI agent narrates — "Here is the plan:" —
+ * however firmly it is told not to, and the canonical planner requires exactly one JSON
+ * object. Taking the outermost balanced object undoes the CLI's presentation and nothing
+ * else: the bytes inside are returned untouched, and anything that is not a valid plan still
+ * fails INVALID_OUTPUT at the canonical gate.
+ *
+ * Returns the input unchanged when no object is found, so the failure stays honest.
+ */
+export function extractJsonObject(text: string): string {
+  const start = text.indexOf("{");
+  if (start === -1) return text;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  /* Unbalanced: hand it back and let the canonical gate reject it. */
+  return text;
 }
 
 /** Removes a single enclosing ``` fence, if present. Content is never otherwise altered. */

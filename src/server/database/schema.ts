@@ -207,7 +207,7 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded')`,
+      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded','mission.created','mission.transitioned','mission.task.dispatched','goal.created','goal.status_updated','goal.converted','goal.idempotency_key_set')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
@@ -552,14 +552,25 @@ export const contextItems = pgTable(
   "context_items",
   {
     id: text("id").primaryKey(),
-    missionId: text("mission_id").notNull(),
+    /*
+     * QUOTED camelCase, because that is what the table actually has (M12).
+     *
+     * The schema declared snake_case, so every insert into `context_items` failed with
+     * `column "mission_id" does not exist` — the whole table was unusable on PostgreSQL and
+     * nothing noticed, because nothing wrote to it until the durable improvement backlog did.
+     * Same mixed-convention hazard already recorded for `goals`/`goal_previews`.
+     *
+     * The MAPPING is corrected rather than the table renamed: a rename is a migration on a
+     * live table for a cosmetic gain, and it would not have made this bug any less likely.
+     */
+    missionId: text("missionId").notNull(),
     scope: text("scope").notNull(),
     type: text("type").notNull(),
     summary: text("summary").notNull(),
-    contentReference: text("content_reference"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    contentReference: text("contentReference"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
     priority: integer("priority").notNull(),
-    tokenEstimate: integer("token_estimate").notNull(),
+    tokenEstimate: integer("tokenEstimate").notNull(),
   },
   (t) => [
     index("context_items_mission_id_idx").on(t.missionId),

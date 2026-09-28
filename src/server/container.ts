@@ -912,11 +912,14 @@ export async function resetContainer(): Promise<void> {
  */
 function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined {
   const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
-  const omniRouteConfigured = Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY);
-  const plannerRequested =
-    env.ICOS_PLANNER_MODEL !== undefined || env.ICOS_PLANNER_TIMEOUT_MS !== undefined;
+  /*
+   * `ICOS_PLANNER_MODEL` is what SELECTS the OmniRoute planner — the OmniRoute base URL and
+   * key alone mean nothing here, because the reviewer requires them too. Treating their mere
+   * presence as "a planner backend is configured" would make every deployment ambiguous.
+   */
+  const omniRouteSelected = env.ICOS_PLANNER_MODEL !== undefined;
 
-  if (command && omniRouteConfigured && plannerRequested) {
+  if (command && omniRouteSelected) {
     throw new Error(
       "AUTONOMY_PLANNER_BACKEND_AMBIGUOUS: both ICOS_PLANNER_COMMAND and OmniRoute are configured; choose one",
     );

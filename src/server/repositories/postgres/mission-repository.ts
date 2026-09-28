@@ -64,6 +64,7 @@ export class PostgresMissionRepository implements MissionRepository {
         input.title,
         input.objective,
         input.tasks.length,
+        input.goalId,
       );
     }
 
@@ -178,12 +179,22 @@ export class PostgresMissionRepository implements MissionRepository {
     title: string,
     objective: string,
     taskCount: number,
+    /**
+     * The goal this mission serves (M12).
+     *
+     * It used to be dropped on this path: `igniteAutonomousMission` passes a goalId, and any
+     * caller supplying an id — which ignition does — silently lost it. That is not cosmetic.
+     * The invariant is that "a mission with no goalId is generic, not autonomous", so losing
+     * it here turned every id-imposed autonomous mission into a generic one and severed the
+     * lineage from goal to plan.
+     */
+    goalId?: string,
   ): Promise<Mission> {
     if (taskCount > 0) throw new Error("MISSION_CREATE_ID_REQUIRES_EMPTY_GRAPH");
     const now = new Date();
     await this.db
       .insert(missions)
-      .values({ id, title, objective, status: "draft", createdAt: now, updatedAt: now })
+      .values({ id, title, objective, goalId, status: "draft", createdAt: now, updatedAt: now })
       .onConflictDoNothing({ target: missions.id });
     const stored = await this.findById(id);
     if (!stored) throw new Error("MISSION_CREATE_INVARIANT_VIOLATED");

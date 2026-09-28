@@ -74,7 +74,7 @@ describe("M12 command planner provider", () => {
     });
 
     expect(out).toBe(VALID_PLAN);
-    const spec = p.run.mock.calls[0]![0] as { command: string; args: string[] };
+    const spec = (p.run.mock.calls as unknown as Array<[{ command: string; args: string[] }]>)[0]![0];
     expect(spec.command).toBe("/opt/agent-cli");
     /* One prompt: canonical policy FIRST, untrusted mission data second. */
     const prompt = spec.args.find((a) => a.includes("SYSTEM POLICY"))!;
@@ -169,10 +169,9 @@ describe("M12 command planner provider", () => {
       parsePlannerCommand(JSON.stringify({ command: "x", args: ["--go"] })),
     ).toThrow(/\{\{prompt\}\}/);
 
-    const ok = parsePlannerCommand(
-      JSON.stringify({ command: "/opt/agent", args: ["-z", "{{prompt}}"] }),
-    );
-    expect(ok).toEqual({ command: "/opt/agent", args: ["-z", "{{prompt}}"] });
+    expect(
+      parsePlannerCommand(JSON.stringify({ command: "/opt/agent", args: ["-z", "{{prompt}}"] })),
+    ).toEqual({ command: "/opt/agent", args: ["-z", "{{prompt}}"] });
   });
 
   it("NO PRODUCT, MODEL OR PROVIDER NAME IS COMMITTED in the provider source", async () => {
