@@ -168,3 +168,28 @@ export async function loadMissionDetail(id: string): Promise<MissionDetail | nul
 
   return { mission, dag: buildDag(input), attempts, reviews };
 }
+
+export interface SystemFacts {
+  backend: "postgres" | "memory";
+  /** Composition facts only: which ICOS services this process actually wired. No secrets, no values. */
+  services: { key: string; label: string; composed: boolean; essential: boolean }[];
+}
+
+export async function loadSystemFacts(): Promise<SystemFacts | null> {
+  const ctx = await getCockpitContext();
+  if (!ctx) return null;
+  const c = ctx.container;
+  return {
+    backend: c.db ? "postgres" : "memory",
+    services: [
+      { key: "postgres", label: "PostgreSQL persistence", composed: Boolean(c.db), essential: true },
+      { key: "auth", label: "Human authentication", composed: Boolean(c.auth), essential: true },
+      { key: "callback", label: "Execution callback secret", composed: Boolean(c.executionCallbackSecret), essential: true },
+      { key: "operational-access", label: "Operational scope service", composed: Boolean(c.operationalAccess), essential: true },
+      { key: "planner", label: "Autonomous mission planner", composed: Boolean(c.autonomousPlanner), essential: false },
+      { key: "workspace", label: "Workspace manager", composed: Boolean(c.workspaceManager), essential: false },
+      { key: "gate", label: "Integration gate", composed: Boolean(c.integrationGate), essential: false },
+      { key: "applier", label: "Integration applier", composed: Boolean(c.integrationApplier), essential: false },
+    ],
+  };
+}

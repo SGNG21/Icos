@@ -87,6 +87,8 @@ export interface DagModel {
   edges: DagEdge[];
   /** Longest chain of unfinished work (node ids, root first). Empty when all done. */
   criticalPath: string[];
+  /** Unfinished nodes on the critical path (the chain may start with completed ancestors). */
+  criticalRemaining: number;
   roots: string[];
   /** Nodes that could not be layered because they sit on a dependency cycle. */
   cycle: string[];
@@ -261,6 +263,7 @@ export function buildDag(input: readonly DagInputTask[]): DagModel {
     nodes,
     edges,
     criticalPath,
+    criticalRemaining: criticalPath.filter((id) => !isFinished(status.get(id)!)).length,
     roots: layers[0] ?? [],
     cycle,
     danglingDependencies: [...dangling],

@@ -63,7 +63,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
         </div>
         <div className="cx-metric" data-tone="autonomy">
           <span className="cx-metric__label">Critical path left</span>
-          <span className="cx-metric__value">{dag.criticalPath.filter((nid) => !isFinished(dag.nodes.find((n) => n.id === nid)!.status)).length}</span>
+          <span className="cx-metric__value">{dag.criticalRemaining}</span>
         </div>
         <div className="cx-metric" data-tone="unknown">
           <span className="cx-metric__label">Cost</span>

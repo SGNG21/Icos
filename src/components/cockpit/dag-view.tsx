@@ -122,7 +122,7 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
             <Route size={16} aria-hidden /> Critical path
           </button>
           <span className="cx-dim">
-            {dag.nodes.length} tasks · {dag.roots.length} parallel root{dag.roots.length === 1 ? "" : "s"} · max width {dag.maxParallelism} · remaining critical path {dag.criticalPath.length}
+            {dag.nodes.length} tasks · {dag.roots.length} parallel root{dag.roots.length === 1 ? "" : "s"} · max width {dag.maxParallelism} · remaining critical path {dag.criticalRemaining}
           </span>
         </div>
 

@@ -335,7 +335,7 @@ export function summarizeMissions(
       failed,
       ready: count("READY"),
       progressPct: tasks.length ? Math.round((completed / tasks.length) * 100) : 0,
-      remainingCriticalPath: dag.criticalPath.length,
+      remainingCriticalPath: dag.criticalRemaining,
       attention,
       tone,
     };

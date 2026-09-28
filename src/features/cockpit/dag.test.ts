@@ -52,6 +52,7 @@ describe("buildDag", () => {
       t("x", "queued", ["a"]),
     ]);
     expect(dag.criticalPath).toEqual(["a", "b", "c"]);
+    expect(dag.criticalRemaining).toBe(2);
     expect(dag.edges.find((e) => e.from === "b" && e.to === "c")!.critical).toBe(true);
     expect(dag.edges.find((e) => e.to === "x")!.critical).toBe(false);
   });

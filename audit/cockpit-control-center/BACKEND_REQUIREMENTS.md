@@ -169,3 +169,19 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - RISK: low
 - BLOCKING_OR_NOT: no — cockpit derives READY (queued tasks whose deps all succeeded) and REVIEW (`review_pending` tasks) from scoped mission tasks and labels them "derived"
 - SUGGESTED_INTERFACE: `SupervisorReadModel.queueDepths()`
+
+### BR-21 — Device / session management
+- UI_FEATURE: Settings › Security (list and revoke sessions/devices)
+- NEEDED_DATA_OR_COMMAND: list of the owner's active sessions (device label, created, last seen) + revoke
+- EXPECTED_CANONICAL_SOURCE: Better Auth session table (server)
+- RISK: medium (revocation is a security mutation → through BR-10)
+- BLOCKING_OR_NOT: no (NOT YET WIRED panel)
+- SUGGESTED_INTERFACE: `GET /api/auth/sessions`, revoke via `ControlCommand` `session.revoke`
+
+### BR-22 — Persisted, acknowledgeable alerts
+- UI_FEATURE: Alerts (acknowledge, dedupe, history, P0 escalation)
+- NEEDED_DATA_OR_COMMAND: server-side alert records derived from BR-02 events, with ack state and actor
+- EXPECTED_CANONICAL_SOURCE: none (cockpit derives alerts per snapshot today, see `snapshot.ts` `deriveAlerts`)
+- RISK: low
+- BLOCKING_OR_NOT: no
+- SUGGESTED_INTERFACE: `GET /api/alerts?state=open`, ack via `ControlCommand` `alert.acknowledge`
