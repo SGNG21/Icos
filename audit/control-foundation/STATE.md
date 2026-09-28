@@ -25,6 +25,7 @@ STATE_VERSIONING_CERTIFIED=TRUE
 RUNTIME_CONTROL_FLAGS_CERTIFIED=TRUE
 REAUTH_CERTIFIED=TRUE
 CONTROL_FOUNDATION_CERTIFIED=TRUE
+MERGE_READY=FALSE   # migration 0047 collision with CORE3 9444447 — see "Migrations"
 ```
 
 `CONTROL_FOUNDATION_CERTIFIED=TRUE` covers exactly the seven commands below, on PostgreSQL:
@@ -54,15 +55,33 @@ correctly but not re-driven after release.
 
 Introduced: `drizzle/0047_control_plane.sql` + journal entry idx 44 (`when` 1790800003287). Nothing else.
 
-Collision status (2026-09-28, CORE3 tip `6ee81be`): **no collision**. The only branch in the repository
-containing a `0047_*` migration is this one; CORE3 tops out at `0046_dispatch_execution_lease_and_resume`.
-Not renumbered.
+Collision status — **REAL COLLISION as of CORE3 `18a51b8`** (checked 2026-09-28, at closure):
+CORE3 commit `9444447` (M12) added `drizzle/0047_audit_goal_events.sql` at journal **idx 44**
+(`when` 1790886402287) — the same number and idx as `0047_control_plane`. At the earlier check
+(CORE3 `6ee81be`) there was none. Not renumbered here: which side moves is a merge-topology decision,
+explicitly reserved.
 
-**Merge-time rule:** if, at merge time, both sides contain a migration numbered 0047, renumber exactly
-ONE of them (which one depends on the actual merge topology — decide then, not now), update
-`drizzle/meta/_journal.json` consistently (contiguous `idx`, strictly increasing `when`, tag = file
-name), then run `migration-journal.test.ts` and the full integration suite on a fresh database before
-integrating.
+Simulated merge with `18a51b8` (`git merge-tree`, no ref): **2 textual conflicts** —
+`drizzle/meta/_journal.json` (both add idx 44) and `src/server/database/schema.ts` (both rewrite the
+`audit_event_type_check` literal). `container.ts` and `mission-repository.ts` auto-merge.
+
+**Semantic conflict (the important part):** both migrations DROP and re-ADD `audit_event_type_check`
+with a full allow-list. CORE3's list adds `goal.*` but not `control.command.*`; this branch's list adds
+`control.command.*` but not `goal.*`. Whichever runs LAST defines the constraint, so a naive
+renumbering breaks the other side: goal writes fail again (CORE3 defect returns), or every control
+command fails (its audit insert is in the command transaction).
+
+**Merge-time rule (binding):**
+
+1. Renumber exactly ONE of the two 0047 migrations to 0048 — decide from the actual merge topology.
+2. The migration that runs SECOND must re-create `audit_event_type_check` as the UNION of both lists
+   (live list + `goal.created`, `goal.status_updated`, `goal.converted`, `goal.idempotency_key_set` +
+   `control.command.rejected|admitted|executed|failed`). The first may stay as is.
+3. `schema.ts`'s CHECK literal must equal that union.
+4. `drizzle/meta/_journal.json`: contiguous `idx` (44, 45), strictly increasing `when`, tag = file name.
+5. Before integrating: `migration-journal.test.ts`, a fresh-database migration run, and the full
+   integration suite — including this branch's control suites AND CORE3's goal/self-development
+   suites (a control command and a goal creation must both write audit rows).
 
 ## Supported command matrix
 
@@ -246,20 +265,19 @@ Opened by this milestone (all OPEN, not started):
 - BR-26 individual runtime flag commands (only safe mode is commandable).
 - BR-27 passkey / second factor for CRITICAL (hook `secondFactor: "not_enforced"`).
 
-## Pre-existing defect (separate, not fixed)
+## Pre-existing defect (separate): `goal.*` audit events
 
-`goal.*` audit events: `src/server/repositories/postgres/goal-repository.ts` appends `goal.created`
-(and other `goal.*`) to `audit_entries`, and the Zod `auditEventTypeSchema` allows them, but the database
-`audit_event_type_check` (last defined by migration 0008, extended as a strict superset by 0047) does
-NOT allow `goal.*`. Verified 2026-09-28 on `icos_control_test` (rolled-back transaction): inserting
-`event_type = 'goal.created'` fails with `violates check constraint "audit_event_type_check"`. Because
-`PostgresGoalRepository.create` inserts the goal, its preview and that audit row in ONE transaction,
-goal creation itself fails on PostgreSQL. Migration 0047 intentionally did not add `goal.*` (out of
-scope; it would change unrelated behaviour). Owner: goal intake / CORE3.
+On this branch's base (`9472de7`) the database `audit_event_type_check` does not allow `goal.*`, while
+`PostgresGoalRepository.create` writes `goal.created` in the SAME transaction as the goal — so goal
+creation fails on PostgreSQL. Verified 2026-09-28 on `icos_control_test` (rolled-back transaction):
+`violates check constraint "audit_event_type_check"`.
+Status: **fixed upstream by CORE3 `9444447` (`0047_audit_goal_events`), NOT on this branch** — and that
+fix is exactly what collides with this branch's migration (see "Migrations"). This branch did not and
+must not add `goal.*` on its own; the union rule above resolves both at merge time.
 
 ## CORE3 merge risk
 
-Simulated merge with CORE3 tip `6ee81be` (`git merge-tree`, no ref created): **clean, 0 conflicts**.
+Simulated merge with CORE3 `6ee81be` (earlier): clean. **With CORE3 `18a51b8` (at closure): 2 conflicts** — `_journal.json`, `schema.ts` (see "Migrations").
 On the simulated merged tree: unit 152 files / 1873 tests passed. `tsc` reports 2 errors in
 `src/server/autonomy/hermes-planner-provider.test.ts:77` — **identical on the CORE3 tip alone**
 (CORE3 M12's own type error, not caused by this branch); no merge-induced type error.
@@ -290,6 +308,8 @@ control-hold admission check.** The dispatcher backstop is a fail-closed FALLBAC
 not the intended admission behaviour, and a path relying on it will surface holds as errors.
 
 ## Next step (not started)
+
+First: owner decision on merge topology for the 0047 collision (rule above). Then:
 
 Cockpit integration on `feat/cockpit-control-center`, per `HANDOFF.md` › "Cockpit integration": replace
 `notWiredTransport` with the HTTP transport against `/api/control/commands`, read `expectedVersion` from

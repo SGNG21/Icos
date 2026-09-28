@@ -1,6 +1,6 @@
 # Control Foundation — backend handoff (BR-10, BR-11, BR-12, BR-18)
 
-Branch `feat/control-foundation`, based on CORE3 `feat/autonomy-core3-goal-planner-dag` @ `9472de7` (simulated merge with `6ee81be`: clean).
+Branch `feat/control-foundation`, based on CORE3 `feat/autonomy-core3-goal-planner-dag` @ `9472de7` (simulated merge with CORE3 `18a51b8`: migration 0047 collision — see STATE.md).
 Decision: `docs/decisions/0044-canonical-control-command-bus.md`. Backend only: the cockpit is NOT wired.
 Re-verify HEAD with `git log --oneline -10` before trusting anything below.
 
@@ -212,13 +212,17 @@ Authoritative detail: `audit/control-foundation/STATE.md`.
 - **BR-27 — passkey / second factor for CRITICAL** (hook present, not enforced).
 - Cockpit BR-01…09, BR-13…17, BR-19…22 remain open.
 
-Pre-existing defect (separate): `goal.*` audit events are rejected by the database
-`audit_event_type_check`, which makes `PostgresGoalRepository.create` fail — see STATE.md.
+Pre-existing defect (separate): `goal.*` audit events are rejected by this branch's base database
+`audit_event_type_check`; fixed upstream by CORE3 `9444447`, which collides with migration 0047 — see
+STATE.md › "Migrations".
 
 ## Merge-conflict risk with CORE3
 
-Per-file LOW/MEDIUM/HIGH table and the migration merge-time rule: `audit/control-foundation/STATE.md`
-› "CORE3 merge risk". Simulated merge with CORE3 `6ee81be`: clean. Any dispatch path CORE3 adds after
+Per-file LOW/MEDIUM/HIGH table and the BINDING migration merge-time rule: `audit/control-foundation/STATE.md`
+› "Migrations" and "CORE3 merge risk". **MERGE_READY=FALSE**: CORE3 `9444447` added
+`0047_audit_goal_events` (same number and journal idx); simulated merge with `18a51b8` conflicts in
+`_journal.json` and `schema.ts`, and both migrations redefine `audit_event_type_check` — the second one
+to run must carry the union of `goal.*` and `control.command.*`. Any dispatch path CORE3 adds after
 this branch must get a control-hold admission check; the dispatcher backstop is only the fail-closed
 fallback.
 
