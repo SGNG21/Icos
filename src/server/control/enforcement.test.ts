@@ -10,6 +10,7 @@ import { RuntimeRecoverySweeper } from "@/server/recovery/runtime-recovery-sweep
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
 
 import type { CommandActor } from "./command-bus";
+import { createControlEffects } from "./compose";
 import type { InMemoryControlStore } from "./in-memory-control-store";
 import { ReauthService } from "./reauth";
 
@@ -258,6 +259,20 @@ describe("cancel and workers go through canonical authorities", () => {
     expect((await t.container.mission.findById(t.mission.id))!.status).toBe("cancelled");
     await t.supervisor.run(t.mission.id);
     expect(t.dispatched).toEqual([]);
+  });
+
+  it("the real cancel effect never overwrites a status that changed after validation", async () => {
+    const t = await setup();
+    const effects = createControlEffects({
+      missions: t.container.mission,
+      tasks: t.container.tasks,
+      workers: t.container.workerRegistryStore,
+      registration: t.container.workerRegistration,
+    });
+    // The bus validated `running`, but the mission completed before the effect ran.
+    await t.container.mission.updateMissionStatus(t.mission.id, "succeeded");
+    expect(await effects.cancelMission(t.mission.id, "running")).toBe(false);
+    expect((await t.container.mission.findById(t.mission.id))!.status).toBe("succeeded");
   });
 
   it("ENABLE_WORKER cannot route before a fresh successful probe", async () => {
