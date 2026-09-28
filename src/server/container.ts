@@ -152,8 +152,13 @@ import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
-import type { AutonomousMissionPlanner } from "@/server/autonomy/autonomous-mission-runner";
 import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
+import { CanonicalAutonomousMissionPlanner } from "@/server/autonomy/canonical-mission-planner";
+import {
+  CommandPlannerProvider,
+  parsePlannerCommand,
+} from "@/server/autonomy/hermes-planner-provider";
+import type { AutonomousMissionPlanner } from "@/server/autonomy/autonomous-mission-runner";
 import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
 import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
 import { PostgresSkillUnitOfWork } from "@/server/uow/postgres-skill-uow";
@@ -730,7 +735,7 @@ export async function buildPostgresContainer(
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
-    autonomousPlanner: createOmniRouteAutonomousMissionPlanner(env),
+    autonomousPlanner: buildAutonomousPlanner(env),
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: handle.db,
@@ -892,6 +897,45 @@ export async function resetContainer(): Promise<void> {
  * to branch a worktree FROM, and guessing one (process.cwd()) could point an autonomous
  * agent at whatever directory the server happened to start in.
  */
+/**
+ * Selects the planner BACKEND (M12, defect 27).
+ *
+ * There is one planning authority; this only chooses which compute answers it. OmniRoute is
+ * preferred when configured, because it is the backend the planner was certified against; a
+ * local-process backend is used otherwise. Configuring BOTH is refused rather than silently
+ * ranked, because "which model plans ICOS's own work" must be a stated decision, not an
+ * accident of precedence.
+ *
+ * Returns undefined when autonomous planning was never requested — the pre-existing
+ * behaviour. If it WAS requested and no backend is usable, the underlying factories throw:
+ * fail closed, never a stub.
+ */
+function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined {
+  const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
+  const omniRouteConfigured = Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY);
+  const plannerRequested =
+    env.ICOS_PLANNER_MODEL !== undefined || env.ICOS_PLANNER_TIMEOUT_MS !== undefined;
+
+  if (command && omniRouteConfigured && plannerRequested) {
+    throw new Error(
+      "AUTONOMY_PLANNER_BACKEND_AMBIGUOUS: both ICOS_PLANNER_COMMAND and OmniRoute are configured; choose one",
+    );
+  }
+
+  if (command) {
+    return new CanonicalAutonomousMissionPlanner({
+      provider: new CommandPlannerProvider({
+        command: command.command,
+        args: command.args,
+        timeoutMs: env.ICOS_PLANNER_TIMEOUT_MS ?? 300_000,
+      }),
+      timeoutMs: env.ICOS_PLANNER_TIMEOUT_MS ?? 300_000,
+    });
+  }
+
+  return createOmniRouteAutonomousMissionPlanner(env);
+}
+
 function buildWorkerExecutor(env: Env): {
   executor: WorkerExecutor;
   runtimes: WorkerRuntimeDescriptor[];

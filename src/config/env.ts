@@ -78,6 +78,16 @@ const envSchema = z.object({
    * default.
    */
   ICOS_GATE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * A LOCAL-PROCESS planner backend, as JSON (M12): `{"command":"...","args":[...]}` where
+   * one arg contains `{{prompt}}`.
+   *
+   * The canonical planner owns every plan semantic; this only says which compute answers it.
+   * No product, model or provider name is committed — a deployment names the binary, exactly
+   * as it does for worker probe and exec commands. Malformed configuration REFUSES TO BOOT
+   * rather than silently leaving ICOS unable to plan.
+   */
+  ICOS_PLANNER_COMMAND: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,
