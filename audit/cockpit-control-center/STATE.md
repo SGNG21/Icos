@@ -8,7 +8,7 @@ Re-verify `CURRENT_HEAD` against `git log` before trusting it.
 See the milestone log below for later heads.
 
 ## CURRENT_MILESTONE
-C1–C3 partial (see log: D-04 missing pages is MUST_NOW).
+Cockpit UI scope complete against available backend (C1–C4, C6 contracts, C7–C9 honest shells, PWA). Remaining work is BACKEND-BLOCKED (BR-01, BR-10, BR-12, …) — see latest log entry.
 
 ## EXISTING_COCKPIT_PATHS (C0 forensic audit)
 | Path | What | Verdict |
@@ -49,7 +49,7 @@ See `BACKEND_REQUIREMENTS.md` (BR-01 … BR-20).
 - `src/app/cockpit/**` (new control center routes + `cockpit.css`)
 - `src/features/cockpit/**` (read models, DAG, commands, live — pure + one server loader)
 - `src/components/cockpit/**`
-- `src/app/manifest.ts`, `src/app/icon.svg`, `src/app/apple-icon.tsx`, `public/sw.js`, `public/offline.html` (PWA)
+- `src/app/manifest.ts`, `src/app/icon.tsx`, `src/app/apple-icon.tsx`, `public/sw.js`, `public/offline.html` (PWA)
 - `src/proxy.ts` matcher only (let PWA assets through unauthenticated — they carry no data)
 - `audit/cockpit-control-center/**`
 
@@ -83,3 +83,22 @@ See `BACKEND_REQUIREMENTS.md` (BR-01 … BR-20).
 - MUST_NOW: write the 8 missing pages (D-04) so nav doesn't 404.
 - SHOULD_NEXT: D-05 PWA, D-06 visual pass, D-07 render tests, then C5 SSE (BR-01).
 - NEXT_ACTION: create `src/app/cockpit/alerts/page.tsx` (render `snapshot.alerts` grouped by category; preferences = `Unavailable` BR-19), then `system/page.tsx` (emergency CommandButtons + safe-mode state UNKNOWN BR-12).
+
+### C4–C9 — all sections, PWA, defect fixes, visual validation (2026-09-28)
+- HEAD: see `git log` (checkpoints `a2dd4f0` pages · `bbf5cb5` PWA · `6633a3e` D-01/02/03 · `4a5426d` visual fixes · `dde4208` format)
+- PAGES (all 12 routes live): overview, missions, mission/[id], workers, providers, alerts, autonomy, self-development, audit, system (emergency), settings, ask.
+- FILES_CHANGED: `src/app/cockpit/{providers,alerts,autonomy,self-development,audit,system,settings,ask}/page.tsx`; `src/features/cockpit/{resources,audit-view,ask}.ts` (+tests), `load.ts` (`loadSystemFacts`); `src/components/cockpit/{ask-icos,worker-card,brand-mark}.tsx`, `render.test.ts`, `pwa.test.ts`; PWA `src/app/{manifest.ts,icon.tsx,apple-icon.tsx}`, `public/{sw.js,offline.html}`; `src/proxy.ts` (+test); defects `src/app/{layout.tsx,page.tsx,control-room/page.tsx}`, `src/components/layout/{sidebar,business-sidebar}.tsx`.
+- DEFECTS CLOSED: D-01 control-room now gated on real headers (forged cookie → 307 login; real session now shows data, before: always "No data available"); D-02 globals.css restored; D-03 hardcoded "Système nominal"/"Intégrations désactivées"/"Exécution verrouillée" replaced by derived health + persistence fact; D-04 all pages; D-05 PWA; D-06 visual validation; D-07 render tests.
+- TESTS: `pnpm test` → 150 files / 1850 passed. Cockpit-specific: 80 (DAG, snapshot/UNKNOWN propagation, commands/risk/idempotency, live/stale, resources, audit query+pagination, render: UNKNOWN/NOT AVAILABLE/NOT YET WIRED, nav 10 sections + 5-slot thumb bar, DAG view, system map (no animation w/o activity), worker card identity separation, emergency controls never LOW and never succeed, Ask ICOS never interprets, SW run in node:vm: navigations network-only, offline → data-free page, API/POST/foreign never intercepted, only `/_next/static` cached; manifest; proxy: PWA assets open, look-alike paths protected). `pnpm typecheck` clean, eslint clean on touched paths, prettier clean on touched files.
+- VISUAL VALIDATION: headless Chrome over CDP (extension unavailable) at 390×844 (DPR2) and 1440×900 against a real Postgres ICOS (scratch DB `icos_cockpit_preview`, migrations applied, owner via `auth:bootstrap`, missions/workers written through ICOS services + real `workerHealthProber.probeAll()`). 30 renders, 0 console errors, no horizontal overflow after fixes. Verified: HIGH dialog (typed + passkey NOT YET WIRED → send disabled), MEDIUM safe-mode → "NOT YET WIRED — nothing was executed", Ask ICOS submit → nothing sent, offline → chip + desaturated data + stale health badge. Fixes found this way are in `4a5426d`.
+  - Reproduce: `createdb icos_cockpit_preview`; migrate `drizzle/` with drizzle migrator (TCP `postgres://$USER@localhost:5432/icos_cockpit_preview`; postgres.js rejects `?host=`); env: PERSISTENCE=postgres, BETTER_AUTH_SECRET(32+), BETTER_AUTH_URL=http://localhost:3100, ICOS_OWNER_EMAIL; Postgres mode also REQUIRES OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY/ICOS_REVIEWER_MODEL (use an unreachable URL + placeholder for a read-only preview); `ICOS_OWNER_PASSWORD=… pnpm auth:bootstrap` creates the owner but never exits (kill it after the row appears); `next dev -p 3100`; sign in via `POST /api/auth/sign-in/email` with `origin` header.
+- OPEN_UI_DEFECTS:
+  - D-08 legacy `/` still calls `forbidden()` although `experimental.authInterrupts` is off (would 500 for a forbidden user). Not cockpit scope.
+  - D-09 legacy `/` panels show "SIMULATION"/"Session locale" badges while rendering real Postgres data (legacy labels, owned by the legacy home).
+  - D-10 cockpit redirects every unauthenticated deep link to `/login?next=/cockpit` (server components cannot see the path without a proxy header).
+  - D-11 DAG: single barycenter pass; very wide graphs open at 0.75 scale with the tail off-canvas (pan/fit available).
+  - D-12 `auth:bootstrap` does not exit (open handle) — script owner, not cockpit.
+- BACKEND_REQUIREMENTS: BR-01…BR-22 (added BR-21 device/session management, BR-22 persisted/acknowledgeable alerts).
+- MUST_NOW (backend-blocked, not UI): BR-10 governed command bus (+BR-11 versions, BR-18 step-up) is the single blocker for ANY control; BR-12 runtime control flags for real safe mode.
+- SHOULD_NEXT: BR-01 SSE over audit (replace `LiveRefresh` polling), BR-02 runtime event vocabulary, BR-03 worker model/provider/account fields, BR-06/08 autonomy + improvement backlog read models; cockpit side then: C5 SSE client with `Last-Event-ID` resume, alert ack UI (BR-22).
+- NEXT_ACTION: when BR-10 lands, replace `notWiredTransport` in `command-button.tsx` with an HTTP transport (`POST /api/commands`, `GET /api/commands/:id`) — contract and tests already in `commands.ts`; nothing else in the UI needs to change.
