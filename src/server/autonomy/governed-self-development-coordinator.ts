@@ -21,6 +21,8 @@ import type { WorkerRegistryPort } from "@/core/contracts/worker-registry";
 import type { MissionTask } from "@/core/mission/contracts";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { IntegrationGate } from "@/server/workspace-manager/integration-gate";
+import type { IntegrationApplier } from "@/server/workspace-manager/integration-applier";
+import type { WorkspaceManager } from "@/server/workspace-manager/manager";
 import type { IntegrationReport } from "@/server/workspace-manager/report";
 
 import { BoundedRepairController, type RepairCandidate } from "./bounded-repair-controller";
@@ -100,7 +102,13 @@ export interface IndependentReviewHandoff {
 }
 
 export type GovernedSelfDevelopmentState =
-  "merge_ready" | "policy_denied" | "gate_rejected" | "human_decision_required";
+  /** The gate accepted but nothing integrated: no applier was composed. */
+  | "merge_ready"
+  /** The gate accepted AND the canonical branch advanced, exactly once (M10). */
+  | "integrated"
+  | "policy_denied"
+  | "gate_rejected"
+  | "human_decision_required";
 
 export interface GovernedSelfDevelopmentOutcome {
   candidateId: string;
@@ -123,6 +131,19 @@ export interface GovernedSelfDevelopmentDependencies {
   execution: CanonicalExecutionHandoff;
   review: IndependentReviewHandoff;
   integrationGate: Pick<IntegrationGate, "integrate">;
+  /**
+   * APPLIES an accepted result to the canonical branch (M10, decision 0041).
+   *
+   * Without it this coordinator stopped at "merge-ready only; no merge performed" — it said
+   * so in its own outcome message. That is the SAME defect shape as 19: a gate that decides
+   * and nothing that acts, so self-development could evaluate its own work and never land it.
+   *
+   * Optional, so a deployment that has not opted into autonomous integration keeps exactly
+   * the previous behaviour. It is the canonical applier, never a second merge path.
+   */
+  integrationApplier?: Pick<IntegrationApplier, "apply">;
+  /** Reaps the workspace after a terminal outcome. Same authority as every other reap. */
+  workspaces?: Pick<WorkspaceManager, "cleanup">;
   durableMemory: DurableMemory;
 }
 
@@ -378,12 +399,69 @@ export class GovernedSelfDevelopmentCoordinator {
       );
     }
 
+    /*
+     * ACCEPT -> APPLY -> REAP (M10).
+     *
+     * The gate granted `accepted`; the canonical applier is what moves the branch, fenced by
+     * the SAME workspace lease that authorised the execution. Without an applier composed
+     * the outcome stays `merge_ready`, exactly as before — autonomous integration is opted
+     * into, never switched on by upgrading.
+     */
+    if (!this.dependencies.integrationApplier) {
+      return this.harvestAndFinalize(
+        request,
+        factualExecutions,
+        factualReviews,
+        "merge_ready",
+        "INTEGRATION_GATE_ACCEPT:merge-ready only; no applier composed",
+        repairAttemptsUsed,
+        canonicalWorkflowId,
+        gateReport,
+      );
+    }
+
+    const applied = await this.dependencies.integrationApplier.apply(
+      currentExecution.workspaceId,
+      { lease: currentExecution.workspaceLease },
+    );
+
+    if (applied.status !== "INTEGRATED" && applied.status !== "ALREADY_INTEGRATED") {
+      /*
+       * NEEDS_REBASE or a lost race. Neither is a failure of the WORK — the target moved —
+       * so it goes back for a human or a later attempt rather than being recorded as a
+       * rejection of what the worker produced.
+       */
+      return this.harvestAndFinalize(
+        request,
+        factualExecutions,
+        factualReviews,
+        "human_decision_required",
+        `INTEGRATION_NOT_APPLIED:${applied.status}`,
+        repairAttemptsUsed,
+        canonicalWorkflowId,
+        gateReport,
+      );
+    }
+
+    /*
+     * Reap only AFTER the commit is contained in the target, and never let a cleanup failure
+     * mask a successful integration: the work has landed either way, and a surviving
+     * worktree is an operational annoyance, not a correctness problem.
+     */
+    await this.dependencies.workspaces
+      ?.cleanup(
+        currentExecution.workspaceId,
+        currentExecution.workspaceLease.owner,
+        currentExecution.workspaceLease.fencingToken,
+      )
+      .catch(() => undefined);
+
     return this.harvestAndFinalize(
       request,
       factualExecutions,
       factualReviews,
-      "merge_ready",
-      "INTEGRATION_GATE_ACCEPT:merge-ready only; no merge performed",
+      "integrated",
+      `INTEGRATION_APPLIED:${applied.status}`,
       repairAttemptsUsed,
       canonicalWorkflowId,
       gateReport,

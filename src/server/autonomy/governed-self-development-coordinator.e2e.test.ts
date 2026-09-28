@@ -28,6 +28,8 @@ import {
   makeRepoFixture,
   type RepoFixture,
 } from "@/server/workspace-manager/test-fixtures";
+import type { IntegrationApplyOutcome } from "@/server/workspace-manager/integration-applier";
+import type { GovernedSelfDevelopmentDependencies } from "./governed-self-development-coordinator";
 import {
   GovernedSelfDevelopmentCoordinator,
   type CanonicalExecutionHandoff,
@@ -259,6 +261,9 @@ interface HarnessOptions {
   maxRepairAttempts?: number;
   gateReject?: boolean;
   gateUnknown?: boolean;
+  /** M10 — the canonical applier and reaper, opted into exactly as production does. */
+  integrationApplier?: GovernedSelfDevelopmentDependencies["integrationApplier"];
+  workspaces?: GovernedSelfDevelopmentDependencies["workspaces"];
 }
 
 interface Harness {
@@ -382,6 +387,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       execution,
       review,
       integrationGate: { integrate },
+      /* M10: absent unless a test opts in, mirroring the production default. */
+      ...(options.integrationApplier ? { integrationApplier: options.integrationApplier } : {}),
+      ...(options.workspaces ? { workspaces: options.workspaces } : {}),
       durableMemory: memory,
     },
     {
@@ -605,5 +613,93 @@ describe("GovernedSelfDevelopmentCoordinator Phase 8E E2E", () => {
     expect(outcome.finalState).toBe("human_decision_required");
     expect(outcome.reason).toContain("UNKNOWN_GATE_DECISION");
     expect(outcome.finalState).not.toBe("merge_ready");
+  });
+
+  /*
+   * M10 — SELF-DEVELOPMENT MUST BE ABLE TO LAND ITS OWN WORK.
+   *
+   * The coordinator stopped at "merge-ready only; no merge performed" — it said so in its own
+   * outcome message. That is the SAME defect shape as 19, one layer up: a gate that decides
+   * and nothing that acts, so ICOS could evaluate its own improvement and never integrate it.
+   */
+  it("APPLIES the accepted result through the CANONICAL applier and reaps the workspace", async () => {
+    const apply = vi.fn(async (): Promise<IntegrationApplyOutcome> => ({
+      status: "INTEGRATED",
+      commit: "c".repeat(40),
+      previousTarget: "b".repeat(40),
+    }));
+    const cleanup = vi.fn(async () => ({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      databaseDropped: true,
+      archivePath: "/tmp/a.json",
+    }));
+    const h = await createHarness({
+      integrationApplier: { apply },
+      workspaces: { cleanup },
+    });
+
+    const outcome = await h.coordinator.process(h.request);
+
+    expect(outcome.finalState).toBe("integrated");
+    expect(outcome.reason).toContain("INTEGRATION_APPLIED:INTEGRATED");
+    expect(apply).toHaveBeenCalledTimes(1);
+    /* Fenced by the SAME workspace lease that authorised the execution. */
+    /*
+     * Fenced by the SAME workspace lease that authorised the execution: a stale coordinator
+     * holding an old ACCEPT cannot move the canonical branch.
+     */
+    expect(apply).toHaveBeenCalledWith(expect.any(String), {
+      lease: { owner: expect.any(String), fencingToken: expect.any(Number) },
+    });
+    /* Reaped only AFTER the commit is contained in the target. */
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(cleanup.mock.invocationCallOrder[0]).toBeGreaterThan(apply.mock.invocationCallOrder[0]);
+  });
+
+  it("A REPLAY is ALREADY_INTEGRATED, not a second integration", async () => {
+    const apply = vi.fn(async (): Promise<IntegrationApplyOutcome> => ({
+      status: "ALREADY_INTEGRATED",
+      commit: "c".repeat(40),
+    }));
+    const h = await createHarness({ integrationApplier: { apply } });
+
+    const outcome = await h.coordinator.process(h.request);
+
+    /* Exactly-once is the applier's property; the coordinator must honour it as success. */
+    expect(outcome.finalState).toBe("integrated");
+    expect(outcome.reason).toContain("ALREADY_INTEGRATED");
+  });
+
+  it("A MOVED TARGET goes to a human, and is NOT recorded as a rejection of the work", async () => {
+    const apply = vi.fn(async (): Promise<IntegrationApplyOutcome> => ({
+      status: "NEEDS_REBASE",
+      targetCommit: "t".repeat(40),
+      sourceCommit: "s".repeat(40),
+    }));
+    const cleanup = vi.fn(async () => ({
+      worktreeRemoved: true,
+      branchDeleted: false,
+      databaseDropped: true,
+      archivePath: "/tmp/a.json",
+    }));
+    const h = await createHarness({ integrationApplier: { apply }, workspaces: { cleanup } });
+
+    const outcome = await h.coordinator.process(h.request);
+
+    expect(outcome.finalState).toBe("human_decision_required");
+    expect(outcome.reason).toContain("INTEGRATION_NOT_APPLIED:NEEDS_REBASE");
+    /* The worker's work was fine — the branch must survive for the rebase. */
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("WITHOUT AN APPLIER it still only DECIDES — integration is opt-in", async () => {
+    const h = await createHarness();
+
+    const outcome = await h.coordinator.process(h.request);
+
+    /* Autonomous self-integration is never switched on by upgrading. */
+    expect(outcome.finalState).toBe("merge_ready");
+    expect(outcome.reason).toContain("no applier composed");
   });
 });
