@@ -41,6 +41,16 @@ describe("proxy", () => {
   });
 
   it("continue d'exclure les routes publiques du matcher", () => {
-    expect(config.matcher).toEqual(["/((?!api|_next/static|_next/image|favicon.ico).*)"]);
+    const matches = (path: string) => config.matcher.some((m) => new RegExp(`^${m}$`).test(path));
+    for (const open of ["/api/cockpit", "/_next/static/x.js", "/favicon.ico", "/manifest.webmanifest", "/sw.js", "/offline.html", "/icon/192", "/apple-icon"]) {
+      expect(matches(open), open).toBe(false);
+    }
+  });
+
+  it("garde protégées les routes applicatives, y compris les préfixes trompeurs", () => {
+    const matches = (path: string) => config.matcher.some((m) => new RegExp(`^${m}$`).test(path));
+    for (const guarded of ["/", "/cockpit", "/cockpit/system", "/control-room", "/sw.jsx", "/offline.html/x", "/manifest.webmanifest.bak", "/iconography"]) {
+      expect(matches(guarded), guarded).toBe(true);
+    }
   });
 });
