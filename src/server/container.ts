@@ -726,7 +726,31 @@ export async function buildPostgresContainer(
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: handle.db,
-    close: handle.close,
+    /*
+     * CLOSE EVERY CLIENT THIS CONTAINER OPENED, not just the shared handle (D1).
+     *
+     * `buildPostgresContainer` opens THREE PostgreSQL clients: the shared drizzle handle,
+     * and one each for the workspace registry and the git port (both need a connection
+     * outside the drizzle schema). Only the handle was closed, so two `postgres.js` pools
+     * — and their sockets — outlived `close()` and kept the Node event loop alive.
+     *
+     * For a long-lived server that is invisible. For a CLI it is fatal: `scripts/
+     * auth-bootstrap.ts` completed its work, printed its result, and then never exited,
+     * so the process that spawned it waited until the test timeout. That is defect D1 —
+     * three "failures" that were one leaked lifecycle, not an auth bug.
+     *
+     * Failures are collected rather than short-circuited: one client refusing to close
+     * must not leave the others open.
+     */
+    close: async () => {
+      const results = await Promise.allSettled([
+        handle.close(),
+        pgWorkspaceRegistry.close(),
+        pgGit.close(),
+      ]);
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed && failed.status === "rejected") throw failed.reason;
+    },
     // Goal intake services
     goalNormalizer,
     goalPlanner,
