@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 
 import {
-  WorkerCapacityExceededError,
   type AuthorizeDispatchStartResult,
   type DispatchAttempt,
   type DispatchAttemptRepository,
@@ -19,8 +18,8 @@ import {
   dispatchAttempts,
   missionTasks,
   tasks,
-  workers,
 } from "@/server/database/schema";
+import { assertWorkerCapacity } from "./worker-capacity";
 import { transitionTask } from "@/core/tasks/lifecycle";
 import { auditToRow, rowToTask } from "@/server/database/mappers";
 
@@ -70,98 +69,6 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     return rows.map((row) => row.workerId as string).sort((a, b) => a.localeCompare(b));
   }
 
-  /**
-   * Fails closed when the assigned worker, or its shared capacity pool, is
-   * already fully committed. Must run inside the prepare transaction, after the
-   * worker rows have been locked.
-   *
-   * An UNREGISTERED worker id is rejected: assigning work to a worker that is
-   * not in the registry means the decision was made against state that no longer
-   * exists, and letting it through would create an attempt whose load nothing
-   * bounds.
-   */
-  private async assertWorkerCapacity(
-    tx: Database,
-    workerId: string,
-    missionTaskId: string,
-  ): Promise<void> {
-    const assigned = await tx
-      .select()
-      .from(workers)
-      .where(eq(workers.id, workerId))
-      .limit(1)
-      .for("update");
-    const worker = assigned[0];
-
-    if (!worker) {
-      throw new WorkerCapacityExceededError(workerId, "is not registered");
-    }
-
-    // Lock every peer in the pool, ordered by id: same order for everyone, so
-    // no deadlock, and no peer can commit an attempt while we are counting.
-    const poolMembers = worker.capacityPool
-      ? await tx
-          .select({ id: workers.id, limit: workers.capacityPoolLimit })
-          .from(workers)
-          .where(eq(workers.capacityPool, worker.capacityPool))
-          .orderBy(asc(workers.id))
-          .for("update")
-      : [];
-
-    const active = await tx
-      .select({ workerId: dispatchAttempts.workerId })
-      .from(dispatchAttempts)
-      .where(
-        and(
-          isNotNull(dispatchAttempts.workerId),
-          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
-        ),
-      );
-
-    // This task's own live attempt is not competing demand: a retry of the same
-    // logical work must not be blocked by the attempt it is superseding.
-    const ownAttempts = await tx
-      .select({ id: dispatchAttempts.id })
-      .from(dispatchAttempts)
-      .where(
-        and(
-          eq(dispatchAttempts.missionTaskId, missionTaskId),
-          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
-        ),
-      );
-    const ownActive = ownAttempts.length;
-
-    const mine = active.filter((row) => row.workerId === workerId).length;
-    if (mine - Math.min(mine, ownActive) >= worker.maxConcurrency) {
-      throw new WorkerCapacityExceededError(
-        workerId,
-        `already holds ${mine} of ${worker.maxConcurrency} concurrent executions`,
-      );
-    }
-
-    if (worker.capacityPool && poolMembers.length > 0) {
-      const declared = poolMembers
-        .map((member) => member.limit)
-        .filter((limit): limit is number => limit !== null);
-
-      if (declared.length > 0) {
-        // A quota is a ceiling: when members disagree, the SMALLEST wins.
-        const limit = Math.min(...declared);
-        const memberIds = new Set(poolMembers.map((member) => member.id));
-        const poolActive = active.filter(
-          (row) => row.workerId !== null && memberIds.has(row.workerId),
-        ).length;
-
-        if (poolActive - Math.min(poolActive, ownActive) >= limit) {
-          throw new WorkerCapacityExceededError(
-            workerId,
-            `capacity pool ${worker.capacityPool} holds ${poolActive} of ${limit}`,
-          );
-        }
-      }
-    }
-  }
-
   async prepare(input: PrepareDispatchAttemptInput): Promise<PrepareDispatchAttemptResult> {
     return this.db.transaction(async (tx) => {
       const now = new Date();
@@ -208,7 +115,7 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
        * pool can never deadlock by acquiring the same rows in opposite orders.
        */
       if (input.workerId) {
-        await this.assertWorkerCapacity(tx, input.workerId, input.missionTaskId);
+        await assertWorkerCapacity(tx, input.workerId, input.missionTaskId);
       }
 
       const currentAttempts = await tx

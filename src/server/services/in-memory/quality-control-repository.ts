@@ -163,6 +163,8 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       nextAttempt?: number;
       nextWorkflowId?: string;
       prompt?: string;
+      /** The worker the retry is ROUTED to (M7.1). */
+      workerId?: string;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -185,6 +187,8 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       nextAttempt?: number;
       nextWorkflowId?: string;
       prompt?: string;
+      /** The worker the retry is ROUTED to (M7.1). */
+      workerId?: string;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -242,6 +246,12 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
           workflowId: input.nextWorkflowId,
           prompt: input.prompt,
           workerKind: missionTask?.workerKind ?? undefined,
+          /*
+           * M7.1 — the routed worker travels with the retry. `prepare()` enforces that
+           * worker's capacity inside its own transaction, so the in-memory path gets the
+           * same guarantee as PostgreSQL for free.
+           */
+          workerId: input.workerId,
           capability: missionTask?.capability ?? undefined,
         });
         dispatchAcquired = prepared.acquired;

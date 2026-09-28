@@ -65,6 +65,19 @@ export interface QualityControlRepository {
       nextAttempt?: number;
       nextWorkflowId?: string;
       prompt?: string;
+      /**
+       * The worker the retry is ROUTED to (M7.1).
+       *
+       * Before this, a QC retry attempt was created with `worker_id = NULL`: unrouted,
+       * and therefore unexecutable by any dispatcher that resolves its worker from the
+       * ledger. Optional, because a deployment with no registry routes nothing and must
+       * keep its pre-M4 behaviour.
+       *
+       * When present, the implementation MUST enforce the worker's capacity inside the
+       * same transaction, exactly as `prepare()` does. A retry that oversubscribes a
+       * worker is the same defect as a dispatch that does.
+       */
+      workerId?: string;
       replanReason?: string;
       forceEscalate?: boolean;
     },

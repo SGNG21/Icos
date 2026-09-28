@@ -12,6 +12,7 @@ import type { ReviewDecisionRepository } from "@/server/review/review-decision-r
 import type { ReviewerService } from "@/server/review/ports";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
+import type { CapabilityRouter } from "@/server/routing/capability-router";
 
 const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
 /** Cool-down before a review parked as unavailable is retried with a fresh budget. */
@@ -31,6 +32,18 @@ export interface QualityControlServiceDeps {
   assertOwned?: (missionId: string, signal?: AbortSignal) => Promise<void>;
   dispatchPrepared?: DispatchPreparedQualityAttempt;
   reviewUnavailableCooldownMs?: number;
+  /**
+   * THE canonical routing authority (M7.1). Optional: a deployment with no registry
+   * routes nothing and keeps its pre-M4 behaviour.
+   *
+   * Without it, a CORRECT/RETRY attempt was created with `worker_id = NULL` — unrouted,
+   * and therefore unexecutable by any dispatcher that resolves its worker from the
+   * ledger. The external worker executor (0038) fails such an attempt closed with
+   * PROVIDER_UNAVAILABLE, so the retry burned a budget slot and changed nothing. This is
+   * the same `CapabilityRouter` the supervisor uses; QC is a second CALLER of one
+   * authority, never a second authority.
+   */
+  capabilityRouter?: CapabilityRouter;
 }
 
 export interface RegisterExecutionInput {
@@ -58,9 +71,23 @@ function actionForDecision(decision: string): QualityAction {
   }
 }
 
+/**
+ * Raised when a retry is due but the fleet can take nothing right now (M7.1).
+ *
+ * Deliberately NOT a decision. Creating an unroutable attempt would consume a retry
+ * from a bounded budget to record a FLEET problem as a TASK failure. Throwing releases
+ * the job for a later sweep instead — back-pressure, matching the dispatch rule that a
+ * task with no eligible worker stays recoverable rather than failing.
+ */
+export const QUALITY_CONTROL_NO_ELIGIBLE_WORKER = "QUALITY_CONTROL_NO_ELIGIBLE_WORKER";
+
 function stableReviewError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "QUALITY_CONTROL_REVIEW_ABORTED";
+  }
+  /* Keep a fleet problem legible instead of filing it as a review failure. */
+  if (error instanceof Error && error.message.startsWith(QUALITY_CONTROL_NO_ELIGIBLE_WORKER)) {
+    return QUALITY_CONTROL_NO_ELIGIBLE_WORKER;
   }
   return "QUALITY_CONTROL_REVIEW_FAILED";
 }
@@ -165,11 +192,25 @@ export class QualityControlService {
               `${change.field}: ${change.reason}${change.suggestion ? ` (${change.suggestion})` : ""}`,
           ),
         ].join("\n");
+        /*
+         * M7.1 — ROUTE the retry before creating it.
+         *
+         * Routing here, not in the repository: the CapabilityRouter is the one authority
+         * (decision 0031) and persistence must not acquire a second opinion about which
+         * worker should run something. The routed worker's capacity is then enforced
+         * inside `applyAction`'s transaction by the shared guard.
+         */
+        const retryWorkerId =
+          current.action === "CORRECT" || current.action === "RETRY"
+            ? await this.routeRetry(current.taskId, originalAttempt?.workerKind)
+            : undefined;
+
         const applied = await this.deps.qualityJobs.applyAction(job.workflowId, ownerToken, {
           ...(current.action === "CORRECT" || current.action === "RETRY"
             ? {
                 nextAttempt,
                 nextWorkflowId: workflowIdForAttempt(current.taskId, nextAttempt),
+                workerId: retryWorkerId,
                 prompt: [
                   "Original task objective:",
                   originalAttempt!.prompt,
@@ -230,6 +271,45 @@ export class QualityControlService {
       signal?.throwIfAborted();
       await this.processPending(candidate, signal);
     }
+  }
+
+  /**
+   * Chooses the worker for a retry, through the canonical router.
+   *
+   * The previous attempt's worker is NOT excluded. A worker that died has already lost
+   * its health evidence (decision 0033), so the router will not offer it; a worker that
+   * merely hit a transient failure is a perfectly good choice, and excluding it would
+   * throw away capacity for no reason. Eligibility is the router's job, not a list of
+   * grudges kept here.
+   */
+  private async routeRetry(
+    taskId: string,
+    workerKind?: string,
+  ): Promise<string | undefined> {
+    if (!this.deps.capabilityRouter) return undefined;
+
+    /*
+     * Required capabilities come from the DURABLE canonical Task, the same source the
+     * supervisor routes on (M4). The value that survived the restart is the value that
+     * routes.
+     */
+    const canonicalTask = await this.deps.tasks.getById(taskId);
+    const routing = await this.deps.capabilityRouter.route({
+      requiredCapabilities: canonicalTask?.requiredCapabilities ?? [],
+      workerKind,
+    });
+
+    if (routing.decision === "ROUTED" && routing.worker) {
+      return routing.worker.id;
+    }
+
+    if (routing.decision === "NO_ELIGIBLE_WORKER") {
+      /* Back-pressure, not a verdict on the task. See the constant's doc. */
+      throw new Error(`${QUALITY_CONTROL_NO_ELIGIBLE_WORKER}: ${routing.reason ?? "fleet"}`);
+    }
+
+    /* ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour. */
+    return undefined;
   }
 
   private async review(workflowId: string, signal?: AbortSignal) {

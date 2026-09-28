@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { assertWorkerCapacity } from "./worker-capacity";
 
 import type {
   QualityAction,
@@ -212,6 +213,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       nextAttempt?: number;
       nextWorkflowId?: string;
       prompt?: string;
+      workerId?: string;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -246,6 +248,19 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${job.missionTaskId}, 0))`,
         );
+
+        /*
+         * M7.1 — a routed retry must obey the SAME capacity rule as a routed dispatch.
+         *
+         * This INSERT bypasses `prepare()`, so before M7.1 it also bypassed the capacity
+         * guard entirely: a retry could hand work to a worker already at its limit, or
+         * blow through a shared pool quota, which `prepare()` would have refused. The
+         * guard is the extracted shared authority — not a second copy of the rule.
+         */
+        if (input.workerId) {
+          await assertWorkerCapacity(tx, input.workerId, job.missionTaskId);
+        }
+
         const previous = await tx
           .select({
             workerKind: dispatchAttempts.workerKind,
@@ -265,6 +280,8 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
             workflowId: input.nextWorkflowId,
             prompt: input.prompt,
             workerKind: previous[0]?.workerKind ?? null,
+            /* Routed by the caller through the canonical CapabilityRouter (M7.1). */
+            workerId: input.workerId ?? null,
             capability: previous[0]?.capability ?? null,
             state: "prepared",
             createdAt: sql`now()`,

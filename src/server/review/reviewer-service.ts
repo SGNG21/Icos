@@ -6,6 +6,7 @@ import type {
   ReviewDecision,
   ReviewDecisionRepository,
 } from "@/server/review/ports";
+import { idSchema } from "@/core/contracts/common";
 import { DeterministicReviewer } from "./deterministic-reviewer";
 
 /**
@@ -54,7 +55,22 @@ export class ReviewerServiceImpl implements ReviewerService {
       severity: this.decisionToSeverity(llmResult.decision),
       reasons: llmResult.reasons,
       requestedChanges: llmResult.requestedChanges,
-      evidenceRefs: input.evidence.map((e) => e.timestamp),
+      /*
+       * Evidence is referenced by TYPE, matching DeterministicReviewer.
+       *
+       * This mapped `e.timestamp` before, which can NEVER satisfy `idSchema`
+       * (lowercase, digits, `-`/`_` only) because an ISO timestamp carries `T`, `Z`,
+       * `:` and `.`. Any reviewed result that carried evidence therefore produced an
+       * invalid decision record and threw QUALITY_CONTROL_INVALID_REVIEW. It never
+       * fired because nothing attached evidence to a reviewed SUCCESS until the M6.3
+       * external worker executor did; the CORE3 chaos certification is what exposed it.
+       *
+       * Non-conforming labels are dropped rather than allowed to invalidate the whole
+       * record: losing a reference is a cosmetic loss, losing the review is not.
+       */
+      evidenceRefs: input.evidence
+        .map((e) => e.type)
+        .filter((type) => idSchema.safeParse(type).success),
       findingRefs: input.findings.map((f) => f.check),
       policyRefs: ["llm-review"],
       providerMetadata: llmResult.providerMetadata,

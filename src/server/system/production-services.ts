@@ -75,6 +75,13 @@ function createRecoveryScheduler(
     reviewDecisions: container.reviewDecisions,
     dispatchAttempts: container.dispatchAttempts,
     qualityJobs: container.qualityControlJobs,
+    /*
+     * M7.1 — QC retries are ROUTED. Without this the retry attempt carried no worker,
+     * so an external worker dispatcher could not execute it and failed it closed,
+     * burning a retry budget on a fleet problem. Same router instance the supervisor
+     * uses: one authority, two callers.
+     */
+    capabilityRouter: container.capabilityRouter,
     dispatchPrepared: async (prepared, signal) => {
       const result = await container.taskExecution.dispatch({
         missionId: prepared.missionId,
