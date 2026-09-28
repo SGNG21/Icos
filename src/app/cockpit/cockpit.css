@@ -126,12 +126,24 @@ body:has(.cx) {
 }
 
 /* Tones → a single custom property every component reads. */
-[data-tone="ok"] { --tone: var(--ok); }
-[data-tone="critical"] { --tone: var(--critical); }
-[data-tone="warn"] { --tone: var(--warn); }
-[data-tone="flow"] { --tone: var(--flow); }
-[data-tone="autonomy"] { --tone: var(--autonomy); }
-[data-tone="unknown"] { --tone: var(--unknown); }
+[data-tone="ok"] {
+  --tone: var(--ok);
+}
+[data-tone="critical"] {
+  --tone: var(--critical);
+}
+[data-tone="warn"] {
+  --tone: var(--warn);
+}
+[data-tone="flow"] {
+  --tone: var(--flow);
+}
+[data-tone="autonomy"] {
+  --tone: var(--autonomy);
+}
+[data-tone="unknown"] {
+  --tone: var(--unknown);
+}
 
 /* ---------- Rail (desktop navigation) ---------- */
 .cx-rail {
@@ -165,9 +177,20 @@ body:has(.cx) {
   font-size: 11px;
 }
 
-.cx-brand__ring { fill: none; stroke: var(--autonomy); stroke-width: 1.5; opacity: 0.8; }
-.cx-brand__core { fill: var(--autonomy); }
-.cx-brand__syn { stroke: var(--flow); stroke-width: 1.2; opacity: 0.55; }
+.cx-brand__ring {
+  fill: none;
+  stroke: var(--autonomy);
+  stroke-width: 1.5;
+  opacity: 0.8;
+}
+.cx-brand__core {
+  fill: var(--autonomy);
+}
+.cx-brand__syn {
+  stroke: var(--flow);
+  stroke-width: 1.2;
+  opacity: 0.55;
+}
 
 .cx-rail__nav ul {
   display: grid;
@@ -319,7 +342,9 @@ html[data-cx-stale] .cx-top__health {
   border-radius: var(--r);
   background: var(--glass);
   backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 20px 40px -24px rgb(0 0 0 / 60%);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 3%) inset,
+    0 20px 40px -24px rgb(0 0 0 / 60%);
 }
 
 .cx-panel__head {
@@ -1041,10 +1066,19 @@ html[data-cx-stale] .cx-top__health {
   letter-spacing: 0.08em;
 }
 
-.cx-risk[data-risk="LOW"] { color: var(--flow); background: rgb(56 189 248 / 14%); }
-.cx-risk[data-risk="MEDIUM"] { color: var(--warn); background: rgb(251 146 60 / 14%); }
+.cx-risk[data-risk="LOW"] {
+  color: var(--flow);
+  background: rgb(56 189 248 / 14%);
+}
+.cx-risk[data-risk="MEDIUM"] {
+  color: var(--warn);
+  background: rgb(251 146 60 / 14%);
+}
 .cx-risk[data-risk="HIGH"],
-.cx-risk[data-risk="CRITICAL"] { color: var(--critical); background: rgb(251 77 109 / 14%); }
+.cx-risk[data-risk="CRITICAL"] {
+  color: var(--critical);
+  background: rgb(251 77 109 / 14%);
+}
 
 .cx-dialog {
   /* Global reset zeroes <dialog> margins; re-centre the modal. */
@@ -1548,7 +1582,11 @@ html[data-cx-stale] .cx-top__health {
     border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);
     border-radius: 16px;
     background:
-      radial-gradient(400px 160px at 90% 0%, color-mix(in srgb, var(--tone) 22%, transparent), transparent 70%),
+      radial-gradient(
+        400px 160px at 90% 0%,
+        color-mix(in srgb, var(--tone) 22%, transparent),
+        transparent 70%
+      ),
       var(--glass);
   }
 
@@ -1846,8 +1884,7 @@ html[data-cx-stale] .cx-top__health {
 .cx-panel--danger {
   border-color: rgb(251 77 109 / 30%);
   background:
-    radial-gradient(600px 200px at 0% 0%, rgb(251 77 109 / 9%), transparent 70%),
-    var(--glass);
+    radial-gradient(600px 200px at 0% 0%, rgb(251 77 109 / 9%), transparent 70%), var(--glass);
 }
 
 .cx-safestate {

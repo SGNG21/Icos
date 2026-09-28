@@ -98,7 +98,11 @@ export interface WorkerView {
   status: WorkerRegistryEntry["status"];
   health: WorkerRegistryEntry["health"];
   availability: WorkerRegistryEntry["availability"];
-  probe: { outcome: WorkerRegistryEntry["lastProbeOutcome"]; at: string | null; ageMs: number | null };
+  probe: {
+    outcome: WorkerRegistryEntry["lastProbeOutcome"];
+    at: string | null;
+    ageMs: number | null;
+  };
   /** Worker ≠ Model ≠ Provider ≠ Account ≠ Capacity slot: each is its own Truth. */
   model: Truth<string>;
   provider: Truth<string>;
@@ -163,7 +167,11 @@ export interface CockpitSnapshot {
   alerts: Alert[];
   workers: Truth<WorkerView[]>;
   missions: Truth<MissionSummary[]>;
-  focus: { missionId: string; title: string; path: { id: string; title: string; status: NodeStatus }[] } | null;
+  focus: {
+    missionId: string;
+    title: string;
+    path: { id: string; title: string; status: NodeStatus }[];
+  } | null;
   timeline: Truth<TimelineEntry[]>;
 }
 
@@ -181,11 +189,19 @@ export function safeMetadata(metadata: Record<string, string>): Record<string, s
   return Object.fromEntries(Object.entries(metadata).filter(([key]) => !SECRET_KEY.test(key)));
 }
 
-function declared(metadata: Record<string, string>, key: string, requirement: string): Truth<string> {
+function declared(
+  metadata: Record<string, string>,
+  key: string,
+  requirement: string,
+): Truth<string> {
   const value = metadata[key];
   return value
     ? real(value, "declared in worker registry metadata (not verified by a probe)")
-    : missing("not_available", `The registry does not record a ${key} for this worker.`, requirement);
+    : missing(
+        "not_available",
+        `The registry does not record a ${key} for this worker.`,
+        requirement,
+      );
 }
 
 export function buildWorkerViews(
@@ -219,7 +235,10 @@ export function buildWorkerViews(
 
   return workers.map((w) => {
     const routable =
-      w.status === "active" && w.health === "healthy" && w.availability === "available" && w.lastProbeOutcome === "ok";
+      w.status === "active" &&
+      w.health === "healthy" &&
+      w.availability === "available" &&
+      w.lastProbeOutcome === "ok";
     return {
       id: w.id,
       name: w.displayName,
@@ -263,7 +282,10 @@ function workerTone(w: WorkerRegistryEntry): Tone {
   return "unknown";
 }
 
-function dagInput(tasks: readonly MissionTask[], attempts: Truth<DispatchAttempt[]>): DagInputTask[] {
+function dagInput(
+  tasks: readonly MissionTask[],
+  attempts: Truth<DispatchAttempt[]>,
+): DagInputTask[] {
   const byMissionTask = new Map<string, DispatchAttempt>();
   if (isReal(attempts)) for (const a of attempts.value) byMissionTask.set(a.missionTaskId, a);
   return tasks.map((task) => {
@@ -297,7 +319,10 @@ export function summarizeMissions(
     const completed = count("COMPLETED");
     const failed = count("FAILED_TERMINAL");
     const attention =
-      mission.status === "blocked" || mission.status === "failed" || mission.status === "awaiting_approval" || failed > 0;
+      mission.status === "blocked" ||
+      mission.status === "failed" ||
+      mission.status === "awaiting_approval" ||
+      failed > 0;
     const tone: Tone =
       mission.status === "failed" || mission.status === "blocked" || failed > 0
         ? "critical"
@@ -318,7 +343,11 @@ export function summarizeMissions(
         focus = {
           missionId: mission.id,
           title: mission.title,
-          path: dag.criticalPath.map((id) => ({ id, title: byId.get(id)!.title, status: byId.get(id)!.status })),
+          path: dag.criticalPath.map((id) => ({
+            id,
+            title: byId.get(id)!.title,
+            status: byId.get(id)!.status,
+          })),
         };
       }
     }
@@ -340,7 +369,9 @@ export function summarizeMissions(
       tone,
     };
   });
-  summaries.sort((a, b) => Number(b.attention) - Number(a.attention) || b.updatedAt.localeCompare(a.updatedAt));
+  summaries.sort(
+    (a, b) => Number(b.attention) - Number(a.attention) || b.updatedAt.localeCompare(a.updatedAt),
+  );
   return { summaries, focus };
 }
 
@@ -360,7 +391,8 @@ export function deriveAlerts(
       category: "CRITICAL",
       severity: "P1",
       title: "In-memory demo backend",
-      detail: "PERSISTENCE is not postgres: data comes from development seeds, not from ICOS state.",
+      detail:
+        "PERSISTENCE is not postgres: data comes from development seeds, not from ICOS state.",
       href: "/cockpit/system",
     });
   }
@@ -410,7 +442,10 @@ export function deriveAlerts(
         id: `mission-${m.id}`,
         category: "MISSION",
         severity: "P1",
-        title: m.status === "failed" ? `Mission failed: ${m.title}` : `${m.failed} failed task(s) in ${m.title}`,
+        title:
+          m.status === "failed"
+            ? `Mission failed: ${m.title}`
+            : `${m.failed} failed task(s) in ${m.title}`,
         href: `/cockpit/missions/${m.id}`,
         at: m.updatedAt,
       });
@@ -429,7 +464,11 @@ export function deriveAlerts(
           href: `/cockpit/workers#${w.id}`,
           at: w.probe.at ?? undefined,
         });
-      } else if (w.probe.outcome === "stale" || w.probe.outcome === "never" || w.probe.outcome === "unsupported") {
+      } else if (
+        w.probe.outcome === "stale" ||
+        w.probe.outcome === "never" ||
+        w.probe.outcome === "unsupported"
+      ) {
         alerts.push({
           id: `worker-${w.id}`,
           category: "WORKER",
@@ -463,13 +502,18 @@ export function deriveAlerts(
         severity: "P1",
         title: `${denied.length} denied access attempt(s) in 24h`,
         href: "/cockpit/audit?eventType=auth.access.denied",
-        at: denied.map((e) => e.occurredAt).sort().at(-1),
+        at: denied
+          .map((e) => e.occurredAt)
+          .sort()
+          .at(-1),
       });
     }
   }
 
   return alerts.sort(
-    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || (b.at ?? "").localeCompare(a.at ?? ""),
+    (a, b) =>
+      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+      (b.at ?? "").localeCompare(a.at ?? ""),
   );
 }
 
@@ -482,24 +526,36 @@ const HEALTH_CATEGORIES: ReadonlySet<AlertCategory> = new Set([
   "RECOVERY",
 ]);
 
-export function deriveHealth(alerts: readonly Alert[], workers: readonly WorkerView[] | null): CockpitSnapshot["health"] {
+export function deriveHealth(
+  alerts: readonly Alert[],
+  workers: readonly WorkerView[] | null,
+): CockpitSnapshot["health"] {
   const relevant = alerts.filter((a) => HEALTH_CATEGORIES.has(a.category) && a.severity !== "P2");
   if (relevant.some((a) => a.severity === "P0")) {
     return { level: "critical", reasons: relevant.map((a) => a.title) };
   }
   if (relevant.length > 0) return { level: "degraded", reasons: relevant.map((a) => a.title) };
   if (workers?.some((w) => w.routable)) {
-    return { level: "healthy", reasons: ["At least one worker is routable with fresh probe evidence; no open incident."] };
+    return {
+      level: "healthy",
+      reasons: ["At least one worker is routable with fresh probe evidence; no open incident."],
+    };
   }
   return {
     level: "unknown",
-    reasons: [workers ? "No worker has current health evidence." : "Worker health is outside your scope or unreadable."],
+    reasons: [
+      workers
+        ? "No worker has current health evidence."
+        : "Worker health is outside your scope or unreadable.",
+    ],
   };
 }
 
 function auditTone(type: string): Tone {
-  if (type === "auth.access.denied" || type.endsWith(".rejected") || type.endsWith(".failed")) return "critical";
-  if (type.startsWith("auth.") || type.startsWith("human_") || type.startsWith("role.")) return "flow";
+  if (type === "auth.access.denied" || type.endsWith(".rejected") || type.endsWith(".failed"))
+    return "critical";
+  if (type.startsWith("auth.") || type.startsWith("human_") || type.startsWith("role."))
+    return "flow";
   if (type.startsWith("skill.") || type.startsWith("capability.")) return "autonomy";
   if (type.endsWith(".completed") || type.endsWith(".succeeded")) return "ok";
   return "flow";
@@ -522,9 +578,16 @@ export function toTimeline(entries: readonly AuditEntry[]): TimelineEntry[] {
 export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
   const since = sources.now.getTime() - DAY_MS;
   const workers = isReal(sources.workers)
-    ? buildWorkerViews(sources.workers.value, sources.activeAssignments, sources.attempts, sources.now)
+    ? buildWorkerViews(
+        sources.workers.value,
+        sources.activeAssignments,
+        sources.attempts,
+        sources.now,
+      )
     : null;
-  const missionData = isReal(sources.missions) ? summarizeMissions(sources.missions.value, sources.attempts) : null;
+  const missionData = isReal(sources.missions)
+    ? summarizeMissions(sources.missions.value, sources.attempts)
+    : null;
   const missions = missionData?.summaries ?? null;
   const alerts = deriveAlerts(sources, workers, missions);
   const health = deriveHealth(alerts, workers);
@@ -535,26 +598,42 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
   const fromMissions = (fn: (m: MissionSummary[]) => number, derivation: string): Truth<number> =>
     missions ? real(fn(missions), derivation) : (sources.missions as Truth<number>);
 
-  const activeMissions = fromMissions((m) => m.filter((x) => ACTIVE_MISSION.has(x.status)).length, "missions in planning/ready/running/blocked/awaiting approval");
-  const readyQueue = fromMissions((m) => m.reduce((n, x) => n + x.ready, 0), "queued mission tasks whose dependencies all completed (BR-20)");
+  const activeMissions = fromMissions(
+    (m) => m.filter((x) => ACTIVE_MISSION.has(x.status)).length,
+    "missions in planning/ready/running/blocked/awaiting approval",
+  );
+  const readyQueue = fromMissions(
+    (m) => m.reduce((n, x) => n + x.ready, 0),
+    "queued mission tasks whose dependencies all completed (BR-20)",
+  );
   const activeWorkers: Truth<number> = isReal(sources.activeAssignments)
-    ? real(new Set(sources.activeAssignments.value).size, "distinct workers holding a non-terminal dispatch")
+    ? real(
+        new Set(sources.activeAssignments.value).size,
+        "distinct workers holding a non-terminal dispatch",
+      )
     : sources.activeAssignments;
   const reviewBacklog: Truth<number> = isReal(sources.tasks)
     ? real(sources.tasks.value.filter((t) => t.status === "review_pending").length)
     : sources.tasks;
   const humanInterventions: Truth<number> = recentAudit
     ? real(
-        recentAudit.filter((e) => e.actor.kind === "human" && !e.eventType.startsWith("auth.")).length,
+        recentAudit.filter((e) => e.actor.kind === "human" && !e.eventType.startsWith("auth."))
+          .length,
         "human-actor audit entries in 24h — partial proxy (BR-07)",
       )
     : (sources.audit as Truth<number>);
   const mustNow = real(alerts.filter((a) => a.severity === "P0").length, "P0 alerts");
-  const telemetry = (what: string) => missing<number>("not_available", `${what} is not measured by any ICOS source yet.`, "BR-04");
+  const telemetry = (what: string) =>
+    missing<number>("not_available", `${what} is not measured by any ICOS source yet.`, "BR-04");
 
-  const workerCount = workers ? real(workers.filter((w) => w.routable).length, "routable workers") : (sources.workers as Truth<number>);
+  const workerCount = workers
+    ? real(workers.filter((w) => w.routable).length, "routable workers")
+    : (sources.workers as Truth<number>);
   const deniedCount: Truth<number> = recentAudit
-    ? real(recentAudit.filter((e) => e.eventType === "auth.access.denied").length, "denied accesses in 24h")
+    ? real(
+        recentAudit.filter((e) => e.eventType === "auth.access.denied").length,
+        "denied accesses in 24h",
+      )
     : (sources.audit as Truth<number>);
   const worstWorker: Tone = !workers?.length
     ? "unknown"
@@ -584,17 +663,64 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
       label: "Goals",
       tone: recentAudit ? "flow" : "unknown",
       metric: recentAudit
-        ? real(recentAudit.filter((e) => e.eventType.startsWith("goal.")).length, "goal events in 24h")
+        ? real(
+            recentAudit.filter((e) => e.eventType.startsWith("goal.")).length,
+            "goal events in 24h",
+          )
         : (sources.audit as Truth<number>),
       metricLabel: "events 24h",
       activity: recentAudit?.filter((e) => e.eventType.startsWith("goal.")).length ?? 0,
       href: "/cockpit/audit?eventType=goal.created",
     },
-    { key: "missions", label: "Missions", tone: missionTone, metric: activeMissions, metricLabel: "active", activity: runningN, href: "/cockpit/missions" },
-    { key: "plans", label: "Plans · DAG", tone: missions ? "flow" : "unknown", metric: readyQueue, metricLabel: "ready", activity: readyN, href: "/cockpit/missions" },
-    { key: "workers", label: "Workers", tone: worstWorker, metric: workerCount, metricLabel: "routable", activity: isReal(activeWorkers) ? activeWorkers.value : 0, href: "/cockpit/workers" },
-    { key: "providers", label: "Providers", tone: "unknown", metric: telemetry("Provider health"), metricLabel: "healthy", activity: 0, href: "/cockpit/providers" },
-    { key: "memory", label: "Memory", tone: "unknown", metric: missing("not_available", "Durable memory exposes no health or volume metric.", "BR-02"), metricLabel: "", activity: 0, href: "/cockpit/system" },
+    {
+      key: "missions",
+      label: "Missions",
+      tone: missionTone,
+      metric: activeMissions,
+      metricLabel: "active",
+      activity: runningN,
+      href: "/cockpit/missions",
+    },
+    {
+      key: "plans",
+      label: "Plans · DAG",
+      tone: missions ? "flow" : "unknown",
+      metric: readyQueue,
+      metricLabel: "ready",
+      activity: readyN,
+      href: "/cockpit/missions",
+    },
+    {
+      key: "workers",
+      label: "Workers",
+      tone: worstWorker,
+      metric: workerCount,
+      metricLabel: "routable",
+      activity: isReal(activeWorkers) ? activeWorkers.value : 0,
+      href: "/cockpit/workers",
+    },
+    {
+      key: "providers",
+      label: "Providers",
+      tone: "unknown",
+      metric: telemetry("Provider health"),
+      metricLabel: "healthy",
+      activity: 0,
+      href: "/cockpit/providers",
+    },
+    {
+      key: "memory",
+      label: "Memory",
+      tone: "unknown",
+      metric: missing(
+        "not_available",
+        "Durable memory exposes no health or volume metric.",
+        "BR-02",
+      ),
+      metricLabel: "",
+      activity: 0,
+      href: "/cockpit/system",
+    },
     {
       key: "security",
       label: "Security",
@@ -604,14 +730,40 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
       activity: isReal(deniedCount) ? deniedCount.value : 0,
       href: "/cockpit/audit?eventType=auth.access.denied",
     },
-    { key: "review", label: "Review", tone: !isReal(reviewBacklog) ? "unknown" : reviewN > 0 ? "warn" : "ok", metric: reviewBacklog, metricLabel: "pending", activity: reviewN, href: "/cockpit/missions" },
-    { key: "integration", label: "Integration", tone: "unknown", metric: missing("not_available", "The integration gate exposes no backlog read.", "BR-14"), metricLabel: "", activity: 0, href: "/cockpit/system" },
-    { key: "self-development", label: "Self-dev", tone: "unknown", metric: missing("not_available", "Improvement candidates are not persisted.", "BR-08"), metricLabel: "", activity: 0, href: "/cockpit/self-development" },
+    {
+      key: "review",
+      label: "Review",
+      tone: !isReal(reviewBacklog) ? "unknown" : reviewN > 0 ? "warn" : "ok",
+      metric: reviewBacklog,
+      metricLabel: "pending",
+      activity: reviewN,
+      href: "/cockpit/missions",
+    },
+    {
+      key: "integration",
+      label: "Integration",
+      tone: "unknown",
+      metric: missing("not_available", "The integration gate exposes no backlog read.", "BR-14"),
+      metricLabel: "",
+      activity: 0,
+      href: "/cockpit/system",
+    },
+    {
+      key: "self-development",
+      label: "Self-dev",
+      tone: "unknown",
+      metric: missing("not_available", "Improvement candidates are not persisted.", "BR-08"),
+      metricLabel: "",
+      activity: 0,
+      href: "/cockpit/self-development",
+    },
     {
       key: "observability",
       label: "Observability",
       tone: recentAudit ? "ok" : "unknown",
-      metric: recentAudit ? real(recentAudit.length, "audit entries in 24h") : (sources.audit as Truth<number>),
+      metric: recentAudit
+        ? real(recentAudit.length, "audit entries in 24h")
+        : (sources.audit as Truth<number>),
       metricLabel: "events 24h",
       activity: recentAudit?.length ?? 0,
       href: "/cockpit/audit",
@@ -624,16 +776,31 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     scope: sources.scope,
     health,
     metrics: {
-      globalHealth: health.level === "unknown" ? missing("unknown", health.reasons[0] ?? "") : real(health.level, "rolled up from alerts"),
-      autonomyLevel: missing("not_available", "No autonomy assessment is produced by ICOS; the level is never guessed.", "BR-06"),
+      globalHealth:
+        health.level === "unknown"
+          ? missing("unknown", health.reasons[0] ?? "")
+          : real(health.level, "rolled up from alerts"),
+      autonomyLevel: missing(
+        "not_available",
+        "No autonomy assessment is produced by ICOS; the level is never guessed.",
+        "BR-06",
+      ),
       activeMissions,
       activeWorkers,
       readyQueue,
       reviewBacklog,
-      integrationBacklog: missing("not_available", "The integration gate exposes no backlog read.", "BR-14"),
+      integrationBacklog: missing(
+        "not_available",
+        "The integration gate exposes no backlog read.",
+        "BR-14",
+      ),
       mustNow,
       providerHealth: telemetry("Provider health"),
-      cost: missing("not_available", "No cost ledger exists; cost is never estimated in the UI.", "BR-05"),
+      cost: missing(
+        "not_available",
+        "No cost ledger exists; cost is never estimated in the UI.",
+        "BR-05",
+      ),
       tokenThroughput: telemetry("Token throughput"),
       latency: telemetry("Provider latency"),
       humanInterventions,
@@ -643,6 +810,8 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     workers: workers ? real(workers) : (sources.workers as Truth<WorkerView[]>),
     missions: missions ? real(missions) : (sources.missions as Truth<MissionSummary[]>),
     focus: missionData?.focus ?? null,
-    timeline: isReal(sources.audit) ? real(toTimeline(sources.audit.value).slice(0, 40)) : (sources.audit as Truth<TimelineEntry[]>),
+    timeline: isReal(sources.audit)
+      ? real(toTimeline(sources.audit.value).slice(0, 40))
+      : (sources.audit as Truth<TimelineEntry[]>),
   };
 }

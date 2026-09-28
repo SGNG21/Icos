@@ -17,8 +17,15 @@ const none = { acknowledged: false, typed: "", reauthenticated: false };
 
 describe("ControlCommand", () => {
   it("carries id, idempotency key, risk and version; no client-asserted actor", () => {
-    const cmd = createCommand({ action: "worker.stop", target, expectedStateVersion: "v7" }, new Date("2026-09-28T00:00:00Z"));
-    expect(cmd).toMatchObject({ riskClass: "MEDIUM", expectedStateVersion: "v7", issuedAt: "2026-09-28T00:00:00.000Z" });
+    const cmd = createCommand(
+      { action: "worker.stop", target, expectedStateVersion: "v7" },
+      new Date("2026-09-28T00:00:00Z"),
+    );
+    expect(cmd).toMatchObject({
+      riskClass: "MEDIUM",
+      expectedStateVersion: "v7",
+      issuedAt: "2026-09-28T00:00:00.000Z",
+    });
     expect(cmd.commandId).not.toBe(cmd.idempotencyKey);
     expect(cmd).not.toHaveProperty("actor");
   });
@@ -33,32 +40,53 @@ describe("dangerous-action confirmation", () => {
   });
 
   it("requires acknowledgement for MEDIUM", () => {
-    const cmd = createCommand({ action: "mission.stop", target: { kind: "mission", id: "m", label: "M" } });
+    const cmd = createCommand({
+      action: "mission.stop",
+      target: { kind: "mission", id: "m", label: "M" },
+    });
     expect(canSubmit(cmd, none)).toBe(false);
     expect(canSubmit(cmd, { ...none, acknowledged: true })).toBe(true);
   });
 
   it("requires the typed target AND re-auth for HIGH", () => {
-    const cmd = createCommand({ action: "system.stop_external_workers", target: { kind: "system", id: "icos", label: "ICOS" } });
-    expect(canSubmit(cmd, { acknowledged: true, typed: "ICOS", reauthenticated: false })).toBe(false);
-    expect(canSubmit(cmd, { acknowledged: true, typed: "icos", reauthenticated: true })).toBe(false);
+    const cmd = createCommand({
+      action: "system.stop_external_workers",
+      target: { kind: "system", id: "icos", label: "ICOS" },
+    });
+    expect(canSubmit(cmd, { acknowledged: true, typed: "ICOS", reauthenticated: false })).toBe(
+      false,
+    );
+    expect(canSubmit(cmd, { acknowledged: true, typed: "icos", reauthenticated: true })).toBe(
+      false,
+    );
     expect(canSubmit(cmd, { acknowledged: true, typed: "ICOS", reauthenticated: true })).toBe(true);
   });
 
   it("never lets CRITICAL execute from the UI", () => {
-    const cmd = { ...createCommand({ action: "worker.stop", target }), riskClass: "CRITICAL" } as ControlCommand;
-    expect(canSubmit(cmd, { acknowledged: true, typed: target.label, reauthenticated: true })).toBe(false);
+    const cmd = {
+      ...createCommand({ action: "worker.stop", target }),
+      riskClass: "CRITICAL",
+    } as ControlCommand;
+    expect(canSubmit(cmd, { acknowledged: true, typed: target.label, reauthenticated: true })).toBe(
+      false,
+    );
   });
 });
 
 describe("idempotent submission", () => {
   it("reports NOT YET WIRED instead of success while the bus is missing", async () => {
-    const out = await submitCommand(notWiredTransport, createCommand({ action: "worker.pause", target }));
+    const out = await submitCommand(
+      notWiredTransport,
+      createCommand({ action: "worker.pause", target }),
+    );
     expect(out.status).toBe("not_wired");
   });
 
   it("turns a dropped request into UNKNOWN_EXECUTION_STATE and forbids blind retry", async () => {
-    const transport: CommandTransport = { submit: vi.fn().mockRejectedValue(new Error("offline")), status: vi.fn() };
+    const transport: CommandTransport = {
+      submit: vi.fn().mockRejectedValue(new Error("offline")),
+      status: vi.fn(),
+    };
     const out = await submitCommand(transport, createCommand({ action: "worker.stop", target }));
     expect(out.status).toBe("unknown_execution_state");
     expect(mayResubmit(out)).toBe(false);
@@ -67,7 +95,10 @@ describe("idempotent submission", () => {
 
   it("allows resubmission of the SAME command only after the server proves it never received it", async () => {
     const cmd = createCommand({ action: "worker.stop", target });
-    const status = vi.fn().mockResolvedValueOnce("not_found").mockResolvedValueOnce({ status: "executed" });
+    const status = vi
+      .fn()
+      .mockResolvedValueOnce("not_found")
+      .mockResolvedValueOnce({ status: "executed" });
     const transport: CommandTransport = { submit: vi.fn(), status };
     const first = await reconcileCommand(transport, cmd);
     expect(first.status).toBe("not_received");
@@ -80,9 +111,12 @@ describe("idempotent submission", () => {
   });
 
   it("stays UNKNOWN when reconciliation itself fails", async () => {
-    const transport: CommandTransport = { submit: vi.fn(), status: vi.fn().mockRejectedValue(new Error("x")) };
-    expect((await reconcileCommand(transport, createCommand({ action: "worker.stop", target }))).status).toBe(
-      "unknown_execution_state",
-    );
+    const transport: CommandTransport = {
+      submit: vi.fn(),
+      status: vi.fn().mockRejectedValue(new Error("x")),
+    };
+    expect(
+      (await reconcileCommand(transport, createCommand({ action: "worker.stop", target }))).status,
+    ).toBe("unknown_execution_state");
   });
 });

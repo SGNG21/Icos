@@ -10,13 +10,28 @@ export const metadata = { title: "Workers" };
 const FILTERS: { key: string; label: string; match: (w: WorkerView) => boolean }[] = [
   { key: "all", label: "All", match: () => true },
   { key: "busy", label: "Executing", match: (w) => w.assignments.length > 0 },
-  { key: "attention", label: "Attention", match: (w) => w.tone === "critical" || w.tone === "warn" },
+  {
+    key: "attention",
+    label: "Attention",
+    match: (w) => w.tone === "critical" || w.tone === "warn",
+  },
   { key: "unknown", label: "No evidence", match: (w) => w.tone === "unknown" },
 ];
 
-const RANK: Record<Tone, number> = { critical: 0, warn: 1, unknown: 2, flow: 3, autonomy: 3, ok: 4 };
+const RANK: Record<Tone, number> = {
+  critical: 0,
+  warn: 1,
+  unknown: 2,
+  flow: 3,
+  autonomy: 3,
+  ok: 4,
+};
 
-export default async function WorkersPage({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+export default async function WorkersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const snapshot = await loadSnapshot();
   if (!snapshot) return null;
   const view = (await searchParams).view ?? "all";
@@ -31,7 +46,11 @@ export default async function WorkersPage({ searchParams }: { searchParams: Prom
         </div>
         <nav className="cx-filters" aria-label="Filter workers">
           {FILTERS.map((f) => (
-            <Link key={f.key} href={`/cockpit/workers?view=${f.key}`} aria-current={filter.key === f.key ? "true" : undefined}>
+            <Link
+              key={f.key}
+              href={`/cockpit/workers?view=${f.key}`}
+              aria-current={filter.key === f.key ? "true" : undefined}
+            >
               {f.label}
             </Link>
           ))}

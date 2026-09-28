@@ -16,5 +16,8 @@ export function generateImageMetadata() {
 export default async function Icon({ id }: { id: Promise<string> }) {
   const key = await id;
   const size = key === "maskable" ? 512 : Number(key);
-  return new ImageResponse(<BrandMark size={size} inset={key === "maskable" ? 0.25 : 0} />, { width: size, height: size });
+  return new ImageResponse(<BrandMark size={size} inset={key === "maskable" ? 0.25 : 0} />, {
+    width: size,
+    height: size,
+  });
 }

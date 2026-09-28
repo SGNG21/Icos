@@ -33,7 +33,11 @@ export const getCockpitContext = cache(async (): Promise<CockpitContext | null> 
   const access = await resolveCockpitAccess(container, await headers());
   if (access.kind === "redirect") redirect("/login?next=%2Fcockpit");
   if (access.kind === "forbidden") return null;
-  return { container, session: access.session, scope: await resolveOperationalScope(container, access.session) };
+  return {
+    container,
+    session: access.session,
+    scope: await resolveOperationalScope(container, access.session),
+  };
 });
 
 async function read<T>(label: string, fn: () => Promise<T>): Promise<Truth<T>> {
@@ -47,10 +51,15 @@ async function read<T>(label: string, fn: () => Promise<T>): Promise<Truth<T>> {
 
 const ACTIVE_TASK = new Set(["queued", "running", "review_pending"]);
 
-async function nonTerminalAttempts(container: Container, missions: readonly MissionWithTasks[]): Promise<DispatchAttempt[]> {
+async function nonTerminalAttempts(
+  container: Container,
+  missions: readonly MissionWithTasks[],
+): Promise<DispatchAttempt[]> {
   // ponytail: one query per active mission task; replace with a cross-mission listing (BR-16) past ~100 active tasks.
   const active = missions.flatMap((m) => m.tasks).filter((t) => ACTIVE_TASK.has(t.status));
-  const lists = await Promise.all(active.map((t) => container.dispatchAttempts.listNonTerminalByMissionTaskId(t.id)));
+  const lists = await Promise.all(
+    active.map((t) => container.dispatchAttempts.listNonTerminalByMissionTaskId(t.id)),
+  );
   return lists.flat();
 }
 
@@ -59,7 +68,10 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
   if (!ctx) return null;
   const { container, session, scope } = ctx;
   const global = scope.kind === "global";
-  const outOfScope = missing("not_available", "Worker infrastructure is visible to owner/admin scope only.");
+  const outOfScope = missing(
+    "not_available",
+    "Worker infrastructure is visible to owner/admin scope only.",
+  );
 
   const [tasks, missions, workers, activeAssignments, pendingApprovals] = await Promise.all([
     read("Tasks", () => container.tasks.listForScope(scope)),
@@ -68,13 +80,20 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
       const out: MissionWithTasks[] = [];
       for (const mission of await container.mission.list()) {
         const tasks = await container.mission.listTasks(mission.id);
-        if (await isMissionInScope(container, mission.id, scope, tasks)) out.push({ mission, tasks });
+        if (await isMissionInScope(container, mission.id, scope, tasks))
+          out.push({ mission, tasks });
       }
       return out;
     }),
     global ? read("Worker registry", () => container.workerRegistryStore.list()) : outOfScope,
-    global ? read("Dispatch ledger", () => container.dispatchAttempts.listActiveWorkerAssignments()) : outOfScope,
-    read("Approvals", async () => (await container.actions.listForScope(scope, { approvalStatus: "pending" })).length),
+    global
+      ? read("Dispatch ledger", () => container.dispatchAttempts.listActiveWorkerAssignments())
+      : outOfScope,
+    read(
+      "Approvals",
+      async () =>
+        (await container.actions.listForScope(scope, { approvalStatus: "pending" })).length,
+    ),
   ]);
 
   const attempts = isReal(missions)
@@ -89,7 +108,9 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
   } else if (isReal(tasks)) {
     // Linked scope: only entries about tasks the caller can already see.
     const visible = new Set(tasks.value.map((t) => t.id));
-    audit = await read("Audit log", async () => (await container.audit.list()).filter((e) => e.taskId && visible.has(e.taskId)));
+    audit = await read("Audit log", async () =>
+      (await container.audit.list()).filter((e) => e.taskId && visible.has(e.taskId)),
+    );
   } else {
     audit = tasks;
   }
@@ -135,10 +156,13 @@ export async function loadMissionDetail(id: string): Promise<MissionDetail | nul
     read("Review decisions", () => container.reviewDecisions.listByMissionId(id)),
   ]);
 
-  const attemptByTask = new Map(isReal(attempts) ? attempts.value.map((a) => [a.missionTaskId, a]) : []);
+  const attemptByTask = new Map(
+    isReal(attempts) ? attempts.value.map((a) => [a.missionTaskId, a]) : [],
+  );
   const latestReview = new Map<string, ReviewDecisionRecord>();
   if (isReal(reviews)) {
-    for (const r of [...reviews.value].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) latestReview.set(r.taskId, r);
+    for (const r of [...reviews.value].sort((a, b) => a.createdAt.localeCompare(b.createdAt)))
+      latestReview.set(r.taskId, r);
   }
 
   const input: DagInputTask[] = tasks.map((task) => {
@@ -182,14 +206,49 @@ export async function loadSystemFacts(): Promise<SystemFacts | null> {
   return {
     backend: c.db ? "postgres" : "memory",
     services: [
-      { key: "postgres", label: "PostgreSQL persistence", composed: Boolean(c.db), essential: true },
+      {
+        key: "postgres",
+        label: "PostgreSQL persistence",
+        composed: Boolean(c.db),
+        essential: true,
+      },
       { key: "auth", label: "Human authentication", composed: Boolean(c.auth), essential: true },
-      { key: "callback", label: "Execution callback secret", composed: Boolean(c.executionCallbackSecret), essential: true },
-      { key: "operational-access", label: "Operational scope service", composed: Boolean(c.operationalAccess), essential: true },
-      { key: "planner", label: "Autonomous mission planner", composed: Boolean(c.autonomousPlanner), essential: false },
-      { key: "workspace", label: "Workspace manager", composed: Boolean(c.workspaceManager), essential: false },
-      { key: "gate", label: "Integration gate", composed: Boolean(c.integrationGate), essential: false },
-      { key: "applier", label: "Integration applier", composed: Boolean(c.integrationApplier), essential: false },
+      {
+        key: "callback",
+        label: "Execution callback secret",
+        composed: Boolean(c.executionCallbackSecret),
+        essential: true,
+      },
+      {
+        key: "operational-access",
+        label: "Operational scope service",
+        composed: Boolean(c.operationalAccess),
+        essential: true,
+      },
+      {
+        key: "planner",
+        label: "Autonomous mission planner",
+        composed: Boolean(c.autonomousPlanner),
+        essential: false,
+      },
+      {
+        key: "workspace",
+        label: "Workspace manager",
+        composed: Boolean(c.workspaceManager),
+        essential: false,
+      },
+      {
+        key: "gate",
+        label: "Integration gate",
+        composed: Boolean(c.integrationGate),
+        essential: false,
+      },
+      {
+        key: "applier",
+        label: "Integration applier",
+        composed: Boolean(c.integrationApplier),
+        essential: false,
+      },
     ],
   };
 }

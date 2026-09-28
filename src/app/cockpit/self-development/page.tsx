@@ -3,7 +3,18 @@ import { getCockpitContext } from "@/features/cockpit/load";
 
 export const metadata = { title: "Self-development" };
 
-const LIFECYCLE = ["DETECTED", "CANDIDATE", "GOAL", "MISSION", "PLAN", "EXECUTION", "REVIEW", "INTEGRATION", "MEASURED", "LEARNED"];
+const LIFECYCLE = [
+  "DETECTED",
+  "CANDIDATE",
+  "GOAL",
+  "MISSION",
+  "PLAN",
+  "EXECUTION",
+  "REVIEW",
+  "INTEGRATION",
+  "MEASURED",
+  "LEARNED",
+];
 const COLUMNS = [
   "Candidate",
   "Source",
@@ -37,13 +48,19 @@ export default async function SelfDevelopmentPage() {
           {LIFECYCLE.map((s) => (
             <li key={s}>
               {s}
-              <span className="cx-missing" data-kind="not_available" title="No persisted candidates to count (BR-08).">
+              <span
+                className="cx-missing"
+                data-kind="not_available"
+                title="No persisted candidates to count (BR-08)."
+              >
                 —
               </span>
             </li>
           ))}
         </ol>
-        <p className="cx-dim">Stage counts appear here once improvement candidates are persisted and readable.</p>
+        <p className="cx-dim">
+          Stage counts appear here once improvement candidates are persisted and readable.
+        </p>
       </Panel>
 
       <Panel title="Improvement candidates" eyebrow="Backlog">
@@ -60,8 +77,9 @@ export default async function SelfDevelopmentPage() {
               <tr>
                 <td colSpan={COLUMNS.length}>
                   <Unavailable title="Improvement candidates are NOT AVAILABLE" requirement="BR-08">
-                    The improvement backlog exists only in memory inside the self-development coordinator; nothing is persisted or exposed to the
-                    cockpit. No candidate is shown rather than an invented one.
+                    The improvement backlog exists only in memory inside the self-development
+                    coordinator; nothing is persisted or exposed to the cockpit. No candidate is
+                    shown rather than an invented one.
                   </Unavailable>
                 </td>
               </tr>

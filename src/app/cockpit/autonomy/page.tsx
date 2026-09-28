@@ -14,12 +14,24 @@ const LEVELS = [
   ["L6", "Continuous autonomy", "Human role is governance and exception handling only."],
 ] as const;
 
-const DIMENSIONS = ["Planning", "Routing", "Recovery", "Review", "Integration", "Self-development", "Deployment"];
+const DIMENSIONS = [
+  "Planning",
+  "Routing",
+  "Recovery",
+  "Review",
+  "Integration",
+  "Self-development",
+  "Deployment",
+];
 
 export default async function AutonomyPage() {
   const snapshot = await loadSnapshot();
   if (!snapshot) return null;
-  const assessment = missing<number>("not_available", "No autonomy assessment is produced by ICOS.", "BR-06");
+  const assessment = missing<number>(
+    "not_available",
+    "No autonomy assessment is produced by ICOS.",
+    "BR-06",
+  );
 
   return (
     <>
@@ -33,8 +45,19 @@ export default async function AutonomyPage() {
       <div className="cx-metrics">
         <MetricTile label="Overall autonomy" truth={assessment} />
         <MetricTile label="Current level" truth={snapshot.metrics.autonomyLevel} />
-        <MetricTile label="Human interventions 24h" truth={snapshot.metrics.humanInterventions} tone="autonomy" />
-        <MetricTile label="Manual intervention debt" truth={missing("not_available", "Interventions are not tagged in the audit log.", "BR-07")} />
+        <MetricTile
+          label="Human interventions 24h"
+          truth={snapshot.metrics.humanInterventions}
+          tone="autonomy"
+        />
+        <MetricTile
+          label="Manual intervention debt"
+          truth={missing(
+            "not_available",
+            "Interventions are not tagged in the audit log.",
+            "BR-07",
+          )}
+        />
       </div>
 
       <div className="cx-grid2">
@@ -48,7 +71,11 @@ export default async function AutonomyPage() {
                   <br />
                   <span className="cx-dim">{meaning}</span>
                 </span>
-                <span className="cx-missing" data-kind="unknown" title="No evidence source exists to place ICOS on this ladder (BR-06).">
+                <span
+                  className="cx-missing"
+                  data-kind="unknown"
+                  title="No evidence source exists to place ICOS on this ladder (BR-06)."
+                >
                   UNKNOWN
                 </span>
               </li>
@@ -69,7 +96,11 @@ export default async function AutonomyPage() {
                 <tr key={d}>
                   <td>{d} autonomy</td>
                   <td>
-                    <span className="cx-missing" data-kind="not_available" title="No per-dimension measurement exists.">
+                    <span
+                      className="cx-missing"
+                      data-kind="not_available"
+                      title="No per-dimension measurement exists."
+                    >
                       NOT AVAILABLE <span className="cx-missing__req">BR-06</span>
                     </span>
                   </td>
@@ -78,14 +109,15 @@ export default async function AutonomyPage() {
             </tbody>
           </table>
           <p className="cx-dim">
-            Human interventions are counted from human-actor audit entries (partial proxy). Every manual action should eventually be recorded as
-            autonomy debt (BR-07).
+            Human interventions are counted from human-actor audit entries (partial proxy). Every
+            manual action should eventually be recorded as autonomy debt (BR-07).
           </p>
         </Panel>
       </div>
 
       <Unavailable title="Autonomy assessment is not produced by the backend" requirement="BR-06">
-        The self-development metrics service exists in code but is not exposed on the ICOS container, so no score is shown.
+        The self-development metrics service exists in code but is not exposed on the ICOS
+        container, so no score is shown.
       </Unavailable>
     </>
   );

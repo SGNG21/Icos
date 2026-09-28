@@ -32,7 +32,9 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
         </div>
         <div>
           <span className="cx-identity__k">Runtime</span>
-          <span className="cx-identity__v" title={w.runtimeSupport}>{w.runtime}</span>
+          <span className="cx-identity__v" title={w.runtimeSupport}>
+            {w.runtime}
+          </span>
         </div>
         <div>
           <span className="cx-identity__k">Model</span>
@@ -56,7 +58,13 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
           <span className="cx-identity__k">Capacity slots</span>
           <span className="cx-identity__v">
             <TruthValue truth={w.slots.used} />/{w.slots.max}
-            {w.pool && <span className="cx-dim"> · pool {w.pool.name}{w.pool.limit ? ` ≤${w.pool.limit}` : ""}</span>}
+            {w.pool && (
+              <span className="cx-dim">
+                {" "}
+                · pool {w.pool.name}
+                {w.pool.limit ? ` ≤${w.pool.limit}` : ""}
+              </span>
+            )}
           </span>
         </div>
       </div>
@@ -78,12 +86,15 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
         <dd>
           {current ? (
             <Link href={`/cockpit/missions/${current.missionId}`}>
-              task <code>{current.taskId.slice(0, 8)}</code> · attempt #{current.attempt} · {current.state}
+              task <code>{current.taskId.slice(0, 8)}</code> · attempt #{current.attempt} ·{" "}
+              {current.state}
             </Link>
           ) : (
             "idle"
           )}
-          {w.assignments.length > 1 && <span className="cx-dim"> +{w.assignments.length - 1} more</span>}
+          {w.assignments.length > 1 && (
+            <span className="cx-dim"> +{w.assignments.length - 1} more</span>
+          )}
         </dd>
         {current?.failureClass && (
           <>
@@ -95,7 +106,13 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
         )}
         <dt>Lease · fencing</dt>
         <dd>
-          <TruthValue truth={missing("not_available", "Lease owner/expiry/fencing token are not readable.", "BR-15")} />
+          <TruthValue
+            truth={missing(
+              "not_available",
+              "Lease owner/expiry/fencing token are not readable.",
+              "BR-15",
+            )}
+          />
         </dd>
         <dt>Latency · throughput · cost</dt>
         <dd>

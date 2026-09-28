@@ -15,7 +15,9 @@ function loadWorker({ online }: { online: boolean }) {
   const listeners: Record<string, (e: unknown) => void> = {};
   const cache = {
     add: vi.fn(async (url: string) => void store.set(url, `cached:${url}`)),
-    put: vi.fn(async (req: { url: string }, res: { body: string }) => void store.set(req.url, res.body)),
+    put: vi.fn(
+      async (req: { url: string }, res: { body: string }) => void store.set(req.url, res.body),
+    ),
   };
   const network = vi.fn(async (req: { url: string }) => {
     if (!online) throw new TypeError("offline");
@@ -23,7 +25,12 @@ function loadWorker({ online }: { online: boolean }) {
     return { ok: true, body, clone: () => ({ body }) };
   });
   const sandbox = {
-    self: { addEventListener: (t: string, fn: (e: unknown) => void) => (listeners[t] = fn), location: { origin: ORIGIN }, skipWaiting: vi.fn(), clients: { claim: vi.fn() } },
+    self: {
+      addEventListener: (t: string, fn: (e: unknown) => void) => (listeners[t] = fn),
+      location: { origin: ORIGIN },
+      skipWaiting: vi.fn(),
+      clients: { claim: vi.fn() },
+    },
     caches: {
       open: async () => cache,
       match: async (req: string | { url: string }) => {
@@ -43,10 +50,16 @@ function loadWorker({ online }: { online: boolean }) {
   const dispatch = async (url: string, init: { method?: string; mode?: string } = {}) => {
     let responded: Promise<{ body: string } | undefined> | null = null;
     listeners.fetch({
-      request: { url: new URL(url, ORIGIN).href, method: init.method ?? "GET", mode: init.mode ?? "cors" },
+      request: {
+        url: new URL(url, ORIGIN).href,
+        method: init.method ?? "GET",
+        mode: init.mode ?? "cors",
+      },
       respondWith: (p: Promise<{ body: string } | undefined>) => (responded = p),
     });
-    return responded === null ? "passthrough" : ((await responded) as { body: string } | undefined)?.body;
+    return responded === null
+      ? "passthrough"
+      : ((await responded) as { body: string } | undefined)?.body;
   };
   const install = async () => {
     let wait: Promise<unknown> = Promise.resolve();
@@ -72,7 +85,9 @@ describe("service worker — offline-safe shell", () => {
   it("falls back to the data-free offline page when the network is gone", async () => {
     const sw = loadWorker({ online: false });
     await sw.install();
-    expect(await sw.dispatch("/cockpit/missions", { mode: "navigate" })).toBe("cached:/offline.html");
+    expect(await sw.dispatch("/cockpit/missions", { mode: "navigate" })).toBe(
+      "cached:/offline.html",
+    );
   });
 
   it("never intercepts API/state reads, commands or foreign origins", async () => {
@@ -96,8 +111,16 @@ describe("service worker — offline-safe shell", () => {
 describe("web app manifest", () => {
   it("installs as a standalone app on the cockpit with any + maskable icons", () => {
     const m = manifest();
-    expect(m).toMatchObject({ start_url: "/cockpit", display: "standalone", theme_color: "#05070d" });
-    expect(m.icons?.map((i) => `${i.sizes}:${i.purpose}`)).toEqual(["192x192:any", "512x512:any", "512x512:maskable"]);
+    expect(m).toMatchObject({
+      start_url: "/cockpit",
+      display: "standalone",
+      theme_color: "#05070d",
+    });
+    expect(m.icons?.map((i) => `${i.sizes}:${i.purpose}`)).toEqual([
+      "192x192:any",
+      "512x512:any",
+      "512x512:maskable",
+    ]);
   });
 
   it("offline page shows no data and states that state is unknown", () => {

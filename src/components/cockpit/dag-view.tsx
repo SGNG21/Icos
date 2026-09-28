@@ -16,7 +16,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * nodes, critical-path focus, inspector with dependencies and WHY evidence.
  * Renders only the graph ICOS returned — no layout invents nodes or edges.
  */
-export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?: Record<string, string> }) {
+export function DagView({
+  dag,
+  workerNames = {},
+}: {
+  dag: DagModel;
+  workerNames?: Record<string, string>;
+}) {
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [view, setView] = useState({ x: PAD, y: PAD, k: 1 });
@@ -42,7 +48,11 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
   useEffect(() => {
     if (fitted.current || box.w === 1000) return;
     fitted.current = true;
-    const k = clamp(Math.min((box.w - PAD * 2) / dag.width, (box.h - PAD * 2) / dag.height), 0.75, 1);
+    const k = clamp(
+      Math.min((box.w - PAD * 2) / dag.width, (box.h - PAD * 2) / dag.height),
+      0.75,
+      1,
+    );
     setView({ x: PAD, y: PAD, k });
   }, [box, dag.width, dag.height]);
 
@@ -63,7 +73,11 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      zoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, ((e.clientX - r.left) / r.width) * vw, ((e.clientY - r.top) / r.height) * vh);
+      zoom(
+        e.deltaY < 0 ? 1.12 : 1 / 1.12,
+        ((e.clientX - r.left) / r.width) * vw,
+        ((e.clientY - r.top) / r.height) * vh,
+      );
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -138,11 +152,18 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
           <button type="button" onClick={fit} aria-label="Fit graph">
             <Maximize2 size={16} aria-hidden />
           </button>
-          <button type="button" onClick={() => setCriticalOnly((v) => !v)} aria-pressed={criticalOnly} disabled={!dag.criticalPath.length}>
+          <button
+            type="button"
+            onClick={() => setCriticalOnly((v) => !v)}
+            aria-pressed={criticalOnly}
+            disabled={!dag.criticalPath.length}
+          >
             <Route size={16} aria-hidden /> Critical path
           </button>
           <span className="cx-dim">
-            {dag.nodes.length} tasks · {dag.roots.length} parallel root{dag.roots.length === 1 ? "" : "s"} · max width {dag.maxParallelism} · remaining critical path {dag.criticalRemaining}
+            {dag.nodes.length} tasks · {dag.roots.length} parallel root
+            {dag.roots.length === 1 ? "" : "s"} · max width {dag.maxParallelism} · remaining
+            critical path {dag.criticalRemaining}
           </span>
         </div>
 
@@ -200,13 +221,18 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
         </svg>
         {(dag.cycle.length > 0 || dag.danglingDependencies.length > 0) && (
           <p className="cx-warn-text" role="alert">
-            Graph integrity: {dag.cycle.length} task(s) on a dependency cycle, {dag.danglingDependencies.length} dangling dependency id(s).
+            Graph integrity: {dag.cycle.length} task(s) on a dependency cycle,{" "}
+            {dag.danglingDependencies.length} dangling dependency id(s).
           </p>
         )}
       </div>
 
       <aside className="cx-inspector" aria-live="polite">
-        {node ? <Inspector node={node} byId={byId} onSelect={setSelected} workerNames={workerNames} /> : <p className="cx-dim">Select a task to inspect it.</p>}
+        {node ? (
+          <Inspector node={node} byId={byId} onSelect={setSelected} workerNames={workerNames} />
+        ) : (
+          <p className="cx-dim">Select a task to inspect it.</p>
+        )}
       </aside>
     </div>
   );
@@ -256,9 +282,15 @@ function Inspector({
         <dt>Capability</dt>
         <dd>{node.capability ?? "—"}</dd>
         <dt>Worker</dt>
-        <dd>{worker ? (workerNames[worker] ?? <code>{worker}</code>) : (node.workerKind ?? "not assigned")}</dd>
+        <dd>
+          {worker
+            ? (workerNames[worker] ?? <code>{worker}</code>)
+            : (node.workerKind ?? "not assigned")}
+        </dd>
         <dt>Attempt</dt>
-        <dd>{node.attempt ? `#${node.attempt.attempt} · ${node.attempt.state}` : "no active attempt"}</dd>
+        <dd>
+          {node.attempt ? `#${node.attempt.attempt} · ${node.attempt.state}` : "no active attempt"}
+        </dd>
         {node.attempt?.dispatchedAt && (
           <>
             <dt>Dispatched</dt>
@@ -282,9 +314,13 @@ function Inspector({
       )}
 
       <h4>Depends on ({node.dependsOn.length})</h4>
-      <ul className="cx-deps">{node.dependsOn.length ? node.dependsOn.map(link) : <li className="cx-dim">root task</li>}</ul>
+      <ul className="cx-deps">
+        {node.dependsOn.length ? node.dependsOn.map(link) : <li className="cx-dim">root task</li>}
+      </ul>
       <h4>Unblocks ({node.dependents.length})</h4>
-      <ul className="cx-deps">{node.dependents.length ? node.dependents.map(link) : <li className="cx-dim">leaf task</li>}</ul>
+      <ul className="cx-deps">
+        {node.dependents.length ? node.dependents.map(link) : <li className="cx-dim">leaf task</li>}
+      </ul>
 
       <h4>WHY</h4>
       <ul className="cx-why">
@@ -296,7 +332,9 @@ function Inspector({
         </li>
         {node.attempt?.failureClass || node.attempt?.lastError ? (
           <li>
-            <strong>Why retry?</strong> {node.attempt.failureClass && <code>{node.attempt.failureClass}</code>} {node.attempt.lastError}
+            <strong>Why retry?</strong>{" "}
+            {node.attempt.failureClass && <code>{node.attempt.failureClass}</code>}{" "}
+            {node.attempt.lastError}
           </li>
         ) : null}
         {node.review && (

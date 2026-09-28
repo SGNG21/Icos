@@ -45,7 +45,12 @@ const mission = (id: string, status: Mission["status"]): Mission => ({
   createdAt: NOW,
   updatedAt: NOW,
 });
-const mt = (id: string, missionId: string, status: MissionTask["status"], dependsOn: string[] = []): MissionTask => ({
+const mt = (
+  id: string,
+  missionId: string,
+  status: MissionTask["status"],
+  dependsOn: string[] = [],
+): MissionTask => ({
   id,
   missionId,
   title: id,
@@ -73,7 +78,14 @@ function sources(over: Partial<CockpitSources> = {}): CockpitSources {
 describe("buildCockpitSnapshot — data honesty", () => {
   it("never fabricates telemetry, cost or autonomy", () => {
     const snap = buildCockpitSnapshot(sources());
-    for (const key of ["autonomyLevel", "providerHealth", "cost", "tokenThroughput", "latency", "integrationBacklog"] as const) {
+    for (const key of [
+      "autonomyLevel",
+      "providerHealth",
+      "cost",
+      "tokenThroughput",
+      "latency",
+      "integrationBacklog",
+    ] as const) {
       expect(snap.metrics[key].kind).toBe("not_available");
     }
     expect(snap.metrics.cost).toMatchObject({ requirement: "BR-05" });
@@ -83,7 +95,9 @@ describe("buildCockpitSnapshot — data honesty", () => {
     const snap = buildCockpitSnapshot(sources({ missions: missing("unknown", "db down") }));
     expect(snap.metrics.activeMissions).toEqual({ kind: "unknown", reason: "db down" });
     expect(snap.missions.kind).toBe("unknown");
-    expect(snap.alerts.some((a) => a.id === "source-missions" && a.category === "RECOVERY")).toBe(true);
+    expect(snap.alerts.some((a) => a.id === "source-missions" && a.category === "RECOVERY")).toBe(
+      true,
+    );
     expect(snap.health.level).toBe("degraded");
   });
 
@@ -94,8 +108,12 @@ describe("buildCockpitSnapshot — data honesty", () => {
   });
 
   it("is healthy only with a routable, freshly probed worker", () => {
-    expect(buildCockpitSnapshot(sources({ workers: real([worker("a1")]) })).health.level).toBe("healthy");
-    const stale = buildCockpitSnapshot(sources({ workers: real([worker("a1", { lastProbeOutcome: "stale" })]) }));
+    expect(buildCockpitSnapshot(sources({ workers: real([worker("a1")]) })).health.level).toBe(
+      "healthy",
+    );
+    const stale = buildCockpitSnapshot(
+      sources({ workers: real([worker("a1", { lastProbeOutcome: "stale" })]) }),
+    );
     expect(stale.health.level).toBe("unknown");
     expect(stale.alerts[0]).toMatchObject({ category: "WORKER", severity: "P2" });
   });
@@ -119,7 +137,9 @@ describe("buildCockpitSnapshot — data honesty", () => {
   });
 
   it("makes pending approvals a P0 governance item without calling the system unhealthy", () => {
-    const snap = buildCockpitSnapshot(sources({ workers: real([worker("a1")]), pendingApprovals: real(2) }));
+    const snap = buildCockpitSnapshot(
+      sources({ workers: real([worker("a1")]), pendingApprovals: real(2) }),
+    );
     expect(snap.alerts[0]).toMatchObject({ category: "GOVERNANCE", severity: "P0" });
     expect(snap.health.level).toBe("healthy");
   });
@@ -127,34 +147,65 @@ describe("buildCockpitSnapshot — data honesty", () => {
 
 describe("workers", () => {
   it("keeps worker, model, provider, account and slots distinct", () => {
-    const w = worker("a1", { metadata: { model: "nemotron-120b", apiKey: "sk-live", provider: "nvidia" } });
-    const attempt = { id: "d1", missionId: "m1", missionTaskId: "x", taskId: "t-x", attempt: 2, workflowId: "wf", prompt: "p", workerId: "a1", state: "dispatched", createdAt: NOW, updatedAt: NOW } as DispatchAttempt;
-    const snap = buildCockpitSnapshot(sources({ workers: real([w]), activeAssignments: real(["a1", "a1"]), attempts: real([attempt]) }));
+    const w = worker("a1", {
+      metadata: { model: "nemotron-120b", apiKey: "sk-live", provider: "nvidia" },
+    });
+    const attempt = {
+      id: "d1",
+      missionId: "m1",
+      missionTaskId: "x",
+      taskId: "t-x",
+      attempt: 2,
+      workflowId: "wf",
+      prompt: "p",
+      workerId: "a1",
+      state: "dispatched",
+      createdAt: NOW,
+      updatedAt: NOW,
+    } as DispatchAttempt;
+    const snap = buildCockpitSnapshot(
+      sources({
+        workers: real([w]),
+        activeAssignments: real(["a1", "a1"]),
+        attempts: real([attempt]),
+      }),
+    );
     if (snap.workers.kind !== "real") throw new Error("expected workers");
     const [view] = snap.workers.value;
     expect(view.model).toMatchObject({ kind: "real", value: "nemotron-120b" });
     expect(view.account).toMatchObject({ kind: "not_available", requirement: "BR-03" });
-    expect(view.slots).toEqual({ used: { kind: "real", value: 2, derivation: expect.any(String) }, max: 2 });
+    expect(view.slots).toEqual({
+      used: { kind: "real", value: 2, derivation: expect.any(String) },
+      max: 2,
+    });
     expect(view.metadata).not.toHaveProperty("apiKey");
     expect(view.assignments[0]).toMatchObject({ missionId: "m1", attempt: 2 });
     expect(snap.metrics.activeWorkers).toMatchObject({ kind: "real", value: 1 });
   });
 
   it("filters credential-looking metadata keys", () => {
-    expect(safeMetadata({ region: "eu", token: "x", DB_PASSWORD: "y", privateKeyPath: "z" })).toEqual({ region: "eu" });
+    expect(
+      safeMetadata({ region: "eu", token: "x", DB_PASSWORD: "y", privateKeyPath: "z" }),
+    ).toEqual({ region: "eu" });
   });
 
   it("handles 100 workers without degrading", () => {
-    const many = Array.from({ length: 100 }, (_, i) => worker(`${String(i).padStart(8, "0")}-w`, { health: i % 7 ? "healthy" : "degraded" }));
+    const many = Array.from({ length: 100 }, (_, i) =>
+      worker(`${String(i).padStart(8, "0")}-w`, { health: i % 7 ? "healthy" : "degraded" }),
+    );
     const started = performance.now();
-    const snap = buildCockpitSnapshot(sources({ workers: real(many), activeAssignments: real(many.map((w) => w.id)) }));
+    const snap = buildCockpitSnapshot(
+      sources({ workers: real(many), activeAssignments: real(many.map((w) => w.id)) }),
+    );
     expect(performance.now() - started).toBeLessThan(100);
     expect(snap.workers.kind === "real" && snap.workers.value.length).toBe(100);
     expect(snap.domains.find((d) => d.key === "workers")!.tone).toBe("warn");
   });
 
   it("does not show workers outside the caller's scope", () => {
-    const snap = buildCockpitSnapshot(sources({ scope: "linked", workers: missing("not_available", "outside scope") }));
+    const snap = buildCockpitSnapshot(
+      sources({ scope: "linked", workers: missing("not_available", "outside scope") }),
+    );
     expect(snap.workers.kind).toBe("not_available");
     expect(snap.metrics.globalHealth.kind).toBe("unknown");
   });
@@ -165,8 +216,18 @@ describe("missions, focus and timeline", () => {
     const snap = buildCockpitSnapshot(
       sources({
         missions: real([
-          { mission: mission("m1", "running"), tasks: [mt("a", "m1", "queued"), mt("b", "m1", "queued", ["a"]), mt("c", "m1", "queued", ["b"])] },
-          { mission: mission("m2", "blocked"), tasks: [mt("z", "m2", "failed"), mt("y", "m2", "queued", ["z"])] },
+          {
+            mission: mission("m1", "running"),
+            tasks: [
+              mt("a", "m1", "queued"),
+              mt("b", "m1", "queued", ["a"]),
+              mt("c", "m1", "queued", ["b"]),
+            ],
+          },
+          {
+            mission: mission("m2", "blocked"),
+            tasks: [mt("z", "m2", "failed"), mt("y", "m2", "queued", ["z"])],
+          },
         ]),
       }),
     );
@@ -176,7 +237,14 @@ describe("missions, focus and timeline", () => {
 
   it("orders the timeline newest first and counts human interventions", () => {
     const entry = (id: string, at: string, kind: "human" | "system", type = "task.transitioned") =>
-      ({ id, occurredAt: at, createdAt: at, eventType: type, actor: { kind, id: kind }, details: {} }) as AuditEntry;
+      ({
+        id,
+        occurredAt: at,
+        createdAt: at,
+        eventType: type,
+        actor: { kind, id: kind },
+        details: {},
+      }) as AuditEntry;
     const snap = buildCockpitSnapshot(
       sources({
         audit: real([
@@ -187,12 +255,19 @@ describe("missions, focus and timeline", () => {
         ]),
       }),
     );
-    expect(snap.timeline.kind === "real" && snap.timeline.value.map((e) => e.id)).toEqual(["2", "1", "3", "4"]);
+    expect(snap.timeline.kind === "real" && snap.timeline.value.map((e) => e.id)).toEqual([
+      "2",
+      "1",
+      "3",
+      "4",
+    ]);
     expect(snap.metrics.humanInterventions).toMatchObject({ kind: "real", value: 1 });
   });
 
   it("counts review backlog from canonical task status", () => {
     const tasks = [{ status: "review_pending" }, { status: "running" }] as Task[];
-    expect(buildCockpitSnapshot(sources({ tasks: real(tasks) })).metrics.reviewBacklog).toMatchObject({ value: 1 });
+    expect(
+      buildCockpitSnapshot(sources({ tasks: real(tasks) })).metrics.reviewBacklog,
+    ).toMatchObject({ value: 1 });
   });
 });

@@ -1,6 +1,16 @@
 "use client";
 
-import { Lock, Pause, Play, RotateCcw, ShieldAlert, Snowflake, Square, ArrowUpDown, type LucideIcon } from "lucide-react";
+import {
+  Lock,
+  Pause,
+  Play,
+  RotateCcw,
+  ShieldAlert,
+  Snowflake,
+  Square,
+  ArrowUpDown,
+  type LucideIcon,
+} from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import {
@@ -92,18 +102,31 @@ export function CommandButton({
   };
 
   // Step-up re-auth does not exist yet (BR-18): HIGH can never be submitted today.
-  const ready = command ? canSubmit(command, { acknowledged: ack, typed, reauthenticated: false }) : false;
+  const ready = command
+    ? canSubmit(command, { acknowledged: ack, typed, reauthenticated: false })
+    : false;
   const firstSend = outcome === null;
 
   return (
     <>
-      <button type="button" className="cx-cmd" data-risk={spec.risk} onClick={open} aria-haspopup="dialog">
+      <button
+        type="button"
+        className="cx-cmd"
+        data-risk={spec.risk}
+        onClick={open}
+        aria-haspopup="dialog"
+      >
         <Icon aria-hidden size={14} />
         {!compact && spec.label}
         {compact && <span className="cx-sr">{spec.label}</span>}
       </button>
 
-      <dialog ref={dialog} className="cx-dialog" aria-labelledby={`${id}-t`} onClose={() => setCommand(null)}>
+      <dialog
+        ref={dialog}
+        className="cx-dialog"
+        aria-labelledby={`${id}-t`}
+        onClose={() => setCommand(null)}
+      >
         {command && (
           <form method="dialog" onSubmit={(e) => e.preventDefault()}>
             <header>
@@ -131,17 +154,29 @@ export function CommandButton({
                 <code>{command.idempotencyKey}</code>
               </dd>
               <dt>Expected version</dt>
-              <dd>{command.expectedStateVersion ?? <span className="cx-missing" data-kind="not_available">NOT AVAILABLE <span className="cx-missing__req">BR-11</span></span>}</dd>
+              <dd>
+                {command.expectedStateVersion ?? (
+                  <span className="cx-missing" data-kind="not_available">
+                    NOT AVAILABLE <span className="cx-missing__req">BR-11</span>
+                  </span>
+                )}
+              </dd>
             </dl>
 
             <p className="cx-dim">
-              Path: authorization → policy → risk → state validation → execution → audit. ICOS decides; this screen only asks.
+              Path: authorization → policy → risk → state validation → execution → audit. ICOS
+              decides; this screen only asks.
             </p>
 
             {policy.kind === "explicit" || policy.kind === "typed_reauth" ? (
               <label className="cx-check">
-                <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} disabled={!firstSend} />I
-                understand the effect of “{spec.label}” on {target.label}.
+                <input
+                  type="checkbox"
+                  checked={ack}
+                  onChange={(e) => setAck(e.target.checked)}
+                  disabled={!firstSend}
+                />
+                I understand the effect of “{spec.label}” on {target.label}.
               </label>
             ) : null}
 
@@ -151,7 +186,12 @@ export function CommandButton({
                   <span>
                     Type <strong>{target.label}</strong> to confirm
                   </span>
-                  <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" disabled={!firstSend} />
+                  <input
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    autoComplete="off"
+                    disabled={!firstSend}
+                  />
                 </label>
                 <button type="button" className="cx-btn" disabled>
                   <Lock aria-hidden size={14} /> Re-authenticate (passkey) — NOT YET WIRED · BR-18
@@ -160,7 +200,10 @@ export function CommandButton({
             )}
 
             {policy.kind === "escalation" && (
-              <p className="cx-warn-text">CRITICAL actions never execute from the cockpit. Governance escalation is NOT YET WIRED (BR-10).</p>
+              <p className="cx-warn-text">
+                CRITICAL actions never execute from the cockpit. Governance escalation is NOT YET
+                WIRED (BR-10).
+              </p>
             )}
 
             {outcome && (
@@ -171,7 +214,11 @@ export function CommandButton({
             )}
 
             <footer>
-              <button type="button" className="cx-btn cx-btn--ghost" onClick={() => dialog.current?.close()}>
+              <button
+                type="button"
+                className="cx-btn cx-btn--ghost"
+                onClick={() => dialog.current?.close()}
+              >
                 Close
               </button>
               {outcome?.status === "unknown_execution_state" && (
@@ -180,7 +227,13 @@ export function CommandButton({
                 </button>
               )}
               {(firstSend || mayResubmit(outcome)) && policy.kind !== "escalation" && (
-                <button type="button" className="cx-btn cx-btn--primary" data-risk={spec.risk} onClick={send} disabled={!ready || busy}>
+                <button
+                  type="button"
+                  className="cx-btn cx-btn--primary"
+                  data-risk={spec.risk}
+                  onClick={send}
+                  disabled={!ready || busy}
+                >
                   {firstSend ? "Send command" : "Send again (same command)"}
                 </button>
               )}

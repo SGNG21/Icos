@@ -28,7 +28,12 @@ export const viewport: Viewport = {
 // Live operational state: never pre-rendered, never cached.
 export const dynamic = "force-dynamic";
 
-const HEALTH_TONE: Record<string, Tone> = { healthy: "ok", degraded: "warn", critical: "critical", unknown: "unknown" };
+const HEALTH_TONE: Record<string, Tone> = {
+  healthy: "ok",
+  degraded: "warn",
+  critical: "critical",
+  unknown: "unknown",
+};
 
 export default async function CockpitLayout({ children }: { children: ReactNode }) {
   const ctx = await getCockpitContext();
@@ -54,7 +59,10 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
           <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden>
             <circle cx="16" cy="16" r="14" className="cx-brand__ring" />
             <circle cx="16" cy="16" r="6" className="cx-brand__core" />
-            <path d="M16 2v8M16 22v8M2 16h8M22 16h8M6 6l5.5 5.5M20.5 20.5L26 26M26 6l-5.5 5.5M11.5 20.5L6 26" className="cx-brand__syn" />
+            <path
+              d="M16 2v8M16 22v8M2 16h8M22 16h8M6 6l5.5 5.5M20.5 20.5L26 26M26 6l-5.5 5.5M11.5 20.5L6 26"
+              className="cx-brand__syn"
+            />
           </svg>
           <span>
             <strong>ICOS</strong>
@@ -86,7 +94,8 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
         </header>
         {snapshot.backend === "memory" && (
           <p className="cx-banner" role="alert">
-            In-memory development backend: every value below comes from demo seeds, not from ICOS. Set PERSISTENCE=postgres for real state.
+            In-memory development backend: every value below comes from demo seeds, not from ICOS.
+            Set PERSISTENCE=postgres for real state.
           </p>
         )}
         <div className="cx-content">{children}</div>

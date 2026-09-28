@@ -11,7 +11,11 @@ const FILTERS = [
   { key: "all", label: "All" },
 ] as const;
 
-export default async function MissionsPage({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+export default async function MissionsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const snapshot = await loadSnapshot();
   if (!snapshot) return null;
   const view = (await searchParams).view ?? "active";
@@ -25,7 +29,11 @@ export default async function MissionsPage({ searchParams }: { searchParams: Pro
         </div>
         <nav className="cx-filters" aria-label="Filter missions">
           {FILTERS.map((f) => (
-            <Link key={f.key} href={`/cockpit/missions?view=${f.key}`} aria-current={view === f.key ? "true" : undefined}>
+            <Link
+              key={f.key}
+              href={`/cockpit/missions?view=${f.key}`}
+              aria-current={view === f.key ? "true" : undefined}
+            >
               {f.label}
             </Link>
           ))}

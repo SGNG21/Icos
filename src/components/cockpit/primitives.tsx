@@ -31,7 +31,15 @@ export const TONE_WORD: Record<Tone, string> = {
   unknown: "Unknown",
 };
 
-export function ToneBadge({ tone, label, size = "md" }: { tone: Tone; label?: string; size?: "sm" | "md" }) {
+export function ToneBadge({
+  tone,
+  label,
+  size = "md",
+}: {
+  tone: Tone;
+  label?: string;
+  size?: "sm" | "md";
+}) {
   const Icon = TONE_ICON[tone];
   return (
     <span className={`cx-badge cx-badge--${size}`} data-tone={tone}>
@@ -98,7 +106,15 @@ export function MetricTile({
 }
 
 /** Panel for a whole feature that has no backend yet. */
-export function Unavailable({ title, requirement, children }: { title: string; requirement: string; children?: ReactNode }) {
+export function Unavailable({
+  title,
+  requirement,
+  children,
+}: {
+  title: string;
+  requirement: string;
+  children?: ReactNode;
+}) {
   return (
     <div className="cx-unavailable" role="note">
       <CircleHelp aria-hidden size={18} />
@@ -106,7 +122,8 @@ export function Unavailable({ title, requirement, children }: { title: string; r
         <strong>{title}</strong>
         {children && <p>{children}</p>}
         <p className="cx-dim">
-          Backend requirement <code>{requirement}</code> — see audit/cockpit-control-center/BACKEND_REQUIREMENTS.md
+          Backend requirement <code>{requirement}</code> — see
+          audit/cockpit-control-center/BACKEND_REQUIREMENTS.md
         </p>
       </div>
     </div>
@@ -129,7 +146,11 @@ export function Panel({
   id?: string;
 }) {
   return (
-    <section className={`cx-panel ${className}`.trim()} aria-labelledby={id ? `${id}-title` : undefined} id={id}>
+    <section
+      className={`cx-panel ${className}`.trim()}
+      aria-labelledby={id ? `${id}-title` : undefined}
+      id={id}
+    >
       <header className="cx-panel__head">
         <div>
           {eyebrow && <p className="cx-eyebrow">{eyebrow}</p>}
@@ -152,5 +173,11 @@ export function formatAge(ms: number | null): string {
 }
 
 export function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }

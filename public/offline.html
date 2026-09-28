@@ -17,8 +17,14 @@
         padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
         box-sizing: border-box;
         color: #e7edf9;
-        background: radial-gradient(700px 400px at 50% 0%, rgb(124 58 237 / 18%), transparent 60%), #04060c;
-        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(700px 400px at 50% 0%, rgb(124 58 237 / 18%), transparent 60%), #04060c;
+        font:
+          15px/1.5 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
       }
       main {
         max-width: 420px;
@@ -52,7 +58,10 @@
         border: 1px dashed #7c89a6;
         border-radius: 6px;
         color: #7c89a6;
-        font: 600 12px ui-monospace, Menlo, monospace;
+        font:
+          600 12px ui-monospace,
+          Menlo,
+          monospace;
         letter-spacing: 0.06em;
       }
       p {
@@ -77,8 +86,8 @@
       <h1>ICOS is unreachable</h1>
       <span class="state" role="status">OFFLINE · STATE UNKNOWN</span>
       <p>
-        This device cannot reach ICOS. The cockpit never shows cached state as current, so nothing is displayed until the connection returns. No
-        command can be sent while offline.
+        This device cannot reach ICOS. The cockpit never shows cached state as current, so nothing
+        is displayed until the connection returns. No command can be sent while offline.
       </p>
       <button type="button" onclick="location.reload()">Retry now</button>
     </main>

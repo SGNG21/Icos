@@ -43,7 +43,8 @@ export default async function SettingsPage() {
 
         <Panel title="Security" eyebrow="Devices · re-authentication">
           <Unavailable title="Passkeys / WebAuthn step-up are NOT YET WIRED" requirement="BR-18">
-            HIGH-risk commands stay unsendable until a fresh re-authentication can be bound to the command.
+            HIGH-risk commands stay unsendable until a fresh re-authentication can be bound to the
+            command.
           </Unavailable>
           <Unavailable title="Device and session management are NOT YET WIRED" requirement="BR-21">
             Listing and revoking your other sessions/devices needs a server endpoint.
@@ -53,7 +54,8 @@ export default async function SettingsPage() {
 
       <Panel title="Notifications" eyebrow="P0 / P1 / P2">
         <Unavailable title="Notification preferences are NOT YET WIRED" requirement="BR-19">
-          Preferences are not stored in the browser: they would silently diverge from what the server sends.
+          Preferences are not stored in the browser: they would silently diverge from what the
+          server sends.
         </Unavailable>
       </Panel>
     </>

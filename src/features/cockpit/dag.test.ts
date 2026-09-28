@@ -26,7 +26,12 @@ describe("deriveNodeStatus", () => {
 
   it("uses the review verdict for review_pending", () => {
     const r = t("a", "review_pending").task;
-    const review = (decision: string) => ({ decision, reasons: ["x"], reviewerKind: "llm", createdAt: "" });
+    const review = (decision: string) => ({
+      decision,
+      reasons: ["x"],
+      reviewerKind: "llm",
+      createdAt: "",
+    });
     expect(deriveNodeStatus(r, true)).toBe("AWAITING_REVIEW");
     expect(deriveNodeStatus(r, true, undefined, review("REQUEST_CHANGES"))).toBe("REPAIR_REQUIRED");
     expect(deriveNodeStatus(r, true, undefined, review("ESCALATE_TO_HUMAN"))).toBe("ESCALATED");
@@ -35,7 +40,12 @@ describe("deriveNodeStatus", () => {
 
 describe("buildDag", () => {
   it("layers by longest path and exposes parallel roots", () => {
-    const dag = buildDag([t("a", "succeeded"), t("b", "succeeded"), t("c", "queued", ["a", "b"]), t("d", "queued", ["c", "a"])]);
+    const dag = buildDag([
+      t("a", "succeeded"),
+      t("b", "succeeded"),
+      t("c", "queued", ["a", "b"]),
+      t("d", "queued", ["c", "a"]),
+    ]);
     const layer = Object.fromEntries(dag.nodes.map((n) => [n.id, n.layer]));
     expect(layer).toEqual({ a: 0, b: 0, c: 1, d: 2 });
     expect(dag.roots).toEqual(["a", "b"]);
@@ -62,7 +72,12 @@ describe("buildDag", () => {
   });
 
   it("explains why a node is blocked", () => {
-    const dag = buildDag([t("a", "failed"), t("b", "queued", ["a"]), t("c", "queued", ["zzz"]), t("d", "draft")]);
+    const dag = buildDag([
+      t("a", "failed"),
+      t("b", "queued", ["a"]),
+      t("c", "queued", ["zzz"]),
+      t("d", "draft"),
+    ]);
     const reason = (id: string) => dag.nodes.find((n) => n.id === id)!.blockedReason;
     expect(reason("b")).toBe("Blocked by “A”.");
     expect(reason("c")).toContain("missing from the graph: zzz");

@@ -7,7 +7,14 @@ import type { Tone } from "@/features/cockpit/snapshot";
 
 export const metadata = { title: "Audit" };
 
-type Params = { eventType?: string; actorKind?: string; taskId?: string; missionId?: string; tone?: string; page?: string };
+type Params = {
+  eventType?: string;
+  actorKind?: string;
+  taskId?: string;
+  missionId?: string;
+  tone?: string;
+  page?: string;
+};
 const TONES: Tone[] = ["critical", "warn", "ok", "flow", "autonomy"];
 
 export default async function AuditPage({ searchParams }: { searchParams: Promise<Params> }) {
@@ -33,7 +40,8 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
     tone: TONES.includes(p.tone as Tone) ? (p.tone as Tone) : undefined,
     page: Number(p.page) || 1,
   });
-  const pageHref = (page: number) => `/cockpit/audit?${new URLSearchParams({ ...p, page: String(page) } as Record<string, string>)}`;
+  const pageHref = (page: number) =>
+    `/cockpit/audit?${new URLSearchParams({ ...p, page: String(page) } as Record<string, string>)}`;
 
   return (
     <>
@@ -126,7 +134,13 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                       {e.actorKind} <code>{e.actor.slice(0, 12)}</code>
                     </td>
                     <td className="cx-hide-sm">
-                      {e.taskId ? <Link href={`/cockpit/audit?taskId=${e.taskId}`}>{e.taskId.slice(0, 8)}</Link> : "—"}
+                      {e.taskId ? (
+                        <Link href={`/cockpit/audit?taskId=${e.taskId}`}>
+                          {e.taskId.slice(0, 8)}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -143,7 +157,8 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
       </Panel>
 
       <p className="cx-dim" style={{ margin: 0 }}>
-        Runtime events (worker started/failed, review required, integration, provider degraded) are not yet emitted into the audit log (BR-02).
+        Runtime events (worker started/failed, review required, integration, provider degraded) are
+        not yet emitted into the audit log (BR-02).
       </p>
     </>
   );

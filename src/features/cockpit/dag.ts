@@ -49,7 +49,10 @@ export interface NodeReview {
 }
 
 export interface DagInputTask {
-  task: Pick<MissionTask, "id" | "title" | "status" | "dependsOn" | "workerKind" | "capability" | "taskId">;
+  task: Pick<
+    MissionTask,
+    "id" | "title" | "status" | "dependsOn" | "workerKind" | "capability" | "taskId"
+  >;
   /** Current non-terminal dispatch attempt, if any. */
   attempt?: NodeAttempt;
   /** Latest review decision for the canonical task, if any. */
@@ -218,8 +221,13 @@ export function buildDag(input: readonly DagInputTask[]): DagModel {
   layers.forEach((ids, index) => {
     if (index > 0) {
       const score = (id: string) => {
-        const rows = byId.get(id)!.task.dependsOn.filter((d) => row.has(d)).map((d) => row.get(d)!);
-        return rows.length ? rows.reduce((a, b) => a + b, 0) / rows.length : Number.MAX_SAFE_INTEGER;
+        const rows = byId
+          .get(id)!
+          .task.dependsOn.filter((d) => row.has(d))
+          .map((d) => row.get(d)!);
+        return rows.length
+          ? rows.reduce((a, b) => a + b, 0) / rows.length
+          : Number.MAX_SAFE_INTEGER;
       };
       ids.sort((a, b) => score(a) - score(b));
     }
@@ -253,7 +261,11 @@ export function buildDag(input: readonly DagInputTask[]): DagModel {
   for (const { task } of input) {
     for (const dep of task.dependsOn) {
       if (byId.has(dep)) {
-        edges.push({ from: dep, to: task.id, critical: critical.has(dep) && critical.has(task.id) });
+        edges.push({
+          from: dep,
+          to: task.id,
+          critical: critical.has(dep) && critical.has(task.id),
+        });
       }
     }
   }
@@ -283,7 +295,8 @@ function blockedReason(
   if (nodeStatus !== "PENDING" && nodeStatus !== "BLOCKED") return null;
 
   const unknownDeps = task.dependsOn.filter((dep) => !byId.has(dep));
-  if (unknownDeps.length) return `Depends on tasks missing from the graph: ${unknownDeps.join(", ")}.`;
+  if (unknownDeps.length)
+    return `Depends on tasks missing from the graph: ${unknownDeps.join(", ")}.`;
 
   const failed = task.dependsOn.filter((dep) =>
     ["FAILED_TERMINAL", "CANCELLED", "BLOCKED"].includes(status.get(dep) ?? ""),
@@ -293,7 +306,8 @@ function blockedReason(
   const waiting = task.dependsOn.filter((dep) => status.get(dep) !== "COMPLETED");
   if (waiting.length) return `Waiting on ${waiting.map((d) => titleOf(byId, d)).join(", ")}.`;
 
-  if (nodeStatus === "BLOCKED") return "Canonical status is blocked; the backend does not expose why (BR-09).";
+  if (nodeStatus === "BLOCKED")
+    return "Canonical status is blocked; the backend does not expose why (BR-09).";
   if (task.status === "draft") return "Draft: not yet queued by ICOS.";
   return null;
 }

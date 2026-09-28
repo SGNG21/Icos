@@ -12,7 +12,12 @@ const RY = 196;
 const NODE_W = 132;
 const NODE_H = 48;
 
-const HEALTH_TONE: Record<HealthLevel, Tone> = { healthy: "ok", degraded: "warn", critical: "critical", unknown: "unknown" };
+const HEALTH_TONE: Record<HealthLevel, Tone> = {
+  healthy: "ok",
+  degraded: "warn",
+  critical: "critical",
+  unknown: "unknown",
+};
 
 /** Flow duration shrinks with real activity; 0 activity = no animation at all. */
 export function flowDuration(activity: number): number | null {
@@ -32,7 +37,12 @@ export function SystemMap({ snapshot }: { snapshot: CockpitSnapshot }) {
 
   return (
     <div className="cx-map">
-      <svg viewBox={`0 0 ${W} ${H}`} role="group" aria-label="ICOS system map" className="cx-map__svg">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        role="group"
+        aria-label="ICOS system map"
+        className="cx-map__svg"
+      >
         <defs>
           <radialGradient id="cx-core" cx="50%" cy="45%" r="60%">
             <stop offset="0%" stopColor="#c4b5fd" stopOpacity="0.95" />
@@ -49,7 +59,13 @@ export function SystemMap({ snapshot }: { snapshot: CockpitSnapshot }) {
         </defs>
 
         <ellipse cx={CX} cy={CY} rx={RX} ry={RY} className="cx-map__orbit" />
-        <ellipse cx={CX} cy={CY} rx={RX * 0.62} ry={RY * 0.62} className="cx-map__orbit cx-map__orbit--inner" />
+        <ellipse
+          cx={CX}
+          cy={CY}
+          rx={RX * 0.62}
+          ry={RY * 0.62}
+          className="cx-map__orbit cx-map__orbit--inner"
+        />
 
         {domains.map((d, i) => {
           const angle = -Math.PI / 2 + (i / domains.length) * Math.PI * 2;
@@ -61,12 +77,17 @@ export function SystemMap({ snapshot }: { snapshot: CockpitSnapshot }) {
           const qx = (sx + x) / 2 - (y - sy) * bend;
           const qy = (sy + y) / 2 + (x - sx) * bend;
           const dur = d.metric.kind === "real" ? flowDuration(d.activity) : null;
-          const value = d.metric.kind === "real" ? String(d.metric.value) : MISSING_LABEL[d.metric.kind];
+          const value =
+            d.metric.kind === "real" ? String(d.metric.value) : MISSING_LABEL[d.metric.kind];
           const label = `${d.label}: ${d.metric.kind === "real" ? `${value} ${d.metricLabel}` : value}, ${TONE_WORD[d.tone]}`;
 
           return (
             <g key={d.key} data-tone={d.tone} className="cx-map__domain">
-              <path d={`M${sx},${sy} Q${qx},${qy} ${x},${y}`} className="cx-map__link" data-missing={d.metric.kind !== "real" || undefined} />
+              <path
+                d={`M${sx},${sy} Q${qx},${qy} ${x},${y}`}
+                className="cx-map__link"
+                data-missing={d.metric.kind !== "real" || undefined}
+              />
               {dur !== null && (
                 <path
                   d={`M${sx},${sy} Q${qx},${qy} ${x},${y}`}
@@ -76,21 +97,39 @@ export function SystemMap({ snapshot }: { snapshot: CockpitSnapshot }) {
                 />
               )}
               <a href={d.href} aria-label={label}>
-                <rect x={x - NODE_W / 2} y={y - NODE_H / 2} width={NODE_W} height={NODE_H} rx={12} className="cx-map__node" />
+                <rect
+                  x={x - NODE_W / 2}
+                  y={y - NODE_H / 2}
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={12}
+                  className="cx-map__node"
+                />
                 <circle cx={x - NODE_W / 2 + 14} cy={y - 7} r={4} className="cx-map__dot" />
                 <text x={x - NODE_W / 2 + 25} y={y - 3} className="cx-map__label">
                   {d.label}
                 </text>
-                <text x={x - NODE_W / 2 + 12} y={y + 15} className="cx-map__metric" data-missing={d.metric.kind !== "real" || undefined}>
+                <text
+                  x={x - NODE_W / 2 + 12}
+                  y={y + 15}
+                  className="cx-map__metric"
+                  data-missing={d.metric.kind !== "real" || undefined}
+                >
                   {value}
-                  {d.metric.kind === "real" && d.metricLabel ? <tspan className="cx-map__unit"> {d.metricLabel}</tspan> : null}
+                  {d.metric.kind === "real" && d.metricLabel ? (
+                    <tspan className="cx-map__unit"> {d.metricLabel}</tspan>
+                  ) : null}
                 </text>
               </a>
             </g>
           );
         })}
 
-        <g data-tone={healthTone} className="cx-map__brain" data-active={totalActivity > 0 || undefined}>
+        <g
+          data-tone={healthTone}
+          className="cx-map__brain"
+          data-active={totalActivity > 0 || undefined}
+        >
           <circle cx={CX} cy={CY} r={96} fill="url(#cx-core)" />
           <circle cx={CX} cy={CY} r={62} className="cx-map__ring" />
           <circle cx={CX} cy={CY} r={70} className="cx-map__ring cx-map__ring--health" />

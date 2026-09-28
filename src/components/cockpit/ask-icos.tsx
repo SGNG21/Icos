@@ -3,7 +3,13 @@
 import { Send } from "lucide-react";
 import { useState } from "react";
 
-import { ASK_EXAMPLES, ASK_MAX_LENGTH, ASK_STAGES, askPipeline, type StageStatus } from "@/features/cockpit/ask";
+import {
+  ASK_EXAMPLES,
+  ASK_MAX_LENGTH,
+  ASK_STAGES,
+  askPipeline,
+  type StageStatus,
+} from "@/features/cockpit/ask";
 
 const STATUS_TEXT: Record<StageStatus, string> = {
   idle: "—",
@@ -61,7 +67,8 @@ export function AskIcos() {
         <p className="cx-outcome" data-status="not_wired" role="status">
           <strong>NOT YET WIRED — nothing was sent</strong>
           <span>
-            ICOS has no endpoint that turns language into a proposed command (BR-17). Your text stayed on this device and was not interpreted.
+            ICOS has no endpoint that turns language into a proposed command (BR-17). Your text
+            stayed on this device and was not interpreted.
           </span>
         </p>
       )}
@@ -72,9 +79,14 @@ export function AskIcos() {
             <span>
               <strong>{stage.label}</strong> <span className="cx-dim">· {stage.owner}</span>
             </span>
-            <span className={stages[i] === "not_yet_wired" ? "cx-missing" : "cx-dim"} data-kind={stages[i] === "not_yet_wired" ? "not_yet_wired" : undefined}>
+            <span
+              className={stages[i] === "not_yet_wired" ? "cx-missing" : "cx-dim"}
+              data-kind={stages[i] === "not_yet_wired" ? "not_yet_wired" : undefined}
+            >
               {STATUS_TEXT[stages[i]]}
-              {stages[i] === "not_yet_wired" && "requirement" in stage && <span className="cx-missing__req">{stage.requirement}</span>}
+              {stages[i] === "not_yet_wired" && "requirement" in stage && (
+                <span className="cx-missing__req">{stage.requirement}</span>
+              )}
             </span>
           </li>
         ))}

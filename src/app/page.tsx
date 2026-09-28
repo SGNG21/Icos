@@ -14,7 +14,12 @@ import { getContainer } from "@/server/container";
 // de pré-rendu statique ni de cache de rendu.
 export const dynamic = "force-dynamic";
 
-const healthLabel = { healthy: "saine", degraded: "dégradée", critical: "critique", unknown: "inconnue" } as const;
+const healthLabel = {
+  healthy: "saine",
+  degraded: "dégradée",
+  critical: "critique",
+  unknown: "inconnue",
+} as const;
 
 export default async function Home() {
   const container = await getContainer();
@@ -60,7 +65,9 @@ export default async function Home() {
 
         <div className="integration-banner" role="status">
           <span>Persistance</span>
-          {container.db ? "PostgreSQL composé." : "Backend mémoire de démonstration : les données affichées sont des seeds, pas l’état ICOS."}
+          {container.db
+            ? "PostgreSQL composé."
+            : "Backend mémoire de démonstration : les données affichées sont des seeds, pas l’état ICOS."}
         </div>
 
         <div className="dashboard-grid">

@@ -7,7 +7,10 @@ import { buildDag } from "@/features/cockpit/dag";
 import { buildCockpitSnapshot, type WorkerView } from "@/features/cockpit/snapshot";
 import { missing, real } from "@/features/cockpit/truth";
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/cockpit/missions", useRouter: () => ({ refresh: () => {} }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/cockpit/missions",
+  useRouter: () => ({ refresh: () => {} }),
+}));
 
 const { MetricTile, TruthValue, ToneBadge, Unavailable } = await import("./primitives");
 const { CockpitNav } = await import("./cockpit-nav");
@@ -40,7 +43,9 @@ describe("truth rendering", () => {
   });
 
   it("forces the unknown tone on a missing metric whatever tone was requested", () => {
-    expect(html(h(MetricTile, { label: "Cost", truth: missing("not_available", "x"), tone: "ok" }))).toContain('data-tone="unknown"');
+    expect(
+      html(h(MetricTile, { label: "Cost", truth: missing("not_available", "x"), tone: "ok" })),
+    ).toContain('data-tone="unknown"');
   });
 
   it("never encodes state by colour alone", () => {
@@ -87,7 +92,12 @@ describe("navigation", () => {
 
 describe("governed controls", () => {
   it("renders a control that opens a dialog, with its risk exposed", () => {
-    const out = html(h(CommandButton, { action: "system.enter_safe_mode", target: { kind: "system", id: "icos", label: "ICOS" } }));
+    const out = html(
+      h(CommandButton, {
+        action: "system.enter_safe_mode",
+        target: { kind: "system", id: "icos", label: "ICOS" },
+      }),
+    );
     expect(out).toContain('data-risk="MEDIUM"');
     expect(out).toContain('aria-haspopup="dialog"');
     expect(out).toContain("Enter safe mode");
@@ -97,12 +107,20 @@ describe("governed controls", () => {
 });
 
 describe("mission DAG view", () => {
-  const task = (id: string, status: "succeeded" | "queued" | "running", dependsOn: string[] = []) => ({
+  const task = (
+    id: string,
+    status: "succeeded" | "queued" | "running",
+    dependsOn: string[] = [],
+  ) => ({
     task: { id, title: id, status, dependsOn, taskId: `t-${id}` },
   });
 
   it("renders focusable nodes with status labels and critical path", () => {
-    const dag = buildDag([task("a", "succeeded"), task("b", "running", ["a"]), task("c", "queued", ["b"])]);
+    const dag = buildDag([
+      task("a", "succeeded"),
+      task("b", "running", ["a"]),
+      task("c", "queued", ["b"]),
+    ]);
     const out = html(h(DagView, { dag }));
     expect(out.match(/role="button"/g)?.length).toBe(3);
     expect(out).toContain('aria-label="b: RUNNING, on critical path"');
@@ -147,7 +165,16 @@ describe("worker identity", () => {
     const { default: WorkersPage } = await import("@/app/cockpit/workers/page");
     expect(WorkersPage).toBeTypeOf("function"); // server page compiles and exports
     const w = buildCockpitSnapshot({
-      ...{ now: new Date(), backend: "postgres", scope: "global", tasks: real([]), missions: real([]), attempts: real([]), pendingApprovals: real(0), audit: real([]) },
+      ...{
+        now: new Date(),
+        backend: "postgres",
+        scope: "global",
+        tasks: real([]),
+        missions: real([]),
+        attempts: real([]),
+        pendingApprovals: real(0),
+        audit: real([]),
+      },
       activeAssignments: real([]),
       workers: real([
         {
@@ -184,7 +211,20 @@ describe("worker identity", () => {
 
 describe("alerts", () => {
   it("renders severity as text and links to the subject", () => {
-    const out = html(h(AlertList, { alerts: [{ id: "a", category: "CAPACITY", severity: "P0", title: "No routable worker", href: "/cockpit/workers" }], empty: "none" }));
+    const out = html(
+      h(AlertList, {
+        alerts: [
+          {
+            id: "a",
+            category: "CAPACITY",
+            severity: "P0",
+            title: "No routable worker",
+            href: "/cockpit/workers",
+          },
+        ],
+        empty: "none",
+      }),
+    );
     expect(out).toContain("P0");
     expect(out).toContain('href="/cockpit/workers"');
   });
@@ -193,7 +233,10 @@ describe("alerts", () => {
 describe("Ask ICOS shell", () => {
   it("never interprets text in the browser: intent compilation is NOT YET WIRED", () => {
     expect(askPipeline("", false)[0]).toBe("idle");
-    expect(askPipeline("Arrête le worker", false)).toEqual(["ready", ...Array(ASK_STAGES.length - 1).fill("idle")]);
+    expect(askPipeline("Arrête le worker", false)).toEqual([
+      "ready",
+      ...Array(ASK_STAGES.length - 1).fill("idle"),
+    ]);
     const sent = askPipeline("Arrête le worker", true);
     expect(sent[1]).toBe("not_yet_wired");
     expect(sent.slice(2).every((s) => s === "waiting")).toBe(true);
@@ -223,7 +266,10 @@ describe("worker card", () => {
       health: "unknown",
       availability: "unknown",
       probe: { outcome: "unsupported", at: null, ageMs: null },
-      model: real("nemotron-120b", "declared in worker registry metadata (not verified by a probe)"),
+      model: real(
+        "nemotron-120b",
+        "declared in worker registry metadata (not verified by a probe)",
+      ),
       provider: real("nvidia", "declared"),
       account: missing("not_available", "no account", "BR-03"),
       slots: { used: real(1, "ledger"), max: 3 },
@@ -237,7 +283,8 @@ describe("worker card", () => {
       routable: false,
     };
     const out = html(h(WorkerCard, { worker: w }));
-    for (const k of ["Worker kind", "Runtime", "Model", "Provider", "Account", "Capacity slots"]) expect(out).toContain(`>${k}<`);
+    for (const k of ["Worker kind", "Runtime", "Model", "Provider", "Account", "Capacity slots"])
+      expect(out).toContain(`>${k}<`);
     expect(out).toContain("nemotron-120b"); // verbatim, not transformed
     expect(out).toContain("NOT AVAILABLE");
     expect(out).toContain("BR-15"); // lease/fencing honestly missing
@@ -249,7 +296,8 @@ describe("worker card", () => {
 
 describe("emergency controls", () => {
   it("are never single-click and never report success without the command bus", async () => {
-    const { COMMAND_ACTIONS, createCommand, notWiredTransport, submitCommand } = await import("@/features/cockpit/commands");
+    const { COMMAND_ACTIONS, createCommand, notWiredTransport, submitCommand } =
+      await import("@/features/cockpit/commands");
     const emergency = Object.entries(COMMAND_ACTIONS).filter(([a]) => a.startsWith("system."));
     expect(emergency.map(([a]) => a).sort()).toEqual([
       "system.enter_safe_mode",
@@ -261,7 +309,13 @@ describe("emergency controls", () => {
     ]);
     for (const [action, spec] of emergency) {
       expect(spec.risk, action).not.toBe("LOW");
-      const out = await submitCommand(notWiredTransport, createCommand({ action: action as never, target: { kind: "system", id: "icos", label: "ICOS" } }));
+      const out = await submitCommand(
+        notWiredTransport,
+        createCommand({
+          action: action as never,
+          target: { kind: "system", id: "icos", label: "ICOS" },
+        }),
+      );
       expect(out.status, action).toBe("not_wired");
     }
     expect(COMMAND_ACTIONS["system.exit_safe_mode"].risk).toBe("HIGH"); // loosening is harder than tightening

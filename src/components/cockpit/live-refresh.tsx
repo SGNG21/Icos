@@ -4,7 +4,13 @@ import { Radio, WifiOff } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { initialLive, isStale, nextDelay, onHeartbeat, type LiveState } from "@/features/cockpit/live";
+import {
+  initialLive,
+  isStale,
+  nextDelay,
+  onHeartbeat,
+  type LiveState,
+} from "@/features/cockpit/live";
 
 /**
  * Interim realtime (BR-01): heartbeat the read-only cockpit API, re-render the
@@ -30,7 +36,10 @@ export function LiveRefresh({ generatedAt }: { generatedAt: string }) {
       if (!navigator.onLine) result = "offline";
       else {
         try {
-          const res = await fetch("/api/cockpit", { cache: "no-store", credentials: "same-origin" });
+          const res = await fetch("/api/cockpit", {
+            cache: "no-store",
+            credentials: "same-origin",
+          });
           result = res.ok ? "ok" : res.status === 401 || res.status === 403 ? "denied" : "error";
         } catch {
           result = "error";

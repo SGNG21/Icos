@@ -7,10 +7,23 @@ export const metadata = { title: "System" };
 
 const EMERGENCY: { action: CommandAction; effect: string }[] = [
   { action: "system.pause_new_work", effect: "No new task is dispatched; running work continues." },
-  { action: "system.freeze_integrations", effect: "No result is integrated; reviews and evidence continue to accumulate." },
-  { action: "system.stop_external_workers", effect: "External worker processes are stopped; in-flight attempts must be recovered." },
-  { action: "system.lock_self_modification", effect: "No self-development change can be planned, executed or integrated." },
-  { action: "system.enter_safe_mode", effect: "All of the above except stopping workers: ICOS observes, preserves state, acts on nothing." },
+  {
+    action: "system.freeze_integrations",
+    effect: "No result is integrated; reviews and evidence continue to accumulate.",
+  },
+  {
+    action: "system.stop_external_workers",
+    effect: "External worker processes are stopped; in-flight attempts must be recovered.",
+  },
+  {
+    action: "system.lock_self_modification",
+    effect: "No self-development change can be planned, executed or integrated.",
+  },
+  {
+    action: "system.enter_safe_mode",
+    effect:
+      "All of the above except stopping workers: ICOS observes, preserves state, acts on nothing.",
+  },
 ];
 
 const SYSTEM = { kind: "system" as const, id: "icos", label: "ICOS" };
@@ -30,12 +43,17 @@ export default async function SystemPage() {
 
       <Panel title="Emergency controls" eyebrow="Safe mode" className="cx-panel--danger">
         <div className="cx-safestate" role="status">
-          <span className="cx-missing" data-kind="unknown" title="No runtime control flags exist to read (BR-12).">
+          <span
+            className="cx-missing"
+            data-kind="unknown"
+            title="No runtime control flags exist to read (BR-12)."
+          >
             SAFE MODE STATE: UNKNOWN <span className="cx-missing__req">BR-12</span>
           </span>
           <p>
-            The cockpit cannot read any emergency flag, so it never shows one as engaged. Until the command bus (BR-10) and runtime control
-            flags (BR-12) exist, these controls confirm your intent and then report <strong>NOT YET WIRED</strong>: nothing is executed. In a real
+            The cockpit cannot read any emergency flag, so it never shows one as engaged. Until the
+            command bus (BR-10) and runtime control flags (BR-12) exist, these controls confirm your
+            intent and then report <strong>NOT YET WIRED</strong>: nothing is executed. In a real
             emergency, stop ICOS processes at the host.
           </p>
         </div>
@@ -93,7 +111,8 @@ export default async function SystemPage() {
             </tbody>
           </table>
           <p className="cx-dim">
-            “Composed” means the process wired the service at start-up. It is not a live reachability probe of Temporal, workers or providers.
+            “Composed” means the process wired the service at start-up. It is not a live
+            reachability probe of Temporal, workers or providers.
           </p>
         </Panel>
 
@@ -111,7 +130,8 @@ export default async function SystemPage() {
                 <li key={d.key}>
                   <strong>{d.label}</strong>{" "}
                   <span className="cx-dim">
-                    {d.metric.kind !== "real" && d.metric.reason} {d.metric.kind !== "real" && d.metric.requirement}
+                    {d.metric.kind !== "real" && d.metric.reason}{" "}
+                    {d.metric.kind !== "real" && d.metric.requirement}
                   </span>
                 </li>
               ))}

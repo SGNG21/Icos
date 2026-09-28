@@ -17,9 +17,17 @@ export const MAX_BACKOFF_MS = 120_000;
 /** Beyond this age the snapshot on screen is flagged STALE even if polling "works". */
 export const STALE_AFTER_MS = 45_000;
 
-export const initialLive = (now: number): LiveState => ({ status: "live", lastSuccessAt: now, failures: 0 });
+export const initialLive = (now: number): LiveState => ({
+  status: "live",
+  lastSuccessAt: now,
+  failures: 0,
+});
 
-export function onHeartbeat(state: LiveState, result: "ok" | "error" | "offline" | "denied", now: number): LiveState {
+export function onHeartbeat(
+  state: LiveState,
+  result: "ok" | "error" | "offline" | "denied",
+  now: number,
+): LiveState {
   switch (result) {
     case "ok":
       return { status: "live", lastSuccessAt: now, failures: 0 };

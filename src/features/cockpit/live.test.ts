@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { BASE_INTERVAL_MS, MAX_BACKOFF_MS, initialLive, isStale, nextDelay, onHeartbeat } from "./live";
+import {
+  BASE_INTERVAL_MS,
+  MAX_BACKOFF_MS,
+  initialLive,
+  isStale,
+  nextDelay,
+  onHeartbeat,
+} from "./live";
 
 describe("live refresh / reconnect", () => {
   it("backs off exponentially and caps", () => {

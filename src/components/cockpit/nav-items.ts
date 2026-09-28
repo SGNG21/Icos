@@ -24,5 +24,7 @@ export const MOBILE_TABS = [
 export type NavIcon = (typeof NAV_ITEMS)[number]["icon"] | "ask";
 
 export function isActive(pathname: string, href: string): boolean {
-  return href === "/cockpit" ? pathname === "/cockpit" : pathname === href || pathname.startsWith(`${href}/`);
+  return href === "/cockpit"
+    ? pathname === "/cockpit"
+    : pathname === href || pathname.startsWith(`${href}/`);
 }

@@ -90,7 +90,10 @@ export function CockpitNav({ p0 }: { p0: number }) {
               const Icon = ICONS[item.icon];
               return (
                 <li key={item.href}>
-                  <Link href={item.href} aria-current={isActive(pathname, item.href) ? "page" : undefined}>
+                  <Link
+                    href={item.href}
+                    aria-current={isActive(pathname, item.href) ? "page" : undefined}
+                  >
                     <Icon aria-hidden size={18} />
                     {item.label}
                   </Link>

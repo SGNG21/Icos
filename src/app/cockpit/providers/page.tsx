@@ -1,6 +1,12 @@
 import Link from "next/link";
 
-import { MetricTile, Panel, ToneBadge, TruthValue, Unavailable } from "@/components/cockpit/primitives";
+import {
+  MetricTile,
+  Panel,
+  ToneBadge,
+  TruthValue,
+  Unavailable,
+} from "@/components/cockpit/primitives";
 import { loadSnapshot } from "@/features/cockpit/load";
 import { UNDECLARED, buildResourceTree, providerTelemetry } from "@/features/cockpit/resources";
 import { missing } from "@/features/cockpit/truth";
@@ -45,7 +51,11 @@ export default async function ProvidersPage() {
                 <div className="cx-tree__row">
                   <strong>{p.declared ? p.provider : "Provider not declared"}</strong>
                   {!p.declared && (
-                    <span className="cx-missing" data-kind="not_available" title="Workers here declare no provider.">
+                    <span
+                      className="cx-missing"
+                      data-kind="not_available"
+                      title="Workers here declare no provider."
+                    >
                       {UNDECLARED} <span className="cx-missing__req">BR-03</span>
                     </span>
                   )}
@@ -56,13 +66,23 @@ export default async function ProvidersPage() {
                   {p.accounts.map((a) => (
                     <li key={a.account}>
                       <div className="cx-tree__row">
-                        <span className="cx-dim">Account</span> {a.account === UNDECLARED ? <em className="cx-dim">not declared</em> : a.account}
+                        <span className="cx-dim">Account</span>{" "}
+                        {a.account === UNDECLARED ? (
+                          <em className="cx-dim">not declared</em>
+                        ) : (
+                          a.account
+                        )}
                       </div>
                       <ul>
                         {a.models.map((m) => (
                           <li key={m.model}>
                             <div className="cx-tree__row">
-                              <span className="cx-dim">Model</span> {m.model === UNDECLARED ? <em className="cx-dim">not declared</em> : m.model}
+                              <span className="cx-dim">Model</span>{" "}
+                              {m.model === UNDECLARED ? (
+                                <em className="cx-dim">not declared</em>
+                              ) : (
+                                m.model
+                              )}
                             </div>
                             <ul>
                               {m.workers.map((w) => (
@@ -109,7 +129,8 @@ export default async function ProvidersPage() {
                     <code>{p.pool}</code>
                   </td>
                   <td>
-                    <TruthValue truth={p.used} /> / {p.limit ?? <span className="cx-dim">no declared limit</span>}
+                    <TruthValue truth={p.used} /> /{" "}
+                    {p.limit ?? <span className="cx-dim">no declared limit</span>}
                   </td>
                   <td>{p.workers.join(", ")}</td>
                 </tr>
@@ -119,7 +140,10 @@ export default async function ProvidersPage() {
         )}
       </Panel>
 
-      <Unavailable title="Billing, per-provider latency and token metering have no ICOS source" requirement="BR-04 · BR-05">
+      <Unavailable
+        title="Billing, per-provider latency and token metering have no ICOS source"
+        requirement="BR-04 · BR-05"
+      >
         These views stay empty rather than estimated.
       </Unavailable>
     </>

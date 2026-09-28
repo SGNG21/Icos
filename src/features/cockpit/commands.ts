@@ -58,7 +58,12 @@ export const controlCommandSchema = z.object({
 export type ControlCommand = z.infer<typeof controlCommandSchema>;
 
 export function createCommand(
-  input: { action: CommandAction; target: ControlCommand["target"]; intent?: string; expectedStateVersion?: string | null },
+  input: {
+    action: CommandAction;
+    target: ControlCommand["target"];
+    intent?: string;
+    expectedStateVersion?: string | null;
+  },
   now: Date = new Date(),
   uuid: () => string = () => crypto.randomUUID(),
 ): ControlCommand {
@@ -76,10 +81,7 @@ export function createCommand(
 }
 
 export type ConfirmationPolicy =
-  | { kind: "single" }
-  | { kind: "explicit" }
-  | { kind: "typed_reauth" }
-  | { kind: "escalation" };
+  { kind: "single" } | { kind: "explicit" } | { kind: "typed_reauth" } | { kind: "escalation" };
 
 export function confirmationPolicy(risk: RiskClass): ConfirmationPolicy {
   switch (risk) {
@@ -110,7 +112,9 @@ export function canSubmit(command: ControlCommand, input: ConfirmationInput): bo
     case "explicit":
       return input.acknowledged;
     case "typed_reauth":
-      return input.acknowledged && input.typed.trim() === command.target.label && input.reauthenticated;
+      return (
+        input.acknowledged && input.typed.trim() === command.target.label && input.reauthenticated
+      );
     case "escalation":
       return false;
   }
@@ -140,33 +144,49 @@ export interface CommandTransport {
 
 export const notWiredTransport: CommandTransport = {
   async submit() {
-    return { status: "not_wired", detail: "The governed command bus does not exist yet (BR-10). Nothing was executed." };
+    return {
+      status: "not_wired",
+      detail: "The governed command bus does not exist yet (BR-10). Nothing was executed.",
+    };
   },
   async status() {
     return "not_found";
   },
 };
 
-export async function submitCommand(transport: CommandTransport, command: ControlCommand): Promise<CommandOutcome> {
+export async function submitCommand(
+  transport: CommandTransport,
+  command: ControlCommand,
+): Promise<CommandOutcome> {
   try {
     return await transport.submit(command);
   } catch {
     return {
       status: "unknown_execution_state",
-      detail: "The request left the device but no answer came back. Checking server state before any retry.",
+      detail:
+        "The request left the device but no answer came back. Checking server state before any retry.",
     };
   }
 }
 
 /** Query server state for an ambiguous command. Never resubmits by itself. */
-export async function reconcileCommand(transport: CommandTransport, command: ControlCommand): Promise<CommandOutcome> {
+export async function reconcileCommand(
+  transport: CommandTransport,
+  command: ControlCommand,
+): Promise<CommandOutcome> {
   try {
     const found = await transport.status(command.commandId);
     return found === "not_found"
-      ? { status: "not_received", detail: "The server has no record of this command. It is safe to send it again." }
+      ? {
+          status: "not_received",
+          detail: "The server has no record of this command. It is safe to send it again.",
+        }
       : found;
   } catch {
-    return { status: "unknown_execution_state", detail: "Server state still unreachable. Do not retry yet." };
+    return {
+      status: "unknown_execution_state",
+      detail: "Server state still unreachable. Do not retry yet.",
+    };
   }
 }
 
