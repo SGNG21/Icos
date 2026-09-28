@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto";
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
 import type { IntegrationGate } from "./integration-gate";
+import type { IntegrationApplier, IntegrationApplyOutcome } from "./integration-applier";
+
+/** The slice of a canonical review decision the gate needs. */
+export interface ReviewLike {
+  decision: string;
+  reviewerKind?: string;
+}
 import type { IntegrationReport } from "./report";
 
 import type { TaskExecutionDispatcher, TaskExecutionDispatchInput } from "@/server/execution/ports";
@@ -14,6 +21,23 @@ export interface WorkspaceExecutionCoordinatorOptions {
   git: Git;
   manager: WorkspaceManager;
   integrationGate: IntegrationGate;
+  /**
+   * APPLIES an ACCEPTed result to the integration target (M8, defect 19).
+   *
+   * Optional, and absent means the pre-M8 behaviour EXACTLY: the gate decides and the
+   * branch waits for a human. A deployment opts in to autonomous integration; it is never
+   * switched on by upgrading.
+   */
+  integrationApplier?: IntegrationApplier;
+  /**
+   * The CANONICAL review decisions, looked up by workflowId (M8, defect 19).
+   *
+   * Without this the gate's `review` step never receives a verdict and always answers
+   * NEEDS_HUMAN_APPROVAL — correct, and the reason an autonomous run could never reach
+   * ACCEPT. Supplying it connects the EXISTING reviewer to the gate; it does not introduce
+   * a second review authority, and the gate still refuses a reviewer that is the worker.
+   */
+  reviewDecisions?: { getByWorkflowId(workflowId: string): Promise<ReviewLike | null> };
   dispatcher: TaskExecutionDispatcher;
   missions: MissionRepository;
   tasks: TaskRepository;
@@ -53,6 +77,8 @@ export interface CoordinationResult {
   reasons?: string[];
   workflowId?: string;
   error?: string;
+  /** Present only when an applier is composed AND the gate returned ACCEPT (M8). */
+  integration?: IntegrationApplyOutcome;
 }
 
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -73,6 +99,8 @@ export class WorkspaceExecutionCoordinator {
   private readonly git: Git;
   private readonly manager: WorkspaceManager;
   private readonly integrationGate: IntegrationGate;
+  private readonly integrationApplier?: IntegrationApplier;
+  private readonly reviewDecisions?: WorkspaceExecutionCoordinatorOptions["reviewDecisions"];
   private readonly dispatcher: TaskExecutionDispatcher;
   private readonly missions: MissionRepository;
   private readonly tasks: TaskRepository;
@@ -99,6 +127,8 @@ export class WorkspaceExecutionCoordinator {
     this.git = options.git;
     this.manager = options.manager;
     this.integrationGate = options.integrationGate;
+    this.integrationApplier = options.integrationApplier;
+    this.reviewDecisions = options.reviewDecisions;
     this.dispatcher = options.dispatcher;
     this.missions = options.missions;
     this.tasks = options.tasks;
@@ -268,6 +298,22 @@ export class WorkspaceExecutionCoordinator {
         humanApprovedBy,
       );
 
+      /*
+       * ACCEPT -> APPLY (M8, defect 19).
+       *
+       * This is the step that was missing: the gate granted `accepted` and nothing ever
+       * moved the canonical branch, so worker branches accumulated indefinitely. The apply
+       * runs HERE, inside the one component that already owns the workspace lease and its
+       * fencing token, so the integration is fenced by the same evidence that authorised
+       * the execution — a stale coordinator cannot integrate.
+       */
+      const integration =
+        gateResult.decision === "ACCEPT" && this.integrationApplier
+          ? await this.integrationApplier.apply(execWs.workspaceId, {
+              lease: { owner: this.ownerToken, fencingToken: execWs.fencingToken! },
+            })
+          : undefined;
+
       return {
         workspaceId: execWs.workspaceId,
         taskId,
@@ -275,6 +321,7 @@ export class WorkspaceExecutionCoordinator {
         decision: gateResult.decision,
         reasons: gateResult.reasons,
         workflowId,
+        integration,
       };
     } catch (error) {
       execWs.status = "failed";
@@ -325,8 +372,22 @@ export class WorkspaceExecutionCoordinator {
       execWs.fencingToken,
     );
 
+    /*
+     * INDEPENDENT REVIEW -> the gate (M8, defect 19).
+     *
+     * The gate's review step answers NEEDS_HUMAN_APPROVAL when no verdict is supplied, so
+     * before this an autonomous run could never reach ACCEPT. The verdict comes from the
+     * CANONICAL review decision for this workflow — the same record QC produced — and the
+     * reviewer identity is its kind, which can never equal a worker id, so the gate's
+     * self-review refusal remains structurally unreachable.
+     *
+     * A worker's own claim is never consulted: only a persisted review decision counts.
+     */
+    const review = await this.resolveReview(workflowId);
+
     // Run IntegrationGate
     const report = await this.integrationGate.integrate(workspaceId, {
+      review,
       humanApprovedBy,
       lease: {
         owner: this.ownerToken,
@@ -340,6 +401,25 @@ export class WorkspaceExecutionCoordinator {
     }
 
     return report;
+  }
+
+  /**
+   * Maps a canonical review decision onto the gate's verdict vocabulary.
+   *
+   * Only APPROVE authorises; REQUEST_CHANGES is an explicit refusal. Everything else —
+   * BLOCK, ESCALATE_TO_HUMAN, RETRY, REPLAN or no decision at all — yields `undefined`, and
+   * the gate then answers NEEDS_HUMAN_APPROVAL. Fail-closed: silence is never consent.
+   */
+  private async resolveReview(
+    workflowId: string,
+  ): Promise<{ verdict: "APPROVED" | "CHANGES_REQUESTED"; reviewer: string } | undefined> {
+    const decision = await this.reviewDecisions?.getByWorkflowId(workflowId);
+    if (!decision) return undefined;
+
+    const reviewer = decision.reviewerKind ?? "reviewer";
+    if (decision.decision === "APPROVE") return { verdict: "APPROVED", reviewer };
+    if (decision.decision === "REQUEST_CHANGES") return { verdict: "CHANGES_REQUESTED", reviewer };
+    return undefined;
   }
 
   /**

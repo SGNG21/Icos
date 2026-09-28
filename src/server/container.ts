@@ -376,6 +376,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     git,
     manager: workspaceManager,
     integrationGate,
+    integrationApplier,
     dispatcher: new InMemoryTaskExecutionDispatcher(),
     missions: mission,
     tasks: tasksRepository,
@@ -626,6 +627,28 @@ export async function buildPostgresContainer(
           repoPath: externalExecution.repoPath,
           workspaceRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
           leaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS,
+          /*
+           * Prefer the GOVERNED workspace when one is registered for this workflow (M8,
+           * defect 19). The manager already indexes workspaces by `workflowId`, so this
+           * needs no reference to the coordinator and creates no composition cycle.
+           * Falls back to an ad-hoc worktree when nothing governed exists, which keeps
+           * a bare dispatch working exactly as it did.
+           */
+          workspaceFor: async (dispatch) => {
+            if (!dispatch.workflowId) return null;
+            const registered = (await workspaceManager.list()).find(
+              (w) => w.workflowId === dispatch.workflowId && w.releasedAt === null,
+            );
+            if (!registered) return null;
+            return {
+              path: registered.worktreePath,
+              mode: "writer",
+              branch: registered.branch,
+              baseCommit: registered.baseCommit,
+              /* The WorkspaceManager owns this worktree's lifecycle, not the executor. */
+              dispose: async () => {},
+            };
+          },
         }),
         fallback: temporalDispatcher,
         externalRuntimes: externalExecution.runtimes,
@@ -637,6 +660,9 @@ export async function buildPostgresContainer(
     git: pgGit,
     manager: workspaceManager,
     integrationGate,
+    integrationApplier,
+    /* The CANONICAL review decisions feed the gate: one reviewer, not two. */
+    reviewDecisions,
     /* The same dispatcher the rest of the runtime uses: one execution authority. */
     dispatcher: taskExecution,
     missions: mission,

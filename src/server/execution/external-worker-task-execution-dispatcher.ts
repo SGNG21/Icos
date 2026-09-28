@@ -18,6 +18,7 @@ import { recordTaskExecution } from "@/server/usecases/record-task-execution";
 import type { WorkerExecutor } from "@/server/workers/execution/worker-executor";
 import {
   provisionWorkspace,
+  type WorkerWorkspace,
   type WorkspaceMode,
 } from "@/server/workers/execution/writer-workspace";
 import type {
@@ -74,6 +75,19 @@ export interface ExternalWorkerDispatcherDeps {
    * a worker loose in the canonical checkout.
    */
   workspaceMode?: (input: TaskExecutionDispatchInput) => WorkspaceMode;
+  /**
+   * Supplies a GOVERNED workspace instead of provisioning an ad-hoc one (M8, defect 19).
+   *
+   * When this returns a workspace, the worker runs in a REGISTERED `Workspace` that the
+   * WorkspaceManager owns — so the Integration Gate can evaluate it, the applier can
+   * integrate it and cleanup can reap it. Without it the executor provisions its own
+   * worktree, which is fine for an isolated run but produces a branch no governed path
+   * ever sees. That orphaning was defect 19's other half.
+   *
+   * A supplied workspace is NOT disposed here: its owner controls its lifecycle, and the
+   * gate needs the worktree to still exist after execution finishes.
+   */
+  workspaceFor?: (input: TaskExecutionDispatchInput) => Promise<WorkerWorkspace | null>;
   /** Identifies this runner in the lease. Defaults to a per-instance uuid. */
   owner?: string;
 }
@@ -138,12 +152,20 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
     );
 
     const mode = this.deps.workspaceMode?.(input) ?? "writer";
-    const workspace = await provisionWorkspace({
-      repoPath: this.deps.repoPath,
-      mode,
-      attemptKey: `${attempt.missionTaskId}-a${attempt.attempt}`,
-      rootDir: this.deps.workspaceRoot,
-    });
+    /*
+     * A governed workspace wins when one exists. Ownership decides disposal: we remove only
+     * what we created, because removing a governed worktree would delete the very thing the
+     * gate is about to evaluate.
+     */
+    const governed = (await this.deps.workspaceFor?.(input)) ?? null;
+    const workspace =
+      governed ??
+      (await provisionWorkspace({
+        repoPath: this.deps.repoPath,
+        mode,
+        attemptKey: `${attempt.missionTaskId}-a${attempt.attempt}`,
+        rootDir: this.deps.workspaceRoot,
+      }));
 
     try {
       const mission = await this.deps.missions.findById(attempt.missionId);
@@ -160,7 +182,7 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
         instructions: attempt.prompt,
         successCriteria: [],
         /* A reader is handed NO write scope, so nothing invites it to write. */
-        allowedFileScope: mode === "writer" ? ["."] : [],
+        allowedFileScope: workspace.mode === "writer" ? ["."] : [],
         workspacePath: workspace.path,
         resumeToken: resumable?.resumeToken ?? null,
         handoff: resumable?.handoff ?? null,
@@ -177,8 +199,8 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
       await this.settle(attempt.id, input, outcome);
       return { workflowId: input.workflowId };
     } finally {
-      /* Removes the worktree; the BRANCH survives, because it is the evidence. */
-      await workspace.dispose();
+      /* Only dispose what we provisioned: a governed workspace outlives this dispatch. */
+      if (!governed) await workspace.dispose();
     }
   }
 
