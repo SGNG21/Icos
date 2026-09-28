@@ -1,12 +1,18 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M8 — defects 22 + 19 closed)
+Updated: 2026-09-28 (M9 — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-NEXT — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED (see NEXT_ACTION), then the
-       Self-Development Supervisor.
+CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — DECLARED, M9, decision 0042, commit a9aa3d7.
+       An ORDINARY autonomous mission now reaches the governed path BY DEFAULT, proven
+       from `buildPostgresContainer` AND from `startProductionServices` — nothing in the
+       proof composes the coordinator by hand. Governed workspace allocated automatically
+       during attempt preparation, real external worker, independent review, gate,
+       canonical commit applied ONCE, branch and worktree reaped, restart duplicates
+       nothing. DEFECT 23 CLOSED.
+NEXT — SELF_DEVELOPMENT_SUPERVISOR, then ICOS_SELF_BUILD_E2E (see NEXT_ACTION).
 M8 — real external execution + governed integration: COMPLETE.
        decisions 0041 (+ wiring), commits 0b1e083, 4b570ec, 1bac102.
        DEFECT 22 CLOSED — `container.taskExecution` now selects the external worker
@@ -58,7 +64,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-1bac102  M8 governed external worker integration, end to end
+a9aa3d7  M9 governed workspace allocation is the DEFAULT path (defect 23 CLOSED)
+  0d3f4c8  M8 recorded — defects 22 + 19 closed, defect 23 named
+  1bac102  M8 governed external worker integration, end to end
   4b570ec  M8 governed worker result integration + reaping (defect 19)
   0b1e083  M8 wire external execution into the REAL container (defect 22)
   a8e4dce  CORE3 chaos certified; deploy gap (defect 22) named
@@ -93,6 +101,65 @@ HEAD commit message every phase; a commit that changes certification status but 
 STATE.md leaves this file actively misleading.
 
 ## CERTIFIED_MILESTONES
+
+### CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — M9 (decision 0042, commit a9aa3d7)
+7 PostgreSQL certification proofs + 8 allocation-policy proofs; 4 mutations verified.
+
+  THE DEFECT: `allocateWorkspace` was only ever called explicitly, so an ORDINARY autonomous
+  mission never reached the governed path — it dispatched with no registered workspace, the
+  executor fell back to an ad-hoc worktree, and the branch was orphaned. Root cause, the SAME
+  SHAPE AS DEFECT 22 FOR THE THIRD TIME: `production-services.ts` passed `undefined` for the
+  supervisor's coordinator, making the supervisor's workspace branch dead code in production.
+
+  ALLOCATION_IN_ATTEMPT_PREPARATION — allocated right after `prepare()` and BEFORE any
+    external execution, keyed by the canonical workflowId.
+  POLICY_FROM_CANONICAL_TASK_ONLY — `riskClass` + `allowedFileScope`. Provider, worker kind
+    and model are NOT inputs: the policy's parameter type has no field for them, so the
+    mistake cannot be reintroduced by editing a condition. The previous gate was
+    `routedWorkerKind`, which let WHO executes decide whether work is governed AND silently
+    skipped governance for any unrouted task.
+  WRITER_ALWAYS_GOVERNED / READER_EXEMPT — read_only needs none; reversible and sensitive do.
+  UNSCOPED_WRITER_IS_BLOCKED — fail closed. Inventing a permissive scope would let an
+    autonomous agent write anywhere; falling back to ad-hoc is the orphan-branch defect.
+    Only blocking is recoverable, and it is visible.
+  ABSENT_METADATA_IS_A_WRITER — guessing "reader" would skip governance for exactly the tasks
+    whose intent nobody wrote down.
+  DECLARED_SCOPE_IS_THE_WORKSPACE_SCOPE — the gate rejects everything outside `owns`, so a
+    generic default would turn every governed run into a rejection.
+  NO_ORPHAN_BRANCH — after the run, `git branch --list ws/*` is EMPTY and the worktree is gone.
+  EXACTLY_ONCE_ACROSS_RESTART — a NEW container re-running the mission integrates nothing
+    twice and creates no second attempt.
+  RETRY_WORKSPACE_SEMANTICS — the same workflowId REUSES its workspace; a different workflowId
+    on the same task is refused as WORKFLOW_COLLISION.
+  PROVEN_FROM_THE_REAL_RUNTIME — `buildPostgresContainer` + `composeAutonomyRuntime` (the exact
+    function `createRecoveryScheduler` calls) AND a real `startProductionServices` boot.
+    NOTHING in the proof composes the coordinator by hand, because a hand-built composition is
+    precisely how defects 22 and 23 stayed invisible.
+
+  SUBSTITUTED, and why: the gate's shell commands (install/typecheck/lint/unit/build/postgres)
+  are trivial passing commands via ICOS_GATE_COMMANDS. Running four full pnpm suites inside a
+  throwaway fixture would prove pnpm works, not that ICOS orchestrates correctly. Every gate
+  RULE — scope, secrets, migrations, diff, conflict, review — is the real one.
+
+  THREE LATENT DEFECTS THIS UNCOVERED, none reachable by a unit test:
+   - `PostgresWorkspaceRegistry` hardcoded `testDatabase: ""` ("will be set by manager"), but
+     the manager READS the workspace back — so the name was always empty and `create()` failed
+     every time with DATABASE_FORBIDDEN. The PostgreSQL workspace path could NEVER allocate
+     anything. Now derived from the slug.
+   - any hyphenated slug broke creation (`^icos_test_[a-z0-9_]{1,32}$`), including the
+     coordinator's own former default `task-<id>`. Slugs are underscore-only.
+   - `markDispatched` assumed Temporal's fire-and-forget shape and rejected a SYNCHRONOUS
+     dispatcher's acknowledgement; the external executor settles the attempt inside
+     `dispatch()`. `prepared` remains invalid.
+
+  NOT PROVEN by this certification, do not overclaim:
+   - the mission used is single-task. Multi-task DAG behaviour is certified separately
+     (M3/M5.4) and is NOT re-proven under the governed path.
+   - the proof drives `supervisor.run(missionId)` directly after booting the real services;
+     it does not wait for the recovery SCHEDULER's timer to pick the mission up.
+   - no LIVE provider is used here; the worker is this process's own Node runtime. The live
+     Hermes proof remains separate and opt-in.
+
 
 ### M8 PROOFS — defects 22 + 19 (commits 0b1e083 / 4b570ec / 1bac102, decision 0041)
 7 unit router + 4 container-composition + 13 applier/reaping + 7 end-to-end; 15 mutations.
@@ -589,7 +656,15 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M8 / 1bac102, all MEASURED):
+Current (at M9 / a9aa3d7, all MEASURED, DOCKER CONFIRMED RUNNING):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 144 files, 1788 tests
+- `pnpm run test:integration`: 438 passed / 3 FAILED / 2 SKIPPED
+- the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING; the count has NEVER moved
+- the 2 skips are the OPT-IN live Hermes proof only — skips did NOT increase
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 44 rows (M9 needed NO migration)
+
+Previous (at M8 / 1bac102):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
 - `pnpm run test` (unit): PASS — 143 files, 1780 tests
 - `pnpm run test:integration`: 431 passed / 3 FAILED / 2 SKIPPED
@@ -794,7 +869,22 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     nothing attached evidence to a reviewed SUCCESS until the M6.3 executor did. A unit
     test could not have found it; the composition did.
 
-23. (M8) NOTHING AUTOMATICALLY ALLOCATES A GOVERNED WORKSPACE for an autonomous mission
+24. (M9) `PostgresMissionRepository.create()` HARDCODES task planning metadata —
+    `riskClass: 'reversible'`, `allowedFileScope: []`, priority 3, attemptBudget 3 — for
+    missions created with inline tasks. Under governance those writer tasks now BLOCK,
+    because an undeclared scope cannot be governed. This is the M2 gap finally having
+    teeth, and it is CORRECT fail-closed behaviour, but it means the inline-creation path
+    cannot produce a runnable writer task.
+    NOT a blocker for CORE3 autonomous orchestration: the AUTONOMOUS path goes through the
+    planner, whose output schema and prompt both carry `allowedFileScope`, and `applyPlan`
+    persists it (covered by task-planning-metadata.integration.test.ts). Fix by having
+    `create()` accept and persist real per-task metadata instead of constants.
+
+23. RESOLVED in M9 (decision 0042, commit a9aa3d7) — governed workspace allocation now
+    happens during normal attempt preparation, keyed by workflowId, decided from
+    `riskClass` + `allowedFileScope` only. Proven from the real container AND from
+    `startProductionServices`. See the CORE3 certification block.
+    ORIGINAL TEXT: NOTHING AUTOMATICALLY ALLOCATES A GOVERNED WORKSPACE for an autonomous mission
     task. `WorkspaceExecutionCoordinator.allocateWorkspace` is still called explicitly, so
     the governed path (workspace -> real worker -> gate -> apply -> reap) is composed and
     proven end to end but is not yet REACHED by an ordinary autonomous mission: such a task
@@ -962,69 +1052,61 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED
+## NEXT_ACTION — SELF_DEVELOPMENT_SUPERVISOR, then ICOS_SELF_BUILD_E2E
 
-M8 closed defects 22 and 19: external execution is wired into the real container, and an
-accepted worker result reaches the canonical branch exactly once and is then reaped. What
-remains is to make an ORDINARY AUTONOMOUS MISSION take that path without anyone composing
-it by hand.
+CORE3 autonomous orchestration is CERTIFIED: an ordinary autonomous mission reaches the
+governed path by default, from the real runtime. What remains is the layer above it — ICOS
+proposing and governing its OWN work — and then the end-to-end certification.
 
-### 1. DEFECT 23 — allocate a governed workspace automatically (the last gap)
-`WorkspaceExecutionCoordinator.allocateWorkspace` is still called explicitly. An ordinary
-autonomous task therefore dispatches with NO registered workspace, the executor falls back
-to an ad-hoc worktree, and its branch is orphaned exactly as before M8. Decide and record:
-  - WHICH tasks get a governed workspace. A writer does; a reader does not. `riskClass` /
-    `allowedFileScope` on the canonical Task are the honest discriminators — NOT worker
-    kind, and NOT provider (defects 18/10).
-  - WHERE allocation happens. The supervisor already routes and prepares the attempt, and
-    the workspace is keyed by workflowId, so preparing an attempt is the natural moment.
-    Do NOT add a second orchestration authority; extend the one that already prepares.
-  - what happens when allocation FAILS (no capacity, collision): back-pressure, exactly as
-    "no eligible worker" is — the task stays recoverable, it does not fail.
-  - fileScope must come from the TASK, not a default. The gate REJECTS out-of-scope files,
-    so a wrong default turns every governed run into a rejection.
+### 1. SELF_DEVELOPMENT_SUPERVISOR
+`src/server/autonomy/governed-self-development-coordinator.ts` already exists; READ IT FIRST
+and extend it rather than starting a second authority. It must:
+  - turn a repository-level objective into a canonical mission plan with REAL per-task
+    metadata — above all `allowedFileScope`, because an unscoped writer now blocks (defect
+    24 is the same lesson: metadata that used to be decorative is now load-bearing);
+  - respect the existing budgets and escalation rules (CLAUDE.md: escalate only for genuine
+    strategic ambiguity, irreversible choices, policy/security conflict, budget or prod
+    credentials);
+  - never bypass the gate. Self-development is the case where an ungoverned merge would be
+    most damaging and most plausible-looking.
 
-### 2. THE CERTIFICATION ITSELF
-One test from `startProductionServices` (or `buildPostgresContainer` + the real recovery
-scheduler) driving: mission -> plan -> routing -> governed workspace -> REAL external
-worker -> structured result + commit evidence -> QC/review -> IntegrationGate -> apply ->
-canonical branch advanced ONCE -> reap -> restart proves no duplicate.
-Requirements for it to count:
-  - start from the CONTAINER, not a hand-built composition. M8's end-to-end still composes
-    the coordinator explicitly; that is the remaining honesty gap.
-  - real PostgreSQL, real processes, real git, restarts as new connections.
-  - assert on durable rows and on `git rev-parse`, never on call counts.
-  - the gate's shell commands may stay a recorded runner (running four pnpm suites inside
-    a throwaway fixture proves pnpm works, not ICOS) — but say so in the record.
+### 2. FIX DEFECT 24 FIRST if the supervisor uses inline mission creation
+`PostgresMissionRepository.create()` hardcodes task metadata, so inline-created writer tasks
+block. Either route self-development through the planner/applyPlan path (which carries
+metadata correctly) or make `create()` persist real metadata.
 
-### THEN
-SELF_DEVELOPMENT_SUPERVISOR -> ICOS_SELF_BUILD_E2E PASS.
+### 3. ICOS_SELF_BUILD_E2E
+ICOS plans a change to its own repository, a real external worker implements it in a governed
+workspace, the gate verifies it with the REAL commands (not the trivial ones the CORE3
+certification substitutes), it is integrated once and reaped, and the result is a commit on
+the integration branch that passes the full suite.
+  - D1 MUST BE FIXED FIRST. The 3 auth-bootstrap-cli timeouts are the only non-design
+    blocker, and the gate runs the full integration suite — so D1 would fail the gate itself.
+  - use the REAL ICOS_GATE_COMMANDS here. The substitution is acceptable for orchestration
+    proofs; it is not acceptable for the certification that ICOS can build itself.
 
 ### ALSO OPEN
+- defect 24 — inline mission creation hardcodes task metadata (above).
 - defect 18 / 10 — provider names as routing keys in `CompositeTaskExecutionDispatcher` and
-  `AIResourceCatalog`. M8 did NOT reinforce them (the router is runtime-only) but did not
-  remove them either. Retiring the composite is the natural moment.
+  `AIResourceCatalog`. M8/M9 did not reinforce them; retiring the composite is the moment.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
-- D1 — the 3 auth-bootstrap-cli timeouts. Still the only non-design blocker to the FINAL
-  ICOS_SELF_BUILD_E2E PASS. Never re-skip them, and note the Docker-outage trap above:
-  they SKIP silently when Docker is down and then look fixed.
+- D1 — 3 auth-bootstrap-cli timeouts. Never re-skip. They SKIP silently when Docker is down
+  and then look fixed; always compare the SKIP count as carefully as the fail count.
 
 ### Already available and proven (reuse, do not rebuild)
-- registration / REAL runtime-keyed probing (0036) swept autonomously (0037) / durable
-  registry / capability routing with derived load and an imposed evidence horizon;
-- ONE external execution boundary (0038) with the eight-class failure taxonomy, execution
-  lease + post-run fence, writer isolation and git commit evidence;
-- recovery of abandoned executions (0039) and routed QC retries (0040);
-- ONE dispatch seam chosen by RUNTIME (M8): `RuntimeDispatchRouter`, wired in the container;
-- ONE integration boundary: gate DECIDES, `IntegrationApplier` ACTS, fast-forward by CAS,
-  exactly-once derived from git, then `manager.cleanup` reaps;
-- ONE capacity authority (`assertWorkerCapacity`); TWO NON-interchangeable recurrence
-  primitives (`scheduled_jobs` for a new periodic concern, the already-timed
-  `RuntimeRecoverySweeper` + `recovery_units` for scanning abandoned durable state).
+- routing/probing/recovery: registration, REAL runtime-keyed probing (0036) swept
+  autonomously (0037), capability routing with derived load, abandoned-execution recovery
+  (0039), routed QC retries (0040);
+- ONE external execution boundary (0038): launch, contract injection, output capture, the
+  eight-class failure taxonomy, execution lease + post-run fence, git commit evidence;
+- ONE dispatch seam chosen by RUNTIME (M8) — `RuntimeDispatchRouter`, wired in the container;
+- ONE integration boundary: gate DECIDES, `IntegrationApplier` ACTS (fast-forward by CAS,
+  exactly-once derived from git), then `manager.cleanup` reaps;
+- ONE allocation policy (M9): `decideWorkspaceAllocation`, canonical metadata only;
+- ONE production composition: `composeAutonomyRuntime` — use it in proofs, never hand-build.
 
 Critical path:
-  defect 23 -> CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED ->
-  SELF_DEVELOPMENT_SUPERVISOR -> ICOS_SELF_BUILD_E2E PASS   (D1 blocks the final PASS.)
+  SELF_DEVELOPMENT_SUPERVISOR -> fix D1 -> ICOS_SELF_BUILD_E2E PASS
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -1173,3 +1255,18 @@ Then M3 durable readiness/dependency gating (mission N13).
 - RUNNING THE PATH FINDS THE MISSING LINK. The coordinator never passed a review verdict to
   the gate, so an autonomous run could never reach ACCEPT. Nothing in the types said so; the
   gate simply answered NEEDS_HUMAN_APPROVAL the first time the whole flow was executed.
+- THE SAME DEFECT SHAPE APPEARED THREE TIMES: a capability fully built and proven, and the
+  CONTAINER never wiring it (defect 22: taskExecution was Temporal; defect 23: the supervisor
+  got `undefined` for its coordinator). Both were invisible because every proof composed the
+  thing by hand. The fix is structural, not vigilance: extract the production composition
+  (`composeAutonomyRuntime`) and make proofs call IT. A test that wires its own graph proves
+  the graph it wired, not the one that runs.
+- MAKING A PATH THE DEFAULT IS WHERE ITS LATENT DEFECTS SURFACE. Turning governed allocation
+  on uncovered three bugs that had been unreachable: a registry that never persisted the test
+  database name (so PostgreSQL workspace creation could NEVER succeed), a slug format that
+  violated the database-name guard, and an acknowledgement that assumed asynchronous dispatch.
+  None was findable by unit tests; all three were found by the first real run.
+- FAIL-CLOSED CHANGES MAKE PREVIOUSLY-DECORATIVE METADATA LOAD-BEARING. `allowedFileScope` was
+  optional and mostly empty; now an unscoped writer blocks. That is correct, and it instantly
+  exposed that `PostgresMissionRepository.create()` hardcodes constants (defect 24). Expect a
+  fail-closed rule to surface every place the data was never really filled in.
