@@ -1,6 +1,6 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M10 — self-development can integrate; D1 fixed)
+Updated: 2026-09-28 (M11 — DEFECT 25 CLOSED; self-development runtime WIRED)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
@@ -64,7 +64,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-a92abad  M10 self-development can land its own work (defect 26 CLOSED)
+5db20d2  M11 DEFECT 25 CLOSED — self-development owns its chain, on the certified path
+  996f865  M10 recorded; defect 25 named as the self-build blocker
+  a92abad  M10 self-development can land its own work (defect 26 CLOSED)
   2e624c2  defect 24 — create() declares task metadata instead of inventing it
   cfe4431  D1 resolved — integration failures now zero
   1ab958b  D1 root cause fixed — the container leaked two PostgreSQL clients
@@ -661,7 +663,13 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M10 / a92abad, all MEASURED, DOCKER CONFIRMED RUNNING):
+Current (at M11 / 5db20d2, all MEASURED, DOCKER CONFIRMED RUNNING):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 1808 tests
+- `pnpm run test:integration`: 451 passed / 0 FAILED / 2 SKIPPED
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 44 rows
+
+Previous (at M10 / a92abad):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
 - `pnpm run test` (unit): PASS — 1792 tests
 - `pnpm run test:integration`: 447 passed / 0 FAILED / 2 SKIPPED
@@ -919,7 +927,39 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     target (NEEDS_REBASE / lost race) goes to a human and KEEPS its branch — the work was
     fine, the target moved, and the branch is what a rebase needs.
 
-25. (M10) THE SELF-DEVELOPMENT COORDINATOR IS NOT COMPOSED, AND DOES NOT USE THE CERTIFIED
+27. (M11) NO PLANNER PROVIDER IS CONFIGURABLE IN THIS ENVIRONMENT — THE SELF-DEVELOPMENT
+    E2E BLOCKER. `OmniRouteAutonomousMissionPlanner` is the ONLY implementation of
+    `AutonomousMissionPlanner`, and `createOmniRouteAutonomousMissionPlanner` throws
+    CONFIGURATION_INCOMPLETE without OMNIROUTE_BASE_URL + OMNIROUTE_API_KEY +
+    ICOS_PLANNER_MODEL. None are set here and there is no `.env` (only `.env.example`), so
+    `container.autonomousPlanner` is undefined and the chain correctly fails closed with
+    AUTONOMY_PLANNER_UNAVAILABLE.
+    CONSEQUENCE: every link of self-development is wired and proven, but ICOS cannot PLAN its
+    own work, so SELF_DEVELOPMENT_E2E cannot be run truthfully. Stubbing the planner would
+    mean ICOS was not planning — the certification would assert something false.
+    TWO WAYS FORWARD, and the choice is the owner's (CLAUDE.md names required production
+    credentials as an escalation trigger):
+      A. supply OmniRoute credentials + ICOS_PLANNER_MODEL — no code change;
+      B. add a Hermes-backed adapter for the EXISTING `AutonomousMissionPlanner` port. Hermes
+         is installed and authenticated here (Nemotron via a custom endpoint) and has already
+         been proven as an external worker. This is a second PROVIDER ADAPTER, not a second
+         planning authority — the same pattern as runtime-keyed probe and exec adapters — but
+         it is a material choice about which model plans ICOS's own self-modification, and it
+         spends credits per planning call.
+
+25. RESOLVED in M11 (commit 5db20d2) — all three links proven:
+    LINK 1 `SelfDevelopmentChain` owns candidate -> goal -> mission -> plan and implements no
+    link of it (ids DERIVED from the candidate contentHash, so idempotence, restart-safety and
+    duplicate-invocation safety all follow; selection evidence written before any mission
+    exists; in-flight work resumed before new work is started).
+    LINK 2 `CertifiedRuntimeExecutionHandoff` is an ADAPTER that calls `supervisor.run` and
+    READS what the certified path produced; it FAILS CLOSED without a governed workspace, a
+    lease or a routed worker, which is what makes a regression to the bypass detectable.
+    LINK 3 composed in `composeAutonomyRuntime` with a composition-asserting test, plus a
+    DURABLE backlog (built on the existing DurableMemory store, no migration) and a canonical
+    independent-review adapter that fails closed when no independent reviewer exists.
+    8 mutations verified. SELF_DEVELOPMENT_RUNTIME_WIRED=TRUE.
+    ORIGINAL TEXT: THE SELF-DEVELOPMENT COORDINATOR IS NOT COMPOSED, AND DOES NOT USE THE CERTIFIED
     EXECUTION PATH. Verified: `GovernedSelfDevelopmentCoordinator` appears NOWHERE outside
     its own file and tests — the FOURTH occurrence of the defect-22/23 shape (a capability
     fully built and proven while the container never wires it).
@@ -1170,8 +1210,13 @@ commands for the self-build certification.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE (M9, decision 0042).
   MULTI_WORKER_E2E_PASS                    — TRUE (M5.4, decision 0035).
   AUTO_SESSION_RECOVERY_PASS               — TRUE (M7 + chaos certification, 0039/0040).
-  SELF_DEVELOPMENT_E2E_PASS                — FALSE. Blocked by defect 25.
+  SELF_DEVELOPMENT_E2E_PASS                — FALSE. Defect 25 is CLOSED and the runtime is
+                                             WIRED, but the run is blocked by DEFECT 27: no
+                                             planner provider is configured, so ICOS cannot
+                                             plan its own work. Stubbing the planner would
+                                             certify something false.
   ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
+  SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11).
 ICOS is NOT yet self-building, and must not be described as such.
 
 Critical path:
