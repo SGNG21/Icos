@@ -1279,7 +1279,7 @@ commands for the self-build certification.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN after the 0045 trigger.
   MULTI_WORKER_E2E_PASS                    — TRUE, RE-PROVEN after the 0045 trigger.
   AUTO_SESSION_RECOVERY_PASS               — TRUE, RE-PROVEN after the 0045 trigger.
-  DEFECT_32                                — OPEN. A dependent governed task never runs after its
+  DEFECT_36                                — OPEN. A dependent governed task never runs after its
                                              parent integrates (completion + wake precede gate +
                                              reap). Blocks natural multi-task DAG progress.
   REPAIR_WORKSPACE_DEFECT                  — OPEN (pre-existing). Correction attempt #2 gets no
@@ -1292,12 +1292,12 @@ commands for the self-build certification.
   SELF_DEVELOPMENT_E2E_PASS                — NOT YET RUN. Defect 28 no longer blocks it, but
                                              the self-dev coordinator still gates directly with
                                              an unpersisted review (0045 open item), and a
-                                             multi-task self-dev plan hits DEFECT 32.
+                                             multi-task self-dev plan hits DEFECT 36.
   ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
 ICOS is NOT yet self-building, and must not be described as such.
 
 Critical path:
-  DEFECT 28 (closed) -> DEFECT 32 + self-dev gate convergence -> SELF_DEVELOPMENT_E2E_PASS
+  DEFECT 28 (closed) -> DEFECT 36 + self-dev gate convergence -> SELF_DEVELOPMENT_E2E_PASS
     -> ICOS_SELF_BUILD_E2E
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)

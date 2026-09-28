@@ -93,7 +93,7 @@ fatal, unreviewed work adopted, re-gate memo removed. Results are recorded in `a
 DEFECT 28 is closable on its own: review → production trigger → gate → integration. The three
 items below are separate defects, each blocking a different capability.
 
-- **DEFECT 32 — dependent governed tasks do not progress.** QC's ACCEPT completes the mission task and
+- **DEFECT 36 — dependent governed tasks do not progress.** QC's ACCEPT completes the mission task and
   wakes the mission BEFORE the pending-review pass gates and reaps the workspace. A dependent task B
   is then dispatched while A is not yet integrated: with a scope overlapping A's, B's allocation is
   refused `OWNERSHIP_CONFLICT` and its PREPARED attempt is never allocated again; with a disjoint scope
