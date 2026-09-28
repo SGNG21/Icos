@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { RuntimeFlags } from "@/core/control/contracts";
 import { effectiveFlags } from "@/core/control/policy";
