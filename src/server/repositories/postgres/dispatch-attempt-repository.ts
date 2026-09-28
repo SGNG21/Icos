@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 
 import {
   WorkerCapacityExceededError,
@@ -8,6 +8,8 @@ import {
   type DispatchAttemptRepository,
   type PrepareDispatchAttemptInput,
   type PrepareDispatchAttemptResult,
+  type RecordExecutionFailureInput,
+  type ResumableAttemptState,
 } from "@/core/contracts/dispatch-attempt";
 import type { AuditEntry } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
@@ -42,6 +44,9 @@ function mapRow(row: typeof dispatchAttempts.$inferSelect): DispatchAttempt {
     updatedAt: row.updatedAt,
     dispatchedAt: row.dispatchedAt ?? undefined,
     lastError: row.lastError ?? undefined,
+    failureClass: (row.failureClass as DispatchAttempt["failureClass"]) ?? undefined,
+    resumeToken: row.resumeToken ?? undefined,
+    handoff: (row.handoff as Record<string, unknown> | null) ?? undefined,
   };
 }
 
@@ -532,6 +537,110 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         claimUntil: null,
       })
       .where(eq(dispatchAttempts.id, id));
+  }
+
+  /**
+   * Settles a failed attempt WITH its classification and resume state (M6.3).
+   *
+   * The execution lease is RELEASED here: the attempt is terminal, so holding a
+   * fence on it would only block the recovery that should now happen.
+   */
+  async recordExecutionFailure(id: string, input: RecordExecutionFailureInput): Promise<void> {
+    await this.db
+      .update(dispatchAttempts)
+      .set({
+        state: "failed",
+        updatedAt: new Date(),
+        /* Bounded: last_error is a diagnostic summary, never a transcript. */
+        lastError: input.message.slice(0, 2_000),
+        failureClass: input.failureClass,
+        resumeToken: input.resumeToken ?? null,
+        handoff: input.handoff ?? null,
+        executionLeaseOwner: null,
+        executionLeaseUntil: null,
+      })
+      .where(eq(dispatchAttempts.id, id));
+  }
+
+  async acquireExecutionLease(id: string, owner: string, leaseMs: number): Promise<boolean> {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+      throw new Error("EXECUTION_LEASE_INVALID_LEASE");
+    }
+
+    const now = new Date();
+    const until = new Date(now.getTime() + leaseMs);
+
+    /*
+     * One atomic UPDATE is the whole mutual exclusion: only a row whose lease is
+     * absent, expired, or already ours can be taken. Reading then writing would
+     * leave a window in which two runners both see "free".
+     */
+    const claimed = await this.db
+      .update(dispatchAttempts)
+      .set({ executionLeaseOwner: owner, executionLeaseUntil: until, updatedAt: now })
+      .where(
+        and(
+          eq(dispatchAttempts.id, id),
+          /* Only a live execution may be leased; terminal attempts are done. */
+          inArray(dispatchAttempts.state, [...ACTIVE_ATTEMPT_STATES]),
+          or(
+            isNull(dispatchAttempts.executionLeaseUntil),
+            lt(dispatchAttempts.executionLeaseUntil, now),
+            eq(dispatchAttempts.executionLeaseOwner, owner),
+          ),
+        ),
+      )
+      .returning({ id: dispatchAttempts.id });
+
+    return claimed.length > 0;
+  }
+
+  async holdsExecutionLease(id: string, owner: string): Promise<boolean> {
+    const now = new Date();
+    const rows = await this.db
+      .select({ id: dispatchAttempts.id })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          eq(dispatchAttempts.id, id),
+          eq(dispatchAttempts.executionLeaseOwner, owner),
+          /* An expired lease is NOT held: time alone revokes it. */
+          gte(dispatchAttempts.executionLeaseUntil, now),
+        ),
+      )
+      .limit(1);
+
+    return rows.length > 0;
+  }
+
+  async latestResumableState(missionTaskId: string): Promise<ResumableAttemptState | null> {
+    const rows = await this.db
+      .select({
+        attempt: dispatchAttempts.attempt,
+        resumeToken: dispatchAttempts.resumeToken,
+        handoff: dispatchAttempts.handoff,
+        failureClass: dispatchAttempts.failureClass,
+      })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          eq(dispatchAttempts.missionTaskId, missionTaskId),
+          isNotNull(dispatchAttempts.resumeToken),
+        ),
+      )
+      /* Newest attempt wins: resume continues the most recent work, not the first. */
+      .orderBy(desc(dispatchAttempts.attempt))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+
+    return {
+      attempt: row.attempt,
+      resumeToken: row.resumeToken ?? undefined,
+      handoff: (row.handoff as Record<string, unknown> | null) ?? undefined,
+      failureClass: (row.failureClass as ResumableAttemptState["failureClass"]) ?? undefined,
+    };
   }
 
   async markCompletedByWorkflowId(workflowId: string): Promise<void> {

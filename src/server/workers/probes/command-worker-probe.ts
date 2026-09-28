@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { runNonInteractive } from "@/server/workers/process/run-process";
 
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type {
@@ -139,44 +139,19 @@ function firstLine(text: string): string {
 /**
  * Runs one command with no stdin, no shell and a hard timeout.
  *
- * Never rejects: a spawn failure (missing executable, EACCES) is returned as a
- * non-zero exit so the caller has ONE shape to interpret. A probe helper that
- * both rejects and resolves is a probe helper with two failure paths, and one of
- * them always ends up unhandled.
+ * Delegates to the shared non-interactive runner (M6.3) so that probing and
+ * EXECUTION cannot drift apart on the guarantees that matter — closed stdin, a
+ * killing timeout, no shell, bounded output, and never rejecting. The probe simply
+ * ignores stdout: it needs a verdict, not a transcript.
  */
-export const runCommand: CommandRunner = (command, timeoutMs) =>
-  new Promise<CommandRunResult>((resolve) => {
-    let settled = false;
-    let timedOut = false;
-    let stderr = "";
-
-    const child = spawn(command.command, [...(command.args ?? [])], {
-      // No stdin: nothing can block waiting for a human.
-      stdio: ["ignore", "ignore", "pipe"],
-      shell: false,
-    });
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    const finish = (exitCode: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode, timedOut, stderr });
-    };
-
-    child.stderr?.on("data", (chunk: Buffer) => {
-      // Bounded: a chatty runtime must not be able to grow this without limit.
-      if (stderr.length < 4_096) stderr += chunk.toString("utf8");
-    });
-
-    child.on("error", (error: Error) => {
-      stderr = stderr || error.message;
-      finish(null);
-    });
-
-    child.on("close", (code) => finish(code));
+export const runCommand: CommandRunner = async (command, timeoutMs) => {
+  const result = await runNonInteractive({
+    command: command.command,
+    args: command.args,
+    timeoutMs,
+    /* A verdict needs the first line of stderr, never a megabyte of it. */
+    maxOutputBytes: 4_096,
   });
+
+  return { exitCode: result.exitCode, timedOut: result.timedOut, stderr: result.stderr };
+};

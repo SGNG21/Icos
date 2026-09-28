@@ -50,6 +50,25 @@ const envSchema = z.object({
    * sweeps. A value at or above the horizon is REFUSED at composition time.
    */
   ICOS_WORKER_PROBE_INTERVAL_MS: optionalPositiveInteger,
+  /*
+   * EXTERNAL WORKER EXECUTION (M6.3). Per RUNTIME, the non-interactive command that
+   * makes a worker do work, as JSON. No executable, product or provider name is
+   * committed: adding Hermes, Codex or anything else is configuration. Malformed
+   * configuration REFUSES TO BOOT rather than silently executing nothing.
+   */
+  ICOS_WORKER_EXEC_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * The failure taxonomy's recognisers, as JSON: per failure class, the regexes
+   * that identify it, plus optional exit-code mappings. Provider-shaped strings
+   * live HERE and never in the core.
+   */
+  ICOS_WORKER_FAILURE_CONFIG: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /** How long one execution may hold its fence before it can be taken over. */
+  ICOS_WORKER_EXECUTION_LEASE_MS: optionalPositiveInteger,
+  /** Where worker worktrees are created. Defaults to the OS temp directory. */
+  ICOS_WORKER_WORKSPACE_ROOT: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /** The canonical repository. A writer worker is guaranteed NOT to run here. */
+  ICOS_REPO_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,

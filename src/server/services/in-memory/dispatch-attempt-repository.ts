@@ -7,6 +7,8 @@ import {
   type DispatchAttemptRepository,
   type PrepareDispatchAttemptInput,
   type PrepareDispatchAttemptResult,
+  type RecordExecutionFailureInput,
+  type ResumableAttemptState,
 } from "@/core/contracts/dispatch-attempt";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
@@ -15,6 +17,14 @@ import { canTransition } from "@/core/tasks/lifecycle";
 
 export class InMemoryDispatchAttemptRepository implements DispatchAttemptRepository {
   private readonly attempts = new Map<string, DispatchAttempt>();
+
+  /*
+   * Execution leases, kept SEPARATE from `recoveryClaims` for the same reason the
+   * Postgres table uses separate columns (migration 0046): one fences who may
+   * dispatch a prepared attempt, the other fences who is running a dispatched one,
+   * and both can be held at once by different processes.
+   */
+  private readonly executionLeases = new Map<string, { owner: string; until: number }>();
 
   private prepareQueue: Promise<void> = Promise.resolve();
 
@@ -455,6 +465,76 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       updatedAt: new Date(),
       lastError: stableMessage,
     });
+  }
+
+  async recordExecutionFailure(id: string, input: RecordExecutionFailureInput): Promise<void> {
+    /* Terminal: holding a fence would only block the recovery that should happen. */
+    this.executionLeases.delete(id);
+    this.recoveryClaims.delete(id);
+
+    const attempt = this.attempts.get(id);
+    if (!attempt) return;
+
+    this.attempts.set(id, {
+      ...attempt,
+      state: "failed",
+      updatedAt: new Date(),
+      lastError: input.message.slice(0, 2_000),
+      failureClass: input.failureClass,
+      resumeToken: input.resumeToken,
+      handoff: input.handoff,
+    });
+  }
+
+  async acquireExecutionLease(id: string, owner: string, leaseMs: number): Promise<boolean> {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+      throw new Error("EXECUTION_LEASE_INVALID_LEASE");
+    }
+
+    const attempt = this.attempts.get(id);
+    /* Only a live execution may be leased; a terminal attempt is done. */
+    if (!attempt || (attempt.state !== "prepared" && attempt.state !== "dispatched")) {
+      return false;
+    }
+
+    const now = Date.now();
+    const existing = this.executionLeases.get(id);
+    /* Free, expired, or already ours. Anything else belongs to someone running. */
+    if (existing && existing.until >= now && existing.owner !== owner) {
+      return false;
+    }
+
+    this.executionLeases.set(id, { owner, until: now + leaseMs });
+    return true;
+  }
+
+  async holdsExecutionLease(id: string, owner: string): Promise<boolean> {
+    const lease = this.executionLeases.get(id);
+    /* An expired lease is NOT held: time alone revokes it. */
+    return Boolean(lease && lease.owner === owner && lease.until >= Date.now());
+  }
+
+  /** Test seam: expire a lease without waiting for the clock. */
+  expireExecutionLeaseForTest(id: string): void {
+    const lease = this.executionLeases.get(id);
+    if (lease) this.executionLeases.set(id, { ...lease, until: Date.now() - 1 });
+  }
+
+  async latestResumableState(missionTaskId: string): Promise<ResumableAttemptState | null> {
+    const candidates = Array.from(this.attempts.values())
+      .filter((a) => a.missionTaskId === missionTaskId && a.resumeToken !== undefined)
+      /* Newest attempt wins: resume continues the most recent work, not the first. */
+      .sort((a, b) => b.attempt - a.attempt);
+
+    const latest = candidates[0];
+    if (!latest) return null;
+
+    return {
+      attempt: latest.attempt,
+      resumeToken: latest.resumeToken,
+      handoff: latest.handoff,
+      failureClass: latest.failureClass,
+    };
   }
 
   async markCompletedByWorkflowId(workflowId: string): Promise<void> {

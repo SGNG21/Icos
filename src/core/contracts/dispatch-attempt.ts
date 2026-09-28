@@ -1,3 +1,5 @@
+import type { WorkerFailureClass } from "./worker-execution";
+
 export type DispatchAttemptState =
   | "prepared"
   | "dispatched"
@@ -27,6 +29,38 @@ export interface DispatchAttempt {
   updatedAt: Date;
   dispatchedAt?: Date;
   lastError?: string;
+  /**
+   * How this attempt failed, operationally (M6.3, migration 0046).
+   *
+   * Finer than the business `error_code` on purpose: it is the input to the retry
+   * decision, and `WORKER_FAILED` cannot distinguish a throttled provider from an
+   * impossible task.
+   */
+  failureClass?: WorkerFailureClass;
+  /** The worker's own session handle, so the NEXT attempt continues this task. */
+  resumeToken?: string;
+  /** What this attempt had already accomplished when it stopped. */
+  handoff?: Record<string, unknown>;
+}
+
+/**
+ * The state the next attempt inherits so it CONTINUES rather than restarts.
+ *
+ * `attempt` is the attempt this came from — carried so a resume can prove which
+ * logical predecessor it is continuing.
+ */
+export interface ResumableAttemptState {
+  attempt: number;
+  resumeToken?: string;
+  handoff?: Record<string, unknown>;
+  failureClass?: WorkerFailureClass;
+}
+
+export interface RecordExecutionFailureInput {
+  failureClass: WorkerFailureClass;
+  message: string;
+  resumeToken?: string;
+  handoff?: Record<string, unknown>;
 }
 
 export interface PrepareDispatchAttemptResult {
@@ -139,6 +173,44 @@ export interface DispatchAttemptRepository {
   markDispatched(id: string): Promise<void>;
 
   markFailed(id: string, message: string): Promise<void>;
+
+  /**
+   * Settles an attempt as failed WITH its operational classification and whatever
+   * resume state the worker produced (M6.3).
+   *
+   * Distinct from `markFailed` rather than an optional argument on it, because the
+   * pre-existing callers (recovery, dispatch errors) have no classification to give
+   * and must not be forced to invent one. A caller that knows uses this; a caller
+   * that does not keeps recording an unclassified failure, which stays honest.
+   */
+  recordExecutionFailure(id: string, input: RecordExecutionFailureInput): Promise<void>;
+
+  /**
+   * Acquires the EXECUTION lease on a dispatched attempt.
+   *
+   * True only for the single owner. An expired lease may be taken over — that is
+   * what makes an abandoned execution recoverable instead of permanently stuck.
+   * Deliberately separate from `claimPrepared`, which fences recovery dispatch of a
+   * PREPARED attempt: see migration 0046 for why sharing the columns is unsafe.
+   */
+  acquireExecutionLease(id: string, owner: string, leaseMs: number): Promise<boolean>;
+
+  /**
+   * THE FENCE. False when this owner no longer holds a live lease on the attempt.
+   *
+   * Asked after a worker process ends and before its result is reported: a runner
+   * whose lease expired mid-run must not report anything, because another runner may
+   * already have redone the work, and two results for one logical attempt is a
+   * duplicate integration.
+   */
+  holdsExecutionLease(id: string, owner: string): Promise<boolean>;
+
+  /**
+   * The resume state the NEXT attempt for this mission task should inherit, from
+   * the most recent attempt that recorded any. Null when there is nothing to
+   * continue, which is the normal first-attempt case.
+   */
+  latestResumableState(missionTaskId: string): Promise<ResumableAttemptState | null>;
 
   markCompletedByWorkflowId(workflowId: string): Promise<void>;
 

@@ -741,9 +741,38 @@ export const dispatchAttempts = pgTable(
     lastError: text("last_error"),
     claimToken: text("claim_token"),
     claimUntil: timestamp("claim_until", { withTimezone: true }),
+    /*
+     * EXTERNAL WORKER EXECUTION (migration 0046, M6.3).
+     *
+     * `failureClass` is the OPERATIONAL taxonomy that drives the retry decision.
+     * It is deliberately finer than `task_execution_results.error_code`, which is
+     * the coarse Cockpit-facing business proof: "the provider throttled us" and
+     * "this task is impossible" are both WORKER_FAILED there, and that difference
+     * is the entire retry decision.
+     *
+     * `resumeToken` + `handoff` are what make a retry a CONTINUATION of the same
+     * logical task rather than a restart. They are recorded on the attempt that
+     * failed; the NEXT attempt reads them forward.
+     *
+     * `executionLease*` fences WHO IS RUNNING a dispatched attempt. Deliberately
+     * NOT claimToken/claimUntil, which fence who may DISPATCH a prepared attempt
+     * during recovery: different state, different lifetime, different owner, and
+     * both can be held at once by different processes. Sharing them would let a
+     * recovery sweeper and a running executor overwrite each other's fence.
+     */
+    failureClass: text("failure_class"),
+    resumeToken: text("resume_token"),
+    handoff: jsonb("handoff"),
+    executionLeaseOwner: text("execution_lease_owner"),
+    executionLeaseUntil: timestamp("execution_lease_until", { withTimezone: true }),
   },
   (t) => [
     unique("dispatch_attempts_workflow_id_unique").on(t.workflowId),
+    /* ALLOW-list, NULL permitted: an unknown class cannot become a retry decision. */
+    check(
+      "dispatch_attempts_failure_class_check",
+      sql`${t.failureClass} is null or ${t.failureClass} in ('SESSION_EXHAUSTED','PROVIDER_UNAVAILABLE','RATE_LIMITED','STREAM_FAILED','WORKER_CRASHED','LEASE_EXPIRED','FAILED_RETRYABLE','FAILED_TERMINAL')`,
+    ),
     unique(
       "dispatch_attempts_mission_task_attempt_unique"
     ).on(t.missionTaskId, t.attempt),
