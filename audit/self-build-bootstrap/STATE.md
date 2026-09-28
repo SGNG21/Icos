@@ -1,11 +1,21 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (CORE3 chaos certified)
+Updated: 2026-09-28 (M8 — defects 22 + 19 closed)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-NEXT — defect 19 (worker branch integration), then Self-Development Supervisor.
+NEXT — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED (see NEXT_ACTION), then the
+       Self-Development Supervisor.
+M8 — real external execution + governed integration: COMPLETE.
+       decisions 0041 (+ wiring), commits 0b1e083, 4b570ec, 1bac102.
+       DEFECT 22 CLOSED — `container.taskExecution` now selects the external worker
+       executor BY RUNTIME. Proven against the CONTAINER, not a hand-built
+       composition: REAL_RUNTIME_EXTERNAL_EXECUTOR_WIRED.
+       DEFECT 19 CLOSED — the gate DECIDES, `IntegrationApplier` ACTS: fast-forward
+       only, by atomic compare-and-swap, exactly-once derived from git, and the
+       branch is reaped afterwards. EXACTLY_ONCE_WORKER_INTEGRATION_PROVEN and
+       WORKER_WORKTREE_REAPING_PROVEN.
 CORE3 CHAOS CERTIFICATION — PASSED, decision 0040, commit a45f0ca.
        A REAL external worker hangs, is KILLED by its own execution timeout, and the
        mission task still completes on ANOTHER worker, EXACTLY ONCE — asserted on
@@ -48,7 +58,11 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-a45f0ca  M7.1 routed QC retries + CORE3 CHAOS CERTIFICATION
+1bac102  M8 governed external worker integration, end to end
+  4b570ec  M8 governed worker result integration + reaping (defect 19)
+  0b1e083  M8 wire external execution into the REAL container (defect 22)
+  a8e4dce  CORE3 chaos certified; deploy gap (defect 22) named
+  a45f0ca  M7.1 routed QC retries + CORE3 CHAOS CERTIFICATION
   4963b09  M7 complete, defect 17 closed, chaos-certification entry state
   c5903ea  M7 abandoned external worker execution recovery (defect 17 CLOSED)
   b1557be  M6 complete, M6.3 proofs, M7 entry state
@@ -79,6 +93,58 @@ HEAD commit message every phase; a commit that changes certification status but 
 STATE.md leaves this file actively misleading.
 
 ## CERTIFIED_MILESTONES
+
+### M8 PROOFS — defects 22 + 19 (commits 0b1e083 / 4b570ec / 1bac102, decision 0041)
+7 unit router + 4 container-composition + 13 applier/reaping + 7 end-to-end; 15 mutations.
+
+  REAL_RUNTIME_EXTERNAL_EXECUTOR_WIRED (defect 22)
+    `RuntimeDispatchRouter` resolves the attempt, reads its worker from the REGISTRY and
+    routes on `worker.runtime`. Asserted against `buildPostgresContainer` itself — the
+    thing production builds — not a composition a test assembled.
+    NOT worker kind, NOT provider: a worker of KIND "hermes" on an unconfigured runtime
+    goes to Temporal, and the same kind on a configured runtime goes external. A provider
+    in metadata changes nothing.
+    WITH NO CONFIG the container returns the Temporal dispatcher EXACTLY as before, and a
+    test pins that — a fix that regresses non-adopters is not a fix.
+    Configuring execution without ICOS_REPO_PATH REFUSES TO BOOT rather than pointing an
+    autonomous writer at whatever directory the server started in.
+
+  EXACTLY_ONCE_WORKER_INTEGRATION_PROVEN (defect 19)
+    `IntegrationApplier` extends the canonical boundary — same manager, same Git port,
+    same lease and fencing token. `accepted` is reachable ONLY through the gate, so
+    "worker output never self-merges" is STRUCTURAL, not a convention.
+    FAST-FORWARD ONLY by `update-ref <new> <expectedOld>`, an atomic compare-and-swap: no
+    machine-made merge commit, no machine-resolved conflict (divergence is NEEDS_REBASE),
+    no read-then-write window. merge/rebase/reset/checkout/push/clean stay FORBIDDEN.
+    EXACTLY-ONCE IS DERIVED FROM GIT, not from a flag or counter: a replay after a crash
+    reaches the same answer as the run that crashed. Proven with a restarted applier.
+    A lost CAS is RACE_LOST (expected, retryable) and CONVERGES to NEEDS_REBASE.
+    A stale/foreign owner or a stale fencing token cannot integrate, even holding an ACCEPT.
+    UNREVIEWED WORK IS NEVER INTEGRATED; REQUEST_CHANGES rejects; escalation is not consent.
+
+  WORKER_WORKTREE_REAPING_PROVEN (defect 19)
+    Reaping asked git the WRONG QUESTION and so never fired: `git branch -d` checks against
+    HEAD, not against an arbitrary ref, so a branch fast-forwarded into `integration/phase-7`
+    while HEAD sat elsewhere was reported "not fully merged" and kept FOREVER. Verified
+    empirically. `deleteBranchMergedInto(branch, target)` asks the right question.
+    A rejected result KEEPS its branch — it is the only copy. The archive is written BEFORE
+    anything is removed, and reaping a worktree with uncommitted work is refused.
+
+  LIFECYCLE (Part D) maps onto the EXISTING statuses, no new states invented:
+    requested/creating -> ready/working -> validating/ready_for_integration -> integrating
+    -> accepted|rejected -> cleanup (releasedAt).
+
+  NOT PROVEN by M8, do not overclaim:
+    - the end-to-end proof composes the coordinator explicitly. The CONTAINER wires the
+      router, applier, reviewDecisions and the governed `workspaceFor` resolver, and that
+      wiring is asserted — but no test yet drives a mission from `startProductionServices`
+      through to an integrated commit. That is CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED.
+    - the gate's shell commands (typecheck/lint/test/build) are a recorded runner in the
+      end-to-end proof. The gate's DECISION LOGIC and all its rules are the real ones;
+      running four pnpm suites in a throwaway fixture would prove pnpm works, not ICOS.
+    - nothing yet ALLOCATES a governed workspace automatically for an autonomous mission
+      task; `allocateWorkspace` is still called explicitly. See defect 23.
+
 
 ### M6 PROGRESS (not a certification — M6.3 is unstarted)
 - M6.1 real runtime-keyed probe — decision 0036, commit 9e808dc.
@@ -523,7 +589,23 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at CORE3 chaos certification / a45f0ca, all MEASURED):
+Current (at M8 / 1bac102, all MEASURED):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 143 files, 1780 tests
+- `pnpm run test:integration`: 431 passed / 3 FAILED / 2 SKIPPED
+- the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING; the count has NEVER moved
+- the 2 skips are the OPT-IN live Hermes proof only
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 44 rows (M8 needed NO migration)
+
+DOCKER OUTAGE — READ THIS BEFORE COMPARING ANY BASELINE.
+Partway through M8 the Docker daemon stopped on this machine. 11 integration FILES are
+gated on `describe.skipIf(!dockerAvailable)` (pg-support.ts), so the suite silently
+reported 357 passed / 79 SKIPPED / 0 failed — and the 3 D1 failures LOOKED FIXED because
+they had been skipped, not fixed. Docker was restarted and the suite re-measured to the
+numbers above. If a future run shows ~79 skips and zero failures, Docker is down: the
+baseline is NOT comparable and D1 is NOT fixed.
+
+Previous (at CORE3 chaos certification / a45f0ca):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS
 - `pnpm run test` (unit): PASS — 141 files, 1760 tests
 - `pnpm run test:integration`: 420 passed / 3 FAILED / 2 SKIPPED
@@ -678,7 +760,12 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     retiring the kind-based branch, which is its own decision. Related to defect 10
     (AIResourceCatalog), same root cause: provider names used as routing keys.
 
-19. (M6.3) NOTHING INTEGRATES A WORKER BRANCH. A successful external run leaves a
+19. RESOLVED in M8 (decision 0041, commits 4b570ec + 1bac102) — the gate DECIDES and
+    `IntegrationApplier` ACTS: fast-forward only by atomic compare-and-swap, exactly-once
+    derived from git, unreviewed work refused, and the branch reaped afterwards (reaping
+    now asks whether the branch is contained in the INTEGRATION TARGET, not in HEAD, which
+    is why it never fired before). See the M8 PROOFS block.
+    ORIGINAL TEXT: NOTHING INTEGRATES A WORKER BRANCH. A successful external run leaves a
     commit on `icos/worker/<missionTask>-a<attempt>-<uniq>` and the task advances to
     `review_pending`. That is deliberate — an executor able to merge could land
     unreviewed work — but it means the self-build loop is NOT closed end to end:
@@ -707,7 +794,20 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     nothing attached evidence to a reviewed SUCCESS until the M6.3 executor did. A unit
     test could not have found it; the composition did.
 
-22. (M7.1) THE EXTERNAL WORKER EXECUTOR IS NOT WIRED INTO THE CONTAINER. Verified:
+23. (M8) NOTHING AUTOMATICALLY ALLOCATES A GOVERNED WORKSPACE for an autonomous mission
+    task. `WorkspaceExecutionCoordinator.allocateWorkspace` is still called explicitly, so
+    the governed path (workspace -> real worker -> gate -> apply -> reap) is composed and
+    proven end to end but is not yet REACHED by an ordinary autonomous mission: such a task
+    dispatches with no registered workspace, the executor falls back to an ad-hoc worktree,
+    and its branch is orphaned exactly as before. This is the LAST gap between "governed
+    integration exists" and "every worker result is governed", and it is the substance of
+    CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED.
+
+22. RESOLVED in M8 (commit 0b1e083) — `container.taskExecution` now selects the external
+    worker executor BY RUNTIME via `RuntimeDispatchRouter`, asserted against the container
+    itself. With no ICOS_WORKER_EXEC_COMMANDS the container returns the Temporal dispatcher
+    exactly as before, so non-adopters are bit-for-bit unchanged.
+    ORIGINAL TEXT, kept because the LESSON matters more than the defect:
     `container.taskExecution` is `TemporalTaskExecutionDispatcher` on the postgres path
     (container.ts:612) and `InMemoryTaskExecutionDispatcher` on the memory path
     (container.ts:383). `ExternalWorkerTaskExecutionDispatcher` appears NOWHERE outside
@@ -862,65 +962,69 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — deploy the executor + integrate worker branches (defects 22 + 19)
+## NEXT_ACTION — CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED
 
-CORE3 is certified: a worker dying mid-execution is survivable end to end, proven on
-durable rows. The next two items are what stand between CERTIFIED and RUNNING, and they
-are entangled enough that they want ONE decision.
+M8 closed defects 22 and 19: external execution is wired into the real container, and an
+accepted worker result reaches the canonical branch exactly once and is then reaped. What
+remains is to make an ORDINARY AUTONOMOUS MISSION take that path without anyone composing
+it by hand.
 
-### 1. DEFECT 22 — wire the external executor into the container (do this first)
-`container.taskExecution` is `TemporalTaskExecutionDispatcher` (postgres) /
-`InMemoryTaskExecutionDispatcher` (memory). `ExternalWorkerTaskExecutionDispatcher`
-appears nowhere outside its own file and tests. A production process started today would
-NOT launch an external worker. Everything M6.3/M7/chaos proves is real and unwired.
-Decide and record:
-  - which workers route to the external executor vs Temporal. Runtime is the honest
-    discriminator (decision 0036/0038), NOT worker kind — do not reinforce defect 18;
-  - what `CompositeTaskExecutionDispatcher`'s provider-name branch becomes. Retiring it
-    is the chance to close defect 18 rather than add a third path;
-  - fail-closed behaviour when neither applies.
-REUSE: the composition already exists and is exercised in
-`core3-chaos-certification.integration.test.ts` — lift it, do not reinvent it.
+### 1. DEFECT 23 — allocate a governed workspace automatically (the last gap)
+`WorkspaceExecutionCoordinator.allocateWorkspace` is still called explicitly. An ordinary
+autonomous task therefore dispatches with NO registered workspace, the executor falls back
+to an ad-hoc worktree, and its branch is orphaned exactly as before M8. Decide and record:
+  - WHICH tasks get a governed workspace. A writer does; a reader does not. `riskClass` /
+    `allowedFileScope` on the canonical Task are the honest discriminators — NOT worker
+    kind, and NOT provider (defects 18/10).
+  - WHERE allocation happens. The supervisor already routes and prepares the attempt, and
+    the workspace is keyed by workflowId, so preparing an attempt is the natural moment.
+    Do NOT add a second orchestration authority; extend the one that already prepares.
+  - what happens when allocation FAILS (no capacity, collision): back-pressure, exactly as
+    "no eligible worker" is — the task stays recoverable, it does not fail.
+  - fileScope must come from the TASK, not a default. The gate REJECTS out-of-scope files,
+    so a wrong default turns every governed run into a rejection.
 
-### 2. DEFECT 19 — nothing integrates a worker branch
-The certification SHOWS the accumulation: two branches survive a single task, one per
-attempt, and only one carries work. A deployed executor makes this immediate. Decide:
-  - who merges, and on what review evidence (a decision record already exists per
-    attempt — `decisions` table);
-  - conflict behaviour against the canonical branch;
-  - how abandoned branches are reaped (M7 reclaims produce them too). The
-    `recovery_units` sweeper is the natural home; do NOT add a scheduled job (see the
-    working rule about the two recurrence primitives).
+### 2. THE CERTIFICATION ITSELF
+One test from `startProductionServices` (or `buildPostgresContainer` + the real recovery
+scheduler) driving: mission -> plan -> routing -> governed workspace -> REAL external
+worker -> structured result + commit evidence -> QC/review -> IntegrationGate -> apply ->
+canonical branch advanced ONCE -> reap -> restart proves no duplicate.
+Requirements for it to count:
+  - start from the CONTAINER, not a hand-built composition. M8's end-to-end still composes
+    the coordinator explicitly; that is the remaining honesty gap.
+  - real PostgreSQL, real processes, real git, restarts as new connections.
+  - assert on durable rows and on `git rev-parse`, never on call counts.
+  - the gate's shell commands may stay a recorded runner (running four pnpm suites inside
+    a throwaway fixture proves pnpm works, not ICOS) — but say so in the record.
 
 ### THEN
-Self-Development Supervisor -> ICOS_SELF_BUILD_E2E.
+SELF_DEVELOPMENT_SUPERVISOR -> ICOS_SELF_BUILD_E2E PASS.
 
 ### ALSO OPEN
-- defect 18 / 10 — provider names as routing keys in the OLD execution path and in
-  `AIResourceCatalog`. Best closed as part of defect 22.
+- defect 18 / 10 — provider names as routing keys in `CompositeTaskExecutionDispatcher` and
+  `AIResourceCatalog`. M8 did NOT reinforce them (the router is runtime-only) but did not
+  remove them either. Retiring the composite is the natural moment.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
-- defect 21 — FIXED in 0040, kept for the lesson about how it was found.
-- D1 — the 3 auth-bootstrap-cli timeouts still block the FINAL certification. Never
-  re-skip them. THEY ARE NOW THE ONLY KNOWN BLOCKER TO ICOS_SELF_BUILD_E2E that is not
-  a design decision.
+- D1 — the 3 auth-bootstrap-cli timeouts. Still the only non-design blocker to the FINAL
+  ICOS_SELF_BUILD_E2E PASS. Never re-skip them, and note the Docker-outage trap above:
+  they SKIP silently when Docker is down and then look fixed.
 
 ### Already available and proven (reuse, do not rebuild)
 - registration / REAL runtime-keyed probing (0036) swept autonomously (0037) / durable
-  registry / live capability routing with derived load and an imposed evidence horizon;
-- ONE external execution boundary (0038): programmatic launch, contract injection,
-  stdout/stderr/exit capture, the eight-class failure taxonomy, writer worktree
-  isolation, git commit evidence, execution lease + post-run fence;
-- automatic recovery of abandoned executions (0039) as a first-class recovery unit with
-  a bounded budget; routed QC retries with capacity enforcement (0040);
-- ONE capacity authority: `assertWorkerCapacity`, shared by `prepare()` and the QC retry
-  insert. Never add a second;
-- TWO recurrence primitives, NOT interchangeable: `scheduled_jobs` (0037) for a new
-  periodic concern; the ALREADY-TIMED `RuntimeRecoverySweeper` + `recovery_units` for
-  scanning abandoned durable state.
+  registry / capability routing with derived load and an imposed evidence horizon;
+- ONE external execution boundary (0038) with the eight-class failure taxonomy, execution
+  lease + post-run fence, writer isolation and git commit evidence;
+- recovery of abandoned executions (0039) and routed QC retries (0040);
+- ONE dispatch seam chosen by RUNTIME (M8): `RuntimeDispatchRouter`, wired in the container;
+- ONE integration boundary: gate DECIDES, `IntegrationApplier` ACTS, fast-forward by CAS,
+  exactly-once derived from git, then `manager.cleanup` reaps;
+- ONE capacity authority (`assertWorkerCapacity`); TWO NON-interchangeable recurrence
+  primitives (`scheduled_jobs` for a new periodic concern, the already-timed
+  `RuntimeRecoverySweeper` + `recovery_units` for scanning abandoned durable state).
 
 Critical path:
-  defect 22 (deploy) + defect 19 (integration) -> Self-Development Supervisor ->
-  ICOS_SELF_BUILD_E2E PASS   (D1 must be fixed before that final PASS.)
+  defect 23 -> CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED ->
+  SELF_DEVELOPMENT_SUPERVISOR -> ICOS_SELF_BUILD_E2E PASS   (D1 blocks the final PASS.)
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -1053,3 +1157,19 @@ Then M3 durable readiness/dependency gating (mission N13).
   composing the executor explicitly in tests, and `container.taskExecution` still resolves
   to Temporal. Always ask what the CONTAINER builds, not what the tests build — grep the
   composition root before claiming a capability is live.
+- A SKIPPED TEST CAN LOOK LIKE A FIXED TEST. Docker stopped mid-session and 11 integration
+  files gated on `describe.skipIf(!dockerAvailable)` vanished into the skip count — taking
+  the 3 D1 failures with them, so the suite read 0 failed. Always compare the SKIP count as
+  carefully as the fail count; a sudden drop in failures with a jump in skips is an
+  environment change, never progress.
+- ASK GIT THE QUESTION YOU ACTUALLY MEAN. `git branch -d` checks a branch against HEAD, not
+  against the ref you integrate into, so reaping silently never fired and branches
+  accumulated forever. The bug was a plausible-looking call that answered a DIFFERENT
+  question correctly. Verify git semantics empirically in a scratch repo — it took thirty
+  seconds and settled it.
+- PREFER A COMPARE-AND-SWAP TO A MERGE. `update-ref <new> <expectedOld>` gave exactly-once
+  integration, atomicity, no merge commits, no machine conflict resolution and no
+  checked-out tree — all from one primitive that `git merge` would have given none of.
+- RUNNING THE PATH FINDS THE MISSING LINK. The coordinator never passed a review verdict to
+  the gate, so an autonomous run could never reach ACCEPT. Nothing in the types said so; the
+  gate simply answered NEEDS_HUMAN_APPROVAL the first time the whole flow was executed.
