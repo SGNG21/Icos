@@ -1,3 +1,5 @@
+import { hasDispatchBackstop } from "@/server/control/runtime-control";
+import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
 import { describe, expect, it, vi } from "vitest";
 
 import { demoActions } from "@/features/actions/data";
@@ -15,7 +17,6 @@ import { demoAgents } from "@/features/agents/data";
 import { demoTasks } from "@/features/tasks/data";
 
 import { buildMemoryContainer, composeAdministration, composeAuthentication } from "./container";
-import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
 import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
@@ -40,6 +41,9 @@ describe("buildMemoryContainer", () => {
     const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
 
     expect(container.taskExecution).toBeInstanceOf(InMemoryTaskExecutionDispatcher);
+    // Decision 0044: the runtime dispatcher carries the control backstop.
+    expect(hasDispatchBackstop(container.taskExecution)).toBe(true);
+    expect(container.control?.guard).toBeDefined();
     expect(container.dispatchAttempts).toBeInstanceOf(InMemoryDispatchAttemptRepository);
     expect(container.executionResults).toBeDefined();
     expect(container.durableMemory).toBeDefined();
@@ -58,9 +62,7 @@ describe("buildMemoryContainer", () => {
     expect(container.executionResults).toBeInstanceOf(InMemoryTaskExecutionResultRepository);
     expect(container.reviewDecisions).toBeInstanceOf(InMemoryReviewDecisionRepository);
     expect(container.qualityControlJobs).toBeInstanceOf(InMemoryQualityControlRepository);
-    expect(container.autonomousRuntime).toBeInstanceOf(
-      InMemoryAutonomousMissionRuntimeRepository,
-    );
+    expect(container.autonomousRuntime).toBeInstanceOf(InMemoryAutonomousMissionRuntimeRepository);
     expect(container.durableMemory).toBeInstanceOf(InMemoryDurableMemory);
 
     const mission = await container.mission.create({

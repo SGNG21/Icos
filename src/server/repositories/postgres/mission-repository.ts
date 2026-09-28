@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AutonomousPlan } from "@/server/database/schema";
 import { autonomousPlans } from "@/server/database/schema";
 
-import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { MissionStatus } from "@/core/mission/contracts";
 
 import type { Mission, MissionTask } from "@/core/mission/contracts";
@@ -988,7 +988,21 @@ export class PostgresMissionRepository implements MissionRepository {
     await this.db
       .update(missions)
       .set({ status, updatedAt: new Date() })
-      .where(eq(missions.id, missionId));
+      // `cancelled` is terminal and sticky (decision 0044): a late writer cannot undo a cancel.
+      .where(and(eq(missions.id, missionId), ne(missions.status, "cancelled")));
+  }
+
+  async transitionMissionStatusIf(
+    missionId: string,
+    from: Mission["status"],
+    to: Mission["status"],
+  ): Promise<boolean> {
+    const rows = await this.db
+      .update(missions)
+      .set({ status: to, updatedAt: new Date() })
+      .where(and(eq(missions.id, missionId), eq(missions.status, from)))
+      .returning({ id: missions.id });
+    return rows.length === 1;
   }
 
   async deleteMission(missionId: string): Promise<void> {

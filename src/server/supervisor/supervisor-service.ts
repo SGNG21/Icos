@@ -12,6 +12,7 @@ import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/w
 
 import type { CapabilityRouter } from "@/server/routing/capability-router";
 
+import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
@@ -37,7 +38,19 @@ export class SupervisorService {
      * routes nothing.
      */
     private readonly capabilityRouter?: CapabilityRouter,
+    /**
+     * Runtime control (decision 0044). When composed, no NEW work is admitted
+     * while dispatch is not allowed or the mission is held: ready tasks stay
+     * ready and prepared attempts stay PREPARED — held, never failed. Wired at
+     * every production composition site.
+     */
+    private readonly controlGuard?: Pick<RuntimeControlGuard, "dispatch">,
   ) {}
+
+  private async admissionHeld(missionId: string): Promise<boolean> {
+    if (!this.controlGuard) return false;
+    return !(await this.controlGuard.dispatch(missionId)).allowed;
+  }
 
   /**
    * Resolves the routing decision for one ready MissionTask.
@@ -133,6 +146,11 @@ export class SupervisorService {
     for (const attempt of prepared) {
       signal?.throwIfAborted();
 
+      // Held attempts stay PREPARED; a later reconciliation dispatches them once released.
+      if (await this.admissionHeld(attempt.missionId)) {
+        continue;
+      }
+
       const claimed = await this.dispatchAttempts.claimPrepared(
         attempt.id,
         recoveryOwner,
@@ -199,7 +217,9 @@ export class SupervisorService {
     }
 
     let tasks = await this.missionRepository.listTasks(missionId);
-    const readyTasks = computeReadyTasks(mission, tasks);
+    // A held mission (or ICOS in safe mode / dispatch disabled) admits nothing new;
+    // the status bookkeeping below still runs.
+    const readyTasks = (await this.admissionHeld(mission.id)) ? [] : computeReadyTasks(mission, tasks);
 
     const env = loadEnv();
     const digitalosFacadePath = env.DIGITALOS_FACADE_PATH;

@@ -1,6 +1,7 @@
 import type { Task } from "@/core/contracts";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
 import type { AgentLookup, CreateTaskInput, TaskRepository } from "@/server/repositories/ports";
+import { isControlHeld } from "@/server/control/runtime-control";
 
 import { createTask } from "./create-task";
 
@@ -63,11 +64,15 @@ export async function createAndDispatchTask(
       prompt: input.description ?? input.title,
     });
     workflowId = dispatched.workflowId;
-  } catch {
+  } catch (error) {
+    // Runtime control (decision 0044): refused by the control plane, not a failure.
+    // The Task stays `draft` either way, so it can be dispatched once released.
     return {
       ok: false,
       reason: "dispatch_failed",
-      message: "échec du démarrage de l'exécution",
+      message: isControlHeld(error)
+        ? `exécution retenue par le plan de contrôle (${error.reason}) : la tâche reste en brouillon`
+        : "échec du démarrage de l'exécution",
     };
   }
 

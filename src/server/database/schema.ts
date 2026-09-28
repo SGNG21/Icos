@@ -12,6 +12,7 @@ import {
   text,
   timestamp,
   unique,
+  uuid,
   foreignKey,
 } from "drizzle-orm/pg-core";
 
@@ -207,7 +208,8 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      sql`${t.eventType} in ('task.created','task.transitioned','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded','mission.created','mission.transitioned','mission.task.dispatched','goal.created','goal.status_updated','goal.converted','goal.idempotency_key_set')`,
+      // Mirrors the constraint enforced by migrations 0008 -> 0047_audit_goal_events -> 0048_control_plane.
+      sql`${t.eventType} in ('task.created','task.transitioned','task.execution.dispatched','task.execution.started','task.execution.completed','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded','mission.created','mission.transitioned','mission.task.dispatched','goal.created','goal.status_updated','goal.converted','goal.idempotency_key_set','control.command.rejected','control.command.admitted','control.command.executed','control.command.failed')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
@@ -1192,3 +1194,81 @@ export const workers = pgTable(
 );
 
 export type WorkerRow = typeof workers.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Control plane (decision 0044, migration 0048). Written ONLY by the control
+// command bus; read by the runtime guards and the Control Center.
+// ---------------------------------------------------------------------------
+
+export const controlCommands = pgTable(
+  "control_commands",
+  {
+    commandId: uuid("command_id").primaryKey(),
+    actorUserId: text("actor_user_id").notNull(),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    commandType: text("command_type").notNull(),
+    targetKind: text("target_kind").notNull(),
+    targetId: text("target_id").notNull(),
+    riskClass: text("risk_class").notNull(),
+    reason: text("reason").notNull(),
+    expectedVersion: integer("expected_version").notNull(),
+    status: text("status").notNull(),
+    reauth: text("reauth").notNull(),
+    rejectionCode: text("rejection_code"),
+    rejectionMessage: text("rejection_message"),
+    version: integer("version"),
+    auditEntryId: text("audit_entry_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    unique("control_commands_actor_key_unique").on(t.actorUserId, t.idempotencyKey),
+    index("control_commands_target_idx").on(t.targetKind, t.targetId),
+  ],
+);
+
+export const controlStateVersions = pgTable(
+  "control_state_versions",
+  {
+    targetKind: text("target_kind").notNull(),
+    targetId: text("target_id").notNull(),
+    version: integer("version").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [primaryKey({ name: "control_state_versions_pk", columns: [t.targetKind, t.targetId] })],
+);
+
+export const runtimeControlFlags = pgTable("runtime_control_flags", {
+  id: text("id").primaryKey(),
+  safeMode: boolean("safe_mode").notNull(),
+  dispatchEnabled: boolean("dispatch_enabled").notNull(),
+  integrationEnabled: boolean("integration_enabled").notNull(),
+  externalActionsEnabled: boolean("external_actions_enabled").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedByCommandId: uuid("updated_by_command_id"),
+});
+
+export const missionControlHolds = pgTable("mission_control_holds", {
+  missionId: text("mission_id")
+    .primaryKey()
+    .references(() => missions.id, { onDelete: "cascade" }),
+  heldByCommandId: uuid("held_by_command_id").notNull(),
+  heldAt: timestamp("held_at", { withTimezone: true }).notNull(),
+});
+
+export const controlReauthProofs = pgTable(
+  "control_reauth_proofs",
+  {
+    id: uuid("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (t) => [unique("control_reauth_proofs_token_hash_unique").on(t.tokenHash)],
+);

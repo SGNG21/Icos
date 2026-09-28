@@ -1,4 +1,5 @@
 import type { WorkflowProbe } from "@/core/contracts/recovery";
+import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import type { Database } from "@/server/database/client";
 import { PostgresRecoveryScanner } from "@/server/recovery/postgres-recovery-scanner";
 import { PostgresRecoveryUnitRepository } from "@/server/recovery/postgres-recovery-unit-repository";
@@ -14,6 +15,7 @@ export function composeRuntimeRecovery(
     db: Database;
     probe?: WorkflowProbe;
     options?: Partial<RuntimeRecoveryOptions>;
+    control?: Pick<RuntimeControlGuard, "dispatch">;
   },
 ): RuntimeRecoverySweeper {
   return new RuntimeRecoverySweeper(
@@ -22,5 +24,6 @@ export function composeRuntimeRecovery(
     createRecoveryActions(input),
     input.probe,
     input.options,
+    input.control,
   );
 }

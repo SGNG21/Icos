@@ -103,6 +103,14 @@ export function composeAutonomyRuntime(container: Container): {
      */
     capabilityRouter: container.capabilityRouter,
     dispatchPrepared: async (prepared, signal) => {
+      // Decision 0044: a held retry stays PREPARED; the (guarded) reconciliation dispatches it
+      // once released. Returning — not throwing — keeps a hold from reading as a QC failure.
+      if (
+        container.control &&
+        !(await container.control.guard.dispatch(prepared.missionId)).allowed
+      ) {
+        return;
+      }
       const result = await container.taskExecution.dispatch({
         missionId: prepared.missionId,
         taskId: prepared.taskId,
@@ -138,6 +146,8 @@ export function composeAutonomyRuntime(container: Container): {
      */
     container.workspaceExecutionCoordinator,
     container.capabilityRouter,
+    /* Decision 0044: paused missions / safe mode admit no new work. */
+    container.control?.guard,
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,
@@ -268,6 +278,7 @@ function createRecoveryScheduler(
         dispatchAttempts: container.dispatchAttempts,
         digitalosFacadePath: env.DIGITALOS_FACADE_PATH,
         probe: new TemporalWorkflowProbe(env.TEMPORAL_ADDRESS, env.TEMPORAL_DISPATCH_TIMEOUT_MS),
+        control: container.control?.guard,
       })
     : null;
 

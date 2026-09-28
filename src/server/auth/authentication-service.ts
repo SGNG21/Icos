@@ -22,7 +22,9 @@ interface BetterAuthUser {
 }
 
 interface BetterAuthSession {
+  id?: string;
   userId?: string;
+  createdAt?: Date | string;
 }
 
 function toHumanUser(u: BetterAuthUser): HumanUser | null {
@@ -120,6 +122,26 @@ export class AuthenticationService implements AuthGateway {
     }
     const roles = await this.roles.listRoles(user.id);
     return { user, roles };
+  }
+
+  async readSessionEvidence(
+    headers: Headers,
+  ): Promise<{ sessionId: string; userId: string; issuedAt: Date } | null> {
+    const result = await this.auth.api.getSession({ headers });
+    const session = result?.session as BetterAuthSession | undefined;
+    if (!session?.id || !session.userId || !session.createdAt) return null;
+    const issuedAt = new Date(session.createdAt);
+    if (Number.isNaN(issuedAt.getTime())) return null;
+    return { sessionId: session.id, userId: session.userId, issuedAt };
+  }
+
+  async verifyPassword(headers: Headers, password: string): Promise<boolean> {
+    try {
+      const result = await this.auth.api.verifyPassword({ body: { password }, headers });
+      return (result as { status?: boolean } | null)?.status === true;
+    } catch {
+      return false;
+    }
   }
 
   async revokeSession(headers: Headers): Promise<void> {

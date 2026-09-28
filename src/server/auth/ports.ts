@@ -55,4 +55,13 @@ export interface AuthGateway {
   readSession(headers: Headers): Promise<AuthenticatedSession | null>;
   revokeSession(headers: Headers): Promise<void>;
   revokeUserSessions(userId: string): Promise<void>;
+  /**
+   * Control plane (decision 0044): the CURRENT session's id and issue time —
+   * never its token. Optional; control commands fail closed without it.
+   */
+  readSessionEvidence?(
+    headers: Headers,
+  ): Promise<{ sessionId: string; userId: string; issuedAt: Date } | null>;
+  /** True only if `password` is the password of the current session's user. Never throws on mismatch. */
+  verifyPassword?(headers: Headers, password: string): Promise<boolean>;
 }
