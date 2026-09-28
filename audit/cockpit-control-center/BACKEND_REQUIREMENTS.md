@@ -83,6 +83,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `routing_decisions` table keyed by dispatch attempt id
 
 ### BR-10 — Governed command bus
+- STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: `ControlCommandBus`, `POST /api/control/commands` + `GET /api/control/commands/:id`; 7 commands (PAUSE/RESUME/CANCEL_MISSION, DISABLE/ENABLE_WORKER, ENTER/EXIT_SAFE_MODE); deterministic ids, idempotent replay, audited in-transaction; 17/17 mutation proofs. Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: PAUSE / RESUME / STOP / RETRY / CHANGE PRIORITY (workers, missions), ASK ICOS execution
 - NEEDED_DATA_OR_COMMAND: single endpoint accepting `ControlCommand` (see `src/features/cockpit/commands.ts`) → authorization → policy → risk → state validation (`expectedStateVersion`) → execution → audit; idempotent on `idempotencyKey`; status query by `commandId`
 - EXPECTED_CANONICAL_SOURCE: new command service (server), NOT the UI
@@ -91,6 +92,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `POST /api/commands` → `{ status: "accepted"|"rejected"|"requires_confirmation"|"requires_reauth", commandId }`; `GET /api/commands/:commandId`
 
 ### BR-11 — State versions for optimistic concurrency
+- STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: `control_state_versions`, `expectedVersion` + typed `VERSION_CONFLICT`; proven with two PostgreSQL connections (exactly one winner). Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: `expectedStateVersion` on every command
 - NEEDED_DATA_OR_COMMAND: monotonic version on mission, mission task, worker registry entry
 - EXPECTED_CANONICAL_SOURCE: repositories (today only `updatedAt` exists; the UI uses `updatedAt` as provisional version)
@@ -99,6 +101,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `version: integer` column incremented on each write
 
 ### BR-12 — Emergency / safe mode
+- STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: `runtime_control_flags` (safeMode, dispatch/integration/externalActions) + `mission_control_holds`; fail closed on unreadable state; enforced at every dispatch admission point, IntegrationGate, IntegrationApplier, dispatcher backstop; `GET /api/control/state`. Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: PAUSE NEW WORK, FREEZE INTEGRATIONS, STOP EXTERNAL WORKERS, LOCK SELF-MODIFICATION, ENTER SAFE MODE
 - NEEDED_DATA_OR_COMMAND: durable global flags read by supervisor/dispatcher/integration gate/self-dev coordinator, + a read of current flag state
 - EXPECTED_CANONICAL_SOURCE: runtime control flags table (does not exist)
@@ -147,6 +150,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `POST /api/commands/propose { text } → ProposedAction[]`
 
 ### BR-18 — Step-up re-authentication
+- STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: LOW none / MEDIUM session < 12 h / HIGH password re-auth proof ≤ 5 min / CRITICAL proof + typed confirmation; `POST /api/control/reauth`; SHA-256-only, user+session-bound, single-use proofs. Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: HIGH / CRITICAL risk confirmation
 - NEEDED_DATA_OR_COMMAND: fresh-auth assertion (passkey/WebAuthn) bound to commandId
 - EXPECTED_CANONICAL_SOURCE: Better Auth
@@ -185,3 +189,40 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - RISK: low
 - BLOCKING_OR_NOT: no
 - SUGGESTED_INTERFACE: `GET /api/alerts?state=open`, ack via `ControlCommand` `alert.acknowledge`
+
+### BR-23 — Canonical manual RETRY_TASK
+- UI_FEATURE: worker/mission "Retry" control
+- NEEDED_DATA_OR_COMMAND: governed RETRY_TASK command
+- EXPECTED_CANONICAL_SOURCE: CORE3 dispatch ledger + QC/repair retry budgets
+- RISK: high (double execution)
+- BLOCKING_OR_NOT: yes for Retry
+- SUGGESTED_INTERFACE: must first define eligible states, retry-budget interaction, attempt numbering, ledger lineage, idempotency, workspace reuse vs new, stale/foreign owner handling, restart, audit, reviewer/integration consequences, exactly-once
+
+### BR-24 — Integration hold and re-drive
+- UI_FEATURE: safe mode / freeze integrations without losing finished work
+- NEEDED_DATA_OR_COMMAND: a held state for completed workspaces + re-drive of integration when released
+- EXPECTED_CANONICAL_SOURCE: `WorkspaceExecutionCoordinator` (CORE3) — today any gate/applier refusal becomes workspace `blocked` + execution `failed`
+- RISK: medium (work finished during safe mode is not integrated after exit)
+- BLOCKING_OR_NOT: no (canonical branch is protected; work is not integrated)
+- SUGGESTED_INTERFACE: CORE3 decision required
+
+### BR-25 — Re-authentication rate limiting
+- UI_FEATURE: HIGH/CRITICAL confirmation
+- NEEDED_DATA_OR_COMMAND: attempt limiting on `POST /api/control/reauth` (audited today, not limited)
+- EXPECTED_CANONICAL_SOURCE: auth layer
+- RISK: medium (password guessing from a live session)
+- BLOCKING_OR_NOT: no
+
+### BR-26 — Per-flag control commands
+- UI_FEATURE: PAUSE NEW WORK, FREEZE INTEGRATIONS, LOCK EXTERNAL ACTIONS as separate controls
+- NEEDED_DATA_OR_COMMAND: commands toggling `dispatchEnabled`, `integrationEnabled`, `externalActionsEnabled` (durable + enforced already; only safe mode is commandable)
+- EXPECTED_CANONICAL_SOURCE: `ControlCommandBus`
+- RISK: medium
+- BLOCKING_OR_NOT: no (safe mode covers the emergency)
+
+### BR-27 — Passkey / second factor for CRITICAL
+- UI_FEATURE: EXIT_SAFE_MODE and future CRITICAL commands
+- NEEDED_DATA_OR_COMMAND: WebAuthn assertion bound to the command
+- EXPECTED_CANONICAL_SOURCE: Better Auth
+- RISK: high
+- BLOCKING_OR_NOT: no (policy hook `secondFactor` exists, `not_enforced`)
