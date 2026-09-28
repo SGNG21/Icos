@@ -1,11 +1,18 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M7)
+Updated: 2026-09-28 (CORE3 chaos certified)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-NEXT — CORE3 chaos certification, then defect 19 (branch integration). See NEXT_ACTION.
+NEXT — defect 19 (worker branch integration), then Self-Development Supervisor.
+CORE3 CHAOS CERTIFICATION — PASSED, decision 0040, commit a45f0ca.
+       A REAL external worker hangs, is KILLED by its own execution timeout, and the
+       mission task still completes on ANOTHER worker, EXACTLY ONCE — asserted on
+       durable rows from new connections. This is the COMPOSITION proof; every
+       mechanism was already certified in isolation.
+M7.1 — routed QC retries: COMPLETE, decision 0040, commit a45f0ca. Closed the
+       re-dispatch gap M7 left open (see M7.1 PROOFS).
 M7 — automatic recovery: COMPLETE, decision 0039, commit c5903ea.
        DEFECT 17 IS CLOSED. A worker killed mid-execution (a REAL SIGKILL, with the
        lease expiring by WALL CLOCK) has its task reclaimed, its capacity slot
@@ -41,7 +48,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-c5903ea  M7 abandoned external worker execution recovery (defect 17 CLOSED)
+a45f0ca  M7.1 routed QC retries + CORE3 CHAOS CERTIFICATION
+  4963b09  M7 complete, defect 17 closed, chaos-certification entry state
+  c5903ea  M7 abandoned external worker execution recovery (defect 17 CLOSED)
   b1557be  M6 complete, M6.3 proofs, M7 entry state
   58fa884  M6.3 real non-interactive external worker execution
   d468a67  M6.2 state + defect 16 closed + M6.3 entry state
@@ -192,12 +201,65 @@ STATE.md leaves this file actively misleading.
   future `coalesce` refactor would silently admit never-leased attempts) and both the
   code comment and the test now say plainly that the test does not prove them.
 
-  NOT PROVEN by M7, do not overclaim:
-    - the RE-DISPATCH itself is still the existing QC/supervisor decision. M7 frees the
-      slot and records the loss; it deliberately adds no second re-routing authority.
-      The proof shows attempt 2 CAN be prepared, not that something automatically does.
-    - no end-to-end chaos run yet drives mission -> real worker -> kill -> recovery ->
-      completion in ONE test. That is the CORE3 chaos certification, still to do.
+  NOT PROVEN by M7 (BOTH CLOSED by M7.1 / decision 0040 — kept for the record):
+    - the RE-DISPATCH was still the existing QC decision, and following it showed the
+      retry was created UNROUTED. Closed below.
+    - no end-to-end chaos run existed. Closed below.
+
+### M7.1 PROOFS — the QC re-dispatch gap (decision 0040, commit a45f0ca)
+6 unit + 3 PostgreSQL, 6 mutations verified.
+  THE GAP, precisely: `QualityControlRepository.applyAction` INSERTs the retry attempt
+  directly and left `worker_id` NULL — it copied only workerKind and capability. Harmless
+  while every dispatcher resolved its own worker; FATAL once one resolves the worker from
+  the LEDGER. The M6.3 external executor reads `attempt.workerId`, finds nothing, and
+  fails the attempt closed with PROVIDER_UNAVAILABLE — so the retry spent one of a
+  BOUNDED number of attempts and changed nothing, and the next would too. A recovered
+  task could NEVER complete. Invisible before M6.3 existed.
+  RETRY_IS_ROUTED            — through the canonical CapabilityRouter, the same instance
+                               the supervisor uses. QC is a second CALLER of one
+                               authority, never a second authority.
+  RETRY_AVOIDS_A_DEAD_WORKER — no grudge list: a dead worker has already lost its health
+                               evidence (0033) so the router does not offer it.
+  NO_ELIGIBLE_WORKER_IS_BACK_PRESSURE — QC throws and the job is released for a later
+                               sweep; it does NOT create an unroutable attempt. Spending
+                               a bounded retry to record a FLEET problem as a TASK
+                               failure is the failure mode avoided.
+  CAPACITY_ENFORCED_ON_RETRY — `applyAction` bypasses `prepare()` and therefore bypassed
+                               the capacity guard entirely. `assertWorkerCapacity` is now
+                               EXTRACTED into a shared module both insert paths call
+                               in-transaction — not copied, because two capacity checks
+                               are two authorities.
+  UNROUTED_WITHOUT_A_ROUTER  — a deployment with no registry keeps pre-M4 behaviour.
+
+### CORE3 CHAOS CERTIFICATION — PASSED (decision 0040, commit a45f0ca)
+2 PostgreSQL scenarios. The fault is REAL: a worker process hangs and is KILLED by its
+own execution timeout.
+  WHOLE_CHAIN_SURVIVES_A_WORKER_DEATH — route -> dispatch a REAL external worker -> hang
+    -> killed -> classified STREAM_FAILED and SETTLED (which returns the slot) -> probe
+    observes it unhealthy -> recovery reviews the failure, routes the retry to the OTHER
+    worker, dispatches it -> the retry really writes and commits -> review ACCEPTS -> the
+    task succeeds. Asserted on DURABLE ROWS from new connections: exactly 2 attempts,
+    exactly 2 results, exactly ONE success, exactly ONE branch carrying the work, and the
+    canonical checkout never moved.
+  TOTAL_FLEET_OUTAGE_IS_BACK_PRESSURE — no attempt 2 is created and the task is NOT
+    failed; it waits for capacity.
+  REAL: PostgreSQL, OS processes, git worktrees and commits, the REAL DeterministicReviewer
+  hard rules, the real routing/capacity/QC/recovery services, restarts as new connections.
+  STUBBED, and why: the LLM half of the reviewer (a network model — the rule that matters,
+  UNKNOWN_EFFECT -> RETRY, is the REAL deterministic one) and the probe sweep's observation
+  that the hung worker is unhealthy (certified in M6.2; running it here adds noise, not
+  proof).
+  RECOVERY RUNS AS SUCCESSIVE SWEEP TICKS, because the sweeper is PERIODIC in production.
+  One tick cannot both create the retry and review its result — `recoverUnregistered` runs
+  at the START of a pass, so the retry's result does not exist yet when the pass that
+  creates it begins. A single all-in-one call would certify a system that does not exist.
+
+  NOT PROVEN by the certification, do not overclaim:
+    - the mission-level loop (planning -> DAG -> multiple tasks) is not exercised here;
+      this certifies ONE task surviving a worker death. Multi-task DAG behaviour is
+      certified separately in M3/M5.4.
+    - nothing integrates the worker branches. The certification itself SHOWS this: TWO
+      branches survive the run, one per attempt. That is defect 19.
 
 - M5 multi-worker orchestration — decisions 0033/0034/0035,
   audit in M5-POST-PHASE-AUDIT.md. All 15 required certification items PASS:
@@ -461,7 +523,17 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M7 / c5903ea, all MEASURED — re-measure, never inherit):
+Current (at CORE3 chaos certification / a45f0ca, all MEASURED):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS
+- `pnpm run test` (unit): PASS — 141 files, 1760 tests
+- `pnpm run test:integration`: 420 passed / 3 FAILED / 2 SKIPPED
+- the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING; the count has never moved
+  across M4, M5, M6.1, M6.2, M6.3, M7, M7.1. NOT skipped, must never be re-skipped.
+- the 2 skips are the OPT-IN live Hermes proof only
+- lint: 0 errors, 289 warnings — EQUAL to baseline · `git diff --check`: PASS
+- ledger 44 rows — M7 and M7.1 both needed NO migration
+
+Previous (at M7 / c5903ea):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS
 - `pnpm run test` (unit): PASS — 140 files, 1754 tests
 - `pnpm run test:integration`: 415 passed / 3 FAILED / 2 SKIPPED
@@ -626,6 +698,29 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     SUCCESSOR: the RE-DISPATCH is still the existing QC/supervisor decision; M7 added no
     second re-routing authority. And see defect 19 — nothing integrates the branches.
 
+21. (M7.1) `ReviewerServiceImpl` built `evidenceRefs` from evidence TIMESTAMPS, which
+    can NEVER satisfy `idSchema` (lowercase/digits/-/_ only) because an ISO timestamp
+    carries `T`, `Z`, `:` and `.`. Every reviewed result carrying evidence threw
+    QUALITY_CONTROL_INVALID_REVIEW. FIXED in 0040 (mapped by `type`, matching
+    DeterministicReviewer, non-conforming labels dropped). RECORDED because of HOW it was
+    found: it had been latent since the reviewer was written and never fired, because
+    nothing attached evidence to a reviewed SUCCESS until the M6.3 executor did. A unit
+    test could not have found it; the composition did.
+
+22. (M7.1) THE EXTERNAL WORKER EXECUTOR IS NOT WIRED INTO THE CONTAINER. Verified:
+    `container.taskExecution` is `TemporalTaskExecutionDispatcher` on the postgres path
+    (container.ts:612) and `InMemoryTaskExecutionDispatcher` on the memory path
+    (container.ts:383). `ExternalWorkerTaskExecutionDispatcher` appears NOWHERE outside
+    its own file and tests.
+    CONSEQUENCE, stated plainly: M6.3, M7 and the CORE3 chaos certification are PROVEN
+    but NOT DEPLOYED. Every proof composes the executor explicitly; a production process
+    started today would still dispatch through Temporal and would not launch an external
+    worker at all. This is the single biggest gap between "certified" and "running".
+    Wiring it needs a decision: which runtimes/worker kinds route to the external
+    executor versus Temporal, and how that interacts with the provider-name branch in
+    `CompositeTaskExecutionDispatcher` (defect 18). Probably belongs with defect 19,
+    since a deployed executor immediately starts producing branches nobody integrates.
+
 20. (M7) `recovery_units.kind` has NO CHECK constraint while `scheduled_jobs.kind` has
     an ALLOW-list. Inconsistent fail-closed posture at the database boundary: a typo'd
     recovery unit kind is storable and would simply never be swept. Not changed in M7 —
@@ -767,66 +862,65 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — CORE3 chaos certification, then branch integration (defect 19)
+## NEXT_ACTION — deploy the executor + integrate worker branches (defects 22 + 19)
 
-M7 closed defect 17, so every individual mechanism in CORE3 now exists and is proven in
-isolation. Two things remain before ICOS_SELF_BUILD_E2E can be attempted.
+CORE3 is certified: a worker dying mid-execution is survivable end to end, proven on
+durable rows. The next two items are what stand between CERTIFIED and RUNNING, and they
+are entangled enough that they want ONE decision.
 
-### 1. CORE3 CHAOS CERTIFICATION (next)
-No single test yet drives the WHOLE chain under a real fault:
-  a real mission -> planning -> capability routing -> a REAL external worker launched
-  -> killed mid-execution -> recovery reclaims the slot -> re-dispatch to another worker
-  -> the task completes -> exactly once, verified in durable rows.
-Every piece is proven separately (see the M5/M6/M7 proof blocks). What is missing is the
-composition, and compositions are where the surprises are — M6.3's classifier defect was
-invisible to every unit test and only appeared end to end.
-Requirements for it to count:
-  - real PostgreSQL, real processes, real restarts (new connections, new instances);
-  - the RE-DISPATCH must be driven by the production path (QC/supervisor), NOT by the
-    test calling `prepare` itself. M7 proved the slot comes back and that attempt 2 CAN
-    be prepared; it did not prove anything automatically does it. That gap is the first
-    thing to close, and it may reveal that the QC retry path needs work.
-  - assert EXACTLY ONCE on durable rows, not on call counts.
+### 1. DEFECT 22 — wire the external executor into the container (do this first)
+`container.taskExecution` is `TemporalTaskExecutionDispatcher` (postgres) /
+`InMemoryTaskExecutionDispatcher` (memory). `ExternalWorkerTaskExecutionDispatcher`
+appears nowhere outside its own file and tests. A production process started today would
+NOT launch an external worker. Everything M6.3/M7/chaos proves is real and unwired.
+Decide and record:
+  - which workers route to the external executor vs Temporal. Runtime is the honest
+    discriminator (decision 0036/0038), NOT worker kind — do not reinforce defect 18;
+  - what `CompositeTaskExecutionDispatcher`'s provider-name branch becomes. Retiring it
+    is the chance to close defect 18 rather than add a third path;
+  - fail-closed behaviour when neither applies.
+REUSE: the composition already exists and is exercised in
+`core3-chaos-certification.integration.test.ts` — lift it, do not reinvent it.
 
-### 2. DEFECT 19 — NOTHING INTEGRATES A WORKER BRANCH (needs a decision first)
-A successful external run leaves a commit on `icos/worker/<missionTask>-a<attempt>-<uniq>`
-and advances the task to `review_pending`. Deliberate — an executor able to merge could
-land unreviewed work — but it means the self-build loop is NOT closed: no reviewer consumes
-the branch, no integrator merges it, and branches accumulate (only the worktree is cleaned
-up, never the branch). Decide, and record as a decision:
-  - who merges, and under what review evidence;
-  - what happens on conflict with the canonical branch;
-  - how stale/abandoned worker branches are reaped (M7 reclaims produce branches too).
+### 2. DEFECT 19 — nothing integrates a worker branch
+The certification SHOWS the accumulation: two branches survive a single task, one per
+attempt, and only one carries work. A deployed executor makes this immediate. Decide:
+  - who merges, and on what review evidence (a decision record already exists per
+    attempt — `decisions` table);
+  - conflict behaviour against the canonical branch;
+  - how abandoned branches are reaped (M7 reclaims produce them too). The
+    `recovery_units` sweeper is the natural home; do NOT add a scheduled job (see the
+    working rule about the two recurrence primitives).
+
+### THEN
+Self-Development Supervisor -> ICOS_SELF_BUILD_E2E.
 
 ### ALSO OPEN
-- defect 18 / defect 10 — the OLD execution path still uses PROVIDER NAMES as routing
-  keys (`CompositeTaskExecutionDispatcher` branches on "hermes"/"openhands"/"digitalos";
-  `task_execution_results.worker_kind` has a CHECK with the same names;
-  `AIResourceCatalog` hardcodes models/providers). M6.3 routes around all of it. Removing
-  it needs a migration plus retiring the kind-based branch.
+- defect 18 / 10 — provider names as routing keys in the OLD execution path and in
+  `AIResourceCatalog`. Best closed as part of defect 22.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
+- defect 21 — FIXED in 0040, kept for the lesson about how it was found.
 - D1 — the 3 auth-bootstrap-cli timeouts still block the FINAL certification. Never
-  re-skip them.
+  re-skip them. THEY ARE NOW THE ONLY KNOWN BLOCKER TO ICOS_SELF_BUILD_E2E that is not
+  a design decision.
 
 ### Already available and proven (reuse, do not rebuild)
 - registration / REAL runtime-keyed probing (0036) swept autonomously (0037) / durable
-  registry / live capability routing with derived load and imposed evidence horizon;
+  registry / live capability routing with derived load and an imposed evidence horizon;
 - ONE external execution boundary (0038): programmatic launch, contract injection,
   stdout/stderr/exit capture, the eight-class failure taxonomy, writer worktree
   isolation, git commit evidence, execution lease + post-run fence;
-- durable retry/resume: `recordExecutionFailure` / `latestResumableState`, certified
-  across restarts;
 - automatic recovery of abandoned executions (0039) as a first-class recovery unit with
-  a bounded retry budget;
-- TWO recurrence primitives, and they are NOT interchangeable — pick deliberately:
-  `scheduled_jobs` (0037) for a NEW periodic concern, and the EXISTING
-  `RuntimeRecoverySweeper` + `recovery_units` for anything that scans for abandoned
-  durable state. Adding a scheduled job for the latter creates a duplicate recovery path.
+  a bounded budget; routed QC retries with capacity enforcement (0040);
+- ONE capacity authority: `assertWorkerCapacity`, shared by `prepare()` and the QC retry
+  insert. Never add a second;
+- TWO recurrence primitives, NOT interchangeable: `scheduled_jobs` (0037) for a new
+  periodic concern; the ALREADY-TIMED `RuntimeRecoverySweeper` + `recovery_units` for
+  scanning abandoned durable state.
 
 Critical path:
-  CORE3 chaos certification -> branch integration (defect 19) ->
-  Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
-  (D1 must be fixed before that final PASS.)
+  defect 22 (deploy) + defect 19 (integration) -> Self-Development Supervisor ->
+  ICOS_SELF_BUILD_E2E PASS   (D1 must be fixed before that final PASS.)
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -944,3 +1038,18 @@ Then M3 durable readiness/dependency gating (mission N13).
   recovery unit deferred for ever — fail-closed and permanently stuck. Fail-closed is
   correct, but a fail-closed branch that can never be left is a silent dead end. When
   adding a fail-closed default, ask what evidence could ever leave it.
+- A COMPOSITION FINDS WHAT UNIT TESTS STRUCTURALLY CANNOT, twice over now. The CORE3
+  chaos certification found (a) a QC retry created with no worker, which made a recovered
+  task impossible to complete, and (b) a latent `evidenceRefs` bug that had been dormant
+  since the reviewer was written and could only fire once something attached evidence to a
+  reviewed SUCCESS. Neither was reachable from any single component's tests. Budget for a
+  composition test per milestone, not just per component.
+- "WIRED" IS NOT "PROVEN". Removing the capacity guard from the QC retry left the whole
+  chaos suite green, because the router never CHOOSES a full worker — the guard exists for
+  a race (routing is decided outside the transaction and is advisory) that the happy path
+  never reaches. A guard whose rejection branch no test reaches is untested code. Drive the
+  race directly.
+- CERTIFIED IS NOT DEPLOYED. M6.3, M7 and the chaos certification are all proven by
+  composing the executor explicitly in tests, and `container.taskExecution` still resolves
+  to Temporal. Always ask what the CONTAINER builds, not what the tests build — grep the
+  composition root before claiming a capability is live.
