@@ -1,11 +1,19 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M6.3)
+Updated: 2026-09-28 (M7)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-M7 — automatic recovery (NEXT, not started). See NEXT_ACTION.
+NEXT — CORE3 chaos certification, then defect 19 (branch integration). See NEXT_ACTION.
+M7 — automatic recovery: COMPLETE, decision 0039, commit c5903ea.
+       DEFECT 17 IS CLOSED. A worker killed mid-execution (a REAL SIGKILL, with the
+       lease expiring by WALL CLOCK) has its task reclaimed, its capacity slot
+       returned, and the same logical task then runs on another worker exactly once.
+       The execution lease is the liveness probe a process worker never had: the
+       pre-existing ADR-0027 orphan scan asks a TEMPORAL WorkflowProbe, which answers
+       `unknown` for a process worker, so that unit deferred FOR EVER — the structural
+       reason defect 17 survived M6.3.
 M6 — non-interactive external workers: COMPLETE.
        M6.1 real runtime-keyed probe  — decision 0036, commit 9e808dc
        M6.2 autonomous probe sweep    — decision 0037, commit c1ca85c
@@ -33,7 +41,9 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-58fa884  M6.3 real non-interactive external worker execution
+c5903ea  M7 abandoned external worker execution recovery (defect 17 CLOSED)
+  b1557be  M6 complete, M6.3 proofs, M7 entry state
+  58fa884  M6.3 real non-interactive external worker execution
   d468a67  M6.2 state + defect 16 closed + M6.3 entry state
   c1ca85c  M6.2 autonomous probe sweep as a durable job (defect 16 CLOSED)
   9e808dc  M6.1 real non-interactive worker probe, keyed by runtime
@@ -136,6 +146,58 @@ STATE.md leaves this file actively misleading.
     - nothing sweeps for EXPIRED execution leases. The fence makes an abandoned run
       reclaimable; no caller reclaims it yet. That is defect 17 / M7.
     - only the `node` and (by configuration) `binary` runtimes have been exercised.
+
+### M7 PROOFS — automatic recovery (decision 0039, commit c5903ea)
+4 unit + 8 PostgreSQL, 5 mutations verified. DEFECT 17 CLOSED.
+  ABANDONED_EXECUTION_DETECTED   — an expired execution lease on a still-`dispatched`
+                                   attempt is POSITIVE evidence nobody is running it.
+                                   No WorkflowProbe involved, which is the point.
+  CAPACITY_SLOT_RECOVERED        — THE defect-17 assertion:
+                                   `listActiveWorkerAssignments()` is `[WORKER_A]`
+                                   before the sweep and `[]` after. Settling the
+                                   attempt is what frees the slot, because load is
+                                   DERIVED from non-terminal attempts (0034).
+  REASSIGNMENT_EXACTLY_ONCE      — attempt 2 then `prepare`s on WORKER_B and succeeds,
+                                   which is only possible if the slot really came back
+                                   (prepare enforces concurrency inside its own
+                                   transaction). Exactly one non-terminal attempt for
+                                   the task, on the new worker only.
+  REAL_CHAOS                     — an ACTUAL OS process is spawned and SIGKILLed, and
+                                   the lease expires by WALL CLOCK. Nothing simulates
+                                   the death with an UPDATE.
+  LIVE_RUNNER_NEVER_RECLAIMED    — an unexpired lease is not a candidate.
+  GRACE_PERIOD_HONOURED          — expiry alone is not enough; a runner finishing a
+                                   long commit is not reclaimed a millisecond late.
+  LATE_REAL_RESULT_WINS          — a result landing between scan and action stops the
+                                   reclaim; a genuine success is never overwritten
+                                   with UNKNOWN_EFFECT.
+  IDEMPOTENT_ACROSS_PROCESSES    — two concurrent sweepers reclaim ONE abandonment
+                                   once, via the existing durable recovery_units claim.
+  BOUNDED_RETRY                  — a permanently failing reclaim is EXHAUSTED after
+                                   maxAttempts: a deterministically dying worker is not
+                                   retried for ever.
+  TERMINAL_MISSION_LEFT_ALONE    — never resurrect work for a cancelled mission.
+
+  DELIBERATE DEVIATION FROM THIS FILE'S OWN M7 PLAN, recorded so it is not read as an
+  oversight: the previous NEXT_ACTION said to reuse the M6.2 `scheduled_jobs` pattern.
+  Reading the code changed the answer — `RuntimeRecoverySweeper` is ALREADY driven on a
+  timer by `AutonomyRecoveryScheduler`, so a new scheduled job would have been a SECOND
+  recovery path over the same table, the duplication M6.3 requirement 9 forbids. The
+  new scan is a candidate source on the EXISTING sweeper. No migration was needed.
+
+  A MUTATION SURVIVED, reported not buried: removing the scanner's
+  `execution_lease_owner is not null` guard — and then BOTH lease-presence guards —
+  changed no test, because SQL's three-valued logic already excludes a NULL lease from
+  the age comparison. Those guards are LEGIBILITY, not enforcement. They are kept (a
+  future `coalesce` refactor would silently admit never-leased attempts) and both the
+  code comment and the test now say plainly that the test does not prove them.
+
+  NOT PROVEN by M7, do not overclaim:
+    - the RE-DISPATCH itself is still the existing QC/supervisor decision. M7 frees the
+      slot and records the loss; it deliberately adds no second re-routing authority.
+      The proof shows attempt 2 CAN be prepared, not that something automatically does.
+    - no end-to-end chaos run yet drives mission -> real worker -> kill -> recovery ->
+      completion in ONE test. That is the CORE3 chaos certification, still to do.
 
 - M5 multi-worker orchestration — decisions 0033/0034/0035,
   audit in M5-POST-PHASE-AUDIT.md. All 15 required certification items PASS:
@@ -399,7 +461,17 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M6.3 / 58fa884, all MEASURED — re-measure, never inherit):
+Current (at M7 / c5903ea, all MEASURED — re-measure, never inherit):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS
+- `pnpm run test` (unit): PASS — 140 files, 1754 tests
+- `pnpm run test:integration`: 415 passed / 3 FAILED / 2 SKIPPED
+- the 3 failures are D1 auth-bootstrap-cli, PRE-EXISTING; the count has never moved
+  across M4, M5, M6.1, M6.2, M6.3, M7. NOT skipped, must never be re-skipped.
+- the 2 skips are the OPT-IN live Hermes proof only (see M6.3 proofs for the command)
+- lint: 0 errors, 289 warnings — EQUAL to baseline
+- `git diff --check`: PASS · ledger 44 rows (M7 needed NO migration)
+
+Previous (at M6.3 / 58fa884):
 - `pnpm run typecheck`: PASS
 - `pnpm run build`: PASS (next build, full route manifest)
 - `pnpm run test` (unit): PASS — 140 files, 1750 tests (M6.2: 1701, M6.1: 1683, M5: 1667)
@@ -542,7 +614,24 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     who merges, under what review evidence, and what happens to abandoned branches
     (they currently accumulate; only the worktree is cleaned up, never the branch).
 
-17. (M5) NO WORKER-DEATH RECOVERY. A worker that dies MID-EXECUTION is DETECTED
+17. RESOLVED in M7 (decision 0039, commit c5903ea) — DEFECT CLOSED.
+    `listAbandonedExecutions` treats an EXPIRED EXECUTION LEASE on a still-`dispatched`
+    attempt as positive evidence that its runner is gone (a live runner renews it), and
+    `reclaimAbandonedExecution` settles the attempt — which is what RETURNS the capacity
+    slot, since load is derived from non-terminal attempts. Proven with a real SIGKILL
+    and wall-clock lease expiry; the task then runs on another worker exactly once.
+    The pre-existing ADR-0027 orphan scan could not do this: it asks a TEMPORAL
+    WorkflowProbe, which answers `unknown` for a process worker, so the unit deferred
+    for ever. That was the structural reason this defect survived M6.3.
+    SUCCESSOR: the RE-DISPATCH is still the existing QC/supervisor decision; M7 added no
+    second re-routing authority. And see defect 19 — nothing integrates the branches.
+
+20. (M7) `recovery_units.kind` has NO CHECK constraint while `scheduled_jobs.kind` has
+    an ALLOW-list. Inconsistent fail-closed posture at the database boundary: a typo'd
+    recovery unit kind is storable and would simply never be swept. Not changed in M7 —
+    tightening it is a migration and its own decision — but the inconsistency is real.
+
+17-ORIGINAL (kept for orientation). A worker that dies MID-EXECUTION is DETECTED
     — its probe evidence expires and it becomes ineligible — but the task it was
     holding is never reassigned: the dispatch attempt stays `dispatched` and its
     capacity stays consumed forever, so that slot is permanently lost.
@@ -678,60 +767,65 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — M7 (automatic recovery)
+## NEXT_ACTION — CORE3 chaos certification, then branch integration (defect 19)
 
-M6.3 built the fence; M7 builds the CALLER that uses it. Defect 17 is now half
-solved, and the remaining half is small and well-shaped:
+M7 closed defect 17, so every individual mechanism in CORE3 now exists and is proven in
+isolation. Two things remain before ICOS_SELF_BUILD_E2E can be attempted.
 
-1. AN EXPIRED-LEASE SWEEPER. `dispatch_attempts` carries `execution_lease_owner` /
-   `execution_lease_until`. A `dispatched` attempt whose lease has expired has been
-   ABANDONED: its runner died mid-execution. Nothing looks for those rows, so the
-   attempt stays `dispatched` forever and the worker's capacity stays consumed.
-   REUSE THE M6.2 PATTERN rather than inventing one: an allow-listed `scheduled_jobs`
-   kind, a grid-aligned idempotency key, self-perpetuating recurrence, and
-   unconditional ignition at startup (decision 0037). Do NOT add a setInterval.
-2. RE-ROUTING. A reclaimed attempt must become a NEW attempt for the same
-   missionTaskId, inheriting `resume_token` and `handoff` via
-   `latestResumableState()` — the machinery exists and is proven, it just has no
-   caller on this path. The failure class to record is LEASE_EXPIRED, which already
-   maps to the fail-closed UNKNOWN_EFFECT.
-3. THE ATTEMPT BUDGET MUST BOUND IT. A worker that dies deterministically must not be
-   retried forever. `attemptBudget` (default 3, set by applyPlan) is the existing
-   bound — check it is actually enforced on this path before relying on it.
-4. CHAOS EVIDENCE. Kill a worker mid-execution, for real, and prove the task
-   completes on another worker exactly once. That is the CORE3 chaos certification,
-   and it is the first proof that the whole chain survives a real fault.
+### 1. CORE3 CHAOS CERTIFICATION (next)
+No single test yet drives the WHOLE chain under a real fault:
+  a real mission -> planning -> capability routing -> a REAL external worker launched
+  -> killed mid-execution -> recovery reclaims the slot -> re-dispatch to another worker
+  -> the task completes -> exactly once, verified in durable rows.
+Every piece is proven separately (see the M5/M6/M7 proof blocks). What is missing is the
+composition, and compositions are where the surprises are — M6.3's classifier defect was
+invisible to every unit test and only appeared end to end.
+Requirements for it to count:
+  - real PostgreSQL, real processes, real restarts (new connections, new instances);
+  - the RE-DISPATCH must be driven by the production path (QC/supervisor), NOT by the
+    test calling `prepare` itself. M7 proved the slot comes back and that attempt 2 CAN
+    be prepared; it did not prove anything automatically does it. That gap is the first
+    thing to close, and it may reveal that the QC retry path needs work.
+  - assert EXACTLY ONCE on durable rows, not on call counts.
 
-THEN — and this is NOT M7, it needs its own decision (defect 19): NOTHING INTEGRATES
-A WORKER BRANCH. A successful external run leaves a commit on
-`icos/worker/<missionTask>-a<attempt>-<uniq>` and advances the task to
-`review_pending`. Deliberate, but it means the self-build loop is not closed: no
-reviewer consumes the branch, no integrator merges it, and abandoned branches
-accumulate (only the worktree is cleaned up). Decide who merges, on what review
-evidence, and how stale worker branches are reaped.
+### 2. DEFECT 19 — NOTHING INTEGRATES A WORKER BRANCH (needs a decision first)
+A successful external run leaves a commit on `icos/worker/<missionTask>-a<attempt>-<uniq>`
+and advances the task to `review_pending`. Deliberate — an executor able to merge could
+land unreviewed work — but it means the self-build loop is NOT closed: no reviewer consumes
+the branch, no integrator merges it, and branches accumulate (only the worktree is cleaned
+up, never the branch). Decide, and record as a decision:
+  - who merges, and under what review evidence;
+  - what happens on conflict with the canonical branch;
+  - how stale/abandoned worker branches are reaped (M7 reclaims produce branches too).
 
-ALSO OPEN, from M6.3 (defect 18) and M5 (defect 10): provider names are still used as
-routing keys in the OLD execution path — `CompositeTaskExecutionDispatcher` branches on
-"hermes"/"openhands"/"digitalos" and `task_execution_results.worker_kind` has a CHECK
-allow-list with the same names. M6.3 routes around it; it did not remove it.
+### ALSO OPEN
+- defect 18 / defect 10 — the OLD execution path still uses PROVIDER NAMES as routing
+  keys (`CompositeTaskExecutionDispatcher` branches on "hermes"/"openhands"/"digitalos";
+  `task_execution_results.worker_kind` has a CHECK with the same names;
+  `AIResourceCatalog` hardcodes models/providers). M6.3 routes around all of it. Removing
+  it needs a migration plus retiring the kind-based branch.
+- defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
+- D1 — the 3 auth-bootstrap-cli timeouts still block the FINAL certification. Never
+  re-skip them.
 
-Already available and proven:
-- `container.workerRegistration` / `workerHealthProber` / `workerRegistryStore` /
-  `capabilityRouter` — registration, REAL runtime-keyed probing (0036) swept
-  autonomously (0037), durable truth, live routing with derived load;
-- `WorkerExecutor` + `CommandWorkerExecutor` — the ONE external execution boundary:
-  programmatic launch, contract injection, stdout/stderr/exit capture, the eight-class
-  failure taxonomy, writer worktree isolation, git commit evidence (decision 0038);
-- `dispatchAttempts.acquireExecutionLease` / `holdsExecutionLease` /
-  `recordExecutionFailure` / `latestResumableState` — the fence and the resume state,
-  both certified on real PostgreSQL across restarts;
-- the durable scheduler as a recurrence primitive (0037) — the pattern to reuse for
-  the M7 sweeper;
-- fail-closed dispatch: no eligible worker -> `blocked`; full worker -> back-pressure.
+### Already available and proven (reuse, do not rebuild)
+- registration / REAL runtime-keyed probing (0036) swept autonomously (0037) / durable
+  registry / live capability routing with derived load and imposed evidence horizon;
+- ONE external execution boundary (0038): programmatic launch, contract injection,
+  stdout/stderr/exit capture, the eight-class failure taxonomy, writer worktree
+  isolation, git commit evidence, execution lease + post-run fence;
+- durable retry/resume: `recordExecutionFailure` / `latestResumableState`, certified
+  across restarts;
+- automatic recovery of abandoned executions (0039) as a first-class recovery unit with
+  a bounded retry budget;
+- TWO recurrence primitives, and they are NOT interchangeable — pick deliberately:
+  `scheduled_jobs` (0037) for a NEW periodic concern, and the EXISTING
+  `RuntimeRecoverySweeper` + `recovery_units` for anything that scans for abandoned
+  durable state. Adding a scheduled job for the latter creates a duplicate recovery path.
 
 Critical path:
-  M7 automatic recovery -> CORE3 chaos certification -> branch integration (defect 19)
-  -> Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
+  CORE3 chaos certification -> branch integration (defect 19) ->
+  Self-Development Supervisor -> ICOS_SELF_BUILD_E2E PASS
   (D1 must be fixed before that final PASS.)
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
@@ -835,3 +929,18 @@ Then M3 durable readiness/dependency gating (mission N13).
 - APPLYING A MIGRATION WITH psql DOES NOT RECORD IT IN THE DRIZZLE LEDGER. psql proves
   idempotence; `pnpm run test:db:setup` (which calls `migrate()`) is what writes the
   `__drizzle_migrations` row. Do both, then `db:verify-ledger <url>`.
+- TWO RECURRENCE PRIMITIVES NOW EXIST AND THEY ARE NOT INTERCHANGEABLE. `scheduled_jobs`
+  (0037) is for a new periodic concern; the existing `RuntimeRecoverySweeper` +
+  `recovery_units` is for scanning abandoned durable state, and it is ALREADY on a timer.
+  In M7 this file's own plan said to use the scheduler; reading the code showed that
+  would have created a SECOND recovery path over the same table. A plan written before
+  the code was read is a hypothesis, not an instruction — including a plan I wrote.
+- SQL THREE-VALUED LOGIC CAN MAKE A GUARD LOOK PROVEN WHEN IT IS NOT. An `is not null`
+  guard next to a comparison on the same column is redundant: NULL already fails the
+  comparison. Removing it changes no test. Keep it for legibility if a future refactor
+  could wrap the comparison, but do not record it as an enforced invariant.
+- A LIVENESS SIGNAL MUST BE ANSWERABLE FOR THE THING BEING ASKED ABOUT. ADR-0027 probed
+  Temporal for workflow liveness, which is unanswerable for a process worker, so the
+  recovery unit deferred for ever — fail-closed and permanently stuck. Fail-closed is
+  correct, but a fail-closed branch that can never be left is a silent dead end. When
+  adding a fail-closed default, ask what evidence could ever leave it.
