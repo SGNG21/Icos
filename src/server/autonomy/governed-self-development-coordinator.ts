@@ -26,6 +26,8 @@ import type { IntegrationApplier } from "@/server/workspace-manager/integration-
 import type { WorkspaceManager } from "@/server/workspace-manager/manager";
 import type { IntegrationReport } from "@/server/workspace-manager/report";
 
+import { decideWorkspaceAllocation } from "@/server/supervisor/workspace-allocation-policy";
+
 import { BoundedRepairController, type RepairCandidate } from "./bounded-repair-controller";
 import { ReviewerIndependenceChecker } from "./reviewer-independence";
 import type { SelfDevelopmentChain } from "./self-development-chain";
@@ -258,6 +260,22 @@ export class GovernedSelfDevelopmentCoordinator {
 
     let last: GovernedSelfDevelopmentOutcome | undefined;
     for (const missionTask of planned) {
+      const canonical = await tasks.getById(missionTask.taskId);
+      /*
+       * ONLY WRITERS ARE GOVERNED HERE, and the SAME policy the supervisor uses decides
+       * which those are — not a second reading of riskClass. A read_only task allocates no
+       * workspace by design, so there is nothing to lease, review, gate or integrate; it is
+       * ordinary autonomous work, settled by the ordinary authority. Reviewing it here would
+       * mean inventing a workspace for work that touches nothing.
+       */
+      const allocation = decideWorkspaceAllocation({
+        taskId: missionTask.taskId,
+        title: missionTask.title,
+        riskClass: canonical?.riskClass,
+        allowedFileScope: canonical?.allowedFileScope,
+      });
+      if (allocation.kind === "NOT_REQUIRED") continue;
+
       const request = await requestFor(missionTask.id, missionTask.taskId);
       last = await this.process(request);
       if (last.finalState !== "integrated" && last.finalState !== "merge_ready") {
@@ -276,8 +294,15 @@ export class GovernedSelfDevelopmentCoordinator {
       );
     }
 
-    await this.transitionCandidate(candidate.id, "approved", actor, last!.reason);
-    return last!;
+    if (!last) {
+      /* A plan of pure readers changes nothing, so it cannot be an improvement. */
+      const request = await requestFor(planned[0]!.id, planned[0]!.taskId);
+      await this.transitionCandidate(candidate.id, "rejected", actor, "PLAN_HAS_NO_WRITER");
+      return this.outcome(request, "human_decision_required", "PLAN_HAS_NO_WRITER", 0);
+    }
+
+    await this.transitionCandidate(candidate.id, "approved", actor, last.reason);
+    return last;
   }
 
   async process(request: GovernedSelfDevelopmentRequest): Promise<GovernedSelfDevelopmentOutcome> {

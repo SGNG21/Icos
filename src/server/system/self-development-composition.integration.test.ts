@@ -97,6 +97,41 @@ describe("DEFECT 25 LINK 3 — self-development is composed in the REAL runtime"
     expect(outcome).toMatchObject({ status: "NO_CANDIDATE" });
   }, 120_000);
 
+  it("DEFECT 31 — a worker that registers AFTER boot is visible to the fleet view", async () => {
+    const container = await productionContainer();
+    const id = `33333333-3333-4333-8333-${Date.now().toString().slice(-12)}`;
+
+    /*
+     * `container.workerRegistry` used to be a boot-time SNAPSHOT of the durable store, so a
+     * worker registering afterwards — which is what workers do in a real deployment — was
+     * invisible to it. The reviewer-independence rule reads this port, so it answered
+     * NO_INDEPENDENT_REVIEWER for ever and self-development could never be reviewed.
+     */
+    expect(container.workerRegistry.getWorker(id)).toBeUndefined();
+
+    await container.workerRegistration.register({
+      id,
+      workerKind: "agent",
+      displayName: "late-arrival",
+      capabilities: ["analysis"],
+      runtime: "binary",
+      runtimeSupport: "SUPPORTED_RUNTIME",
+      maxConcurrency: 1,
+    });
+
+    expect(container.workerRegistry.getWorker(id)?.displayName).toBe("late-arrival");
+
+    /* And PROBE EVIDENCE follows too, not just the registration. */
+    await container.workerRegistration.probe(id, {
+      health: "healthy",
+      availability: "available",
+    });
+    expect(container.workerRegistry.getWorker(id)?.health).toBe("healthy");
+
+    await container.workerRegistration.deregister(id);
+    expect(container.workerRegistry.getWorker(id)).toBeUndefined();
+  }, 120_000);
+
   it("IT REFERENCES THE CANONICAL REPOSITORIES AND SERVICES", async () => {
     const container = await productionContainer();
 

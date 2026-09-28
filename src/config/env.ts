@@ -88,6 +88,12 @@ const envSchema = z.object({
    * rather than silently leaving ICOS unable to plan.
    */
   ICOS_PLANNER_COMMAND: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /**
+   * The local-process REVIEWER backend, same shape and same rules as the planner's (M13).
+   * The canonical review policy, vocabulary and schema are unchanged; this only says which
+   * compute answers them.
+   */
+  ICOS_REVIEWER_COMMAND: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,

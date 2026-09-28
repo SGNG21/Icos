@@ -54,7 +54,7 @@ describe("production task execution composition", () => {
     }
   });
 
-  it("fails closed when the OmniRoute reviewer is not configured for PostgreSQL", async () => {
+  it("fails closed when NO reviewer backend is configured for PostgreSQL", async () => {
     const env = loadEnv({
       NODE_ENV: "production",
       PERSISTENCE: "postgres",
@@ -64,7 +64,7 @@ describe("production task execution composition", () => {
       // no ICOS_REVIEWER_MODEL
     });
     await expect(buildPostgresContainer(DATABASE_URL, undefined, env)).rejects.toThrow(
-      "Le reviewer OmniRoute est requis pour le backend PostgreSQL.",
+      "Un reviewer LLM est requis pour le backend PostgreSQL (ICOS_REVIEWER_COMMAND ou OmniRoute).",
     );
   });
 });

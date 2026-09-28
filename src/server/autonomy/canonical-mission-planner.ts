@@ -115,7 +115,36 @@ export class CanonicalAutonomousMissionPlanner implements AutonomousMissionPlann
     this.timeoutMs = options.timeoutMs;
   }
 
+  /**
+   * How many times one planning request may be put to the provider.
+   *
+   * A real model answers a `.strict()` schema correctly most of the time and not every time:
+   * measured against a live agent, roughly half of otherwise identical runs came back with
+   * prose around the JSON or a field the schema does not name. Retrying the SAME prompt is
+   * the honest fix — it loosens no contract, invents no plan, and changes nothing about what
+   * a plan means. Only shape failures are retried; a timeout, an abort or a provider failure
+   * are conditions retrying cannot improve.
+   */
+  private static readonly MAX_ATTEMPTS = 3;
+
   async plan(input: Parameters<AutonomousMissionPlanner["plan"]>[0]): Promise<MissionPlan> {
+    let lastShapeError: Error | undefined;
+    for (let attempt = 1; attempt <= CanonicalAutonomousMissionPlanner.MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.planOnce(input);
+      } catch (error) {
+        const retryable =
+          error instanceof Error &&
+          (error.message === `${PLANNER_ERROR_PREFIX}INVALID_OUTPUT` ||
+            error.message === `${PLANNER_ERROR_PREFIX}INVALID_RESPONSE`);
+        if (!retryable) throw error;
+        lastShapeError = error;
+      }
+    }
+    throw lastShapeError;
+  }
+
+  private async planOnce(input: Parameters<AutonomousMissionPlanner["plan"]>[0]): Promise<MissionPlan> {
     const controller = new AbortController();
     const abort = () => controller.abort(input.signal?.reason);
     const timeout = setTimeout(() => controller.abort(plannerError("TIMEOUT")), this.timeoutMs);
@@ -184,11 +213,14 @@ export class CanonicalAutonomousMissionPlanner implements AutonomousMissionPlann
       "Produce a minimal executable acyclic task graph for the stated objective.",
       "Every dependency must reference another task key in the same response.",
       "Use stable concise keys, non-empty titles, and version 1.",
+      "Do NOT set workerKind or capability. Routing is the deployment's decision, and a",
+      "capability key it has never heard of makes the task unroutable and blocks it.",
       "Declare each task's execution envelope explicitly instead of relying on defaults:",
       "- riskClass: read_only for inspection, reversible for ordinary edits, sensitive for risky or hard-to-undo work.",
       "- reviewPolicy: always for sensitive work. A sensitive task may never use never.",
       "- priority: 1 (highest) to 5 (lowest). attemptBudget: at least 1.",
-      "- successCriteria: how completion is verified. allowedFileScope: the paths the task may touch.",
+      "- successCriteria: how completion is verified. allowedFileScope: the paths the task may touch,",
+      "  written as repository-relative paths such as docs/ or src/server/, never absolute paths.",
       "- expectedArtifacts: what the task must produce. requiredCapabilities: the skills a worker needs.",
       "Required schema (fields marked optional may be omitted, but omitting an envelope field accepts the default):",
       '{"version":1,"tasks":[{"key":"string","title":"string","description":"string (optional)","dependsOn":["task-key"],"workerKind":"string (optional)","capability":"string (optional)","objective":"string (optional)","instructions":"string (optional)","successCriteria":["string"],"requiredCapabilities":["string"],"riskClass":"read_only|reversible|sensitive","allowedFileScope":["string"],"expectedArtifacts":["string"],"priority":1,"attemptBudget":3,"reviewPolicy":"never|if_risky|always","integrationPolicy":"string (optional)"}]}',

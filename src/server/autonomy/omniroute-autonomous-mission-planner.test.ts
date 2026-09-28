@@ -40,7 +40,7 @@ function planner(fetchImpl: typeof fetch): OmniRouteAutonomousMissionPlanner {
 
 describe("OmniRouteAutonomousMissionPlanner", () => {
   it("returns a schema-valid and DAG-valid initial MissionPlan", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       response(
         JSON.stringify({
           version: 1,
@@ -102,7 +102,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
      * DID specify a risk class or attempt budget had its entire plan rejected —
      * planning metadata could never originate from planner output.
      */
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       response(
         JSON.stringify({
           version: 1,
@@ -168,7 +168,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
   });
 
   it("asks the provider for the execution envelope", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       response(
         JSON.stringify({
           version: 1,
@@ -203,7 +203,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
      * Schema-valid (sensitive and never are both legal values) but rejected by
      * validateMissionPlan: the semantic gate is not duplicated in the schema.
      */
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       response(
         JSON.stringify({
           version: 1,
@@ -230,7 +230,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
   });
 
   it("fails closed when provider output is not valid JSON", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response("not-json"));
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => response("not-json"));
 
     await expect(
       planner(fetchMock).plan({ mission, tasks: [], reason: "initial" }),
@@ -240,7 +240,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
   it("fails closed when structured output violates the planner schema", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(
+      .mockImplementation(async () =>
         response(JSON.stringify({ version: 1, tasks: [{ key: "A", title: "A" }] })),
       );
 
@@ -250,7 +250,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
   });
 
   it("fails closed when schema-valid output is not a valid DAG", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       response(
         JSON.stringify({
           version: 1,
@@ -268,7 +268,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
   });
 
   it("fails closed on provider HTTP errors", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response("ignored", 503));
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => response("ignored", 503));
 
     await expect(
       planner(fetchMock).plan({ mission, tasks: [], reason: "initial" }),

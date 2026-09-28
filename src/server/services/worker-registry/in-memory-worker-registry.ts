@@ -22,6 +22,13 @@ export class InMemoryWorkerRegistry implements WorkerRegistryPort {
     this.workers.push({ ...worker });
   }
 
+  /** Insert or replace, so a live view can follow the durable store (defect 31). */
+  upsert(worker: WorkerRegistryEntry): void {
+    const index = this.workers.findIndex((w) => w.id === worker.id);
+    if (index === -1) this.workers.push({ ...worker });
+    else this.workers[index] = { ...worker };
+  }
+
   /**
    * Unregister a worker by ID.
    */

@@ -65,9 +65,14 @@ async function productionContainer(): Promise<Container> {
     NODE_ENV: "test",
     PERSISTENCE: "postgres",
     DATABASE_URL,
-    OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
-    OMNIROUTE_API_KEY: "unused-self-dev",
-    ICOS_REVIEWER_MODEL: "self-dev-reviewer",
+    /*
+     * The REVIEWER backend: the same local agent, as compute. Not a stub — the canonical
+     * review policy, vocabulary and schema are the production ones; only the transport is a
+     * process instead of HTTP. No OmniRoute endpoint is configured, so there is exactly one
+     * reviewer backend and the container's ambiguity refusal stays meaningful.
+     */
+    ICOS_REVIEWER_COMMAND: JSON.stringify({ command: HERMES, args: ["-z", "{{prompt}}", "--cli"] }),
+    ICOS_REVIEWER_TIMEOUT_MS: "900000",
     /* The PLANNER backend: a real local agent, named only here as configuration. */
     ICOS_PLANNER_COMMAND: JSON.stringify({ command: HERMES, args: ["-z", "{{prompt}}", "--cli"] }),
     ICOS_PLANNER_TIMEOUT_MS: "300000",
@@ -182,6 +187,23 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
     expect(canonical).not.toBeNull();
     console.log(
       `SELF_DEV envelope: riskClass=${canonical?.riskClass} scope=${JSON.stringify(canonical?.allowedFileScope)}`,
+    );
+
+    /*
+     * WHY IT STOPPED, IN THE RUNTIME'S OWN TERMS. A self-development run has many honest
+     * ways to stop early (unroutable capability, refused scope, no independent reviewer),
+     * and without this the failure is an assertion on a number with no context.
+     */
+    for (const t of missionTasks) {
+      const ct = await container.tasks.getById(t.taskId);
+      console.log(
+        `SELF_DEV task: ${t.title} status=${t.status} capability=${t.capability}` +
+          ` risk=${ct?.riskClass} scope=${JSON.stringify(ct?.allowedFileScope)}`,
+      );
+    }
+    console.log(
+      `SELF_DEV workspaces: ${(await container.workspaceManager!.list()).length}` +
+        ` workers=${container.workerRegistry.listWorkers().map((w) => `${w.id.slice(0, 4)}:${w.health}/${w.availability}`).join(",")}`,
     );
 
     /* The run reached a landed state, or the reason says why — never a raw query error. */

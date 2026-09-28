@@ -5,7 +5,7 @@ import {
   PLANNER_PLACEHOLDERS,
   parsePlannerCommand,
   stripCodeFence,
-} from "./hermes-planner-provider";
+} from "./command-planner-provider";
 import { CanonicalAutonomousMissionPlanner } from "./canonical-mission-planner";
 import type { Mission } from "@/core/mission/contracts";
 
@@ -176,7 +176,7 @@ describe("M12 command planner provider", () => {
 
   it("NO PRODUCT, MODEL OR PROVIDER NAME IS COMMITTED in the provider source", async () => {
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile("src/server/autonomy/hermes-planner-provider.ts", "utf8");
+    const source = await readFile("src/server/autonomy/command-planner-provider.ts", "utf8");
     const body = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\*.*$/gm, "");
 
     /*

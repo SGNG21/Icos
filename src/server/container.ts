@@ -26,6 +26,7 @@ import { InMemoryApprovalRepository } from "@/server/services/in-memory/approval
 import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
 import { InMemoryTaskRepository } from "@/server/services/in-memory/task-repository";
 import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capability-repository";
+import { MirroringWorkerRegistryStore } from "@/server/services/worker-registry/mirroring-worker-registry-store";
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
 import { CapabilityRouter } from "@/server/routing/capability-router";
@@ -133,8 +134,9 @@ import { InMemoryTaskExecutionResultRepository } from "@/server/services/in-memo
 import { InMemoryGoalRepository } from "@/server/services/in-memory/goal-repository";
 import { PostgresGoalRepository } from "@/server/repositories/postgres/goal-repository";
 import { InMemoryReviewerService } from "@/server/review/in-memory-reviewer-service";
-import type { ReviewerService } from "@/server/review/ports";
+import type { ReviewerPort, ReviewerService } from "@/server/review/ports";
 import { createOmniRouteReviewer } from "@/server/review/omniroute-reviewer";
+import { CommandReviewer, parseReviewerCommand } from "@/server/review/command-reviewer";
 import type { ReviewDecisionRepository } from "@/server/review/review-decision-repository";
 import { InMemoryReviewDecisionRepository } from "@/server/services/in-memory/review-decision-repository";
 import { InMemoryQualityControlRepository } from "@/server/services/in-memory/quality-control-repository";
@@ -157,7 +159,7 @@ import { CanonicalAutonomousMissionPlanner } from "@/server/autonomy/canonical-m
 import {
   CommandPlannerProvider,
   parsePlannerCommand,
-} from "@/server/autonomy/hermes-planner-provider";
+} from "@/server/autonomy/command-planner-provider";
 import type { AutonomousMissionPlanner } from "@/server/autonomy/autonomous-mission-runner";
 import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
 import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
@@ -326,7 +328,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
 
   const tasksRepository = new InMemoryTaskRepository(auditLog, tasks);
   const mission = new InMemoryMissionRepository(tasksRepository);
-  const workerRegistryStore = new InMemoryWorkerRegistryStore();
+  const workerRegistry = new InMemoryWorkerRegistry([]);
+  /* Same live view as the durable container (defect 31): one fleet, not two. */
+  const workerRegistryStore = new MirroringWorkerRegistryStore(
+    new InMemoryWorkerRegistryStore(),
+    workerRegistry,
+  );
   const dispatchAttempts = new InMemoryDispatchAttemptRepository(
     mission,
     tasksRepository,
@@ -351,7 +358,6 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   // Worker Registry (Phase 8C) — durable store + hydrated read model (M4).
   // buildMemoryContainer is synchronous by contract, and a fresh in-memory
   // store is empty by construction, so there is nothing to hydrate.
-  const workerRegistry = new InMemoryWorkerRegistry([]);
   const capabilityRouter = new CapabilityRouter(workerRegistryStore, {
     /*
      * M5.3: durable load, derived from the dispatch ledger. Passing the reader
@@ -557,10 +563,12 @@ export async function buildPostgresContainer(
   const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
   const autonomousRuntime = new PostgresAutonomousMissionRuntimeRepository(handle.db);
   const scheduledJobs = new PostgresScheduledJobRepository(handle.db);
-  const llmReviewer = createOmniRouteReviewer(env);
+  const llmReviewer = buildLlmReviewer(env);
   if (!llmReviewer) {
     await handle.close().catch(() => {});
-    throw new PersistenceConfigError("Le reviewer OmniRoute est requis pour le backend PostgreSQL.");
+    throw new PersistenceConfigError(
+      "Un reviewer LLM est requis pour le backend PostgreSQL (ICOS_REVIEWER_COMMAND ou OmniRoute).",
+    );
   }
   const reviewer = new PostgresReviewerService(handle.db, llmReviewer);
   const conversationService = new ConversationService(
@@ -573,8 +581,18 @@ export async function buildPostgresContainer(
    * That is what makes routing survive a process restart — a new process reads
    * the same `workers` rows and reaches the same routing decision.
    */
-  const workerRegistryStore = new PostgresWorkerRegistryStore(handle.db);
-  const workerRegistry = new InMemoryWorkerRegistry(await workerRegistryStore.list());
+  const durableWorkerRegistryStore = new PostgresWorkerRegistryStore(handle.db);
+  /*
+   * A LIVE fleet view, not a boot-time snapshot (defect 31). `WorkerRegistryPort` is
+   * synchronous, so this view is seeded from the durable store and then kept in step by
+   * mirroring every write back into it — otherwise a worker that registers after the runtime
+   * boots is invisible to the reviewer-independence rule, which then fails closed for ever.
+   */
+  const workerRegistry = new InMemoryWorkerRegistry(await durableWorkerRegistryStore.list());
+  const workerRegistryStore = new MirroringWorkerRegistryStore(
+    durableWorkerRegistryStore,
+    workerRegistry,
+  );
   const capabilityRouter = new CapabilityRouter(workerRegistryStore, {
     /*
      * M5.3: durable load, derived from the dispatch ledger. Passing the reader
@@ -910,6 +928,36 @@ export async function resetContainer(): Promise<void> {
  * behaviour. If it WAS requested and no backend is usable, the underlying factories throw:
  * fail closed, never a stub.
  */
+/**
+ * Selects the REVIEWER COMPUTE (M13). Mirrors `buildAutonomousPlanner` exactly, including its
+ * refusal to boot when two backends are configured: which model reviewed a change is
+ * audit-relevant, so it must never be decided by which environment variable happened to win.
+ */
+function buildLlmReviewer(env: Env): ReviewerPort | undefined {
+  const command = parseReviewerCommand(env.ICOS_REVIEWER_COMMAND);
+  /*
+   * `ICOS_REVIEWER_MODEL` is what SELECTS the OmniRoute reviewer — not the timeout, which is
+   * shared configuration, and not the OmniRoute credentials, which other components need too.
+   */
+  const omniRouteSelected = env.ICOS_REVIEWER_MODEL !== undefined;
+
+  if (command && omniRouteSelected) {
+    throw new Error(
+      "QUALITY_REVIEWER_BACKEND_AMBIGUOUS: both ICOS_REVIEWER_COMMAND and OmniRoute are configured; choose one",
+    );
+  }
+
+  if (command) {
+    return new CommandReviewer({
+      command: command.command,
+      args: command.args,
+      timeoutMs: env.ICOS_REVIEWER_TIMEOUT_MS ?? 300_000,
+    });
+  }
+
+  return createOmniRouteReviewer(env);
+}
+
 function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined {
   const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
   /*
