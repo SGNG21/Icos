@@ -1,6 +1,6 @@
 # Control Foundation — backend handoff (BR-10, BR-11, BR-12, BR-18)
 
-Branch `feat/control-foundation`, rebased on CORE3 `feat/autonomy-core3-goal-planner-dag` @ `9472de7`.
+Branch `feat/control-foundation`, based on CORE3 `feat/autonomy-core3-goal-planner-dag` @ `9472de7` (simulated merge with `6ee81be`: clean).
 Decision: `docs/decisions/0044-canonical-control-command-bus.md`. Backend only: the cockpit is NOT wired.
 Re-verify HEAD with `git log --oneline -10` before trusting anything below.
 
@@ -145,27 +145,57 @@ operation (deploying it changes no behaviour until a command is issued); `audit_
 replaced by a strict superset of the LIVE list. Rollback steps are in the file header. Not applied to
 any live database. `schema.ts`'s audit CHECK, which had drifted from the database, now mirrors it.
 
+## Client rules (how the cockpit must use the contract)
+
+- **idempotencyKey**: one fresh UUID per owner intent. Reuse it ONLY to retransmit the same request
+  after a transport failure (timeout, dropped connection). The server derives `commandId` from
+  (actor, key), so a retransmission can never execute twice: it returns the stored result
+  (`replayed: true`) or, if the first request never arrived, executes once now. Never reuse a key for a
+  different payload (`IDEMPOTENCY_KEY_REUSED`, 409).
+- **Lost response**: the client does not know `commandId` until it receives a response, so the
+  recovery is "retransmit with the SAME key", not "GET by id". `GET /api/control/commands/:commandId`
+  is for commands whose response WAS received (e.g. to follow a 202).
+- **A key names one attempt, including its rejection.** Any final rejection is replayed as-is for that
+  key. To try again after fixing the cause (new version, new proof, confirmation), send a NEW key.
+- **Stale version** (`VERSION_CONFLICT`, 409, body `version` = current): refetch
+  `GET /api/control/state`, show the owner what changed, and only on a new explicit action send a new
+  key with the new `expectedVersion`. Never auto-resend.
+- **State changed** (`INVALID_TRANSITION` 409 at admission, or `FAILED` 409 after admission): nothing
+  changed; refresh and re-evaluate. `FAILED` still bumped the version.
+- **Unknown outcome** (`UNKNOWN_EXECUTION_STATE`, 202): do NOT send a new command. Poll
+  `GET /api/control/commands/:commandId` (the id is in the 202 body) until it settles to `EXECUTED`; if
+  it stays unknown, show it as unknown — the server never re-executes it implicitly.
+- **Re-auth** (HIGH / CRITICAL): on `428` with `REAUTH_REQUIRED`, `REAUTH_EXPIRED` or `REAUTH_INVALID`,
+  prompt for the password, `POST /api/control/reauth`, then send a NEW key with `reauthProof`. A proof
+  lives 5 minutes, is bound to this user AND this session, and is consumed only by an ADMITTED command
+  (a rejection such as `CONFIRMATION_REQUIRED` or `VERSION_CONFLICT` does not consume it). Keep it in
+  memory only; never persist or log it. A wrong password returns 401 from `/reauth` (audited).
+- **Session too old** (`SESSION_TOO_OLD`, 428, MEDIUM): the session is > 12 h old — sign in again.
+- **Typed confirmation** (CRITICAL, `CONFIRMATION_REQUIRED`, 428): the owner must type exactly
+  `confirmationPhrase(type, target)` = `"<TYPE> <kind>:<id>"`, today only `EXIT_SAFE_MODE runtime:global`.
+- **Risk class comes from the server** (`COMMAND_SPECS` / `riskClass` in every result). The cockpit's
+  local risk table must be replaced by it (e.g. CANCEL_MISSION is HIGH on the backend, MEDIUM in the
+  current cockpit placeholder).
+- **Route-level errors**: 401 (no/expired session or no session evidence), 403 (cross-origin or no
+  `cockpit.read`), 503 `persistence_unavailable` (control plane not composed). Nothing is recorded.
+
 ## Proofs
 
-- Unit: `pnpm test` → 151 files / 1865 tests. Control-specific: `src/server/control/*.test.ts`,
-  `src/app/api/control/control-routes.test.ts`.
+Authoritative detail: `audit/control-foundation/STATE.md`.
+
+- Unit: `pnpm test` → 151 files / 1865 tests, 0 failed.
 - Integration (dedicated DB, never the shared `icos_test`):
   `ICOS_TEST_DATABASE_URL=postgres://$USER@localhost:5432/icos_control_test pnpm test:integration`
-  → 69 files / 462 passed / 2 skipped (pre-existing live-Hermes tests, not this branch).
-  - concurrency: two pools, same version → exactly one EXECUTED, one VERSION_CONFLICT; duplicate id
-    race → one row, one audit entry; concurrent proof reuse → one success.
-  - restart: new pool/store/bus (and a whole new PostgreSQL container) sees the hold, versions and
-    results; the held mission still admits nothing.
-  - audit atomicity: a failure after the audit insert rolls both back.
-- Mutations: `python3 audit/control-foundation/mutation-proofs.py` → 17/17 KILLED by assertion
-  failures (version check, authorization, freshness/re-auth, proof single-use, hold guard, supervisor
-  hold, safe mode, fail-closed read, gate guard, applier guard, backstop, audit write, idempotency,
-  QC retry hold, cancel CAS, sticky cancelled, enable evidence reset).
+  → 70 files, 463 passed / 0 failed / 2 skipped (pre-existing live-Hermes tests, not this branch).
+  Control PostgreSQL suites: 12 tests (races, restart, whole-container restart, crash reconciliation,
+  audit atomicity, fail-closed flags, production composition, cancel CAS).
+- Mutations: `python3 audit/control-foundation/mutation-proofs.py` → 17/17 killed by behavioural
+  assertions, 0 invalid, 0 survived (`audit/control-foundation/mutation-results.txt`).
 - Structure: `no-bypass.test.ts` — only the control store/schema touch control tables, only the bus
   writes holds/flags/versions/proofs, only the commands route executes, no client code imports
   server control code, no mutating verb on `/api/control/state`.
 
-## Remaining backend requirements (new)
+## Remaining backend requirements (open)
 
 - **BR-23 — canonical manual RETRY_TASK.** Must define: eligible states; interaction with QC/repair
   retry budgets; attempt numbering; dispatch-ledger lineage; idempotency; workspace reuse vs new;
@@ -175,41 +205,50 @@ any live database. `schema.ts`'s audit CHECK, which had drifted from the databas
   actions disallowed, the gate/applier refuse correctly, but `WorkspaceExecutionCoordinator` turns ANY
   refusal into workspace `blocked` + execution `failed`, and nothing re-drives integration later.
   Safe mode therefore protects the canonical branch but a result finished during safe mode is not
-  integrated after exit. Needs: a held state for completed workspaces and a re-drive when released.
-  Deliberately NOT changed here (CORE3 semantics, actively evolving).
+  integrated after exit. Deliberately NOT changed here (CORE3 semantics, actively evolving).
 - **BR-25 — re-auth rate limiting.** `POST /api/control/reauth` is audited but not rate-limited.
 - **BR-26 — per-flag commands.** `dispatchEnabled`, `integrationEnabled`, `externalActionsEnabled` are
-  durable and enforced but only safe mode is commandable; individual toggles need commands + risk.
+  durable and enforced but only safe mode is commandable.
 - **BR-27 — passkey / second factor for CRITICAL** (hook present, not enforced).
+- Cockpit BR-01…09, BR-13…17, BR-19…22 remain open.
 
-Pre-existing defects observed (not fixed, not in scope): `goal-repository.ts` writes `goal.*` audit
-events that the database CHECK does not allow; the Zod audit enum and the DB constraint disagree.
+Pre-existing defect (separate): `goal.*` audit events are rejected by the database
+`audit_event_type_check`, which makes `PostgresGoalRepository.create` fail — see STATE.md.
 
 ## Merge-conflict risk with CORE3
 
-Shared files edited (all small, localized): `container.ts` (control composition, backstop, gate/applier
-`control`), `supervisor-service.ts` (optional 8th ctor arg + two guard lines), `production-services.ts`
-(guard wiring + QC hold), `runtime-recovery-sweeper.ts` + `compose-runtime-recovery.ts`,
-`integration-gate.ts`, `integration-applier.ts`, `record-mission-task-execution.ts`,
-`create-and-dispatch-task.ts`, `mission/ports.ts` + both mission repositories, `worker-registration-service.ts`,
-`auth/ports.ts` + `authentication-service.ts`, `core/contracts/audit.ts`, `database/schema.ts`,
-`drizzle/meta/_journal.json` (entry idx 44 — a CORE3 migration 0047 would collide: renumber on merge),
-two API routes (`executions/completed`, `missions/autonomous`: one argument each).
-CORE3 moved twice during this work; the branch was rebased each time with no conflict. Any NEW dispatch
-site CORE3 adds must either go through an existing admission point or add a hold check (the backstop
-will otherwise refuse it with a throw).
+Per-file LOW/MEDIUM/HIGH table and the migration merge-time rule: `audit/control-foundation/STATE.md`
+› "CORE3 merge risk". Simulated merge with CORE3 `6ee81be`: clean. Any dispatch path CORE3 adds after
+this branch must get a control-hold admission check; the dispatcher backstop is only the fail-closed
+fallback.
 
-## Cockpit integration (later, on feat/cockpit-control-center)
+## Cockpit integration (later, on feat/cockpit-control-center — not started)
 
 1. Replace `notWiredTransport` in `src/components/cockpit/command-button.tsx` with an HTTP transport:
-   `submit` → `POST /api/control/commands`; `status(commandId)` → `GET /api/control/commands/:id`
-   (a 404 means `not_received`: resubmit the SAME idempotencyKey).
-2. Map the cockpit's `COMMAND_ACTIONS` to the backend types; drop actions with no backend command
-   (`worker.retry`, `mission.change_priority`, `system.pause_new_work`, `system.freeze_integrations`,
-   `system.stop_external_workers`, `system.lock_self_modification` stay NOT YET WIRED — BR-23/26).
-3. Read `expectedVersion` from `GET /api/control/state` (replace the `updatedAt` placeholder).
+   `submit` → `POST /api/control/commands` (retransmit with the SAME key on transport failure);
+   follow a 202 with `GET /api/control/commands/:commandId`.
+2. Map cockpit actions to backend commands:
+
+   | Cockpit action           | Backend command                                                |
+   | ------------------------ | -------------------------------------------------------------- |
+   | `mission.pause`          | `PAUSE_MISSION`                                                |
+   | `mission.resume`         | `RESUME_MISSION`                                               |
+   | `mission.stop`           | `CANCEL_MISSION` (HIGH)                                        |
+   | `worker.pause`           | `DISABLE_WORKER` (stops routing; does not kill running work)   |
+   | `worker.resume`          | `ENABLE_WORKER` (HIGH; worker routes only after a fresh probe) |
+   | `system.enter_safe_mode` | `ENTER_SAFE_MODE`                                              |
+   | `system.exit_safe_mode`  | `EXIT_SAFE_MODE` (CRITICAL)                                    |
+
+   Remain **NOT YET WIRED**: `worker.retry` (BR-23), `worker.stop` (no backend command terminates a
+   running worker), `mission.change_priority` (no backend priority command), `system.pause_new_work`,
+   `system.freeze_integrations`, `system.lock_self_modification` (BR-26), `system.stop_external_workers`
+   (no backend command). ASK ICOS stays NOT YET WIRED (BR-17).
+
+3. Read `expectedVersion` from `GET /api/control/state?missionId=…&workerId=…` (replace the `updatedAt`
+   placeholder); `runtime.version` for safe-mode commands.
 4. HIGH/CRITICAL: password prompt → `POST /api/control/reauth` → send `reauthProof`; CRITICAL also
-   sends `confirmation = confirmationPhrase(type, target)`. Keep the proof in memory only.
-5. Show `rejection.code` / `reauth` / `auditEntryId` from the typed result; `202` ⇒ UNKNOWN, then poll GET.
-6. System page: show `runtime.stored` / `effective` / `version` instead of `UNKNOWN (BR-12)`.
-7. Mission hold in mission views from `missions[].held`.
+   sends `confirmation = confirmationPhrase(type, target)`.
+5. Show `status`, `rejection.code`, `reauth`, `version`, `auditEntryId` from the typed result.
+6. System page: show `runtime.stored` / `effective` / `version` instead of `UNKNOWN (BR-12)`; `stored:
+null` must render as "flags unreadable — everything effectively off".
+7. Mission views: `missions[].held` from `/api/control/state`.

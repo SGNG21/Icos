@@ -264,6 +264,74 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
     });
   });
 
+  it("crash after admission: UNKNOWN on a new pool, never re-executed, reconciled from canonical state", async () => {
+    const store = new PostgresControlStore(a.db);
+    const reauth = new ReauthService(store, { verifyPassword: async () => true });
+    const issued = await reauth.issue({
+      headers: new Headers(),
+      userId: USER,
+      sessionId: actor.sessionId,
+      password: "x",
+    });
+    if (!issued.ok) throw new Error("issue");
+    // The canonical effect dies mid-flight (process crash / lost connection).
+    let effectCalls = 0;
+    const crashing: ControlEffects = {
+      ...effects,
+      cancelMission: async () => {
+        effectCalls += 1;
+        throw new Error("process died");
+      },
+    };
+    const request: ControlCommandRequest = {
+      idempotencyKey: randomUUID(),
+      type: "CANCEL_MISSION",
+      target: { kind: "mission", id: "mission-ctl" },
+      expectedVersion: 0,
+      reason: "crash proof",
+      reauthProof: issued.proof,
+    };
+    const first = await new ControlCommandBus({ store, effects: crashing }).execute(actor, request);
+    expect(first.status).toBe("UNKNOWN_EXECUTION_STATE");
+    expect(effectCalls).toBe(1);
+    const [row] = await a.db
+      .select()
+      .from(controlCommands)
+      .where(eq(controlCommands.commandId, first.commandId));
+    expect(row.status).toBe("ADMITTED");
+
+    // Restart: another pool, another store, another bus.
+    const restarted = new ControlCommandBus({
+      store: new PostgresControlStore(b.db),
+      effects: crashing,
+    });
+    expect((await restarted.get(session, first.commandId))!.status).toBe("UNKNOWN_EXECUTION_STATE");
+    // Replaying the identical request does NOT run the effect again.
+    expect((await restarted.execute(actor, request)).status).toBe("UNKNOWN_EXECUTION_STATE");
+    expect(effectCalls).toBe(1);
+
+    // Canonical state later shows the effect: reading the command settles it, durably and audited.
+    missionStatus.set("mission-ctl", "cancelled");
+    expect(await restarted.get(session, first.commandId)).toMatchObject({
+      status: "EXECUTED",
+      replayed: true,
+    });
+    const [settled] = await a.db
+      .select()
+      .from(controlCommands)
+      .where(eq(controlCommands.commandId, first.commandId));
+    expect(settled.status).toBe("EXECUTED");
+    const audit = await a.db
+      .select()
+      .from(auditEntries)
+      .where(sql`details->>'commandId' = ${first.commandId}`);
+    expect(audit.map((e) => e.eventType).sort()).toEqual([
+      "control.command.admitted",
+      "control.command.executed",
+    ]);
+    expect(effectCalls).toBe(1);
+  });
+
   it("enters and leaves safe mode durably", async () => {
     const store = new PostgresControlStore(a.db);
     const bus = new ControlCommandBus({ store, effects });
