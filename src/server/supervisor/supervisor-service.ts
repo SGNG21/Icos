@@ -250,6 +250,16 @@ export class SupervisorService {
 
       if (this.workspaceExecutionCoordinator && allocation.kind === "GOVERNED") {
         let allocated = false;
+        /*
+         * DEFECT 28 — the gate may not have run yet.
+         *
+         * When no canonical review exists, the coordinator leaves the work durable and
+         * `ready_for_integration` instead of gating it. That is neither success nor
+         * failure: the task is still in flight, waiting for the independent reviewer.
+         * Marking it terminal here, or releasing its workspace in the `finally`, would
+         * destroy the very evidence the reviewer is about to judge.
+         */
+        let awaitingReview = false;
         try {
           if (!this.dispatchAttempts) {
             throw new Error(
@@ -315,13 +325,16 @@ export class SupervisorService {
           await this.dispatchAttempts.markDispatched(prepared.attempt.id);
 
           // Update task status based on coordinator result
-          if (coordResult.success) {
+          awaitingReview = coordResult.awaitingReview === true;
+          if (awaitingReview) {
+            // Deliberately no status change: the task stays in flight, pending review.
+          } else if (coordResult.success) {
             await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "succeeded");
           } else {
             await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "failed");
           }
         } finally {
-          if (allocated) {
+          if (allocated && !awaitingReview) {
             // Release workspace
             await this.workspaceExecutionCoordinator.releaseWorkspace(task.taskId);
           }

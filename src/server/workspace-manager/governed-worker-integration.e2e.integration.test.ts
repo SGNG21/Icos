@@ -378,8 +378,13 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       workflowId: WORKFLOW_ID,
     });
 
-    expect(result.decision).toBe("NEEDS_HUMAN_APPROVAL");
-    expect(result.reasons).toContain("revue absente");
+    /*
+     * Since M13 (defect 28) absent review no longer produces a premature NEEDS_HUMAN_APPROVAL:
+     * the gate does not run at all, and the work waits. The SAFETY PROPERTY is unchanged and
+     * is what this test exists for — nothing unreviewed reaches the canonical branch.
+     */
+    expect(result.awaitingReview).toBe(true);
+    expect(result.decision).toBeUndefined();
     expect(result.integration).toBeUndefined();
     expect(await target()).toBe(before);
   }, 120_000);
@@ -429,8 +434,13 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       workflowId: WORKFLOW_ID,
     });
 
-    /* Only APPROVE authorises; anything else leaves the decision to a human. */
-    expect(result.decision).toBe("NEEDS_HUMAN_APPROVAL");
+    /*
+     * Only APPROVE authorises. An escalating verdict is NOT a review the gate can act on, so
+     * since M13 it leaves the work waiting rather than gating it — and, either way, nothing
+     * is integrated, which is the property that matters.
+     */
+    expect(result.decision).not.toBe("ACCEPT");
+    expect(result.integration).toBeUndefined();
     expect(await target()).toBe(before);
   }, 120_000);
 

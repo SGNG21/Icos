@@ -1,11 +1,17 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M12 — DEFECT 27 CLOSED; SELF_DEVELOPMENT_E2E candidate->plan PASSES)
+Updated: 2026-09-28 (M13 — DEFECT 28 CLOSED; CORE3 RE-CERTIFIED with NO pre-seeded review)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
 ## CURRENT_MILESTONE
-CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — DECLARED, M9, decision 0042, commit a9aa3d7.
+M13 — DEFECT 28 CLOSED, decision 0044. The IntegrationGate now runs only AFTER an
+       independent canonical review exists. CORE3 is RE-CERTIFIED with the certification
+       artifact removed: no proof pre-persists an approval any more. Execution leaves the
+       work durable and `ready_for_integration` (`awaitingReview: true`); the later
+       `gatePendingReview()` pass gates, applies and reaps. One gate, one review authority,
+       order changed. No review still means no integration, and no premature escalation.
+CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — RE-DECLARED, M13, decision 0044 (was M9/0042).
        An ORDINARY autonomous mission now reaches the governed path BY DEFAULT, proven
        from `buildPostgresContainer` AND from `startProductionServices` — nothing in the
        proof composes the coordinator by hand. Governed workspace allocated automatically
@@ -1206,7 +1212,16 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — DEFECT 25: connect self-development to the certified path
+## NEXT_ACTION — run the REAL SELF_DEVELOPMENT_E2E, then ICOS_SELF_BUILD_E2E
+
+Defect 28 is closed and CORE3 is re-certified without the pre-seeded-approval artifact, so the
+full self-development chain can now be run for the first time:
+  candidate -> goal -> mission -> real planning -> DAG -> governed execution -> independent
+  review -> IntegrationGate -> REAL gates -> integration -> evaluation -> durable learning.
+Constraints for that run: no pre-seeded review, no manual stage advancement, no fake gate
+commands, and no calling coordinator internals to advance stages.
+
+## SUPERSEDED NEXT_ACTION — DEFECT 25 (closed in M11; kept for orientation)
 
 D1 is fixed and integration failures are ZERO. CORE3 autonomous orchestration is certified.
 Self-development can now INTEGRATE (M10). One gap remains before ICOS_SELF_BUILD_E2E, and it
@@ -1253,23 +1268,20 @@ commands for the self-build certification.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
 
 ### CERTIFICATION LEDGER — what is and is NOT true today
-  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE (M9, decision 0042).
-  MULTI_WORKER_E2E_PASS                    — TRUE (M5.4, decision 0035).
-  AUTO_SESSION_RECOVERY_PASS               — TRUE (M7 + chaos certification, 0039/0040).
-  SELF_DEVELOPMENT_E2E_PASS                — PARTIAL, and therefore recorded as FALSE.
-                                             candidate -> goal -> mission -> plan -> DAG
-                                             PASSES via production composition with a REAL
-                                             planner (M12). Execution, review, real gates,
-                                             integration and learning are NOT yet covered:
-                                             blocked by DEFECT 28 (the gate runs before any
-                                             independent review can exist).
-  SELF_DEVELOPMENT_PLANNING_E2E_PASS        — TRUE (M12, commit 9444447).
-  ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
+  DEFECT_28                                — CLOSED (M13, decision 0044).
+  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN after defect 28 (M13, 0044).
+                                             9 proofs, NO pre-seeded review anywhere.
+  MULTI_WORKER_E2E_PASS                    — TRUE, RE-PROVEN after defect 28 (M5.4, 0035).
+  AUTO_SESSION_RECOVERY_PASS               — TRUE, RE-PROVEN after defect 28 (M7, 0039/0040).
   SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11).
+  SELF_DEVELOPMENT_PLANNING_E2E_PASS       — TRUE (M12, commit 9444447).
+  SELF_DEVELOPMENT_E2E_PASS                — NOT YET RUN end to end. Its blocker (defect 28)
+                                             is now closed; the full run is the next action.
+  ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
 ICOS is NOT yet self-building, and must not be described as such.
 
 Critical path:
-  defect 25 (3 links above) -> SELF_DEVELOPMENT_E2E_PASS -> ICOS_SELF_BUILD_E2E
+  DEFECT 28 (closed) -> SELF_DEVELOPMENT_E2E_PASS -> ICOS_SELF_BUILD_E2E
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -1465,3 +1477,15 @@ Then M3 durable readiness/dependency gating (mission N13).
   unlisted field, and an LLM adds one occasionally. The fix was to SAY SO in the prompt, not
   to loosen the contract — and to normalise transport (code fences, narration around the JSON)
   in the provider, where it cannot touch plan semantics.
+- A CERTIFICATION ARTIFACT IS A DEFECT WEARING A TEST HELPER'S CLOTHES. Every CORE3 proof
+  called `approve(c)` before `supervisor.run`, and that line was read for two milestones as
+  test setup. It was in fact the exact statement of defect 28: the gate ran in the same call
+  that finished execution, so the ONLY way to reach ACCEPT was to fabricate the approval
+  first. When a proof must arrange something the runtime can never arrange for itself, the
+  proof is describing a missing capability, not preparing a fixture. Read helper names as
+  claims about production.
+- AN EDIT THAT IS NOT IN `git status` WAS NEVER MADE. The supervisor half of defect 28 was
+  believed applied and was simply absent; CORE3 failed 5/9 for a reason already 'fixed'. The
+  stack trace named `supervisor-service.ts:326` and `git status` did not list that file — two
+  seconds of evidence against a remembered edit. Trust the working tree, never the memory of
+  having changed it. (Same shape as the defect-24 patch that silently failed to apply.)

@@ -80,6 +80,13 @@ export interface CoordinationResult {
   error?: string;
   /** Present only when an applier is composed AND the gate returned ACCEPT (M8). */
   integration?: IntegrationApplyOutcome;
+  /**
+   * True when execution finished but NO canonical review exists yet (M13, defect 28).
+   *
+   * Not a failure and not an escalation: the workspace is durable, holds its commits, and is
+   * waiting for QC. A later governed pass gates it once a review is persisted.
+   */
+  awaitingReview?: boolean;
 }
 
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -301,7 +308,46 @@ export class WorkspaceExecutionCoordinator {
       );
       execWs.status = "completed";
 
-      // QC ACCEPT -> IntegrationGate handoff
+      /*
+       * THE GATE RUNS ONLY AFTER AN INDEPENDENT REVIEW EXISTS (M13, defect 28).
+       *
+       * It used to run here unconditionally, consulting a review QC had not written yet — QC
+       * reviews on a LATER sweep, after the result is recorded. So the gate answered
+       * NEEDS_HUMAN_APPROVAL for every unreviewed run, and the CORE3 certification had to
+       * PRE-PERSIST an approval to get past it. That pre-seeding was a certification
+       * artifact hiding a real ordering defect.
+       *
+       * Absent review is neither approval nor escalation. The workspace stays durable and
+       * `ready_for_integration`, and `gatePendingReview()` gates it on a later pass.
+       */
+      const pendingReview = await this.resolveReview(workflowId);
+      if (!pendingReview) {
+        /*
+         * Idempotent: a second pass over work that is already waiting must not attempt a
+         * self-transition, which the lifecycle rightly forbids.
+         */
+        const current = await this.manager.get(execWs.workspaceId);
+        if (current.status !== "ready_for_integration") {
+          await this.manager.transition(
+            execWs.workspaceId,
+            "ready_for_integration",
+            this.ownerToken,
+            execWs.fencingToken,
+          );
+        }
+        return {
+          workspaceId: execWs.workspaceId,
+          taskId,
+          /*
+           * NOT success: nothing was accepted or integrated. NOT failure either — the work
+           * is intact and waiting. The caller must not mark the task terminal on this.
+           */
+          success: false,
+          awaitingReview: true,
+          workflowId,
+        };
+      }
+
       const gateResult = await this.handoffToIntegrationGate(
         execWs.workspaceId,
         workflowId,
@@ -374,13 +420,20 @@ export class WorkspaceExecutionCoordinator {
     if (!execWs) throw new Error(`OWNERSHIP_LOST: workspace ${workspaceId} is not tracked`);
     await this.assertOwned(execWs);
 
-    // Transition to ready_for_integration
-    await this.manager.transition(
-      workspaceId,
-      "ready_for_integration",
-      this.ownerToken,
-      execWs.fencingToken,
-    );
+    /*
+     * Move to `ready_for_integration` only if not already there. Since M13 the work may
+     * ALREADY be waiting in that state — it was parked there when no review existed — and the
+     * lifecycle rightly forbids a self-transition.
+     */
+    const before = await this.manager.get(workspaceId);
+    if (before.status !== "ready_for_integration") {
+      await this.manager.transition(
+        workspaceId,
+        "ready_for_integration",
+        this.ownerToken,
+        execWs.fencingToken,
+      );
+    }
 
     /*
      * INDEPENDENT REVIEW -> the gate (M8, defect 19).
@@ -411,6 +464,75 @@ export class WorkspaceExecutionCoordinator {
     }
 
     return report;
+  }
+
+  /**
+   * THE LATER GOVERNED PASS (M13, defect 28).
+   *
+   * Gates every workspace that finished execution and has since acquired a canonical review.
+   * This is what closes the loop opened by `awaitingReview`: execution and gating are now two
+   * governed steps with QC between them, rather than one step that gated whatever review
+   * happened to exist.
+   *
+   * It is idempotent and safe to call on every sweep: a workspace with no review is skipped,
+   * one already accepted is left alone, and integration is exactly-once by the applier's own
+   * git-derived check.
+   */
+  async gatePendingReview(humanApprovedBy?: string): Promise<CoordinationResult[]> {
+    const results: CoordinationResult[] = [];
+
+    for (const execWs of this.executionWorkspaces.values()) {
+      if (!execWs.workflowId || execWs.status === "released") continue;
+
+      const workspace = await this.manager.get(execWs.workspaceId).catch(() => null);
+      /* Only work that finished and is waiting: never re-gate an accepted or released one. */
+      if (!workspace || workspace.releasedAt !== null) continue;
+      if (workspace.status !== "ready_for_integration" && workspace.status !== "integrating") {
+        continue;
+      }
+
+      /* Still unreviewed: leave it pending rather than gating it again. */
+      if (!(await this.resolveReview(execWs.workflowId))) continue;
+
+      const gateResult = await this.handoffToIntegrationGate(
+        execWs.workspaceId,
+        execWs.workflowId,
+        humanApprovedBy,
+      );
+
+      const integration =
+        gateResult.decision === "ACCEPT" && this.integrationApplier
+          ? await this.integrationApplier.apply(execWs.workspaceId, {
+              lease: { owner: this.ownerToken, fencingToken: execWs.fencingToken! },
+            })
+          : undefined;
+
+      /*
+       * REAP after the commit is contained in the target, and only then. Release moved here
+       * with the gate: since M13 the execution pass leaves work AWAITING REVIEW, so releasing
+       * there would have removed the worktree the gate still has to evaluate — and destroyed
+       * the commits with it.
+       */
+      if (
+        integration?.status === "INTEGRATED" ||
+        integration?.status === "ALREADY_INTEGRATED" ||
+        gateResult.decision === "REJECT"
+      ) {
+        await this.releaseWorkspace(execWs.taskId).catch(() => undefined);
+      }
+
+      results.push({
+        workspaceId: execWs.workspaceId,
+        taskId: execWs.taskId,
+        success: gateResult.decision === "ACCEPT",
+        decision: gateResult.decision,
+        reasons: gateResult.reasons,
+        workflowId: execWs.workflowId,
+        integration,
+      });
+    }
+
+    return results;
   }
 
   /**

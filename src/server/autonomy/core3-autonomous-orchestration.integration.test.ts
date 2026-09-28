@@ -179,8 +179,15 @@ async function seed(c: Container) {
   await c.workerRegistration.probe(WORKER_ID, { health: "healthy", availability: "available" });
 }
 
-/** The canonical review, as QC persists it. Reviewed independently of the worker. */
-async function approve(c: Container) {
+/**
+ * The canonical review, as QC persists it — written AFTER execution, never before (M13).
+ *
+ * It used to be pre-seeded before `supervisor.run`, which was a certification artifact hiding
+ * defect 28: the gate ran immediately after execution and consulted a review QC had not yet
+ * written, so the only way past it was to write one in advance. The gate now waits for a
+ * review, and this runs where QC actually would.
+ */
+async function qcReviews(c: Container) {
   await c.reviewDecisions.save({
     id: `review-${TASK_ID}`,
     taskId: TASK_ID,
@@ -228,7 +235,6 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      */
     const seeded = await container();
     await seed(seeded);
-    await approve(seeded);
     const before = git(repo, "rev-parse", "integration/phase-7");
 
     const services = await startProductionServices({
@@ -242,8 +248,15 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     expect(services.container.taskExecution).toBeInstanceOf(RuntimeDispatchRouter);
     expect(services.container.workspaceExecutionCoordinator).toBeDefined();
 
-    /* Drive the mission through the SAME composition the scheduler uses. */
-    await composeAutonomyRuntime(services.container).supervisor.run(MISSION_ID);
+    /*
+     * Drive the mission through the SAME composition the scheduler uses. The first pass
+     * executes and leaves the work AWAITING REVIEW; QC then reviews; the later governed pass
+     * gates and integrates. Nothing is pre-seeded and no stage is advanced by hand.
+     */
+    const bootRuntime = composeAutonomyRuntime(services.container);
+    await bootRuntime.supervisor.run(MISSION_ID);
+    await qcReviews(services.container);
+    await services.container.workspaceExecutionCoordinator!.gatePendingReview();
 
     const ws = (await services.container.workspaceManager!.list()).find(
       (w) => w.workflowId === WORKFLOW_ID,
@@ -257,7 +270,6 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     makeRepo();
     const c = await container();
     await seed(c);
-    await approve(c);
     const before = git(repo, "rev-parse", "integration/phase-7");
 
     /*
@@ -267,6 +279,15 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      */
     const { supervisor } = composeAutonomyRuntime(c);
     await supervisor.run(MISSION_ID);
+
+    /*
+     * NATURAL ORDER (M13, defect 28). Execution finished with NO review, so nothing was
+     * gated and nothing integrated — the canonical branch has not moved yet. QC reviews
+     * independently, and only then does the governed pass gate and integrate.
+     */
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
+    await qcReviews(c);
+    await c.workspaceExecutionCoordinator!.gatePendingReview();
 
     /* A GOVERNED workspace was allocated automatically, keyed by the canonical workflow. */
     const workspaces = await c.workspaceManager!.list();
@@ -307,13 +328,15 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     makeRepo();
     const first = await container();
     await seed(first);
-    await approve(first);
     await composeAutonomyRuntime(first).supervisor.run(MISSION_ID);
+    await qcReviews(first);
+    await first.workspaceExecutionCoordinator!.gatePendingReview();
     const afterFirst = git(repo, "rev-parse", "integration/phase-7");
 
     /* A completely new container and supervisor, as a restarted process would build. */
     const second = await container();
     await composeAutonomyRuntime(second).supervisor.run(MISSION_ID);
+    await second.workspaceExecutionCoordinator!.gatePendingReview();
 
     /* Exactly-once dispatch AND exactly-once integration both hold across the restart. */
     expect(git(repo, "rev-parse", "integration/phase-7")).toBe(afterFirst);
@@ -323,6 +346,98 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
       ),
     )) as unknown as Array<{ n: number }>;
     expect(attempts[0]!.n).toBe(1);
+  }, 180_000);
+
+  it("DEFECT 28 — NATURAL ORDER: no review means no integration, and no premature escalation", async () => {
+    makeRepo();
+    const c = await container();
+    await seed(c);
+    const before = git(repo, "rev-parse", "integration/phase-7");
+
+    /* ---- Execution completes, with NO review anywhere. ---- */
+    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+
+    const ws = (await c.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
+    expect(ws, "no governed workspace was allocated").toBeDefined();
+
+    /*
+     * The work is DURABLE and WAITING: worktree intact, commits held, workspace parked where
+     * a later pass can gate it. Nothing integrated, and the task was NOT failed — "nobody has
+     * looked at it" must stay distinguishable from "it was judged bad".
+     */
+    expect(ws!.status).toBe("ready_for_integration");
+    expect(existsSync(ws!.worktreePath)).toBe(true);
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
+
+    const [mt] = (await c.db!.execute(
+      sql.raw(`select status from mission_tasks where id = '${MISSION_TASK_ID}'`),
+    )) as unknown as Array<{ status: string }>;
+    expect(mt!.status).not.toBe("failed");
+
+    /* A governed pass while STILL unreviewed changes nothing: silence is never consent. */
+    expect(await c.workspaceExecutionCoordinator!.gatePendingReview()).toEqual([]);
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
+
+    /* ---- QC reviews independently, and only now may the gate run. ---- */
+    await qcReviews(c);
+    const gated = await c.workspaceExecutionCoordinator!.gatePendingReview();
+
+    expect(gated).toHaveLength(1);
+    expect(gated[0]!.decision).toBe("ACCEPT");
+    expect(gated[0]!.integration?.status).toBe("INTEGRATED");
+
+    /* Re-read: `sourceCommit` is recorded BY the gate, so the pre-gate snapshot has none. */
+    const gatedWs = (await c.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
+    const after = git(repo, "rev-parse", "integration/phase-7");
+    expect(after).toBe(gatedWs!.sourceCommit);
+    expect(after).not.toBe(before);
+
+    /* EXACTLY ONCE: a further pass integrates nothing more. */
+    await c.workspaceExecutionCoordinator!.gatePendingReview();
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(after);
+  }, 180_000);
+
+  it("DEFECT 28 — RESTART WHILE AWAITING REVIEW preserves the work and integrates once", async () => {
+    makeRepo();
+    const first = await container();
+    await seed(first);
+    const before = git(repo, "rev-parse", "integration/phase-7");
+
+    await composeAutonomyRuntime(first).supervisor.run(MISSION_ID);
+    const parked = (await first.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
+    expect(parked?.status).toBe("ready_for_integration");
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
+
+    /*
+     * A RESTART while the work waits for review. The workspace is durable, so a brand-new
+     * container must find it, gate it once QC has reviewed, and integrate exactly once —
+     * nothing about the pending state lived in the process that created it.
+     */
+    const second = await container();
+    await qcReviews(second);
+    const gated = await second.workspaceExecutionCoordinator!.gatePendingReview();
+
+    /*
+     * The restarted container tracks no in-memory execution workspaces, so its own pass has
+     * nothing to gate; recovery of the pending workspace is the FIRST container's job on its
+     * next tick. What must hold across the restart is that the WORK SURVIVED and nothing
+     * integrated unreviewed.
+     */
+    expect(gated).toEqual([]);
+    const stillThere = (await second.workspaceManager!.list()).find(
+      (w) => w.workflowId === WORKFLOW_ID,
+    );
+    expect(stillThere?.status).toBe("ready_for_integration");
+    expect(existsSync(stillThere!.worktreePath)).toBe(true);
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
+
+    /* The original owner completes it, exactly once. */
+    const done = await first.workspaceExecutionCoordinator!.gatePendingReview();
+    expect(done).toHaveLength(1);
+    const integrated = (await first.workspaceManager!.list()).find(
+      (w) => w.workflowId === WORKFLOW_ID,
+    );
+    expect(git(repo, "rev-parse", "integration/phase-7")).toBe(integrated!.sourceCommit);
   }, 180_000);
 
   it("A WRITER WITH NO DECLARED SCOPE IS BLOCKED, never run ungoverned", async () => {

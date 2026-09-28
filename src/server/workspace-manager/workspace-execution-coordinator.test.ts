@@ -393,62 +393,130 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
     });
   });
 
-  describe("QC ACCEPT -> IntegrationGate handoff", () => {
-    it("runs IntegrationGate after successful execution", async () => {
-      await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
+  describe("DEFECT 28 — the gate runs only after an independent review exists", () => {
+    /** A canonical review, as QC persists it. Never pre-seeded before execution. */
+    const approving = { getByWorkflowId: async () => ({ decision: "APPROVE", reviewerKind: "deterministic" }) };
 
-      await coordinator.executeInWorkspace(
+    function coordinatorWithReviews(reviews?: { getByWorkflowId: (id: string) => Promise<unknown> }) {
+      return new WorkspaceExecutionCoordinator({
+        git: mockGit,
+        manager: mockManager,
+        integrationGate: mockIntegrationGate,
+        reviewDecisions: reviews as never,
+        dispatcher: mockDispatcher,
+        missions: mockMissions,
+        tasks: mockTasks,
+        durableMemory: mockDurableMemory,
+        ownerToken: "coordinator",
+      });
+    }
+
+    const exec = (c: WorkspaceExecutionCoordinator, approvedBy?: string) =>
+      c.executeInWorkspace(
         "mission-1",
         "task-1",
-        {
-          taskId: "task-1",
-          prompt: "Test prompt",
-          workerKind: "digitalos",
-          capability: "test-capability",
-        },
-        "human-reviewer",
+        { taskId: "task-1", prompt: "Test prompt", workerKind: "digitalos", capability: "test-capability" },
+        approvedBy,
       );
+
+    it("NO REVIEW: the gate does NOT run, and nothing is accepted", async () => {
+      /*
+       * This replaces a test that asserted the gate ran here regardless. That expectation WAS
+       * the defect: QC reviews on a later sweep, so the gate was always consulting a review
+       * that did not exist yet, and the CORE3 certification had to pre-persist an approval to
+       * get past it.
+       */
+      const c = coordinatorWithReviews();
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      const result = await exec(c, "human-reviewer");
+
+      expect(mockIntegrationGate.integrate).not.toHaveBeenCalled();
+      expect(result.awaitingReview).toBe(true);
+      /* Not accepted — and NOT a failure either: the work is intact and waiting. */
+      expect(result.success).toBe(false);
+      expect(result.decision).toBeUndefined();
+    });
+
+    it("NO REVIEW IS NOT APPROVAL, and not a permanent escalation either", async () => {
+      const c = coordinatorWithReviews();
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      const result = await exec(c);
+
+      /* The old behaviour returned NEEDS_HUMAN_APPROVAL here — escalating before QC had run. */
+      expect(result.decision).not.toBe("ACCEPT");
+      expect(result.decision).not.toBe("NEEDS_HUMAN_APPROVAL");
+      expect(result.awaitingReview).toBe(true);
+      /* The workspace is left where a later pass can gate it. */
+      expect(mockManager.transition).toHaveBeenCalledWith(
+        expect.any(String),
+        "ready_for_integration",
+        "coordinator",
+        expect.any(Number),
+      );
+    });
+
+    it("WITH A REVIEW the gate runs exactly as before — M9 behaviour is preserved", async () => {
+      const c = coordinatorWithReviews(approving);
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      const result = await exec(c, "human-reviewer");
 
       expect(mockIntegrationGate.integrate).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
           humanApprovedBy: "human-reviewer",
+          review: { verdict: "APPROVED", reviewer: "deterministic" },
           lease: { owner: "coordinator", fencingToken: 1 },
         }),
       );
-    });
-
-    it("returns NEEDS_HUMAN_APPROVAL when no human approval provided", async () => {
-      await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
-
-      const result = await coordinator.executeInWorkspace("mission-1", "task-1", {
-        taskId: "task-1",
-        prompt: "Test prompt",
-        workerKind: "digitalos",
-        capability: "test-capability",
-      });
-
-      expect(result.decision).toBe("NEEDS_HUMAN_APPROVAL");
-      expect(result.success).toBe(false);
-    });
-
-    it("returns ACCEPT when human approval provided", async () => {
-      await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
-
-      const result = await coordinator.executeInWorkspace(
-        "mission-1",
-        "task-1",
-        {
-          taskId: "task-1",
-          prompt: "Test prompt",
-          workerKind: "digitalos",
-          capability: "test-capability",
-        },
-        "human-reviewer",
-      );
-
       expect(result.decision).toBe("ACCEPT");
       expect(result.success).toBe(true);
+      expect(result.awaitingReview).toBeUndefined();
+    });
+
+    it("THE LATER GOVERNED PASS gates work whose review arrived after execution", async () => {
+      /*
+       * The natural order: execute with no review, QC writes one, the next pass gates it.
+       * Nothing is pre-seeded and no stage is advanced by hand.
+       */
+      let review: { decision: string; reviewerKind: string } | null = null;
+      const c = coordinatorWithReviews({ getByWorkflowId: async () => review });
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      const first = await exec(c);
+      expect(first.awaitingReview).toBe(true);
+      expect(mockIntegrationGate.integrate).not.toHaveBeenCalled();
+
+      /* A pass while STILL unreviewed must not gate: silence is never consent. */
+      expect(await c.gatePendingReview()).toEqual([]);
+      expect(mockIntegrationGate.integrate).not.toHaveBeenCalled();
+
+      /* QC reviews independently. */
+      review = { decision: "APPROVE", reviewerKind: "deterministic" };
+
+      const gated = await c.gatePendingReview("human-reviewer");
+      expect(gated).toHaveLength(1);
+      expect(gated[0]!.decision).toBe("ACCEPT");
+      expect(mockIntegrationGate.integrate).toHaveBeenCalledTimes(1);
+    });
+
+    it("REQUEST_CHANGES reaches the gate as a refusal, not as silence", async () => {
+      const c = coordinatorWithReviews({
+        getByWorkflowId: async () => ({ decision: "REQUEST_CHANGES", reviewerKind: "deterministic" }),
+      });
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      await exec(c);
+
+      /* A refusal IS a review, so the gate runs and rejects — it does not wait for one. */
+      expect(mockIntegrationGate.integrate).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          review: { verdict: "CHANGES_REQUESTED", reviewer: "deterministic" },
+        }),
+      );
     });
   });
 
