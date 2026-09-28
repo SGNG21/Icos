@@ -2,7 +2,21 @@
  * Phase 7C — contrats de recovery généralisé (ADR-0027). Types purs, sans Next.js / Drizzle.
  */
 
-export type RecoveryUnitKind = "waiting_settled" | "dispatch_prepared_stale" | "dispatch_orphaned";
+export type RecoveryUnitKind =
+  | "waiting_settled"
+  | "dispatch_prepared_stale"
+  | "dispatch_orphaned"
+  /**
+   * M7 — an EXTERNAL WORKER execution whose lease expired (decision 0039).
+   *
+   * Distinct from `dispatch_orphaned` because the EVIDENCE is different, and that
+   * difference is the whole reason defect 17 survived M6.3. `dispatch_orphaned` asks
+   * a `WorkflowProbe` whether a Temporal workflow is still alive; an external worker
+   * has no workflow, so that probe answers `unknown` forever and the unit defers for
+   * ever — detection without reassignment. For a process-based worker the EXECUTION
+   * LEASE is the liveness signal: a live runner renews it, a dead one cannot.
+   */
+  | "dispatch_execution_abandoned";
 
 export interface RecoveryUnitRef {
   kind: RecoveryUnitKind;
@@ -73,6 +87,14 @@ export interface RecoveryScanner {
   listSettledWaiting(options: RecoveryScanOptions): Promise<WaitingSettledCandidate[]>;
   listStalePrepared(options: RecoveryScanOptions): Promise<RecoveryDispatchRef[]>;
   listOrphanedDispatched(options: RecoveryScanOptions): Promise<RecoveryDispatchRef[]>;
+  /**
+   * M7 — `dispatched` attempts whose EXECUTION LEASE has expired.
+   *
+   * Requires a lease owner to have existed: an attempt nobody ever leased was never
+   * picked up by an external worker, and belongs to `listStalePrepared` /
+   * `listOrphanedDispatched` instead. Never guesses.
+   */
+  listAbandonedExecutions(options: RecoveryScanOptions): Promise<RecoveryDispatchRef[]>;
 }
 
 export type WorkflowStatus =

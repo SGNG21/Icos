@@ -110,4 +110,53 @@ export class PostgresRecoveryScanner implements RecoveryScanner {
     `);
     return (rows as unknown as DispatchRow[]).map(toRef);
   }
+
+  /**
+   * M7 — abandoned EXTERNAL WORKER executions (decision 0039).
+   *
+   * The signal is the EXECUTION LEASE, not a workflow probe. A live runner renews its
+   * lease; a runner that died cannot, so an expired lease on a still-`dispatched`
+   * attempt is positive evidence that nobody is executing it any more. That is what
+   * makes this recoverable where `listOrphanedDispatched` could only defer: a
+   * process-based worker has no Temporal workflow to ask about.
+   *
+   * An attempt nobody ever leased was never picked up by an external worker, so there is
+   * no death to infer; it belongs to the prepared/orphan scans instead. NOTE, honestly:
+   * the two `is not null` guards below are LEGIBILITY, not enforcement — a NULL
+   * `execution_lease_until` already fails the comparison under SQL's three-valued logic,
+   * and removing both guards changes no test. They are kept so the intent survives a
+   * future refactor that might wrap that comparison in a `coalesce` and silently start
+   * admitting never-leased attempts.
+   *
+   * `olderThanMs` is applied ON TOP of lease expiry, so a lease that has only just
+   * lapsed gets a grace period before being declared abandoned. A runner finishing a
+   * long commit must not be reclaimed out from under itself.
+   */
+  async listAbandonedExecutions({
+    limit,
+    olderThanMs,
+  }: RecoveryScanOptions): Promise<RecoveryDispatchRef[]> {
+    const rows = await this.db.execute(sql`
+      select d.id, d.mission_id, d.mission_task_id, d.task_id, d.workflow_id, d.attempt
+      from dispatch_attempts d
+      join missions m on m.id = d.mission_id
+      join mission_tasks t on t.id = d.mission_task_id
+      where d.state = 'dispatched'
+        and m.status not in ${TERMINAL_MISSION}
+        and t.status in ('queued','running')
+        -- An external worker really did take this attempt (redundant with the
+        -- comparison below under three-valued logic; kept as intent — see the doc).
+        and d.execution_lease_owner is not null
+        -- ...and its runner can no longer be alive, plus a grace period.
+        and d.execution_lease_until is not null
+        and d.execution_lease_until <= now() - (${positiveInt(olderThanMs, "RECOVERY_INVALID_AGE")} * interval '1 millisecond')
+        -- A real result already landed: nothing was lost, nothing to reclaim.
+        and not exists (select 1 from task_execution_results r where r.workflow_id = d.workflow_id)
+        -- Only the authoritative (latest) attempt of the task.
+        and d.attempt = (select max(x.attempt) from dispatch_attempts x where x.mission_task_id = d.mission_task_id)
+      order by d.execution_lease_until asc, d.id asc
+      limit ${positiveInt(limit, "RECOVERY_INVALID_LIMIT")}
+    `);
+    return (rows as unknown as DispatchRow[]).map(toRef);
+  }
 }

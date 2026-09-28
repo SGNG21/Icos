@@ -19,6 +19,11 @@ export interface RuntimeRecoveryActions {
   redispatch(attempt: RecoveryDispatchRef): Promise<void>;
   /** Enregistre un ÉCHEC worker (jamais un succès) ; le QC décide ensuite (retry borné). */
   recordLostExecution(attempt: RecoveryDispatchRef): Promise<void>;
+  /**
+   * M7 — settles an external worker execution abandoned by its runner, FREEING the
+   * worker's capacity slot. The bounded retry stays the QC's decision, as above.
+   */
+  reclaimAbandonedExecution(attempt: RecoveryDispatchRef): Promise<void>;
 }
 
 export interface RuntimeRecoveryOptions {
@@ -28,6 +33,13 @@ export interface RuntimeRecoveryOptions {
   graceMs: number;
   /** Ancienneté d'un dispatch `dispatched` sans résultat avant sonde du workflow. */
   orphanAfterMs: number;
+  /**
+   * M7 — grace period AFTER an execution lease expires before the attempt is declared
+   * abandoned. Short, because an expired lease is already strong evidence: a live
+   * runner renews it. Not zero, so a runner finishing a long commit is not reclaimed
+   * out from under itself.
+   */
+  abandonedExecutionGraceMs: number;
   backoffBaseMs: number;
 }
 
@@ -36,6 +48,7 @@ export const DEFAULT_RUNTIME_RECOVERY_OPTIONS: RuntimeRecoveryOptions = {
   maxAttempts: 5,
   graceMs: 60_000,
   orphanAfterMs: 10 * 60_000,
+  abandonedExecutionGraceMs: 60_000,
   backoffBaseMs: 30_000,
 };
 
@@ -96,6 +109,30 @@ export class RuntimeRecoverySweeper {
       candidates.push({
         unit: { kind: "dispatch_orphaned", key: a.workflowId, missionId: a.missionId },
         run: () => this.orphan(a),
+      });
+    }
+
+    /*
+     * M7 — abandoned EXTERNAL WORKER executions (decision 0039).
+     *
+     * Deliberately a SEPARATE candidate source from `listOrphanedDispatched`, not a
+     * widening of it. The orphan scan asks a `WorkflowProbe` whether a Temporal
+     * workflow still exists; a process-based external worker has no workflow, so that
+     * probe answers `unknown` and the unit defers FOR EVER. This scan uses the
+     * execution lease instead, which a dead runner cannot renew — positive evidence
+     * rather than an unanswerable question. That is the mechanism by which defect 17
+     * survived M6.3.
+     */
+    for (const a of await this.scanner.listAbandonedExecutions({
+      limit,
+      olderThanMs: this.options.abandonedExecutionGraceMs,
+    })) {
+      candidates.push({
+        unit: { kind: "dispatch_execution_abandoned", key: a.workflowId, missionId: a.missionId },
+        run: async () => {
+          await this.actions.reclaimAbandonedExecution(a);
+          return { outcome: "resolved", reason: "ABANDONED_EXECUTION_RECLAIMED" };
+        },
       });
     }
 

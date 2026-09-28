@@ -26,11 +26,14 @@ function scanner(parts: {
   waiting?: WaitingSettledCandidate[];
   prepared?: RecoveryDispatchRef[];
   orphaned?: RecoveryDispatchRef[];
+  /** M7 — external worker executions whose lease expired. */
+  abandoned?: RecoveryDispatchRef[];
 }): RecoveryScanner {
   return {
     listSettledWaiting: async () => parts.waiting ?? [],
     listStalePrepared: async () => parts.prepared ?? [],
     listOrphanedDispatched: async () => parts.orphaned ?? [],
+    listAbandonedExecutions: async () => parts.abandoned ?? [],
   };
 }
 
@@ -40,6 +43,7 @@ function actions(overrides: Partial<RuntimeRecoveryActions> = {}): RuntimeRecove
     reconcileDispatches: vi.fn().mockResolvedValue(undefined),
     redispatch: vi.fn().mockResolvedValue(undefined),
     recordLostExecution: vi.fn().mockResolvedValue(undefined),
+    reclaimAbandonedExecution: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -193,5 +197,96 @@ describe("RuntimeRecoverySweeper", () => {
     now += 101;
     expect((await sweeper.sweep()).attempted).toBe(1); // lease expired → taken over
     expect(a.wake).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * M7 — ABANDONED EXTERNAL WORKER EXECUTIONS (decision 0039).
+   *
+   * These pin that the new candidate source is a FIRST-CLASS recovery unit: it gets the
+   * same durable claim, the same bounded attempts and the same backoff as every other
+   * unit, and it does NOT depend on a WorkflowProbe.
+   */
+  it("RECLAIMS an abandoned external worker execution, with NO workflow probe at all", async () => {
+    const reclaim = vi.fn().mockResolvedValue(undefined);
+    const units = new InMemoryRecoveryUnitRepository();
+    const sweeper = new RuntimeRecoverySweeper(
+      scanner({ abandoned: [attempt("a1")] }),
+      units,
+      actions({ reclaimAbandonedExecution: reclaim }),
+      /*
+       * NO probe. This is the whole point: the orphan path asks a Temporal probe whether
+       * a workflow lives, and for a process-based worker that answer is `unknown`
+       * forever. The lease already answered the question.
+       */
+      undefined,
+      { abandonedExecutionGraceMs: 0 },
+    );
+
+    const result = await sweeper.sweep();
+
+    expect(reclaim).toHaveBeenCalledTimes(1);
+    expect(result.discovered).toBe(1);
+    expect(result.succeeded).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("the unit is RESOLVED, so a later sweep does not reclaim it twice", async () => {
+    const reclaim = vi.fn().mockResolvedValue(undefined);
+    const units = new InMemoryRecoveryUnitRepository();
+    const build = () =>
+      new RuntimeRecoverySweeper(
+        scanner({ abandoned: [attempt("a1")] }),
+        units,
+        actions({ reclaimAbandonedExecution: reclaim }),
+        undefined,
+        { abandonedExecutionGraceMs: 0 },
+      );
+
+    await build().sweep();
+    /* The scan is stateless and will keep returning the row until the state changes. */
+    await build().sweep();
+
+    expect(reclaim).toHaveBeenCalledTimes(1);
+  });
+
+  it("A FAILING RECLAIM counts a bounded attempt and never blocks the other units", async () => {
+    const reclaim = vi.fn().mockRejectedValue(new Error("RECOVERY_DB_DOWN"));
+    const wake = vi.fn().mockResolvedValue(null);
+    const sweeper = new RuntimeRecoverySweeper(
+      scanner({ waiting: [waiting()], abandoned: [attempt("a1")] }),
+      new InMemoryRecoveryUnitRepository(),
+      actions({ reclaimAbandonedExecution: reclaim, wake }),
+      undefined,
+      { abandonedExecutionGraceMs: 0 },
+    );
+
+    const result = await sweeper.sweep();
+
+    expect(result.failed).toBe(1);
+    /* The unrelated unit still ran: one bad unit must not stall recovery. */
+    expect(wake).toHaveBeenCalledTimes(1);
+  });
+
+  it("RECLAMATION IS BOUNDED: a permanently failing unit is eventually EXHAUSTED", async () => {
+    const reclaim = vi.fn().mockRejectedValue(new Error("RECOVERY_DB_DOWN"));
+    const units = new InMemoryRecoveryUnitRepository();
+    const build = () =>
+      new RuntimeRecoverySweeper(
+        scanner({ abandoned: [attempt("a1")] }),
+        units,
+        actions({ reclaimAbandonedExecution: reclaim }),
+        undefined,
+        { maxAttempts: 2, backoffBaseMs: 0, abandonedExecutionGraceMs: 0 },
+      );
+
+    await build().sweep();
+    await build().sweep();
+    const third = await build().sweep();
+
+    /*
+     * A worker that dies deterministically must not be retried for ever. The budget is
+     * the existing recovery-unit bound, not a new mechanism.
+     */
+    expect(third.failures[0]?.error).toMatchObject({ message: "RECOVERY_UNIT_EXHAUSTED" });
   });
 });
