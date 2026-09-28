@@ -1,6 +1,6 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (D1 FIXED — integration failures = 0)
+Updated: 2026-09-28 (M10 — self-development can integrate; D1 fixed)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
@@ -64,7 +64,10 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-1ab958b  D1 root cause fixed — the container leaked two PostgreSQL clients
+a92abad  M10 self-development can land its own work (defect 26 CLOSED)
+  2e624c2  defect 24 — create() declares task metadata instead of inventing it
+  cfe4431  D1 resolved — integration failures now zero
+  1ab958b  D1 root cause fixed — the container leaked two PostgreSQL clients
   3c47cf0  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED; defect 24 named
   a9aa3d7  M9 governed workspace allocation is the DEFAULT path (defect 23 CLOSED)
   0d3f4c8  M8 recorded — defects 22 + 19 closed, defect 23 named
@@ -658,7 +661,14 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at D1 fix / 1ab958b, all MEASURED, DOCKER CONFIRMED RUNNING):
+Current (at M10 / a92abad, all MEASURED, DOCKER CONFIRMED RUNNING):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 1792 tests
+- `pnpm run test:integration`: 447 passed / 0 FAILED / 2 SKIPPED
+- INTEGRATION FAILURES REMAIN ZERO. The 2 skips are ONLY the opt-in live Hermes proof.
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 44 rows
+
+Previous (at D1 fix / 1ab958b):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
 - `pnpm run test` (unit): PASS — 144 files, 1788 tests
 - `pnpm run test:integration`: 443 passed / 0 FAILED / 2 SKIPPED
@@ -898,7 +908,36 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     nothing attached evidence to a reviewed SUCCESS until the M6.3 executor did. A unit
     test could not have found it; the composition did.
 
-24. (M9) `PostgresMissionRepository.create()` HARDCODES task planning metadata —
+26. RESOLVED in M10 (commit a92abad) — `GovernedSelfDevelopmentCoordinator` called
+    `integrationGate.integrate` and then STOPPED, saying so in its own outcome message:
+    "merge-ready only; no merge performed". The SAME defect shape as 19, one layer up: a
+    gate that decides and nothing that acts, so ICOS could evaluate its own improvement,
+    pass every check, and never integrate it.
+    FIXED by ACCEPT -> APPLY -> REAP through the CANONICAL authorities (the same
+    `IntegrationApplier` and `WorkspaceManager.cleanup`), fenced by the SAME workspace lease
+    that authorised the execution. Optional, so absent keeps the previous behaviour. A moved
+    target (NEEDS_REBASE / lost race) goes to a human and KEEPS its branch — the work was
+    fine, the target moved, and the branch is what a rebase needs.
+
+25. (M10) THE SELF-DEVELOPMENT COORDINATOR IS NOT COMPOSED, AND DOES NOT USE THE CERTIFIED
+    EXECUTION PATH. Verified: `GovernedSelfDevelopmentCoordinator` appears NOWHERE outside
+    its own file and tests — the FOURTH occurrence of the defect-22/23 shape (a capability
+    fully built and proven while the container never wires it).
+    Worse than composition: it executes through an injected `CanonicalExecutionHandoff`
+    function, NOT through `container.taskExecution` / the supervisor. So even once composed
+    it would bypass the CORE3-certified path (runtime-based dispatch, governed allocation,
+    capability routing, execution lease, recovery).
+    And nothing creates candidate -> HighLevelGoal -> Mission -> AutonomousPlan: the
+    coordinator takes missionId/missionTaskId/taskId as INPUT. That chain has no owner.
+    THIS IS THE BLOCKER FOR ICOS_SELF_BUILD_E2E. See NEXT_ACTION.
+
+24. RESOLVED in M10 (commit 2e624c2) — `create()` now passes DECLARED task metadata through
+    the one creation authority (`prepareTaskCreation`) and OMITS what the caller did not
+    declare, so `taskSchema` defaults apply. Nothing is invented in the repository, so no
+    second planning contract exists. Option B (prohibit inline writer tasks) was rejected:
+    the autonomous path already never uses them — `igniteAutonomousMission` creates missions
+    with `tasks: []` — so a prohibition would only have broken the manual path.
+    ORIGINAL TEXT: `PostgresMissionRepository.create()` HARDCODES task planning metadata —
     `riskClass: 'reversible'`, `allowedFileScope: []`, priority 3, attemptBudget 3 — for
     missions created with inline tasks. Under governance those writer tasks now BLOCK,
     because an undeclared scope cannot be governed. This is the M2 gap finally having
@@ -1081,61 +1120,62 @@ CAPABILITY ROUTING : src/server/routing/capability-router.ts
 Readiness is NEVER persisted — only derived. A stored ready flag is rejected (R5):
 derived state that can disagree with the DAG is how double-unlock bugs appear.
 
-## NEXT_ACTION — SELF_DEVELOPMENT_SUPERVISOR, then ICOS_SELF_BUILD_E2E
+## NEXT_ACTION — DEFECT 25: connect self-development to the certified path
 
-CORE3 autonomous orchestration is CERTIFIED: an ordinary autonomous mission reaches the
-governed path by default, from the real runtime. What remains is the layer above it — ICOS
-proposing and governing its OWN work — and then the end-to-end certification.
+D1 is fixed and integration failures are ZERO. CORE3 autonomous orchestration is certified.
+Self-development can now INTEGRATE (M10). One gap remains before ICOS_SELF_BUILD_E2E, and it
+is precise.
 
-### 1. SELF_DEVELOPMENT_SUPERVISOR
-`src/server/autonomy/governed-self-development-coordinator.ts` already exists; READ IT FIRST
-and extend it rather than starting a second authority. It must:
-  - turn a repository-level objective into a canonical mission plan with REAL per-task
-    metadata — above all `allowedFileScope`, because an unscoped writer now blocks (defect
-    24 is the same lesson: metadata that used to be decorative is now load-bearing);
-  - respect the existing budgets and escalation rules (CLAUDE.md: escalate only for genuine
-    strategic ambiguity, irreversible choices, policy/security conflict, budget or prod
-    credentials);
-  - never bypass the gate. Self-development is the case where an ungoverned merge would be
-    most damaging and most plausible-looking.
+### DEFECT 25 — three missing links, in dependency order
 
-### 2. FIX DEFECT 24 FIRST if the supervisor uses inline mission creation
-`PostgresMissionRepository.create()` hardcodes task metadata, so inline-created writer tasks
-block. Either route self-development through the planner/applyPlan path (which carries
-metadata correctly) or make `create()` persist real metadata.
+1. NOTHING OWNS candidate -> HighLevelGoal -> Mission -> AutonomousPlan.
+   `GovernedSelfDevelopmentCoordinator.process()` takes missionId/missionTaskId/taskId as
+   INPUT. Give that chain an owner. `igniteAutonomousMission` is the canonical mission
+   creation usecase and the planner is the canonical planning authority — compose them, do
+   not write a third. The plan MUST declare `allowedFileScope` per writer task, or the task
+   blocks (decision 0042); the planner's schema and prompt already carry it.
 
-### 3. ICOS_SELF_BUILD_E2E
-ICOS plans a change to its own repository, a real external worker implements it in a governed
-workspace, the gate verifies it with the REAL commands (not the trivial ones the CORE3
-certification substitutes), it is integrated once and reaped, and the result is a commit on
-the integration branch that passes the full suite.
-  - D1 MUST BE FIXED FIRST. The 3 auth-bootstrap-cli timeouts are the only non-design
-    blocker, and the gate runs the full integration suite — so D1 would fail the gate itself.
-  - use the REAL ICOS_GATE_COMMANDS here. The substitution is acceptable for orchestration
-    proofs; it is not acceptable for the certification that ICOS can build itself.
+2. THE COORDINATOR MUST EXECUTE THROUGH THE CERTIFIED PATH.
+   Today it calls an injected `CanonicalExecutionHandoff`. That bypasses
+   `container.taskExecution`, governed allocation, capability routing, the execution lease
+   and recovery — i.e. everything CORE3 certifies. Implement the handoff IN TERMS OF the
+   production supervisor (`composeAutonomyRuntime(container).supervisor.run`), so there is
+   one execution authority rather than two.
+
+3. COMPOSE IT IN THE CONTAINER.
+   This is the FOURTH time a capability was fully built and proven while the container never
+   wired it (defects 22, 23, 25, and the coordinator's own missing applier). Do not treat it
+   as an oversight to be avoided by care: assert the composition in a test, as
+   `container-external-executor-wiring.integration.test.ts` does.
+
+### THEN — ICOS_SELF_BUILD_E2E
+VERIFIED FEASIBLE: a fresh `git worktree` has no node_modules, and
+`pnpm install --frozen-lockfile --offline` completes in ~4s against the warm pnpm store. A
+REAL gate run is therefore roughly: install 4s + typecheck ~30s + lint ~60s + unit ~54s +
+integration ~110s + build ~60s = about 5-6 minutes. There is NO reason to use fake gate
+commands for the self-build certification.
+  - use the REAL ICOS_GATE_COMMANDS. The trivial commands are acceptable for orchestration
+    proofs (they prove ICOS orchestrates, not that pnpm works) and are NOT acceptable for
+    proving ICOS can build itself.
+  - the test must NOT call coordinator internals to advance stages; drive the default
+    production runtime path.
+  - the improvement must be real, bounded and low-risk, and it must pass the real gates.
 
 ### ALSO OPEN
-- defect 24 — inline mission creation hardcodes task metadata (above).
 - defect 18 / 10 — provider names as routing keys in `CompositeTaskExecutionDispatcher` and
-  `AIResourceCatalog`. M8/M9 did not reinforce them; retiring the composite is the moment.
+  `AIResourceCatalog`. Retiring the composite is the moment to close them.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
-- D1 — 3 auth-bootstrap-cli timeouts. Never re-skip. They SKIP silently when Docker is down
-  and then look fixed; always compare the SKIP count as carefully as the fail count.
 
-### Already available and proven (reuse, do not rebuild)
-- routing/probing/recovery: registration, REAL runtime-keyed probing (0036) swept
-  autonomously (0037), capability routing with derived load, abandoned-execution recovery
-  (0039), routed QC retries (0040);
-- ONE external execution boundary (0038): launch, contract injection, output capture, the
-  eight-class failure taxonomy, execution lease + post-run fence, git commit evidence;
-- ONE dispatch seam chosen by RUNTIME (M8) — `RuntimeDispatchRouter`, wired in the container;
-- ONE integration boundary: gate DECIDES, `IntegrationApplier` ACTS (fast-forward by CAS,
-  exactly-once derived from git), then `manager.cleanup` reaps;
-- ONE allocation policy (M9): `decideWorkspaceAllocation`, canonical metadata only;
-- ONE production composition: `composeAutonomyRuntime` — use it in proofs, never hand-build.
+### CERTIFICATION LEDGER — what is and is NOT true today
+  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE (M9, decision 0042).
+  MULTI_WORKER_E2E_PASS                    — TRUE (M5.4, decision 0035).
+  AUTO_SESSION_RECOVERY_PASS               — TRUE (M7 + chaos certification, 0039/0040).
+  SELF_DEVELOPMENT_E2E_PASS                — FALSE. Blocked by defect 25.
+  ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
+ICOS is NOT yet self-building, and must not be described as such.
 
 Critical path:
-  SELF_DEVELOPMENT_SUPERVISOR -> fix D1 -> ICOS_SELF_BUILD_E2E PASS
+  defect 25 (3 links above) -> SELF_DEVELOPMENT_E2E_PASS -> ICOS_SELF_BUILD_E2E
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -1310,3 +1350,13 @@ Then M3 durable readiness/dependency gating (mission N13).
   that opens a connection must be closed by whoever composed it — and the regression proof
   counts real backends in `pg_stat_activity` rather than naming the clients, so it catches the
   next one too.
+- THE SAME DEFECT SHAPE HAS NOW APPEARED FOUR TIMES: a capability fully built, fully proven,
+  and never wired into the container (taskExecution was Temporal; the supervisor got
+  `undefined` for its coordinator; the self-development coordinator is composed nowhere; and
+  that coordinator's own gate had no applier). Care has not prevented it once. The only thing
+  that has is a TEST THAT ASSERTS THE COMPOSITION — `container-external-executor-wiring`
+  catches it, a hand-built harness never will. Write that test first, next time.
+- A COMPONENT WITH ITS OWN EXECUTION ABSTRACTION WILL BYPASS THE CERTIFIED PATH. The
+  self-development coordinator takes an injected `CanonicalExecutionHandoff`, so composing it
+  would still not make it use runtime-based dispatch, governed allocation, routing, leases or
+  recovery. An injected seam is not neutral: it is a second authority waiting to diverge.
