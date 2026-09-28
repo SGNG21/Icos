@@ -9,7 +9,7 @@ import type {
 import type { ControlStore } from "./ports";
 
 /**
- * Runtime enforcement of control state (decision 0043). Read-only: it never
+ * Runtime enforcement of control state (decision 0044). Read-only: it never
  * changes flags or holds — only the command bus does.
  *
  * FAIL CLOSED: an unreadable flags row means nothing may start; an unreadable

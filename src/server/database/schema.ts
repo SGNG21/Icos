@@ -1185,7 +1185,7 @@ export const workers = pgTable(
 export type WorkerRow = typeof workers.$inferSelect;
 
 // ---------------------------------------------------------------------------
-// Control plane (decision 0043, migration 0047). Written ONLY by the control
+// Control plane (decision 0044, migration 0047). Written ONLY by the control
 // command bus; read by the runtime guards and the Control Center.
 // ---------------------------------------------------------------------------
 

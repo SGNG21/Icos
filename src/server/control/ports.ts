@@ -13,7 +13,7 @@ import type { ProofCheck } from "@/core/control/policy";
 import type { Mission } from "@/core/mission/contracts";
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 
-/** Durable control-plane state (decision 0043). Implemented in memory and in PostgreSQL. */
+/** Durable control-plane state (decision 0044). Implemented in memory and in PostgreSQL. */
 
 export interface CommandRecord {
   commandId: string;

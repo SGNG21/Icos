@@ -23,7 +23,7 @@ import { ReauthService } from "./reauth";
 import { RuntimeControlGuard } from "./runtime-control";
 
 /**
- * Real PostgreSQL proofs for the control plane (decision 0043): row-lock
+ * Real PostgreSQL proofs for the control plane (decision 0044): row-lock
  * concurrency across two independent connection pools, restart durability,
  * audit atomicity and fail-closed reads.
  */

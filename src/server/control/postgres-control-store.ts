@@ -29,7 +29,7 @@ type Executor = Pick<Database, "select" | "insert" | "update" | "delete" | "exec
 const FLAGS_ID = "global";
 
 /**
- * PostgreSQL control store (decision 0043, migration 0047).
+ * PostgreSQL control store (decision 0044, migration 0047).
  *
  * One command = one transaction. `pg_advisory_xact_lock` on the command id
  * serializes duplicate requests (idempotency); `SELECT … FOR UPDATE` on the

@@ -43,7 +43,7 @@ export const auditEventTypeSchema = z.enum([
   "goal.status_updated",
   "goal.converted",
   "goal.idempotency_key_set",
-  // Control plane (decision 0043): every authenticated control attempt.
+  // Control plane (decision 0044): every authenticated control attempt.
   "control.command.rejected",
   "control.command.admitted",
   "control.command.executed",

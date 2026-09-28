@@ -9,7 +9,7 @@ import {
   type RuntimeFlags,
 } from "./contracts";
 
-/** Pure control policy (decision 0043). */
+/** Pure control policy (decision 0044). */
 
 export const MEDIUM_MAX_SESSION_AGE_MS = 12 * 60 * 60 * 1000;
 export const REAUTH_PROOF_TTL_MS = 5 * 60 * 1000;

@@ -1,4 +1,4 @@
-# 0043: One control command bus, durable runtime flags, and admission holds
+# 0044: One control command bus, durable runtime flags, and admission holds
 
 ## Status
 Accepted (owner-validated design, 2026-09-28)

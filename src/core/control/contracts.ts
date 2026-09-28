@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Control-plane contract (decision 0043). PURE: no Next.js, Drizzle, PostgreSQL
+ * Control-plane contract (decision 0044). PURE: no Next.js, Drizzle, PostgreSQL
  * or Better Auth. This is the typed surface the Control Center consumes.
  */
 

@@ -17,7 +17,7 @@ import { isValidMissionTransition } from "@/core/mission/machine";
 import type { CommandRecord, ControlEffects, ControlStore, ControlTx } from "./ports";
 
 /**
- * THE control command authority (decision 0043, BR-10/11/18/12).
+ * THE control command authority (decision 0044, BR-10/11/18/12).
  *
  * authenticate (caller) → validate (caller, Zod) → authorize → risk → auth
  * freshness / re-auth → idempotency → version lock → state validation →
