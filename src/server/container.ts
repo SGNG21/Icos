@@ -37,6 +37,17 @@ import {
   parseWorkerProbeCommands,
   probeableRuntimes,
 } from "@/server/workers/probes/probe-command-config";
+import { CommandWorkerExecutor } from "@/server/workers/execution/command-worker-executor";
+import {
+  createWorkerExecResolver,
+  executableRuntimes,
+  parseWorkerExecCommands,
+} from "@/server/workers/execution/exec-command-config";
+import { parseWorkerFailureConfig } from "@/server/workers/execution/failure-classifier";
+import { WorkerExecutor } from "@/server/workers/execution/worker-executor";
+import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/external-worker-task-execution-dispatcher";
+import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
+import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { PostgresWorkerRegistryStore } from "@/server/repositories/postgres/worker-registry-store";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
@@ -568,18 +579,54 @@ export async function buildPostgresContainer(
     runner: new PostgresCommandRunner(),
     database: new PostgresGateDatabase(),
   });
+  /*
+   * TASK EXECUTION (M8, defect 22).
+   *
+   * Until now this was unconditionally Temporal, so a production process could never
+   * launch an external worker however much of M6.3/M7 was certified. It is now chosen by
+   * RUNTIME: a worker whose runtime this process has an executor adapter for is launched
+   * here; everything else still goes to Temporal, unchanged.
+   *
+   * With no `ICOS_WORKER_EXEC_COMMANDS` configured, `buildWorkerExecutor()` returns null,
+   * the router is never built, and `taskExecution` IS the Temporal dispatcher exactly as
+   * before. Opting in cannot regress a deployment that has not.
+   */
+  const temporalDispatcher = new TemporalTaskExecutionDispatcher(
+    env.TEMPORAL_ADDRESS,
+    env.TEMPORAL_TASK_QUEUE,
+    env.TEMPORAL_WORKFLOW_TYPE,
+    true,
+    undefined,
+    env.TEMPORAL_DISPATCH_TIMEOUT_MS,
+  );
+  const externalExecution = buildWorkerExecutor(env);
+  const taskExecution: TaskExecutionDispatcher = externalExecution
+    ? new RuntimeDispatchRouter({
+        dispatchAttempts,
+        workers: workerRegistryStore,
+        external: new ExternalWorkerTaskExecutionDispatcher({
+          executor: externalExecution.executor,
+          workers: workerRegistryStore,
+          dispatchAttempts,
+          executionResults,
+          missions: mission,
+          tasks,
+          durableMemory: new PostgresDurableMemory(handle.db),
+          repoPath: externalExecution.repoPath,
+          workspaceRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
+          leaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS,
+        }),
+        fallback: temporalDispatcher,
+        externalRuntimes: externalExecution.runtimes,
+      })
+    : temporalDispatcher;
+
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git: pgGit,
     manager: workspaceManager,
     integrationGate,
-    dispatcher: new TemporalTaskExecutionDispatcher(
-      env.TEMPORAL_ADDRESS,
-      env.TEMPORAL_TASK_QUEUE,
-      env.TEMPORAL_WORKFLOW_TYPE,
-      true,
-      undefined,
-      env.TEMPORAL_DISPATCH_TIMEOUT_MS,
-    ),
+    /* The same dispatcher the rest of the runtime uses: one execution authority. */
+    dispatcher: taskExecution,
     missions: mission,
     tasks: tasks,
     durableMemory: new PostgresDurableMemory(handle.db),
@@ -609,14 +656,7 @@ export async function buildPostgresContainer(
     ...administration,
     mission,
     missionService,
-    taskExecution: new TemporalTaskExecutionDispatcher(
-      env.TEMPORAL_ADDRESS,
-      env.TEMPORAL_TASK_QUEUE,
-      env.TEMPORAL_WORKFLOW_TYPE,
-      true,
-      undefined,
-      env.TEMPORAL_DISPATCH_TIMEOUT_MS,
-    ),
+    taskExecution,
     executionCallbackSecret: env.ICOS_EXECUTION_CALLBACK_SECRET,
     executionResults,
     durableMemory: new PostgresDurableMemory(handle.db),
@@ -750,6 +790,45 @@ export async function resetContainer(): Promise<void> {
  * have no way to check this" — which is a different and more useful fact than
  * "we checked and it failed".
  */
+/**
+ * Composes the EXTERNAL worker executor from configuration (M8, defect 22).
+ *
+ * Returns null when nothing is configured, and that is the default: with no
+ * `ICOS_WORKER_EXEC_COMMANDS`, no runtime has an adapter, the router's external set is
+ * empty, and every dispatch behaves exactly as it did before. Opting in is a deployment
+ * decision, not a code change — the same rule decision 0036 set for probe commands.
+ *
+ * `ICOS_REPO_PATH` is required alongside it: a writer worker needs a canonical repository
+ * to branch a worktree FROM, and guessing one (process.cwd()) could point an autonomous
+ * agent at whatever directory the server happened to start in.
+ */
+function buildWorkerExecutor(env: Env): {
+  executor: WorkerExecutor;
+  runtimes: WorkerRuntimeDescriptor[];
+  repoPath: string;
+} | null {
+  const configured = parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS);
+  const runtimes = executableRuntimes(configured);
+  if (runtimes.length === 0) return null;
+
+  if (!env.ICOS_REPO_PATH) {
+    /* Refuse to boot rather than guess where an autonomous writer may commit. */
+    throw new Error(
+      "ICOS_REPO_PATH_REQUIRED: ICOS_WORKER_EXEC_COMMANDS configures external worker execution, so the canonical repository must be declared explicitly",
+    );
+  }
+
+  const adapter = new CommandWorkerExecutor(createWorkerExecResolver(configured), {
+    failureConfig: parseWorkerFailureConfig(env.ICOS_WORKER_FAILURE_CONFIG),
+  });
+
+  return {
+    executor: new WorkerExecutor(Object.fromEntries(runtimes.map((r) => [r, adapter]))),
+    runtimes,
+    repoPath: env.ICOS_REPO_PATH,
+  };
+}
+
 function buildWorkerProbeAdapters(): Record<string, CommandWorkerProbe> {
   const configured = parseWorkerProbeCommands(loadEnv().ICOS_WORKER_PROBE_COMMANDS);
   const probe = new CommandWorkerProbe(createWorkerProbeResolver(configured));

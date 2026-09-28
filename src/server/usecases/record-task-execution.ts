@@ -11,7 +11,16 @@ import type { DurableMemory } from "@/core/context/durable-memory";
 export interface RecordTaskExecutionDeps {
   tasks: TaskRepository;
   executionResults: TaskExecutionResultRepository;
-  supervisor: SupervisorService;
+  /**
+   * DECLARED BUT UNUSED by this usecase, and therefore OPTIONAL (M8).
+   *
+   * It is not removed because callers pass it and the symmetry with
+   * `recordMissionTaskExecution` is worth keeping. It is optional because requiring it
+   * created a real COMPOSITION CYCLE: the supervisor needs a `TaskExecutionDispatcher`,
+   * and the external worker dispatcher needs to record results — so the container could
+   * not build either first. A dependency nothing reads must not dictate composition order.
+   */
+  supervisor?: SupervisorService;
   missions: MissionRepository;
   durableMemory: DurableMemory;
   dispatchAttempts?: DispatchAttemptRepository;

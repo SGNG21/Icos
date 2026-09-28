@@ -58,7 +58,9 @@ export interface ExternalWorkerDispatcherDeps {
   executionResults: TaskExecutionResultRepository;
   missions: MissionRepository;
   tasks: TaskRepository;
-  supervisor: SupervisorService;
+  /** Optional: `recordTaskExecution` does not read it, and requiring it would force a
+   * composition cycle on the container (the supervisor needs a dispatcher). */
+  supervisor?: SupervisorService;
   durableMemory: DurableMemory;
   /** The canonical repository. A writer is guaranteed NOT to run here. */
   repoPath: string;
