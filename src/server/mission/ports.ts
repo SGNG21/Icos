@@ -1,4 +1,5 @@
 import type { Mission, MissionTask } from "@/core/mission/contracts";
+import type { Task } from "@/core/contracts";
 import type { AutonomousPlan } from "@/core/contracts/autonomous-plan";
 import type { MissionPlan } from "@/server/mission/mission-plan";
 
@@ -13,7 +14,39 @@ export interface MissionRepository {
     title: string;
     objective: string;
     goalId?: string;
-    tasks: Omit<MissionTask, "id" | "missionId" | "status" | "taskId">[];
+    /**
+     * Mission tasks, each optionally carrying CANONICAL PLANNING METADATA (defect 24).
+     *
+     * `create()` used to INVENT this metadata — `riskClass: 'reversible'`,
+     * `allowedFileScope: []`, priority 3, attemptBudget 3, reviewPolicy 'if_risky' — as
+     * hardcoded literals. Under governance that made every inline-created writer task
+     * unrunnable: it claimed to be a writer while declaring no scope, which the allocation
+     * policy must refuse (decision 0042).
+     *
+     * There is ONE task-creation authority, `prepareTaskCreation`, and ONE source of
+     * defaults, `taskSchema`. What the caller declares is passed through; what it omits is
+     * left to the schema. Nothing is invented here, so no second planning contract exists.
+     *
+     * `applyPlan` remains the authority for PLANNED tasks; this is the manual path, and it
+     * can now express the same metadata rather than silently faking it.
+     */
+    tasks: (Omit<MissionTask, "id" | "missionId" | "status" | "taskId"> &
+      Partial<
+        Pick<
+          Task,
+          | "objective"
+          | "instructions"
+          | "successCriteria"
+          | "requiredCapabilities"
+          | "riskClass"
+          | "allowedFileScope"
+          | "expectedArtifacts"
+          | "priority"
+          | "attemptBudget"
+          | "reviewPolicy"
+          | "integrationPolicy"
+        >
+      >)[];
   }): Promise<Mission>;
   /**
    * Atomically applies a validated planner DAG to an existing mission.

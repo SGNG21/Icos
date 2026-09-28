@@ -57,16 +57,7 @@ export class PostgresMissionRepository implements MissionRepository {
     return rows.map(rowToMissionTask);
   }
 
-  async create(input: {
-    id?: string;
-    title: string;
-    objective: string;
-    goalId?: string;
-    tasks: Omit<
-      MissionTask,
-      "id" | "missionId" | "status" | "taskId"
-    >[];
-  }): Promise<Mission> {
+  async create(input: Parameters<MissionRepository["create"]>[0]): Promise<Mission> {
     if (input.id !== undefined) {
       return this.createWithImposedId(
         input.id,
@@ -98,18 +89,23 @@ export class PostgresMissionRepository implements MissionRepository {
         planId: undefined,
         title: taskInput.title,
         description: taskInput.description ?? undefined,
-        objective: input.objective,
-        instructions: taskInput.description ?? '',
+        objective: taskInput.objective ?? input.objective,
+        instructions: taskInput.instructions ?? taskInput.description ?? '',
         dependencies: [],
-        successCriteria: [],
-        requiredCapabilities: [],
-        riskClass: 'reversible',
-        allowedFileScope: [],
-        expectedArtifacts: [],
-        priority: 3,
-        attemptBudget: 3,
-        reviewPolicy: 'if_risky',
-        integrationPolicy: '',
+        /*
+         * DECLARED, NEVER INVENTED (defect 24). Omitted fields fall through to
+         * `taskSchema`'s canonical defaults, so there is one source of truth rather
+         * than a second set of literals living here.
+         */
+        successCriteria: taskInput.successCriteria,
+        requiredCapabilities: taskInput.requiredCapabilities,
+        riskClass: taskInput.riskClass,
+        allowedFileScope: taskInput.allowedFileScope,
+        expectedArtifacts: taskInput.expectedArtifacts,
+        priority: taskInput.priority,
+        attemptBudget: taskInput.attemptBudget,
+        reviewPolicy: taskInput.reviewPolicy,
+        integrationPolicy: taskInput.integrationPolicy,
         assignedAgentId: undefined,
       });
 
