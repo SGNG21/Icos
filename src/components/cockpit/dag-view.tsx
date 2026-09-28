@@ -23,8 +23,28 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
   const [selected, setSelected] = useState<string | null>(dag.criticalPath.at(-1) ?? null);
   const [criticalOnly, setCriticalOnly] = useState(false);
   const byId = useMemo(() => new Map(dag.nodes.map((n) => [n.id, n])), [dag]);
-  const vw = Math.max(640, dag.width + PAD * 2);
-  const vh = Math.max(280, Math.min(640, dag.height + PAD * 2));
+  // The viewBox tracks the element's real pixel size so nodes draw at 1:1.
+  const [box, setBox] = useState({ w: 1000, h: 420 });
+  const vw = box.w;
+  const vh = box.h;
+  useEffect(() => {
+    const el = svg.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setBox({ w: Math.round(width), h: Math.round(height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // Fit once on first real measure, but never below a legible scale.
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current || box.w === 1000) return;
+    fitted.current = true;
+    const k = clamp(Math.min((box.w - PAD * 2) / dag.width, (box.h - PAD * 2) / dag.height), 0.75, 1);
+    setView({ x: PAD, y: PAD, k });
+  }, [box, dag.width, dag.height]);
 
   const fit = () => {
     const k = clamp(Math.min((vw - PAD * 2) / dag.width, (vh - PAD * 2) / dag.height), 0.2, 1.5);
@@ -130,6 +150,7 @@ export function DagView({ dag, workerNames = {} }: { dag: DagModel; workerNames?
           ref={svg}
           viewBox={`0 0 ${vw} ${vh}`}
           className="cx-dag__svg"
+          style={{ height: clamp(dag.height + PAD * 2, 200, 560) }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

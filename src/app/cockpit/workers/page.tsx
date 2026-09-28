@@ -1,10 +1,9 @@
 import Link from "next/link";
 
-import { CommandButton } from "@/components/cockpit/command-button";
-import { Panel, ToneBadge, TruthValue, formatAge } from "@/components/cockpit/primitives";
+import { Panel, TruthValue } from "@/components/cockpit/primitives";
+import { WorkerCard } from "@/components/cockpit/worker-card";
 import { loadSnapshot } from "@/features/cockpit/load";
 import type { Tone, WorkerView } from "@/features/cockpit/snapshot";
-import { missing } from "@/features/cockpit/truth";
 
 export const metadata = { title: "Workers" };
 
@@ -58,137 +57,5 @@ export default async function WorkersPage({ searchParams }: { searchParams: Prom
         </div>
       )}
     </>
-  );
-}
-
-function WorkerCard({ worker: w }: { worker: WorkerView }) {
-  const target = { kind: "worker" as const, id: w.id, label: w.name };
-  const used = w.slots.used.kind === "real" ? w.slots.used.value : 0;
-  const current = w.assignments[0];
-
-  return (
-    <article className="cx-worker" id={w.id} data-tone={w.tone} aria-labelledby={`${w.id}-name`}>
-      <header className="cx-worker__head">
-        <div>
-          <h3 id={`${w.id}-name`}>{w.name}</h3>
-          <code>{w.id}</code>
-        </div>
-        <ToneBadge tone={w.tone} label={`${w.health} · ${w.availability}`} />
-      </header>
-
-      <div className="cx-identity" aria-label="Execution identity">
-        <div>
-          <span>Worker kind</span>
-          <span>{w.kind}</span>
-        </div>
-        <div>
-          <span>Runtime</span>
-          <span title={w.runtimeSupport}>{w.runtime}</span>
-        </div>
-        <div>
-          <span>Model</span>
-          <span>
-            <TruthValue truth={w.model} />
-          </span>
-        </div>
-        <div>
-          <span>Provider</span>
-          <span>
-            <TruthValue truth={w.provider} />
-          </span>
-        </div>
-        <div>
-          <span>Account</span>
-          <span>
-            <TruthValue truth={w.account} />
-          </span>
-        </div>
-        <div>
-          <span>Capacity slots</span>
-          <span>
-            <TruthValue truth={w.slots.used} />/{w.slots.max}
-            {w.pool && <span className="cx-dim"> · pool {w.pool.name}{w.pool.limit ? ` ≤${w.pool.limit}` : ""}</span>}
-          </span>
-        </div>
-      </div>
-
-      <div className="cx-slots" aria-hidden>
-        {Array.from({ length: Math.min(w.slots.max, 24) }, (_, i) => (
-          <i key={i} data-used={i < used || undefined} />
-        ))}
-      </div>
-
-      <dl className="cx-kv">
-        <dt>Registry status</dt>
-        <dd>{w.status}</dd>
-        <dt>Last health evidence</dt>
-        <dd>
-          {w.probe.outcome} · {formatAge(w.probe.ageMs)}
-        </dd>
-        <dt>Current work</dt>
-        <dd>
-          {current ? (
-            <Link href={`/cockpit/missions/${current.missionId}`}>
-              task <code>{current.taskId.slice(0, 8)}</code> · attempt #{current.attempt} · {current.state}
-            </Link>
-          ) : (
-            "idle"
-          )}
-          {w.assignments.length > 1 && <span className="cx-dim"> +{w.assignments.length - 1} more</span>}
-        </dd>
-        {current?.failureClass && (
-          <>
-            <dt>Last failure</dt>
-            <dd>
-              <code>{current.failureClass}</code> {current.lastError}
-            </dd>
-          </>
-        )}
-        <dt>Lease · fencing</dt>
-        <dd>
-          <TruthValue truth={missing("not_available", "Lease owner/expiry/fencing token are not readable.", "BR-15")} />
-        </dd>
-        <dt>Latency · throughput · cost</dt>
-        <dd>
-          <TruthValue truth={missing("not_available", "No per-worker telemetry.", "BR-04")} />
-        </dd>
-      </dl>
-
-      {(w.capabilities.length > 0 || w.features.length > 0) && (
-        <div className="cx-tags">
-          {w.capabilities.map((c) => (
-            <span key={c} className="cx-chip" data-tone="flow">
-              {c}
-            </span>
-          ))}
-          {w.features.map((f) => (
-            <span key={f} className="cx-chip">
-              {f}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {Object.keys(w.metadata).length > 0 && (
-        <details>
-          <summary className="cx-dim">Declared metadata (unverified)</summary>
-          <dl className="cx-kv">
-            {Object.entries(w.metadata).map(([k, v]) => (
-              <div key={k} style={{ display: "contents" }}>
-                <dt>{k}</dt>
-                <dd>{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      )}
-
-      <div className="cx-actions" aria-label={`Controls for ${w.name}`}>
-        <CommandButton action="worker.pause" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.resume" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.retry" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.stop" target={target} expectedStateVersion={w.probe.at} />
-      </div>
-    </article>
   );
 }

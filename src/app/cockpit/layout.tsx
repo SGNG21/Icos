@@ -75,7 +75,7 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
           <a href="/cockpit" className="cx-top__brand" aria-label="ICOS home">
             ICOS
           </a>
-          <span title={snapshot.health.reasons.join("\n")}>
+          <span className="cx-top__health" title={snapshot.health.reasons.join("\n")}>
             <ToneBadge tone={tone} label={`System ${snapshot.health.level}`} />
           </span>
           <span className="cx-top__spacer" />

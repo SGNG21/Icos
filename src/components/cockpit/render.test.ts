@@ -209,3 +209,71 @@ describe("Ask ICOS shell", () => {
     expect(out).toMatch(/<button type="submit"[^>]*disabled/);
   });
 });
+
+describe("worker card", () => {
+  it("keeps Worker / Runtime / Model / Provider / Account / Capacity slot separate and verbatim", async () => {
+    const { WorkerCard } = await import("./worker-card");
+    const w: WorkerView = {
+      id: "w-1",
+      name: "openhands-docker-01",
+      kind: "openhands",
+      runtime: "docker",
+      runtimeSupport: "DECLARED_ONLY",
+      status: "active",
+      health: "unknown",
+      availability: "unknown",
+      probe: { outcome: "unsupported", at: null, ageMs: null },
+      model: real("nemotron-120b", "declared in worker registry metadata (not verified by a probe)"),
+      provider: real("nvidia", "declared"),
+      account: missing("not_available", "no account", "BR-03"),
+      slots: { used: real(1, "ledger"), max: 3 },
+      pool: { name: "nv-quota", limit: 2 },
+      capabilities: [],
+      features: [],
+      tags: [],
+      metadata: {},
+      assignments: [],
+      tone: "unknown",
+      routable: false,
+    };
+    const out = html(h(WorkerCard, { worker: w }));
+    for (const k of ["Worker kind", "Runtime", "Model", "Provider", "Account", "Capacity slots"]) expect(out).toContain(`>${k}<`);
+    expect(out).toContain("nemotron-120b"); // verbatim, not transformed
+    expect(out).toContain("NOT AVAILABLE");
+    expect(out).toContain("BR-15"); // lease/fencing honestly missing
+    expect(out).toContain("pool nv-quota ≤2");
+    expect(out).toContain("unsupported");
+    expect(out.match(/class="cx-cmd"/g)?.length).toBe(4); // governed controls only
+  });
+});
+
+describe("emergency controls", () => {
+  it("are never single-click and never report success without the command bus", async () => {
+    const { COMMAND_ACTIONS, createCommand, notWiredTransport, submitCommand } = await import("@/features/cockpit/commands");
+    const emergency = Object.entries(COMMAND_ACTIONS).filter(([a]) => a.startsWith("system."));
+    expect(emergency.map(([a]) => a).sort()).toEqual([
+      "system.enter_safe_mode",
+      "system.exit_safe_mode",
+      "system.freeze_integrations",
+      "system.lock_self_modification",
+      "system.pause_new_work",
+      "system.stop_external_workers",
+    ]);
+    for (const [action, spec] of emergency) {
+      expect(spec.risk, action).not.toBe("LOW");
+      const out = await submitCommand(notWiredTransport, createCommand({ action: action as never, target: { kind: "system", id: "icos", label: "ICOS" } }));
+      expect(out.status, action).toBe("not_wired");
+    }
+    expect(COMMAND_ACTIONS["system.exit_safe_mode"].risk).toBe("HIGH"); // loosening is harder than tightening
+  });
+});
+
+describe("stale indicator", () => {
+  it("renders live state with a polite live region", async () => {
+    const { LiveRefresh } = await import("./live-refresh");
+    const out = html(h(LiveRefresh, { generatedAt: new Date().toISOString() }));
+    expect(out).toContain('role="status"');
+    expect(out).toContain('aria-live="polite"');
+    expect(out).toContain("Live");
+  });
+});

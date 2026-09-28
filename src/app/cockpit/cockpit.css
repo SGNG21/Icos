@@ -69,6 +69,7 @@ body:has(.cx) {
 .cx h3,
 .cx h4 {
   margin: 0;
+  font-family: var(--sans);
   letter-spacing: -0.01em;
 }
 
@@ -285,13 +286,15 @@ body:has(.cx) {
 }
 
 /* Stale data must look stale. */
-html[data-cx-stale] .cx-content {
+html[data-cx-stale] .cx-content,
+html[data-cx-stale] .cx-top__health {
   filter: saturate(0.25) brightness(0.9);
   transition: filter 0.4s;
 }
 
 .cx-live {
   display: inline-flex;
+  white-space: nowrap;
   gap: 6px;
   align-items: center;
   padding: 4px 10px;
@@ -405,10 +408,20 @@ html[data-cx-stale] .cx-content {
   font-size: 0.6em;
 }
 
-.cx-derived {
-  color: var(--flow);
-  font-size: 0.55em;
+/* Derived values: dotted underline + tooltip + screen-reader text (no stray glyph). */
+.cx-value[data-derived] {
+  text-decoration: underline dotted color-mix(in srgb, var(--flow) 60%, transparent);
+  text-underline-offset: 0.2em;
   cursor: help;
+}
+
+/* Missing badges must shrink inside tiles and grid cells instead of overflowing. */
+.cx-metric .cx-missing,
+.cx-domains .cx-missing,
+.cx-identity .cx-missing {
+  max-width: 100%;
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 .cx-metrics {
@@ -439,7 +452,6 @@ html[data-cx-stale] .cx-content {
 .cx-metric__value {
   font: 600 22px/1.1 var(--sans);
   color: color-mix(in srgb, var(--tone) 35%, var(--text));
-  text-transform: capitalize;
 }
 
 .cx-unavailable {
@@ -900,7 +912,7 @@ html[data-cx-stale] .cx-content {
   background: rgb(4 8 18 / 55%);
 }
 
-.cx-identity span:first-child {
+.cx-identity__k {
   color: var(--dim);
   font-size: 10px;
   font-weight: 600;
@@ -908,11 +920,10 @@ html[data-cx-stale] .cx-content {
   text-transform: uppercase;
 }
 
-.cx-identity span:last-child {
-  overflow: hidden;
+/* Values are real data: wrap, never truncate or restyle them. */
+.cx-identity__v {
   font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .cx-slots {
@@ -1036,6 +1047,8 @@ html[data-cx-stale] .cx-content {
 .cx-risk[data-risk="CRITICAL"] { color: var(--critical); background: rgb(251 77 109 / 14%); }
 
 .cx-dialog {
+  /* Global reset zeroes <dialog> margins; re-centre the modal. */
+  margin: auto;
   width: min(520px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
   padding: 0;
@@ -1061,6 +1074,7 @@ html[data-cx-stale] .cx-content {
 .cx-dialog header {
   display: grid;
   gap: 6px;
+  justify-items: start;
 }
 
 .cx-dialog h2 {
@@ -1097,6 +1111,9 @@ html[data-cx-stale] .cx-content {
 .cx-field input,
 .cx-field textarea,
 .cx-field select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 40px;
   padding: 8px 10px;
   border: 1px solid var(--line-2);
@@ -1176,8 +1193,7 @@ html[data-cx-stale] .cx-content {
 .cx-dag__svg {
   display: block;
   width: 100%;
-  height: auto;
-  min-height: 280px;
+  /* Real pixel size (height set inline from the graph): nodes stay legible; zoom/pan/fit reach the rest. */
   border: 1px solid var(--line);
   border-radius: 12px;
   background:
@@ -1584,10 +1600,10 @@ html[data-cx-stale] .cx-content {
   }
 
   .cx-metrics {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cx-metrics > :not([data-mobile]) {
+  .cx-metrics--overview > :not([data-mobile]) {
     display: none;
   }
 
@@ -1608,7 +1624,7 @@ html[data-cx-stale] .cx-content {
 
   .cx-domains {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
     margin: 0;
     padding: 0;
@@ -1637,7 +1653,7 @@ html[data-cx-stale] .cx-content {
   }
 
   .cx-identity {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .cx-dag__stage {
@@ -1879,6 +1895,7 @@ html[data-cx-stale] .cx-content {
 @media (max-width: 860px) {
   .cx-auditfilter .cx-field {
     flex: 1 1 140px;
+    min-width: 0;
   }
 
   .cx-emergency {

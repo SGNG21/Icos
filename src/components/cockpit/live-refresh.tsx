@@ -78,9 +78,9 @@ export function LiveRefresh({ generatedAt }: { generatedAt: string }) {
     state.status === "denied"
       ? "Session ended — reload to sign in"
       : state.status === "offline"
-        ? `Offline · data ${age}s old`
+        ? `Offline · ${age}s old`
         : stale
-          ? `Stale · ${age}s old · reconnecting`
+          ? `Stale · ${age}s · reconnecting`
           : "Live";
 
   return (

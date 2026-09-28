@@ -74,7 +74,6 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
       </div>
 
       <Panel title="Task graph" eyebrow={`Plan · ${dag.nodes.length} tasks`}>
-        <DagView dag={dag} workerNames={workerNames} />
         {/* Phone: the graph as ordered stages, same data, thumb-sized. */}
         <div className="cx-stages">
           {Array.from({ length: layers }, (_, layer) => (
@@ -97,6 +96,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
             </section>
           ))}
         </div>
+        <DagView dag={dag} workerNames={workerNames} />
       </Panel>
 
       <div className="cx-grid2">

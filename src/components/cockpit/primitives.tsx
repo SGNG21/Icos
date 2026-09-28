@@ -61,14 +61,14 @@ export function TruthValue<T>({
 }) {
   if (truth.kind !== "real") return <MissingBadge truth={truth} />;
   return (
-    <span className="cx-value" title={truth.derivation ? `Derived: ${truth.derivation}` : "Read from canonical ICOS state"}>
+    <span
+      className="cx-value"
+      data-derived={truth.derivation ? true : undefined}
+      title={truth.derivation ? `Derived: ${truth.derivation}` : "Read from canonical ICOS state"}
+    >
       {format(truth.value)}
       {unit && <small>{unit}</small>}
-      {truth.derivation && (
-        <span className="cx-derived" aria-label={`derived: ${truth.derivation}`}>
-          ⌁
-        </span>
-      )}
+      {truth.derivation && <span className="cx-sr">(derived: {truth.derivation})</span>}
     </span>
   );
 }

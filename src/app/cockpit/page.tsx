@@ -8,7 +8,8 @@ import { SystemMap } from "@/components/cockpit/system-map";
 import { loadSnapshot } from "@/features/cockpit/load";
 import type { CockpitSnapshot, MetricKey, Tone } from "@/features/cockpit/snapshot";
 
-export const metadata = { title: "Overview" };
+// A layout title template does not apply to a page in the same segment.
+export const metadata = { title: "Overview · ICOS" };
 
 const HEALTH_TONE: Record<CockpitSnapshot["health"]["level"], Tone> = {
   healthy: "ok",
@@ -92,7 +93,7 @@ export default async function OverviewPage() {
         </Link>
       </nav>
 
-      <div className="cx-metrics" role="list" aria-label="Global metrics">
+      <div className="cx-metrics cx-metrics--overview" role="list" aria-label="Global metrics">
         {METRICS.map((m) => {
           const truth = snapshot.metrics[m.key];
           return (

@@ -148,7 +148,9 @@ export function CommandButton({
             {policy.kind === "typed_reauth" && (
               <>
                 <label className="cx-field">
-                  Type <strong>{target.label}</strong> to confirm
+                  <span>
+                    Type <strong>{target.label}</strong> to confirm
+                  </span>
                   <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" disabled={!firstSend} />
                 </label>
                 <button type="button" className="cx-btn" disabled>
