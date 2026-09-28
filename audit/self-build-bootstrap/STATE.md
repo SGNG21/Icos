@@ -1,6 +1,6 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M11 — DEFECT 25 CLOSED; self-development runtime WIRED)
+Updated: 2026-09-28 (M12 — DEFECT 27 CLOSED; SELF_DEVELOPMENT_E2E candidate->plan PASSES)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
@@ -64,7 +64,10 @@ M1 — immutable plan lineage: FROZEN, see M1-FREEZE.md
 M0 — repository recovery: COMPLETE, see M0-RECOVERY-REPORT.md
 
 ## CURRENT_HEAD
-5db20d2  M11 DEFECT 25 CLOSED — self-development owns its chain, on the certified path
+9444447  M12 SELF_DEVELOPMENT_E2E candidate -> plan, via production composition
+  6ee81be  M12 planner backend is pluggable compute, not a second planner (defect 27)
+  9472de7  DEFECT 25 CLOSED; defect 27 named
+  5db20d2  M11 DEFECT 25 CLOSED — self-development owns its chain, on the certified path
   996f865  M10 recorded; defect 25 named as the self-build blocker
   a92abad  M10 self-development can land its own work (defect 26 CLOSED)
   2e624c2  defect 24 — create() declares task metadata instead of inventing it
@@ -663,7 +666,15 @@ Pre-repair (session start, at ec5dcf5):
 - format:check: FAIL, 243 files (PRE-EXISTING, repo is not prettier-formatted)
 - lint: 0 errors, ~290 warnings (PRE-EXISTING)
 
-Current (at M11 / 5db20d2, all MEASURED, DOCKER CONFIRMED RUNNING):
+Current (at M12 / 9444447, all MEASURED, DOCKER CONFIRMED RUNNING):
+- `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
+- `pnpm run test` (unit): PASS — 1816 tests
+- `pnpm run test:integration`: 451 passed / 0 FAILED / 3 SKIPPED
+- skips rose 2 -> 3: the new SELF_DEVELOPMENT_E2E is OPT-IN (ICOS_SELF_DEV_E2E=1) because it
+  spends real model credits. It PASSES when run. Repro command is in the test header.
+- lint: 0 errors, 289 warnings — EQUAL to baseline · ledger 45 rows (migration 0047)
+
+Previous (at M11 / 5db20d2):
 - `pnpm run typecheck`: PASS · `pnpm run build`: PASS · `git diff --check`: PASS
 - `pnpm run test` (unit): PASS — 1808 tests
 - `pnpm run test:integration`: 451 passed / 0 FAILED / 2 SKIPPED
@@ -927,7 +938,42 @@ added by ec5dcf5, while igniteAutonomousMission already declared it optional.)
     target (NEEDS_REBASE / lost race) goes to a human and KEEPS its branch — the work was
     fine, the target moved, and the branch is what a rebase needs.
 
-27. (M11) NO PLANNER PROVIDER IS CONFIGURABLE IN THIS ENVIRONMENT — THE SELF-DEVELOPMENT
+28. (M12) THE GATE RUNS BEFORE ANY INDEPENDENT REVIEW CAN EXIST — the remaining self-build
+    blocker, and an ARCHITECTURE decision rather than a bug.
+    VERIFIED: `WorkspaceExecutionCoordinator.executeInWorkspace` runs the IntegrationGate
+    immediately after execution, and the gate's review step consults
+    `reviewDecisions.getByWorkflowId`. For a workflow that has only just executed, QC has not
+    reviewed yet — QC reviews on a LATER sweep, after the result is recorded. So the gate
+    answers NEEDS_HUMAN_APPROVAL unless a review was PRE-PERSISTED, which is exactly what the
+    CORE3 certification does (`approve(c)` before `supervisor.run`).
+    For ordinary autonomous work this is SAFE — nothing auto-integrates without a review. For
+    autonomous SELF-DEVELOPMENT it is blocking: nothing produces the review before the gate.
+    `GovernedSelfDevelopmentCoordinator` already has the right order (execute -> independent
+    review -> gate -> apply), but its execution handoff enters `supervisor.run`, which gates
+    inside `executeInWorkspace` — so the gate would run twice, the first time in the wrong
+    order. TWO COMPONENTS EACH OWN "gate after execution" WITH DIFFERENT REVIEW
+    PRECONDITIONS. That is the conflict.
+    OPTIONS (either changes CERTIFIED M9 behaviour, so the CORE3 certification must be re-run):
+      A. make the coordinator's gate CONDITIONAL — when no review exists, leave the workspace
+         `ready_for_integration` for a later gated pass instead of gating unreviewed. Nothing
+         that previously ACCEPTed would stop (a review existed then); work with no review
+         would be left pending rather than marked NEEDS_HUMAN_APPROVAL with the mission task
+         failed. Smallest change, and arguably the correct ordering everywhere.
+      B. give self-development an execution entry that stops BEFORE the gate, leaving the
+         gate solely to the self-development coordinator. Keeps M9 untouched but leaves two
+         gating paths, which is the duplication the milestone has spent itself removing.
+    RECOMMENDATION: A. The gate belongs after independent review, always; the immediate gate
+    is the anomaly.
+
+27. RESOLVED in M12 (commit 6ee81be) — `CanonicalAutonomousMissionPlanner` owns the schema,
+    prompts, DAG gate and error taxonomy; a backend is a `PlannerCompletionProvider` (two
+    strings in, one out) with no way to influence what a plan MEANS. OmniRoute keeps its class,
+    constructor and error codes and its 14 tests pass UNCHANGED. `CommandPlannerProvider` adds
+    a local-process backend, named only in configuration, handling no secret and surfacing only
+    an exit code. Configuring BOTH backends is REFUSED rather than silently ranked.
+    PROVEN against the real binary: a schema-valid, DAG-valid plan, and a cyclic plan from this
+    backend rejected with the identical canonical error code.
+    ORIGINAL TEXT: NO PLANNER PROVIDER IS CONFIGURABLE IN THIS ENVIRONMENT — THE SELF-DEVELOPMENT
     E2E BLOCKER. `OmniRouteAutonomousMissionPlanner` is the ONLY implementation of
     `AutonomousMissionPlanner`, and `createOmniRouteAutonomousMissionPlanner` throws
     CONFIGURATION_INCOMPLETE without OMNIROUTE_BASE_URL + OMNIROUTE_API_KEY +
@@ -1210,11 +1256,14 @@ commands for the self-build certification.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE (M9, decision 0042).
   MULTI_WORKER_E2E_PASS                    — TRUE (M5.4, decision 0035).
   AUTO_SESSION_RECOVERY_PASS               — TRUE (M7 + chaos certification, 0039/0040).
-  SELF_DEVELOPMENT_E2E_PASS                — FALSE. Defect 25 is CLOSED and the runtime is
-                                             WIRED, but the run is blocked by DEFECT 27: no
-                                             planner provider is configured, so ICOS cannot
-                                             plan its own work. Stubbing the planner would
-                                             certify something false.
+  SELF_DEVELOPMENT_E2E_PASS                — PARTIAL, and therefore recorded as FALSE.
+                                             candidate -> goal -> mission -> plan -> DAG
+                                             PASSES via production composition with a REAL
+                                             planner (M12). Execution, review, real gates,
+                                             integration and learning are NOT yet covered:
+                                             blocked by DEFECT 28 (the gate runs before any
+                                             independent review can exist).
+  SELF_DEVELOPMENT_PLANNING_E2E_PASS        — TRUE (M12, commit 9444447).
   ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
   SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11).
 ICOS is NOT yet self-building, and must not be described as such.
@@ -1405,3 +1454,14 @@ Then M3 durable readiness/dependency gating (mission N13).
   self-development coordinator takes an injected `CanonicalExecutionHandoff`, so composing it
   would still not make it use runtime-based dispatch, governed allocation, routing, leases or
   recovery. An injected seam is not neutral: it is a second authority waiting to diverge.
+- "BUILT BUT NEVER EXERCISED" IS THE DOMINANT DEFECT CLASS IN THIS REPOSITORY. M12 alone
+  uncovered four more by running one real path: `context_items` mapped snake_case against a
+  camelCase table (every write failed), `audit_event_type_check` allowed no `goal.*` event
+  (every goal write failed), `createWithImposedId` silently dropped `goalId` (every
+  id-imposed autonomous mission lost its lineage), and `saveContextItem` was assumed to
+  upsert. None was findable by reading; each took one real execution. Prefer running the path
+  to reasoning about it.
+- A SCHEMA THAT IS `.strict()` MEETS A REAL MODEL BADLY. The canonical plan schema rejects any
+  unlisted field, and an LLM adds one occasionally. The fix was to SAY SO in the prompt, not
+  to loosen the contract — and to normalise transport (code fences, narration around the JSON)
+  in the provider, where it cannot touch plan semantics.
