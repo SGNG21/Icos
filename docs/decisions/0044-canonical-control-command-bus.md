@@ -99,6 +99,7 @@ Guards sit where work is ADMITTED, and hold it instead of failing it:
 - `SupervisorService.reconcilePreparedDispatches`: held attempts stay PREPARED;
 - recovery sweeper orphan redispatch: deferred `CONTROL_HELD` (re-examined later);
 - correction dispatch: the attempt is prepared and left PREPARED for reconciliation;
+- QC retry dispatch (`composeAutonomyRuntime` → `dispatchPrepared`): the retry attempt stays PREPARED;
 - `create-and-dispatch-task`: the dispatcher backstop refuses; the Task stays `draft` (this use case
   never fails a Task on dispatch refusal) and the caller is told the control plane held it.
 

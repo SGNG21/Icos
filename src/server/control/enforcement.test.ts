@@ -245,6 +245,33 @@ describe("safe mode", () => {
   });
 });
 
+describe("QC retry dispatch (production composition)", () => {
+  it("a held retry is not dispatched and stays PREPARED", async () => {
+    const t = await setup();
+    const { composeAutonomyRuntime } = await import("@/server/system/production-services");
+    const { qualityControl } = composeAutonomyRuntime(t.container);
+    const dispatchPrepared = (
+      qualityControl as unknown as { deps: { dispatchPrepared: (a: unknown) => Promise<void> } }
+    ).deps.dispatchPrepared;
+    const [task] = t.tasksBefore;
+    const prepared = await t.container.dispatchAttempts.prepare({
+      missionId: t.mission.id,
+      missionTaskId: task.id,
+      taskId: task.taskId,
+      attempt: 2,
+      workflowId: `wf-retry-${task.id}`,
+      prompt: "retry",
+    });
+    await t.send({ type: "PAUSE_MISSION", target: { kind: "mission", id: t.mission.id } });
+    const spy = vi.spyOn(t.container.taskExecution, "dispatch");
+    await dispatchPrepared(prepared.attempt);
+    expect(spy).not.toHaveBeenCalled();
+    expect(
+      (await t.container.dispatchAttempts.listPrepared(t.mission.id)).map((a) => a.workflowId),
+    ).toContain(`wf-retry-${task.id}`);
+  });
+});
+
 describe("cancel and workers go through canonical authorities", () => {
   it("cancel is compare-and-set and sticky: a late status write cannot undo it", async () => {
     const t = await setup();

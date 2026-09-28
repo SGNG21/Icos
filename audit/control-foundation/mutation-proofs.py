@@ -20,6 +20,7 @@ M=[
  ("dispatcher backstop", "src/server/control/runtime-control.ts", "if (!decision.allowed)\n      throw new ControlHeldError(decision.reason, `dispatch", "if (false)\n      throw new ControlHeldError(decision.reason, `dispatch"),
  ("audit write", "src/server/control/command-bus.ts", "await tx.appendAudit(", "await (async (..._a: unknown[]) => {})("),
  ("idempotency", "src/server/control/command-bus.ts", "const existing = await tx.getCommand(commandId);", "const existing = null as CommandRecord | null;"),
+ ("QC retry hold (production composition)", "src/server/system/production-services.ts", "!(await container.control.guard.dispatch(prepared.missionId)).allowed", "false"),
  ("cancel compare-and-set", "src/server/control/compose.ts", "? deps.missions.transitionMissionStatusIf(id, from, \"cancelled\")", "? (await deps.missions.updateMissionStatus(id, \"cancelled\"), true)"),
  ("sticky cancelled", "src/server/services/in-memory/mission-repository.ts", "if (mission.status === \"cancelled\") return;", ""),
  ("enable resets evidence", "src/server/services/worker-registry/worker-registration-service.ts", "      health: \"unknown\",\n      availability: \"unknown\",\n      lastProbeAt: null,\n      lastProbeOutcome: \"never\",\n", ""),
