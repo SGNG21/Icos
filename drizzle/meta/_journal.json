@@ -309,6 +309,13 @@
       "when": 1790800002287,
       "tag": "0046_dispatch_execution_lease_and_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1790800003287,
+      "tag": "0047_control_plane",
+      "breakpoints": true
     }
   ]
 }
