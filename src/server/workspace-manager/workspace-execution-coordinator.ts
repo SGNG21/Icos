@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
-import type { FileScope } from "./types";
+import { WorkspaceError, type FileScope } from "./types";
 import type { IntegrationGate } from "./integration-gate";
 import type { IntegrationApplier, IntegrationApplyOutcome } from "./integration-applier";
 
@@ -479,6 +479,85 @@ export class WorkspaceExecutionCoordinator {
    * git-derived check.
    */
   async gatePendingReview(humanApprovedBy?: string): Promise<CoordinationResult[]> {
+    /*
+     * SINGLE-FLIGHT (defect 28 closure). The production sweep may fire while a previous pass is
+     * still gating (a gate runs the full verification suite). Overlapping passes in one process
+     * share the in-flight pass instead of gating the same workspace twice. Across processes the
+     * durable workspace lease below is the exclusion.
+     */
+    if (this.pendingReviewPass) return this.pendingReviewPass;
+    this.pendingReviewPass = this.runPendingReviewPass(humanApprovedBy).finally(() => {
+      this.pendingReviewPass = null;
+    });
+    return this.pendingReviewPass;
+  }
+
+  private pendingReviewPass: Promise<CoordinationResult[]> | null = null;
+  /** workspaceId → gate inputs of its last NEEDS_* verdict (see runPendingReviewPass). */
+  private readonly inconclusiveGates = new Map<string, string>();
+
+  /**
+   * DURABLE ADOPTION (defect 28 closure).
+   *
+   * `executionWorkspaces` only knows what THIS process executed. After a restart — or when the
+   * work was executed by another process — the pending workspace exists only in the durable
+   * registry, and a pass over the in-memory map would never see it: parked work would wait for
+   * ever. So the pass first adopts, from durable state, every workspace that is parked for
+   * review AND already has a canonical review.
+   *
+   * - No review: not adopted, not claimed, not touched. Silence is never consent, and taking
+   *   a lease on unreviewed work would only block its real owner.
+   * - Adoption takes the durable lease (`acquireLease` bumps the fencing token). `LEASE_HELD`
+   *   means a live owner is responsible for it: skip. Two processes cannot both adopt it.
+   */
+  private async adoptReviewedPendingWorkspaces(): Promise<void> {
+    const tracked = new Set(
+      Array.from(this.executionWorkspaces.values())
+        .filter((w) => w.status !== "released")
+        .map((w) => w.workspaceId),
+    );
+
+    for (const ws of await this.manager.list()) {
+      if (tracked.has(ws.workspaceId)) continue;
+      if (ws.releasedAt !== null || !ws.workflowId || !ws.taskId || !ws.missionId) continue;
+      if (ws.status !== "ready_for_integration" && ws.status !== "integrating") continue;
+      if (!(await this.resolveReview(ws.workflowId))) continue;
+
+      let claimed;
+      try {
+        claimed = await this.manager.acquireLease(ws.workspaceId, this.ownerToken, this.leaseMs);
+      } catch (error) {
+        /*
+         * LEASE_HELD: a live owner is responsible for it. REGISTRY_LOCKED: another process is
+         * mutating the registry right now (the registry uses a TRY-lock). Both mean "not now":
+         * skip it, the next sweep retries. Exclusion is the lock and the lease, never a guess.
+         */
+        if (
+          error instanceof WorkspaceError &&
+          (error.code === "LEASE_HELD" ||
+            error.code === "REGISTRY_LOCKED" ||
+            error.code === "WORKSPACE_RELEASED")
+        ) {
+          continue;
+        }
+        throw error;
+      }
+
+      this.executionWorkspaces.set(ws.taskId, {
+        workspaceId: ws.workspaceId,
+        taskId: ws.taskId,
+        missionId: ws.missionId,
+        status: "completed",
+        allocatedAt: ws.createdAt,
+        workflowId: ws.workflowId,
+        fencingToken: claimed.fencingToken,
+      });
+      this.startLeaseRenewal(ws.workspaceId, this.ownerToken, claimed.fencingToken);
+    }
+  }
+
+  private async runPendingReviewPass(humanApprovedBy?: string): Promise<CoordinationResult[]> {
+    await this.adoptReviewedPendingWorkspaces();
     const results: CoordinationResult[] = [];
 
     for (const execWs of this.executionWorkspaces.values()) {
@@ -492,13 +571,35 @@ export class WorkspaceExecutionCoordinator {
       }
 
       /* Still unreviewed: leave it pending rather than gating it again. */
-      if (!(await this.resolveReview(execWs.workflowId))) continue;
+      const review = await this.resolveReview(execWs.workflowId);
+      if (!review) continue;
+
+      /*
+       * NO RE-GATE ON UNCHANGED INPUTS (defect 28 closure). A NEEDS_* verdict is not terminal,
+       * but gating again with the same review, the same work and the same target can only
+       * repeat it — at the cost of the full verification suite on every sweep. Re-gate only
+       * when one of those inputs moved. Process-local on purpose: after a restart the first
+       * pass gates once more, which is the safe direction.
+       */
+      const fingerprint = [
+        review.verdict,
+        humanApprovedBy ?? "",
+        await this.git.resolveCommit(workspace.branch).catch(() => "?"),
+        await this.git.resolveCommit(workspace.integrationTarget).catch(() => "?"),
+      ].join("|");
+      if (this.inconclusiveGates.get(execWs.workspaceId) === fingerprint) continue;
 
       const gateResult = await this.handoffToIntegrationGate(
         execWs.workspaceId,
         execWs.workflowId,
         humanApprovedBy,
       );
+
+      if (gateResult.decision === "ACCEPT" || gateResult.decision === "REJECT") {
+        this.inconclusiveGates.delete(execWs.workspaceId);
+      } else {
+        this.inconclusiveGates.set(execWs.workspaceId, fingerprint);
+      }
 
       const integration =
         gateResult.decision === "ACCEPT" && this.integrationApplier

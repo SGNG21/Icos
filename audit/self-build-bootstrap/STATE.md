@@ -1268,20 +1268,37 @@ commands for the self-build certification.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
 
 ### CERTIFICATION LEDGER — what is and is NOT true today
-  DEFECT_28                                — CLOSED (M13, decision 0044).
-  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN after defect 28 (M13, 0044).
-                                             9 proofs, NO pre-seeded review anywhere.
-  MULTI_WORKER_E2E_PASS                    — TRUE, RE-PROVEN after defect 28 (M5.4, 0035).
-  AUTO_SESSION_RECOVERY_PASS               — TRUE, RE-PROVEN after defect 28 (M7, 0039/0040).
+  DEFECT_28                                — CLOSED (decisions 0044 + 0045). The M13 claim was
+                                             premature: gatePendingReview() had no production
+                                             caller and the proof wrote APPROVE by hand. Closed
+                                             by the production recovery-sweep trigger with durable
+                                             adoption. PRODUCTION_PENDING_REVIEW_TRIGGER=PASS,
+                                             NATURAL_RUNTIME_REVIEW_GATE_E2E=PASS (real QC + real
+                                             reviewer client, no manual review/gate/apply), 7/7
+                                             mutations killed.
+  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN after the 0045 trigger.
+  MULTI_WORKER_E2E_PASS                    — TRUE, RE-PROVEN after the 0045 trigger.
+  AUTO_SESSION_RECOVERY_PASS               — TRUE, RE-PROVEN after the 0045 trigger.
+  DEFECT_32                                — OPEN. A dependent governed task never runs after its
+                                             parent integrates (completion + wake precede gate +
+                                             reap). Blocks natural multi-task DAG progress.
+  REPAIR_WORKSPACE_DEFECT                  — OPEN (pre-existing). Correction attempt #2 gets no
+                                             governed workspace (attemptNumber fixed at 1).
+                                             Blocks real bounded repair.
+  STUCK_EXECUTION_ATTEMPTS                 — OPEN (pre-existing). Governed attempts stay
+                                             `dispatched`; worker slots are never returned.
   SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11).
   SELF_DEVELOPMENT_PLANNING_E2E_PASS       — TRUE (M12, commit 9444447).
-  SELF_DEVELOPMENT_E2E_PASS                — NOT YET RUN end to end. Its blocker (defect 28)
-                                             is now closed; the full run is the next action.
+  SELF_DEVELOPMENT_E2E_PASS                — NOT YET RUN. Defect 28 no longer blocks it, but
+                                             the self-dev coordinator still gates directly with
+                                             an unpersisted review (0045 open item), and a
+                                             multi-task self-dev plan hits DEFECT 32.
   ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
 ICOS is NOT yet self-building, and must not be described as such.
 
 Critical path:
-  DEFECT 28 (closed) -> SELF_DEVELOPMENT_E2E_PASS -> ICOS_SELF_BUILD_E2E
+  DEFECT 28 (closed) -> DEFECT 32 + self-dev gate convergence -> SELF_DEVELOPMENT_E2E_PASS
+    -> ICOS_SELF_BUILD_E2E
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:

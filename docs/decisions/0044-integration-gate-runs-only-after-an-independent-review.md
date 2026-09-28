@@ -62,7 +62,11 @@ Rejected alternatives:
 ## Evidence
 
 `core3-autonomous-orchestration.integration.test.ts` — 9 proofs, NO pre-seeded review anywhere.
-`approve()` is gone; `qcReviews()` runs the real reviewer at the point the runtime would.
+`approve()` is gone. **Correction (decision 0045):** the helper that replaced it, `qcReviews()`, did
+NOT run a reviewer — it wrote an APPROVE record directly, after execution; it is now named
+`writeApprovalDirectly()`. These proofs also called `gatePendingReview()` by hand, which had no production
+caller. Both gaps are closed by decision 0045, whose natural-order proof runs the real QC/reviewer and the
+production trigger with neither shortcut.
 Two new proofs:
 
 - **NATURAL ORDER** — run with no review: nothing is integrated, no gate decision exists, the

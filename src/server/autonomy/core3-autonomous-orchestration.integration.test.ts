@@ -180,14 +180,18 @@ async function seed(c: Container) {
 }
 
 /**
- * The canonical review, as QC persists it — written AFTER execution, never before (M13).
+ * WRITES AN APPROVE RECORD DIRECTLY — it does NOT run a reviewer.
  *
- * It used to be pre-seeded before `supervisor.run`, which was a certification artifact hiding
- * defect 28: the gate ran immediately after execution and consulted a review QC had not yet
- * written, so the only way past it was to write one in advance. The gate now waits for a
- * review, and this runs where QC actually would.
+ * These proofs certify orchestration mechanics (allocation, gating order, reuse, restart,
+ * exactly-once) and use this shortcut to put a canonical review in place AFTER execution,
+ * never before (M13). They also call `gatePendingReview()` themselves.
+ *
+ * The RUNTIME path — the real QC service and reviewer producing the review, and the production
+ * recovery sweep (the only production caller of `gatePendingReview()`) gating it, with no
+ * hand-written review and no manual gate call — is proven in
+ * `core3-natural-review-gate.integration.test.ts` (defect 28 closure, decision 0045).
  */
-async function qcReviews(c: Container) {
+async function writeApprovalDirectly(c: Container) {
   await c.reviewDecisions.save({
     id: `review-${TASK_ID}`,
     taskId: TASK_ID,
@@ -255,7 +259,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      */
     const bootRuntime = composeAutonomyRuntime(services.container);
     await bootRuntime.supervisor.run(MISSION_ID);
-    await qcReviews(services.container);
+    await writeApprovalDirectly(services.container);
     await services.container.workspaceExecutionCoordinator!.gatePendingReview();
 
     const ws = (await services.container.workspaceManager!.list()).find(
@@ -286,7 +290,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      * independently, and only then does the governed pass gate and integrate.
      */
     expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
-    await qcReviews(c);
+    await writeApprovalDirectly(c);
     await c.workspaceExecutionCoordinator!.gatePendingReview();
 
     /* A GOVERNED workspace was allocated automatically, keyed by the canonical workflow. */
@@ -329,7 +333,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     const first = await container();
     await seed(first);
     await composeAutonomyRuntime(first).supervisor.run(MISSION_ID);
-    await qcReviews(first);
+    await writeApprovalDirectly(first);
     await first.workspaceExecutionCoordinator!.gatePendingReview();
     const afterFirst = git(repo, "rev-parse", "integration/phase-7");
 
@@ -379,7 +383,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);
 
     /* ---- QC reviews independently, and only now may the gate run. ---- */
-    await qcReviews(c);
+    await writeApprovalDirectly(c);
     const gated = await c.workspaceExecutionCoordinator!.gatePendingReview();
 
     expect(gated).toHaveLength(1);
@@ -414,7 +418,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      * nothing about the pending state lived in the process that created it.
      */
     const second = await container();
-    await qcReviews(second);
+    await writeApprovalDirectly(second);
     const gated = await second.workspaceExecutionCoordinator!.gatePendingReview();
 
     /*
