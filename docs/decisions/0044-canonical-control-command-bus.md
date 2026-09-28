@@ -102,9 +102,12 @@ Guards sit where work is ADMITTED, and hold it instead of failing it:
 - `create-and-dispatch-task`: the dispatcher backstop refuses; the Task stays `draft` (this use case
   never fails a Task on dispatch refusal) and the caller is told the control plane held it.
 
-The container's `taskExecution` is wrapped by `ControlGatedDispatcher`, which throws
-`ControlHeldError` if a dispatch reaches it while dispatch is not allowed — the last line of
-defence, reached only by a path that missed its admission guard.
+The container's `taskExecution` carries an in-place backstop (`installDispatchBackstop`): its
+`dispatch` refuses with `ControlHeldError` if a dispatch reaches it while dispatch is not allowed —
+the last line of defence, reached only by a path that missed its admission guard. It is installed
+IN PLACE rather than as a wrapper so the dispatcher keeps its concrete class: which dispatcher
+production uses (Temporal vs runtime router) is a fact CORE3 certifies, and the control layer must
+not change it.
 
 `IntegrationGate.integrate` refuses with `CONTROL_HELD` when integration is not allowed.
 `IntegrationApplier.apply` refuses when external actions are not allowed.

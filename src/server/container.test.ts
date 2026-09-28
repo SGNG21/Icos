@@ -1,4 +1,5 @@
-import { ControlGatedDispatcher } from "@/server/control/runtime-control";
+import { hasDispatchBackstop } from "@/server/control/runtime-control";
+import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
 import { describe, expect, it, vi } from "vitest";
 
 import { demoActions } from "@/features/actions/data";
@@ -39,8 +40,9 @@ describe("buildMemoryContainer", () => {
   it("reconstruit le graphe de services ICOS sur des collaborateurs partagés", async () => {
     const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
 
-    // Decision 0044: the runtime dispatcher sits behind the control backstop.
-    expect(container.taskExecution).toBeInstanceOf(ControlGatedDispatcher);
+    expect(container.taskExecution).toBeInstanceOf(InMemoryTaskExecutionDispatcher);
+    // Decision 0044: the runtime dispatcher carries the control backstop.
+    expect(hasDispatchBackstop(container.taskExecution)).toBe(true);
     expect(container.control?.guard).toBeDefined();
     expect(container.dispatchAttempts).toBeInstanceOf(InMemoryDispatchAttemptRepository);
     expect(container.executionResults).toBeDefined();
@@ -60,9 +62,7 @@ describe("buildMemoryContainer", () => {
     expect(container.executionResults).toBeInstanceOf(InMemoryTaskExecutionResultRepository);
     expect(container.reviewDecisions).toBeInstanceOf(InMemoryReviewDecisionRepository);
     expect(container.qualityControlJobs).toBeInstanceOf(InMemoryQualityControlRepository);
-    expect(container.autonomousRuntime).toBeInstanceOf(
-      InMemoryAutonomousMissionRuntimeRepository,
-    );
+    expect(container.autonomousRuntime).toBeInstanceOf(InMemoryAutonomousMissionRuntimeRepository);
     expect(container.durableMemory).toBeInstanceOf(InMemoryDurableMemory);
 
     const mission = await container.mission.create({

@@ -111,16 +111,14 @@ describe("PostgresControlStore (BR-10/11/12/18)", () => {
       });
     await a.db.insert(user).values({ id: USER, name: "Owner", email: "owner@icos.test" });
     const now = new Date();
-    await a.db
-      .insert(missions)
-      .values({
-        id: "mission-ctl",
-        title: "Control",
-        objective: "o",
-        status: "running",
-        createdAt: now,
-        updatedAt: now,
-      } as never);
+    await a.db.insert(missions).values({
+      id: "mission-ctl",
+      title: "Control",
+      objective: "o",
+      status: "running",
+      createdAt: now,
+      updatedAt: now,
+    } as never);
     missionStatus.clear();
   });
 

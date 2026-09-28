@@ -11,7 +11,7 @@ import { SupervisorService } from "@/server/supervisor/supervisor-service";
 
 import type { CommandActor } from "./command-bus";
 import { PostgresControlStore } from "./postgres-control-store";
-import { ControlGatedDispatcher } from "./runtime-control";
+import { hasDispatchBackstop } from "./runtime-control";
 
 /**
  * The PRODUCTION PostgreSQL composition enforces control state end to end
@@ -56,7 +56,7 @@ describe("control plane in the PostgreSQL container", () => {
 
   it("composes one durable control plane behind the runtime dispatcher", () => {
     expect(container.control!.store).toBeInstanceOf(PostgresControlStore);
-    expect(container.taskExecution).toBeInstanceOf(ControlGatedDispatcher);
+    expect(hasDispatchBackstop(container.taskExecution)).toBe(true);
   });
 
   it("safe mode refuses dispatch, integration and applier writes in the production graph", async () => {

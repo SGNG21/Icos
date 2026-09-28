@@ -1,7 +1,7 @@
 import { composeControlPlane, type ControlPlane } from "@/server/control/compose";
 import { InMemoryControlStore } from "@/server/control/in-memory-control-store";
 import { PostgresControlStore } from "@/server/control/postgres-control-store";
-import { ControlGatedDispatcher, RuntimeControlGuard } from "@/server/control/runtime-control";
+import { installDispatchBackstop, RuntimeControlGuard } from "@/server/control/runtime-control";
 import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
@@ -398,7 +398,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     manager: workspaceManager,
     integrationGate,
     integrationApplier,
-    dispatcher: new ControlGatedDispatcher(new InMemoryTaskExecutionDispatcher(), controlGuard),
+    dispatcher: installDispatchBackstop(new InMemoryTaskExecutionDispatcher(), controlGuard),
     missions: mission,
     tasks: tasksRepository,
     durableMemory: new InMemoryDurableMemory(),
@@ -423,7 +423,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     skillUow,
     mission,
     missionService,
-    taskExecution: new ControlGatedDispatcher(new InMemoryTaskExecutionDispatcher(), controlGuard),
+    taskExecution: installDispatchBackstop(new InMemoryTaskExecutionDispatcher(), controlGuard),
     control: composeControlPlane({
       store: controlStore,
       guard: controlGuard,
@@ -665,7 +665,7 @@ export async function buildPostgresContainer(
    * CONTROL BACKSTOP (decision 0044): every admission point holds work before it gets
    * here; this wrapper only refuses a dispatch that slipped past its admission guard.
    */
-  const taskExecution: TaskExecutionDispatcher = new ControlGatedDispatcher(
+  const taskExecution: TaskExecutionDispatcher = installDispatchBackstop(
     externalExecution
     ? new RuntimeDispatchRouter({
         dispatchAttempts,

@@ -101,24 +101,43 @@ export async function assertExternalActionAllowed(
   if (!decision.allowed) throw new ControlHeldError(decision.reason, action);
 }
 
-/**
- * Last line of defence around the container's dispatcher. Every admission
- * point holds work BEFORE reaching here; this only fires for a path that
- * missed its admission guard, and then refuses rather than dispatches.
- */
-export class ControlGatedDispatcher implements TaskExecutionDispatcher {
-  constructor(
-    private readonly inner: TaskExecutionDispatcher,
-    private readonly guard: Pick<RuntimeControlGuard, "dispatch">,
-  ) {}
+/** Marks a dispatcher whose `dispatch` goes through the control backstop. */
+export const CONTROL_BACKSTOP = Symbol.for("icos.control.dispatch-backstop");
 
-  async dispatch(
+/**
+ * Last line of defence on the container's dispatcher. Every admission point
+ * holds work BEFORE reaching here; this only fires for a path that missed its
+ * admission guard, and then refuses rather than dispatches.
+ *
+ * Installed IN PLACE (the instance keeps its class) rather than as a wrapper:
+ * the dispatcher's concrete identity — Temporal vs runtime router — is part of
+ * what CORE3 certifies about the production graph, and a control layer must not
+ * change that fact. Idempotent.
+ */
+export function installDispatchBackstop<T extends TaskExecutionDispatcher>(
+  dispatcher: T,
+  guard: Pick<RuntimeControlGuard, "dispatch">,
+): T {
+  if (hasDispatchBackstop(dispatcher)) return dispatcher;
+  const original = dispatcher.dispatch.bind(dispatcher);
+  const gated = async (
     input: TaskExecutionDispatchInput,
     digitalosFacadePath?: string,
-  ): Promise<TaskExecutionDispatchResult> {
-    const decision = await this.guard.dispatch(input.missionId);
+  ): Promise<TaskExecutionDispatchResult> => {
+    const decision = await guard.dispatch(input.missionId);
     if (!decision.allowed)
       throw new ControlHeldError(decision.reason, `dispatch of task ${input.taskId}`);
-    return this.inner.dispatch(input, digitalosFacadePath);
-  }
+    return original(input, digitalosFacadePath);
+  };
+  Object.defineProperty(dispatcher, "dispatch", {
+    value: gated,
+    writable: false,
+    configurable: true,
+  });
+  Object.defineProperty(dispatcher, CONTROL_BACKSTOP, { value: true });
+  return dispatcher;
+}
+
+export function hasDispatchBackstop(dispatcher: TaskExecutionDispatcher): boolean {
+  return (dispatcher as unknown as Record<symbol, unknown>)[CONTROL_BACKSTOP] === true;
 }

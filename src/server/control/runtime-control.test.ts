@@ -4,8 +4,9 @@ import type { RuntimeFlags } from "@/core/control/contracts";
 import { effectiveFlags } from "@/core/control/policy";
 
 import {
-  ControlGatedDispatcher,
   ControlHeldError,
+  hasDispatchBackstop,
+  installDispatchBackstop,
   RuntimeControlGuard,
   assertExternalActionAllowed,
 } from "./runtime-control";
@@ -108,21 +109,31 @@ describe("canonical external-action guard", () => {
 });
 
 describe("dispatcher backstop", () => {
+  class Recording {
+    calls: unknown[] = [];
+    async dispatch(input: { taskId: string; prompt: string }, path?: string) {
+      this.calls.push([input, path]);
+      return { workflowId: "wf" };
+    }
+  }
+
   it("refuses instead of dispatching when a path missed its admission guard", async () => {
-    const inner = { dispatch: vi.fn().mockResolvedValue({ workflowId: "wf" }) };
-    const gated = new ControlGatedDispatcher(inner, guardOver(flags({ safeMode: true })));
+    const inner = installDispatchBackstop(new Recording(), guardOver(flags({ safeMode: true })));
     await expect(
-      gated.dispatch({ taskId: "t", prompt: "p", missionId: "m1" }),
+      inner.dispatch({ taskId: "t", prompt: "p", missionId: "m1" } as never),
     ).rejects.toBeInstanceOf(ControlHeldError);
-    expect(inner.dispatch).not.toHaveBeenCalled();
+    expect(inner.calls).toEqual([]);
   });
 
-  it("passes through when allowed", async () => {
-    const inner = { dispatch: vi.fn().mockResolvedValue({ workflowId: "wf" }) };
-    const gated = new ControlGatedDispatcher(inner, guardOver(flags()));
-    await expect(gated.dispatch({ taskId: "t", prompt: "p" }, "/facade")).resolves.toEqual({
+  it("passes through when allowed, keeps the instance's class, and installs once", async () => {
+    const d = new Recording();
+    const guard = guardOver(flags());
+    expect(installDispatchBackstop(installDispatchBackstop(d, guard), guard)).toBe(d);
+    expect(d).toBeInstanceOf(Recording);
+    expect(hasDispatchBackstop(d)).toBe(true);
+    await expect(d.dispatch({ taskId: "t", prompt: "p" }, "/facade")).resolves.toEqual({
       workflowId: "wf",
     });
-    expect(inner.dispatch).toHaveBeenCalledWith({ taskId: "t", prompt: "p" }, "/facade");
+    expect(d.calls).toEqual([[{ taskId: "t", prompt: "p" }, "/facade"]]);
   });
 });
