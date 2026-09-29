@@ -3,7 +3,9 @@
 import {
   Bell,
   Bot,
+  Briefcase,
   Cpu,
+  GitMerge,
   LayoutDashboard,
   Menu,
   MessageSquare,
@@ -22,6 +24,8 @@ import { MOBILE_TABS, NAV_ITEMS, isActive, type NavIcon } from "./nav-items";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   overview: LayoutDashboard,
+  executive: Briefcase,
+  pipeline: GitMerge,
   missions: Workflow,
   workers: Bot,
   providers: Network,

@@ -60,12 +60,14 @@ describe("truth rendering", () => {
 });
 
 describe("navigation", () => {
-  it("exposes all ten sections and a five-slot thumb bar with Ask ICOS centred", () => {
+  it("exposes all sections and a five-slot thumb bar with Ask ICOS centred", () => {
     expect(NAV_ITEMS.map((i) => i.label)).toEqual([
       "Overview",
+      "Executive",
       "Missions",
+      "Pipeline",
       "Workers",
-      "Providers",
+      "Compute",
       "Alerts",
       "Autonomy",
       "Self-development",
@@ -154,6 +156,8 @@ describe("system map", () => {
     attempts: real([]),
     pendingApprovals: real(0),
     audit: real([]),
+    qualityJobs: real([]),
+    workspaces: real([]),
   };
 
   it("animates nothing without real activity and labels missing domains", () => {
@@ -183,6 +187,8 @@ describe("worker identity", () => {
         attempts: real([]),
         pendingApprovals: real(0),
         audit: real([]),
+        qualityJobs: real([]),
+        workspaces: real([]),
       },
       activeAssignments: real([]),
       workers: real([
@@ -288,6 +294,7 @@ describe("worker card", () => {
       tags: [],
       metadata: {},
       assignments: [],
+      leases: real([]),
       tone: "unknown",
       routable: false,
     };
@@ -296,7 +303,7 @@ describe("worker card", () => {
       expect(out).toContain(`>${k}<`);
     expect(out).toContain("nemotron-120b"); // verbatim, not transformed
     expect(out).toContain("NOT AVAILABLE");
-    expect(out).toContain("BR-15"); // lease/fencing honestly missing
+    expect(out).toContain("no workspace lease held"); // read from the workspace registry
     expect(out).toContain("pool nv-quota ≤2");
     expect(out).toContain("unsupported");
     // One governed control (disable, since the worker is active) + retry shown as not commandable.
@@ -329,6 +336,6 @@ describe("stale indicator", () => {
     const out = html(h(LiveRefresh, { generatedAt: new Date().toISOString() }));
     expect(out).toContain('role="status"');
     expect(out).toContain('aria-live="polite"');
-    expect(out).toContain("Live");
+    expect(out).toContain("LIVE");
   });
 });

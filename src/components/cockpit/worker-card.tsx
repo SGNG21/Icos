@@ -104,15 +104,19 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
             </dd>
           </>
         )}
-        <dt>Lease · fencing</dt>
+        <dt>Workspace lease · fencing</dt>
         <dd>
-          <TruthValue
-            truth={missing(
-              "not_available",
-              "Lease owner/expiry/fencing token are not readable.",
-              "BR-15",
-            )}
-          />
+          {w.leases.kind !== "real" ? (
+            <TruthValue truth={w.leases} />
+          ) : w.leases.value.length === 0 ? (
+            <span className="cx-dim">no workspace lease held</span>
+          ) : (
+            w.leases.value.map((l) => (
+              <span key={l.slug} className="cx-chip" data-lease={l.state}>
+                {l.slug} · {l.status} · lease {l.state} · fence {l.fencingToken}
+              </span>
+            ))
+          )}
         </dd>
         <dt>Latency · throughput · cost</dt>
         <dd>

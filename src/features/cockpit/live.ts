@@ -51,3 +51,19 @@ export function nextDelay(state: LiveState, jitter = 0): number {
 export function isStale(state: LiveState, now: number): boolean {
   return state.status !== "live" || now - state.lastSuccessAt > STALE_AFTER_MS;
 }
+
+/** Cockpit-wide link vocabulary. UNKNOWN is a data value, never a link state shown as healthy. */
+export type LinkState = "LIVE" | "STALE" | "OFFLINE" | "ERROR" | "UNAVAILABLE";
+
+export function linkState(state: LiveState, now: number): LinkState {
+  switch (state.status) {
+    case "denied":
+      return "UNAVAILABLE";
+    case "offline":
+      return "OFFLINE";
+    case "reconnecting":
+      return "ERROR";
+    case "live":
+      return isStale(state, now) ? "STALE" : "LIVE";
+  }
+}

@@ -411,9 +411,44 @@ html[data-cx-stale] .cx-top__health {
   cursor: help;
 }
 
+/* Neutral: violet is reserved for ICOS improvement proposals, never for a gap. */
 .cx-missing[data-kind="not_connected"] {
-  border-color: rgb(167 139 250 / 55%);
-  color: var(--autonomy);
+  border-style: dotted;
+  color: var(--muted);
+}
+
+.cx-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+}
+
+.cx-modes a {
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  color: var(--muted);
+  font: 600 12px var(--sans);
+  text-decoration: none;
+}
+
+.cx-modes a[aria-current="page"] {
+  background: var(--glass-hi);
+  color: var(--text);
+}
+
+.cx-cmd[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.cx-reauth {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
 }
 
 .cx-missing__req {

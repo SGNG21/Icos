@@ -72,6 +72,12 @@ export default async function OverviewPage() {
           <p className="cx-eyebrow">ICOS · Overview</p>
           <h1>Control plane</h1>
         </div>
+        <nav className="cx-modes" aria-label="Cockpit mode">
+          <Link href="/cockpit" aria-current="page">
+            System
+          </Link>
+          <Link href="/cockpit/executive">Executive</Link>
+        </nav>
         <p className="cx-dim">Snapshot {formatTime(snapshot.generatedAt)}</p>
       </div>
 

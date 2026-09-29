@@ -12,6 +12,7 @@ import { getContainer, type Container } from "@/server/container";
 import type { AgentScope } from "@/server/repositories/ports";
 
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
+import type { QualityFact, WorkspaceFact } from "./pipeline";
 import { buildCockpitSnapshot, type CockpitSources, type MissionWithTasks } from "./snapshot";
 import { isReal, missing, real, type Truth } from "./truth";
 
@@ -115,6 +116,53 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
     audit = tasks;
   }
 
+  const qualityJobs: CockpitSources["qualityJobs"] = isReal(missions)
+    ? await read("Quality control", async () => {
+        const visible = new Set(missions.value.map((m) => m.mission.id));
+        return (await container.qualityControlJobs.listPending())
+          .filter((j) => visible.has(j.missionId))
+          .map(
+            (j): QualityFact => ({
+              workflowId: j.workflowId,
+              missionId: j.missionId,
+              missionTaskId: j.missionTaskId,
+              taskId: j.taskId,
+              executionAttempt: j.executionAttempt,
+              reviewAttemptCount: j.reviewAttemptCount,
+              state: j.state,
+              action: j.action ?? null,
+              lastError: j.lastError ?? null,
+              updatedAt: new Date(j.updatedAt).toISOString(),
+            }),
+          );
+      })
+    : missions;
+
+  const manager = container.workspaceManager;
+  const workspaces: CockpitSources["workspaces"] = !global
+    ? outOfScope
+    : !manager
+      ? missing("not_available", "The workspace manager is not composed in this process.")
+      : await read("Workspace registry", async () =>
+          // Paths, test database names and file scopes are deliberately not carried.
+          (await manager.list()).map(
+            (w): WorkspaceFact => ({
+              id: w.workspaceId,
+              slug: w.slug,
+              workerId: w.workerId,
+              missionId: w.missionId,
+              taskId: w.taskId,
+              status: w.status,
+              branch: w.branch,
+              leaseOwner: w.leaseOwner,
+              leaseExpiresAt: w.leaseExpiresAt,
+              fencingToken: w.fencingToken,
+              sourceCommit: w.sourceCommit,
+              updatedAt: w.updatedAt,
+            }),
+          ),
+        );
+
   return {
     now: new Date(),
     backend: container.db ? "postgres" : "memory",
@@ -126,6 +174,8 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
     attempts,
     pendingApprovals,
     audit,
+    qualityJobs,
+    workspaces,
   };
 });
 

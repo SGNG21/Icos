@@ -71,6 +71,8 @@ function sources(over: Partial<CockpitSources> = {}): CockpitSources {
     attempts: real([]),
     pendingApprovals: real(0),
     audit: real([]),
+    qualityJobs: real([]),
+    workspaces: real([]),
     ...over,
   };
 }
@@ -84,7 +86,6 @@ describe("buildCockpitSnapshot — data honesty", () => {
       "cost",
       "tokenThroughput",
       "latency",
-      "integrationBacklog",
     ] as const) {
       expect(snap.metrics[key].kind).toBe("not_available");
     }

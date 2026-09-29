@@ -34,6 +34,7 @@ function view(
     tags: [],
     metadata: {},
     assignments: [],
+    leases: real([]),
     tone: "ok",
     routable: true,
   };

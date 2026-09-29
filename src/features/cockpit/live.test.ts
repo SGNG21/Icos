@@ -40,3 +40,15 @@ describe("live refresh / reconnect", () => {
     expect(onHeartbeat(initialLive(0), "denied", 1).status).toBe("denied");
   });
 });
+
+describe("link state vocabulary", () => {
+  it("maps transport state to LIVE / STALE / OFFLINE / ERROR / UNAVAILABLE", async () => {
+    const { linkState, initialLive, onHeartbeat, STALE_AFTER_MS } = await import("./live");
+    const s = initialLive(0);
+    expect(linkState(s, 1)).toBe("LIVE");
+    expect(linkState(s, STALE_AFTER_MS + 1)).toBe("STALE");
+    expect(linkState(onHeartbeat(s, "offline", 1), 1)).toBe("OFFLINE");
+    expect(linkState(onHeartbeat(s, "error", 1), 1)).toBe("ERROR");
+    expect(linkState(onHeartbeat(s, "denied", 1), 1)).toBe("UNAVAILABLE");
+  });
+});

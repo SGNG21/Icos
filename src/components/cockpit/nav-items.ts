@@ -1,9 +1,11 @@
 /** Cockpit information architecture. Pure data so it is testable outside React. */
 export const NAV_ITEMS = [
   { href: "/cockpit", label: "Overview", icon: "overview" },
+  { href: "/cockpit/executive", label: "Executive", icon: "executive" },
   { href: "/cockpit/missions", label: "Missions", icon: "missions" },
+  { href: "/cockpit/pipeline", label: "Pipeline", icon: "pipeline" },
   { href: "/cockpit/workers", label: "Workers", icon: "workers" },
-  { href: "/cockpit/providers", label: "Providers", icon: "providers" },
+  { href: "/cockpit/providers", label: "Compute", icon: "providers" },
   { href: "/cockpit/alerts", label: "Alerts", icon: "alerts" },
   { href: "/cockpit/autonomy", label: "Autonomy", icon: "autonomy" },
   { href: "/cockpit/self-development", label: "Self-development", icon: "selfdev" },

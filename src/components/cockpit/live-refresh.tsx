@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   initialLive,
   isStale,
+  linkState,
   nextDelay,
   onHeartbeat,
   type LiveState,
@@ -83,17 +84,17 @@ export function LiveRefresh({ generatedAt }: { generatedAt: string }) {
     document.documentElement.toggleAttribute("data-cx-stale", stale);
   }, [stale]);
   const age = Math.max(0, Math.round((now - state.lastSuccessAt) / 1000));
-  const label =
-    state.status === "denied"
-      ? "Session ended — reload to sign in"
-      : state.status === "offline"
-        ? `Offline · ${age}s old`
-        : stale
-          ? `Stale · ${age}s · reconnecting`
-          : "Live";
+  const link = linkState(state, now);
+  const label = {
+    LIVE: "LIVE",
+    STALE: `STALE · ${age}s old`,
+    OFFLINE: `OFFLINE · data ${age}s old`,
+    ERROR: `ERROR · reconnecting · data ${age}s old`,
+    UNAVAILABLE: "UNAVAILABLE · session ended — reload to sign in",
+  }[link];
 
   return (
-    <span className="cx-live" data-stale={stale || undefined} role="status" aria-live="polite">
+    <span className="cx-live" data-link={link} data-stale={stale || undefined} role="status" aria-live="polite">
       {stale ? <WifiOff aria-hidden size={14} /> : <Radio aria-hidden size={14} />}
       {label}
     </span>

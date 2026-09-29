@@ -4,6 +4,14 @@ import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 
 import { buildDag, type DagInputTask, type NodeStatus } from "./dag";
+import {
+  buildPipeline,
+  integrationBacklog,
+  leaseState,
+  type LeaseState,
+  type QualityFact,
+  type WorkspaceFact,
+} from "./pipeline";
 import { isReal, missing, real, type Truth } from "./truth";
 
 /**
@@ -36,6 +44,10 @@ export interface CockpitSources {
   attempts: Truth<DispatchAttempt[]>;
   pendingApprovals: Truth<number>;
   audit: Truth<AuditEntry[]>;
+  /** Pending quality-control jobs of in-scope missions. */
+  qualityJobs: Truth<QualityFact[]>;
+  /** Workspace registry: integration lifecycle, leases, fencing tokens. */
+  workspaces: Truth<WorkspaceFact[]>;
 }
 
 export type MetricKey =
@@ -115,6 +127,8 @@ export interface WorkerView {
   /** Registry metadata minus anything that looks like a credential. */
   metadata: Record<string, string>;
   assignments: WorkerAssignment[];
+  /** Workspace leases held by this worker (workspace registry). */
+  leases: Truth<{ slug: string; status: string; state: LeaseState; expiresAt: string | null; fencingToken: number }[]>;
   tone: Tone;
   routable: boolean;
 }
@@ -209,6 +223,7 @@ export function buildWorkerViews(
   activeAssignments: Truth<string[]>,
   attempts: Truth<DispatchAttempt[]>,
   now: Date,
+  workspaces: Truth<WorkspaceFact[]> = missing("unknown", "Workspace registry not read."),
 ): WorkerView[] {
   const load = new Map<string, number>();
   if (isReal(activeAssignments)) {
@@ -268,6 +283,19 @@ export function buildWorkerViews(
       tags: [...w.tags],
       metadata: safeMetadata(w.metadata),
       assignments: byWorker.get(w.id) ?? [],
+      leases: isReal(workspaces)
+        ? real(
+            workspaces.value
+              .filter((x) => x.workerId === w.id && x.leaseOwner)
+              .map((x) => ({
+                slug: x.slug,
+                status: x.status,
+                state: leaseState(x, now),
+                expiresAt: x.leaseExpiresAt,
+                fencingToken: x.fencingToken,
+              })),
+          )
+        : (workspaces as WorkerView["leases"]),
       tone: workerTone(w),
       routable,
     };
@@ -583,13 +611,15 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
         sources.activeAssignments,
         sources.attempts,
         sources.now,
+        sources.workspaces,
       )
     : null;
   const missionData = isReal(sources.missions)
     ? summarizeMissions(sources.missions.value, sources.attempts)
     : null;
   const missions = missionData?.summaries ?? null;
-  const alerts = deriveAlerts(sources, workers, missions);
+  const alerts = [...deriveAlerts(sources, workers, missions), ...buildPipeline(sources).alerts];
+  const backlog = integrationBacklog(sources.workspaces);
   const health = deriveHealth(alerts, workers);
   const recentAudit = isReal(sources.audit)
     ? sources.audit.value.filter((e) => Date.parse(e.occurredAt) >= since)
@@ -742,11 +772,11 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     {
       key: "integration",
       label: "Integration",
-      tone: "unknown",
-      metric: missing("not_available", "The integration gate exposes no backlog read.", "BR-14"),
-      metricLabel: "",
-      activity: 0,
-      href: "/cockpit/system",
+      tone: !isReal(backlog) ? "unknown" : backlog.value > 0 ? "warn" : "ok",
+      metric: backlog,
+      metricLabel: "backlog",
+      activity: isReal(backlog) ? backlog.value : 0,
+      href: "/cockpit/pipeline",
     },
     {
       key: "self-development",
@@ -789,11 +819,7 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
       activeWorkers,
       readyQueue,
       reviewBacklog,
-      integrationBacklog: missing(
-        "not_available",
-        "The integration gate exposes no backlog read.",
-        "BR-14",
-      ),
+      integrationBacklog: backlog,
       mustNow,
       providerHealth: telemetry("Provider health"),
       cost: missing(
