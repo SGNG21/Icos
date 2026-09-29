@@ -101,7 +101,13 @@ async function productionContainer(): Promise<Container> {
     ICOS_PLANNER_TIMEOUT_MS: "300000",
     /* The WORKER backend, keyed by runtime. */
     ICOS_WORKER_EXEC_COMMANDS: JSON.stringify({
-      binary: { command: HERMES, args: ["-z", "{{prompt}}", "--cli", "--yolo"], timeoutMs: 600_000 },
+      /*
+       * A RESOURCE BUDGET, not a check. The configured agent runs an extra-high-reasoning model;
+       * on this repository a correct edit took longer than 10 min twice (runs 1 and 2), and a
+       * retry on the same compute would time out the same way. ICOS's handling of a timeout is
+       * proven separately (core3-dag-settlement, SUPERSEDED_ATTEMPT_*).
+       */
+      binary: { command: HERMES, args: ["-z", "{{prompt}}", "--cli", "--yolo"], timeoutMs: 1_200_000 },
     }),
     ICOS_REPO_PATH: REPO,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
@@ -299,5 +305,5 @@ describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an inte
     /* Evaluation and durable learning. */
     expect((await runtime.backlog.get(candidate.id))?.status).toBe("approved");
     expect(await container.durableMemory.getPatterns({ limit: 50 })).not.toHaveLength(0);
-  }, 3_600_000);
+  }, 7_200_000);
 });
