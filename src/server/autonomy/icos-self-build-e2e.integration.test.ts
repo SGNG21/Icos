@@ -11,6 +11,12 @@ import { composeAutonomyRuntime } from "@/server/system/production-services";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { selfDevelopmentIds } from "@/server/autonomy/self-development-chain";
 import { writeSelfDevelopmentEvidence } from "@/server/autonomy/self-development-evidence";
+import {
+  candidateRegistration,
+  classifyModels,
+  computeSnapshot,
+  listOmniRouteModels,
+} from "@/server/workers/compute-fleet";
 
 /*
  * ICOS_SELF_BUILD_E2E — the decisive one.
@@ -94,7 +100,11 @@ async function productionContainer(): Promise<Container> {
      * process instead of HTTP. No OmniRoute endpoint is configured, so there is exactly one
      * reviewer backend and the container's ambiguity refusal stays meaningful.
      */
-    ICOS_REVIEWER_COMMAND: JSON.stringify({ command: HERMES, args: ["-z", "{{prompt}}", "--cli"] }),
+    /* `{{model}}`: the reviewer runs on compute ROUTED per review (decision 0054). */
+    ICOS_REVIEWER_COMMAND: JSON.stringify({
+      command: HERMES,
+      args: ["-z", "{{prompt}}", "--cli", "-m", "{{model}}"],
+    }),
     ICOS_REVIEWER_TIMEOUT_MS: "900000",
     /* The PLANNER backend: a real local agent, named only here as configuration. */
     ICOS_PLANNER_COMMAND: JSON.stringify({ command: HERMES, args: ["-z", "{{prompt}}", "--cli"] }),
@@ -107,7 +117,12 @@ async function productionContainer(): Promise<Container> {
        * retry on the same compute would time out the same way. ICOS's handling of a timeout is
        * proven separately (core3-dag-settlement, SUPERSEDED_ATTEMPT_*).
        */
-      binary: { command: HERMES, args: ["-z", "{{prompt}}", "--cli", "--yolo"], timeoutMs: 1_200_000 },
+      binary: {
+        command: HERMES,
+        /* `{{model}}`: the ROUTED candidate's model runs, not the agent's default (0054). */
+        args: ["-z", "{{prompt}}", "--cli", "--yolo", "-m", "{{model}}"],
+        timeoutMs: 1_200_000,
+      },
     }),
     /* Must outlive the worker budget, or a run that uses it is fenced (refused at boot). */
     ICOS_WORKER_EXECUTION_LEASE_MS: "1500000",
@@ -138,30 +153,34 @@ describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an inte
     );
 
     /*
-     * THE FLEET. Two workers on the configured runtime, differing on every identity axis, so
-     * the existing independence rule can find a reviewer that is provably not the producer.
-     * Registration is what a real deployment's workers do for themselves at boot.
+     * THE FLEET, FROM PROVIDER TRUTH (decision 0054). Which models exist is OmniRoute's answer,
+     * not this test's: one candidate per served model of a recognised family, every one able to
+     * write and to review. No model, family or provider is named here — ICOS routes the writer,
+     * each correction and each reviewer itself, from policy and the ledger. The snapshot is
+     * printed first, without the credential.
      */
+    const omniroute = {
+      baseUrl: process.env.OMNIROUTE_BASE_URL ?? "",
+      credential: process.env.OMNIROUTE_API_KEY ?? "",
+    };
+    expect(omniroute.baseUrl && omniroute.credential, "OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY required to discover compute").toBeTruthy();
+    const served = await listOmniRouteModels(omniroute);
+    console.log(`SELF_BUILD compute snapshot: ${JSON.stringify(computeSnapshot(new URL(omniroute.baseUrl).origin, served), null, 2)}`);
+    const discovered = classifyModels(served);
+    expect(discovered.length, "OmniRoute serves no model of a recognised family").toBeGreaterThan(1);
+
     const fleet: string[] = [];
-    for (const [id, name, model] of [
-      ["11111111-1111-4111-8111-111111111111", "self-build-writer", "writer-model"],
-      ["22222222-2222-4222-8222-222222222222", "self-build-reviewer", "reviewer-model"],
-    ]) {
-      await container.workerRegistration.register({
-        id,
-        workerKind: "agent",
-        displayName: name,
-        capabilities: ["code_editing", "documentation", "analysis"],
+    for (const model of discovered) {
+      const registration = candidateRegistration(model, {
         runtime: "binary",
-        runtimeSupport: "SUPPORTED_RUNTIME",
-        maxConcurrency: 1,
-        metadata: { model, provider: `${name}-provider`, account: `${name}-account` },
+        capabilities: ["code_editing", "documentation", "analysis", "review"],
       });
-      await container.workerRegistration.probe(id, {
+      await container.workerRegistration.register(registration);
+      await container.workerRegistration.probe(registration.id, {
         health: "healthy",
         availability: "available",
       });
-      fleet.push(id);
+      fleet.push(registration.id);
     }
 
     /*

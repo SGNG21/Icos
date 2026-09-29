@@ -182,13 +182,14 @@ export function classifyWorkerFailure(
 
   if (input.process.timedOut) {
     /*
-     * A timeout is NOT "the task failed": we killed the worker, so we do not know
-     * what it had already written. STREAM_FAILED carries exactly that meaning —
-     * the answer never completed, the effect is unknown, resume rather than
-     * restart — and it maps to the fail-closed UNKNOWN_EFFECT business code.
+     * We killed it for exceeding its budget. What it had already written is unknown
+     * (UNKNOWN_EFFECT, like STREAM_FAILED), but the CAUSE is known and it is not the
+     * transport: the compute did not finish in time. Recording it as STREAM_FAILED — as
+     * this did until decision 0054 — made self-build run 5's two budget timeouts
+     * indistinguishable from a dropped connection, so nothing could route away from them.
      */
     return decide(
-      "STREAM_FAILED",
+      "EXECUTION_TIMEOUT",
       `killed after exceeding its timeout (${input.process.durationMs}ms)`,
     );
   }

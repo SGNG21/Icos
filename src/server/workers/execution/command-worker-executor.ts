@@ -272,7 +272,27 @@ export class CommandWorkerExecutor implements WorkerExecutorPort {
         contractPath,
         workspace: workspace.path,
         resumeToken: contract.resumeToken ?? undefined,
+        model: identity.model,
+        provider: identity.provider,
       });
+
+      /*
+       * A template that asks for the model of a worker that declares none must not run: it
+       * would pass an empty `-m` and the CLI would silently use its default — a routing
+       * decision that routed nothing. Refused before anything ran, so the task is untouched.
+       */
+      const missing = (["model", "provider"] as const).filter(
+        (key) => template.some((arg) => arg.includes(`{{${key}}}`)) && !identity[key],
+      );
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          identity,
+          failureClass: "MODEL_UNAVAILABLE",
+          retryable: isRetryableFailure("MODEL_UNAVAILABLE"),
+          message: `WORKER_EXEC_UNROUTABLE: the launch command needs ${missing.join(", ")} and worker ${identity.workerId} declares none`,
+        };
+      }
 
       const result = await this.run({
         command: command.command,
@@ -280,7 +300,7 @@ export class CommandWorkerExecutor implements WorkerExecutorPort {
         /* The worker runs IN its workspace. For a writer that is its own worktree. */
         cwd: workspace.path,
         env: contractEnv(contract, contractPath),
-        timeoutMs: command.timeoutMs ?? this.defaultTimeoutMs,
+        timeoutMs: request.timeoutMs ?? command.timeoutMs ?? this.defaultTimeoutMs,
       });
 
       const process: WorkerProcessObservation = {

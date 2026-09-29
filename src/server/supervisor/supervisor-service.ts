@@ -12,6 +12,7 @@ import type { DurableMemory } from "@/core/context/durable-memory";
 import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/workspace-execution-coordinator";
 
 import type { CapabilityRouter } from "@/server/routing/capability-router";
+import { complexityFromRisk } from "@/core/workers/compute-routing";
 
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
@@ -68,7 +69,15 @@ export class SupervisorService {
    */
   private async routeReadyTask(
     missionTask: { taskId: string; workerKind?: string | null },
-  ): Promise<{ blocked: boolean; workerKind?: string; workerId?: string; reason?: string }> {
+  ): Promise<{
+    blocked: boolean;
+    /** Back-pressure: nothing routable NOW, for reasons that end by themselves. */
+    deferred?: boolean;
+    workerKind?: string;
+    workerId?: string;
+    reason?: string;
+    routingDecision?: Record<string, unknown>;
+  }> {
     if (!this.capabilityRouter) {
       return { blocked: false };
     }
@@ -76,10 +85,35 @@ export class SupervisorService {
     const canonicalTask = await this.taskRepository.getById(missionTask.taskId);
     const requiredCapabilities = canonicalTask?.requiredCapabilities ?? [];
 
-    const routing = await this.capabilityRouter.route({
-      requiredCapabilities,
-      workerKind: missionTask.workerKind ?? undefined,
-    });
+    /*
+     * WHAT must be done, never WHO does it (decision 0054): the planner's canonical Task says
+     * how risky and how broad the work is, and the router chooses compute from that. A first
+     * dispatch has no prior attempts; a correction is routed by QC, with its history.
+     */
+    const routing = await this.capabilityRouter.route(
+      {
+        requiredCapabilities,
+        workerKind: missionTask.workerKind ?? undefined,
+      },
+      {
+        role: "writer",
+        taskType: requiredCapabilities[0],
+        complexity: complexityFromRisk(canonicalTask?.riskClass),
+        risk: canonicalTask?.riskClass,
+        repositoryMutation: (canonicalTask?.allowedFileScope?.length ?? 0) > 0,
+        correctionAttempt: 0,
+        priorAttempts: [],
+      },
+    );
+
+    if (routing.decision === "NO_ELIGIBLE_WORKER" && routing.transient) {
+      /*
+       * A provider cooldown or a full fleet ends by itself (decision 0054). Blocking here would
+       * make one 429 a permanent verdict on every task that became ready during it — nothing
+       * ever moves a task out of `blocked`. Still fail closed: nothing is dispatched.
+       */
+      return { blocked: false, deferred: true, reason: routing.reason };
+    }
 
     if (routing.decision === "NO_ELIGIBLE_WORKER") {
       // FAIL CLOSED: refuse the dispatch rather than hand the task to whatever
@@ -98,6 +132,7 @@ export class SupervisorService {
         blocked: false,
         workerKind: routing.worker.workerKind,
         workerId: routing.worker.id,
+        routingDecision: routing.evidence,
       };
     }
 
@@ -283,7 +318,7 @@ export class SupervisorService {
        * a reason that names nothing actually wrong.
        */
       const pendingAttempt = preparedByTask.get(task.id);
-      const routing = pendingAttempt
+      const routing: Awaited<ReturnType<SupervisorService["routeReadyTask"]>> = pendingAttempt
         ? {
             blocked: false,
             workerKind: pendingAttempt.workerKind,
@@ -294,6 +329,7 @@ export class SupervisorService {
         await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "blocked");
         continue;
       }
+      if (routing.deferred) continue;
       const routedWorkerKind = routing.workerKind ?? task.workerKind ?? undefined;
 
       const prompt = task.description || task.title;
@@ -404,6 +440,7 @@ export class SupervisorService {
                 prompt,
                 workerKind: routedWorkerKind,
                 workerId: routing.workerId,
+                routingDecision: routing.routingDecision,
                 capability: task.capability || undefined,
               })
               .catch(rethrowUnlessCapacity);
@@ -508,6 +545,7 @@ export class SupervisorService {
             prompt,
             workerKind: routedWorkerKind,
             workerId: routing.workerId,
+            routingDecision: routing.routingDecision,
             capability: task.capability || undefined,
           })
           .catch(rethrowUnlessCapacity);

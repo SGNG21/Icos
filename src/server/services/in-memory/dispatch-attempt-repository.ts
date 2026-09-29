@@ -214,6 +214,7 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       workerKind: input.workerKind,
       workerId: input.workerId,
       capability: input.capability,
+      routingDecision: input.routingDecision,
       state: "prepared",
       createdAt: now,
       updatedAt: now,
@@ -487,6 +488,7 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       failureClass: input.failureClass,
       resumeToken: input.resumeToken,
       handoff: input.handoff,
+      executionDurationMs: input.durationMs,
     });
   }
 
@@ -541,7 +543,7 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
     };
   }
 
-  async markCompletedByWorkflowId(workflowId: string): Promise<void> {
+  async markCompletedByWorkflowId(workflowId: string, durationMs?: number): Promise<void> {
     const attempt = Array.from(this.attempts.values()).find(
       (candidate) => candidate.workflowId === workflowId,
     );
@@ -555,6 +557,7 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       ...attempt,
       state: "completed",
       updatedAt: new Date(),
+      ...(durationMs === undefined ? {} : { executionDurationMs: durationMs }),
     });
   }
 

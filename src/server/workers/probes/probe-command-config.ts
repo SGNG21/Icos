@@ -106,7 +106,26 @@ export function createWorkerProbeResolver(
   return (worker) => {
     const declared = configured[worker.runtime];
     if (declared) {
-      return declared;
+      /*
+       * `{{model}}` / `{{provider}}` make the probe ask about THIS candidate's model, not just
+       * whether the runtime starts (decision 0054): "Sonnet is unavailable" is per candidate.
+       * A template that needs a value the worker does not declare is unresolvable — which the
+       * prober records as a dated failure, never a pass.
+       */
+      const values: Record<string, string | undefined> = {
+        "{{model}}": worker.metadata?.model,
+        "{{provider}}": worker.metadata?.provider,
+      };
+      const args = declared.args ?? [];
+      if (args.some((arg) => Object.entries(values).some(([k, v]) => arg.includes(k) && !v))) {
+        return null;
+      }
+      return {
+        ...declared,
+        args: args.map((arg) =>
+          Object.entries(values).reduce((out, [k, v]) => out.split(k).join(v ?? ""), arg),
+        ),
+      };
     }
 
     if (worker.runtime === "node") {

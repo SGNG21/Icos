@@ -4,6 +4,24 @@ Updated: 2026-09-29 (M14 — ICOS improves itself from one sentence; SELF_DEVELO
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
+## WORKER_ROUTER (decision 0054) — 2026-09-29, after self-build run 5 (be74968)
+Governed multi-model worker routing, built on the ONE existing router (CapabilityRouter over
+worker-eligibility.ts); no second router. A compute candidate is a registered worker; the routed
+model now actually runs (`{{model}}` in exec/probe/reviewer commands — before this every worker
+ran the CLI default and `metadata.model` was a label). Policy `compute-routing/1`: tier/cost
+priors for six families, ledger-derived history (14 d, <=50/model, smoothed K=5), cooldowns,
+escalation from ledger facts, one budget/lease invariant (budget + 2 min <= lease), reviewer
+routed independently (writer's worker hard-excluded, writer's model avoided when possible).
+Migration 0048: failure classes EXECUTION_TIMEOUT / AUTH_FAILURE / MODEL_UNAVAILABLE (run 5's
+timeouts had been stored as STREAM_FAILED), `routing_decision` jsonb + `execution_duration_ms`.
+Independent review: REQUEST_CHANGES (B1 cooldown blocked tasks permanently; B2 unfenced budget
+refusal) — both fixed with mutation-proven tests, plus tier fallback, per-runtime budget, reviewer
+tier from REQUEST_CHANGES only, snapshot prints origin only.
+Self-build harness now registers the fleet from OmniRoute `/v1/models`; `pnpm compute:snapshot`.
+RUN 6 NOT STARTED — requires a separate owner decision. The live model inventory has NOT been
+read (the agent may not read the local gateway credential): run `pnpm compute:snapshot` with
+OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY set first.
+
 ## CURRENT_MILESTONE
 M13 — DEFECT 28 CLOSED, decision 0044. The IntegrationGate now runs only AFTER an
        independent canonical review exists. CORE3 is RE-CERTIFIED with the certification

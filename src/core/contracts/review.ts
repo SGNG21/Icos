@@ -43,6 +43,11 @@ export const reviewerProviderMetadataSchema = z
     model: z.string().min(1),
     temperature: z.number().optional(),
     promptVersion: z.string().optional(),
+    /**
+     * ROUTING_DECISION evidence for the REVIEWER's compute (decision 0054), when the reviewer
+     * was routed. Stored with the decision it produced, as the writer's is with its attempt.
+     */
+    routing: z.record(z.string(), z.unknown()).optional(),
   })
   .optional();
 

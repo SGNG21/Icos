@@ -105,6 +105,16 @@ export const workerFailureClassSchema = z.enum([
   "STREAM_FAILED",
   /** The process died abnormally (signal, non-zero with no verdict). */
   "WORKER_CRASHED",
+  /**
+   * ICOS killed the worker for exceeding its execution budget. Distinct from STREAM_FAILED
+   * (a transport death): the model did not finish in time, so repeating the same compute with
+   * the same budget is the least likely thing to work. Routing reads it (decision 0054).
+   */
+  "EXECUTION_TIMEOUT",
+  /** The credential was refused. Retrying on the same account is waste; elsewhere is not. */
+  "AUTH_FAILURE",
+  /** The provider is up but this model is not served. Another model may be. */
+  "MODEL_UNAVAILABLE",
   /** This attempt's execution lease expired; another runner may own it now. */
   "LEASE_EXPIRED",
   /** Retryable, but not attributable to any class above. Honest catch-all. */
@@ -130,6 +140,9 @@ export const WORKER_FAILURE_RETRYABLE: Readonly<Record<WorkerFailureClass, boole
     RATE_LIMITED: true,
     STREAM_FAILED: true,
     WORKER_CRASHED: true,
+    EXECUTION_TIMEOUT: true,
+    AUTH_FAILURE: true,
+    MODEL_UNAVAILABLE: true,
     LEASE_EXPIRED: true,
     FAILED_RETRYABLE: true,
     /* The ONLY terminal class. A worker's explicit "impossible" verdict. */
@@ -154,6 +167,8 @@ export function toExecutionErrorCode(failureClass: WorkerFailureClass): Executio
     case "PROVIDER_UNAVAILABLE":
     case "RATE_LIMITED":
     case "SESSION_EXHAUSTED":
+    case "AUTH_FAILURE":
+    case "MODEL_UNAVAILABLE":
       return "WORKER_UNAVAILABLE";
     /*
      * The work may be PARTIALLY DONE and we cannot say what landed, so this is
@@ -170,6 +185,8 @@ export function toExecutionErrorCode(failureClass: WorkerFailureClass): Executio
     case "STREAM_FAILED":
     case "LEASE_EXPIRED":
     case "WORKER_CRASHED":
+    /* Killed mid-run: what it had written is unknown, exactly like a crash. */
+    case "EXECUTION_TIMEOUT":
       return "UNKNOWN_EFFECT";
     /* A verdict was actually reached: the worker ran and reported failure. */
     case "FAILED_RETRYABLE":

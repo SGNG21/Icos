@@ -78,6 +78,8 @@ export interface QualityControlRepository {
        * worker is the same defect as a dispatch that does.
        */
       workerId?: string;
+      /** ROUTING_DECISION evidence for the retry, stored with the attempt (decision 0054). */
+      routingDecision?: Record<string, unknown>;
       replanReason?: string;
       forceEscalate?: boolean;
     },

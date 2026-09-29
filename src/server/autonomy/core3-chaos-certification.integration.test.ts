@@ -111,6 +111,10 @@ function restart() {
 
   const router = new CapabilityRouter(store, {
     activeAssignments: () => ledger.listActiveWorkerAssignments(),
+    /* Composed as the container composes it (decision 0054). */
+    computeHistory: (since) => ledger.listRecentComputeOutcomes(since),
+    executionLeaseMs: 20 * 60_000,
+    defaultBudgetMs: () => 1_500,
   });
 
   const supervisor = new SupervisorService(
@@ -311,8 +315,8 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
     const afterFault = restart();
     const failed = await afterFault.ledger.getByWorkflowId(workflowIdForAttempt(TASK_ID, 1));
     expect(failed?.state).toBe("failed");
-    /* Killed, so the effect is UNKNOWN — never "the task failed". */
-    expect(failed?.failureClass).toBe("STREAM_FAILED");
+    /* Killed for its budget (decision 0054); the effect is still UNKNOWN — never "the task failed". */
+    expect(failed?.failureClass).toBe("EXECUTION_TIMEOUT");
     expect(
       (await afterFault.executionResults.getByWorkflowId(workflowIdForAttempt(TASK_ID, 1)))?.error
         ?.code,
@@ -363,12 +367,53 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
 
     /* EXACTLY TWO attempts: the fault and its retry. No third, no fork. */
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ attempt: 1, state: "failed", failure_class: "STREAM_FAILED" });
+    expect(rows[0]).toMatchObject({
+      attempt: 1,
+      state: "failed",
+      failure_class: "EXECUTION_TIMEOUT",
+    });
 
     /* REASSIGNED: the retry went to the OTHER worker, chosen by the real router. */
     const otherWorker = firstWorker === WORKER_A ? WORKER_B : WORKER_A;
     expect(rows[1]!.attempt).toBe(2);
     expect(rows[1]!.worker_id).toBe(otherWorker);
+
+    /*
+     * DECISION 0054 — WHY the retry went elsewhere is durable, on the retry's own row, read
+     * from a NEW connection: the ledger's EXECUTION_TIMEOUT on attempt 1 penalised the model
+     * that timed out. Both executions carry their observed duration. Attempt 1's row is the
+     * fault exactly as it happened — the retry added a row and changed none.
+     */
+    const evidence = (await verify.handle.db.execute(
+      sql.raw(
+        `select attempt, routing_decision, execution_duration_ms from dispatch_attempts where mission_task_id = '${MISSION_TASK_ID}' order by attempt`,
+      ),
+    )) as unknown as Array<{
+      attempt: number;
+      routing_decision: Record<string, any> | null;
+      execution_duration_ms: number | null;
+    }>;
+    const retryDecision = evidence[1]!.routing_decision!;
+    expect(retryDecision).toMatchObject({
+      kind: "ROUTING_DECISION",
+      role: "writer",
+      previousFailure: { attempt: 1, failureClass: "EXECUTION_TIMEOUT" },
+      selected: { workerId: otherWorker },
+    });
+    const timedOut = (retryDecision.candidateSet as Array<Record<string, any>>).find(
+      (c) => c.workerId === firstWorker,
+    )!;
+    /* The dead worker lost its health evidence, and its timeout is in the history it carries. */
+    expect(timedOut.selectable).toBe(false);
+    expect(timedOut.excludedBecause).toContain("HEALTH_NOT_HEALTHY");
+    expect(timedOut.history).toMatchObject({
+      executions: 1,
+      timeouts: 1,
+      infraFailures: 1,
+      reviewed: 0,
+    });
+    expect(evidence[0]!.execution_duration_ms).toBeGreaterThanOrEqual(1_400);
+    expect(evidence[1]!.execution_duration_ms).not.toBeNull();
 
     /* EXACTLY ONE SUCCESS among exactly two results. */
     const results = (await verify.handle.db.execute(

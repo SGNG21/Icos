@@ -1,4 +1,11 @@
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
+import {
+  evaluateCompute,
+  scoreCompute,
+  type ComputeContext,
+  type ComputeExclusion,
+  type ComputeVerdict,
+} from "./compute-routing";
 
 /**
  * THE canonical worker eligibility authority (decision 0031).
@@ -132,6 +139,12 @@ export interface WorkerRequirement {
    * capacity under concurrency.
    */
   load?: WorkerLoadSnapshot;
+  /**
+   * Governed compute routing (decision 0054). Absent: exactly the pre-0054 behaviour — gates
+   * above, then least-load, then id. Present: the compute gates also apply and eligible
+   * candidates are ORDERED BY POLICY SCORE. Never loosens a gate above.
+   */
+  compute?: ComputeContext;
 }
 
 export interface WorkerEligibilityVerdict {
@@ -265,6 +278,13 @@ export function selectEligibleWorkers(
   workers: readonly WorkerRegistryEntry[],
   requirement: WorkerRequirement = {},
 ): WorkerRegistryEntry[] {
+  if (requirement.compute) {
+    const byId = new Map(workers.map((w) => [w.id, w] as const));
+    return rankComputePool(workers, requirement)
+      .filter((c) => c.selectable)
+      .map((c) => byId.get(c.workerId)!);
+  }
+
   const load = requirement.load;
 
   return workers
@@ -278,6 +298,117 @@ export function selectEligibleWorkers(
       }
       return a.id.localeCompare(b.id);
     });
+}
+
+/** One candidate's full routing verdict: the canonical gates, then the compute policy. */
+export interface ComputeCandidateVerdict extends ComputeVerdict {
+  eligibility: WorkerEligibilityVerdict;
+  /** Passed every canonical gate AND every compute gate. */
+  selectable: boolean;
+  /** Set when a PREFERENCE gate was relaxed because nothing else qualified. Recorded, never silent. */
+  fallback?: "TIER_FALLBACK";
+}
+
+/**
+ * Refusals that end by themselves: a cooldown lapses, a slot frees. A routing that fails ONLY
+ * for these is back-pressure — the task stays ready — never a verdict on the task.
+ */
+export const TRANSIENT_EXCLUSIONS: ReadonlySet<string> = new Set([
+  "PROVIDER_COOLDOWN",
+  "AT_CAPACITY",
+  "CAPACITY_POOL_SATURATED",
+]);
+
+/** True when some candidate is refused for transient reasons only. */
+export function isTransientRefusal(verdicts: readonly ComputeCandidateVerdict[]): boolean {
+  return (
+    !verdicts.some((v) => v.selectable) &&
+    verdicts.some((v) => {
+      const reasons = [...v.eligibility.reasons, ...v.exclusions];
+      return reasons.length > 0 && reasons.every((r) => TRANSIENT_EXCLUSIONS.has(r));
+    })
+  );
+}
+
+/**
+ * Governed compute ranking (decision 0054). Every candidate, in decision order: selectable
+ * ones first by score (desc), then load, then id; the excluded after them by id. This list IS
+ * the ROUTING_DECISION evidence — nothing is chosen that it does not explain.
+ *
+ * WRITER/REVIEWER INDEPENDENCE: for a reviewer, a candidate running the writer's own model is
+ * excluded — but only when a different model is otherwise selectable. Refusing all review
+ * because the only qualified reviewer shares the writer's model would stall the task on a
+ * preference; the gate's own self-review refusal stays the hard rule.
+ */
+export function rankComputePool(
+  workers: readonly WorkerRegistryEntry[],
+  requirement: WorkerRequirement,
+): ComputeCandidateVerdict[] {
+  const ctx = requirement.compute;
+  if (!ctx) throw new Error("rankComputePool requires a compute requirement");
+
+  const verdicts: ComputeCandidateVerdict[] = workers.map((worker) => {
+    const eligibility = evaluateWorkerEligibility(worker, requirement);
+    const compute = evaluateCompute(worker, ctx);
+    return {
+      ...compute,
+      eligibility,
+      selectable: eligibility.eligible && compute.exclusions.length === 0,
+    };
+  });
+
+  /*
+   * TIER IS A PREFERENCE, NOT A WALL. When nothing meets the required tier, the strongest
+   * candidates that fail ONLY that gate are re-admitted and marked. Refusing would stall a
+   * correction for ever (QC treats NO_ELIGIBLE_WORKER as back-pressure) on a fleet that could
+   * still do the work — and the correction bound would never be reached.
+   */
+  if (!verdicts.some((v) => v.selectable)) {
+    const onlyTier = verdicts.filter(
+      (v) => v.eligibility.eligible && v.exclusions.length === 1 && v.exclusions[0] === "BELOW_REQUIRED_TIER",
+    );
+    const best = Math.max(...onlyTier.map((v) => v.profile.tier ?? 0));
+    for (const v of onlyTier) {
+      if ((v.profile.tier ?? 0) === best) {
+        v.selectable = true;
+        v.fallback = "TIER_FALLBACK";
+      }
+    }
+  }
+
+  const writerModel = ctx.requirement.role === "reviewer" ? ctx.requirement.writerModelKey : undefined;
+  if (writerModel) {
+    const independentExists = verdicts.some(
+      (v) => v.selectable && v.profile.modelKey !== writerModel,
+    );
+    if (independentExists) {
+      for (const v of verdicts) {
+        if (v.selectable && v.profile.modelKey === writerModel) {
+          v.exclusions.push("SAME_MODEL_AS_WRITER" satisfies ComputeExclusion);
+          v.selectable = false;
+        }
+      }
+    }
+  }
+
+  const loadOf = (id: string) => requirement.load?.byWorkerId[id] ?? 0;
+  const byId = new Map(workers.map((w) => [w.id, w] as const));
+  for (const v of verdicts) {
+    if (v.selectable) {
+      v.score = scoreCompute(v, ctx, loadOf(v.workerId), byId.get(v.workerId)!.maxConcurrency);
+    }
+  }
+
+  return verdicts.sort((a, b) => {
+    if (a.selectable !== b.selectable) return a.selectable ? -1 : 1;
+    if (a.selectable && b.selectable) {
+      const delta = (b.score?.total ?? 0) - (a.score?.total ?? 0);
+      if (delta !== 0) return delta;
+      const load = loadOf(a.workerId) - loadOf(b.workerId);
+      if (load !== 0) return load;
+    }
+    return a.workerId.localeCompare(b.workerId);
+  });
 }
 
 /**

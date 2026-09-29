@@ -228,6 +228,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       nextWorkflowId?: string;
       prompt?: string;
       workerId?: string;
+      routingDecision?: Record<string, unknown>;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -310,6 +311,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
             workerKind: previous[0]?.workerKind ?? null,
             /* Routed by the caller through the canonical CapabilityRouter (M7.1). */
             workerId: input.workerId ?? null,
+            routingDecision: input.routingDecision ?? null,
             capability: previous[0]?.capability ?? null,
             state: "prepared",
             createdAt: sql`now()`,

@@ -38,7 +38,11 @@ import {
   parseWorkerProbeCommands,
   probeableRuntimes,
 } from "@/server/workers/probes/probe-command-config";
-import { CommandWorkerExecutor } from "@/server/workers/execution/command-worker-executor";
+import {
+  CommandWorkerExecutor,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+} from "@/server/workers/execution/command-worker-executor";
+import { budgetFitsLease, SETTLEMENT_MARGIN_MS } from "@/core/workers/compute-routing";
 import {
   createWorkerExecResolver,
   executableRuntimes,
@@ -620,6 +624,16 @@ export async function buildPostgresContainer(
      * and a restart recounts them identically.
      */
     activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
+    /* Decision 0054: compute history and the budget/lease facts come from the same authority. */
+    computeHistory: (since) => dispatchAttempts.listRecentComputeOutcomes(since),
+    executionLeaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS ?? DEFAULT_EXECUTION_LEASE_MS,
+    defaultBudgetMs: runtimeDefaultBudgetMs(env),
+    steersModel: (runtime) =>
+      Boolean(
+        parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS)[runtime]?.args.some((arg) =>
+          arg.includes("{{model}}"),
+        ),
+      ),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(
@@ -1089,14 +1103,27 @@ function governedWorkflow(
  * A worker allowed to run as long as (or longer than) its execution lease is fenced every time it
  * uses its budget: the lease is not renewed while it runs, so the result is discarded as stale
  * (self-build run 3). Refused at boot rather than discovered twenty minutes into a run.
+ *
+ * ONE invariant (decision 0054), shared with per-candidate routing: budget + settlement margin
+ * <= lease. Equality was already refused; a budget that ends seconds before the lease lapses
+ * leaves no time to collect evidence and settle, and is refused now too.
  */
 function assertExecutionLeaseOutlivesWorkers(env: Env): void {
   const leaseMs = env.ICOS_WORKER_EXECUTION_LEASE_MS ?? DEFAULT_EXECUTION_LEASE_MS;
   for (const [runtime, command] of Object.entries(parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS))) {
-    if (command?.timeoutMs !== undefined && command.timeoutMs >= leaseMs) {
+    if (command?.timeoutMs !== undefined && !budgetFitsLease(command.timeoutMs, leaseMs)) {
       throw new Error(
-        `WORKER_TIMEOUT_EXCEEDS_EXECUTION_LEASE: ${runtime} timeoutMs=${command.timeoutMs} >= ICOS_WORKER_EXECUTION_LEASE_MS=${leaseMs}`,
+        `WORKER_TIMEOUT_EXCEEDS_EXECUTION_LEASE: ${runtime} timeoutMs=${command.timeoutMs} + settlement margin ${SETTLEMENT_MARGIN_MS} > ICOS_WORKER_EXECUTION_LEASE_MS=${leaseMs}`,
       );
     }
   }
+}
+
+/**
+ * The budget a candidate that declares none will actually run with: ITS runtime's configured
+ * timeout, else the executor's default — exactly what the executor would use.
+ */
+function runtimeDefaultBudgetMs(env: Env): (runtime: WorkerRuntimeDescriptor) => number {
+  const commands = parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS);
+  return (runtime) => commands[runtime]?.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 }

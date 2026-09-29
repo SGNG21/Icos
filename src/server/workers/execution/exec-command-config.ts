@@ -32,6 +32,13 @@ export const EXEC_PLACEHOLDERS = {
   resumeToken: "{{resumeToken}}",
   /** Absolute path of the isolated workspace. */
   workspace: "{{workspace}}",
+  /**
+   * The ROUTED candidate's model and provider (decision 0054), from its registration. This is
+   * what makes a routing decision real: without it every worker on a runtime runs whatever the
+   * CLI defaults to, and `metadata.model` is only a label.
+   */
+  model: "{{model}}",
+  provider: "{{provider}}",
 } as const;
 
 const execCommandSchema = z

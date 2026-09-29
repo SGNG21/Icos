@@ -175,6 +175,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       prompt?: string;
       /** The worker the retry is ROUTED to (M7.1). */
       workerId?: string;
+      routingDecision?: Record<string, unknown>;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -199,6 +200,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       prompt?: string;
       /** The worker the retry is ROUTED to (M7.1). */
       workerId?: string;
+      routingDecision?: Record<string, unknown>;
       replanReason?: string;
       forceEscalate?: boolean;
     },
@@ -268,6 +270,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
            * same guarantee as PostgreSQL for free.
            */
           workerId: input.workerId,
+          routingDecision: input.routingDecision,
           capability: missionTask?.capability ?? undefined,
         });
         dispatchAcquired = prepared.acquired;

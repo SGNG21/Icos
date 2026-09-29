@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import {
+  budgetFitsLease,
+  computeProfileOf,
+  SETTLEMENT_MARGIN_MS,
+} from "@/core/workers/compute-routing";
+import {
   toExecutionErrorCode,
   workerTaskContractSchema,
   type WorkerExecutionOutcome,
@@ -146,6 +151,21 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
       return { workflowId: input.workflowId };
     }
 
+    /*
+     * THE BUDGET/LEASE INVARIANT, checked only once THIS runner holds the lease (decision 0054): a refusal is a terminal write, and an unfenced one could fail another runner's live attempt. The
+     * router already excludes a candidate whose budget cannot fit; this refuses an attempt that
+     * reached here anyway (routed before 0054, registration changed since). Nothing has run, so
+     * the task is untouched and the retry is routed afresh — where the gate now applies.
+     */
+    const budgetMs = routedBudgetMs(attempt.routingDecision) ?? computeProfileOf(worker).executionBudgetMs;
+    if (budgetMs !== undefined && !budgetFitsLease(budgetMs, this.leaseMs)) {
+      await this.settleFailure(attempt.id, input, {
+        failureClass: "PROVIDER_UNAVAILABLE",
+        message: `BUDGET_EXCEEDS_LEASE: budget ${budgetMs}ms + settlement margin ${SETTLEMENT_MARGIN_MS}ms > lease ${this.leaseMs}ms`,
+      });
+      return { workflowId: input.workflowId };
+    }
+
     /* Resume state from the most recent attempt that produced any. */
     const resumable = await this.deps.dispatchAttempts.latestResumableState(
       attempt.missionTaskId,
@@ -194,6 +214,7 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
         workspace,
         stillOwnsLease: () =>
           this.deps.dispatchAttempts.holdsExecutionLease(attempt.id, this.owner),
+        timeoutMs: budgetMs,
       });
 
       await this.settle(attempt.id, input, outcome);
@@ -243,7 +264,10 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
      * ever, since only the legacy callback route ever completed one. Review and integration
      * are the task's lifecycle, not the attempt's.
      */
-    await this.deps.dispatchAttempts.markCompletedByWorkflowId(input.workflowId!);
+    await this.deps.dispatchAttempts.markCompletedByWorkflowId(
+      input.workflowId!,
+      outcome.process.durationMs,
+    );
   }
 
   private async settleFailure(
@@ -263,6 +287,7 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
       message: failure.message,
       resumeToken: failure.resumeToken,
       handoff: failure.handoff,
+      durationMs: failure.outcome?.ok === false ? failure.outcome.process?.durationMs : undefined,
     });
 
     await this.record({
@@ -309,6 +334,14 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
       durableMemory: this.deps.durableMemory,
     };
   }
+}
+
+/** The budget routing recorded on the attempt, if it recorded one. */
+function routedBudgetMs(evidence: Record<string, unknown> | undefined): number | undefined {
+  const budget = evidence?.budget as { ms?: unknown } | undefined;
+  return typeof budget?.ms === "number" && Number.isSafeInteger(budget.ms) && budget.ms > 0
+    ? budget.ms
+    : undefined;
 }
 
 function truncate(text: string, max = 20_000): string | undefined {

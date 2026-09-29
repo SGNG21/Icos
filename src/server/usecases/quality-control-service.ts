@@ -9,10 +9,14 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskExecutionResultRepository, TaskRepository } from "@/server/repositories/ports";
 import type { ReviewDecisionRepository } from "@/server/review/review-decision-repository";
-import type { ReviewerService } from "@/server/review/ports";
+import type { ReviewerCompute, ReviewerService } from "@/server/review/ports";
+
+/** The capability a candidate declares to be routable as an independent reviewer (0054). */
+export const REVIEW_CAPABILITY = "review";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 import type { CapabilityRouter } from "@/server/routing/capability-router";
+import { complexityFromRisk, type PriorAttemptFact } from "@/core/workers/compute-routing";
 
 const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
 /** Cool-down before a review parked as unavailable is retried with a fresh budget. */
@@ -206,9 +210,14 @@ export class QualityControlService {
          * worker should run something. The routed worker's capacity is then enforced
          * inside `applyAction`'s transaction by the shared guard.
          */
-        const retryWorkerId =
+        const retryRouting =
           current.action === "CORRECT" || current.action === "RETRY"
-            ? await this.routeRetry(current.taskId, originalAttempt?.workerKind)
+            ? await this.routeRetry(
+                current.taskId,
+                originalAttempt?.workerKind,
+                current.executionAttempt,
+                taskReviews,
+              )
             : undefined;
 
         const applied = await this.deps.qualityJobs.applyAction(job.workflowId, ownerToken, {
@@ -216,7 +225,8 @@ export class QualityControlService {
             ? {
                 nextAttempt,
                 nextWorkflowId: workflowIdForAttempt(current.taskId, nextAttempt),
-                workerId: retryWorkerId,
+                workerId: retryRouting?.workerId,
+                routingDecision: retryRouting?.evidence,
                 prompt: [
                   "Original task objective:",
                   originalAttempt!.prompt,
@@ -290,8 +300,10 @@ export class QualityControlService {
    */
   private async routeRetry(
     taskId: string,
-    workerKind?: string,
-  ): Promise<string | undefined> {
+    workerKind: string | undefined,
+    executionAttempt: number,
+    taskReviews: readonly { workflowId: string; decision: string }[],
+  ): Promise<{ workerId?: string; evidence?: Record<string, unknown> } | undefined> {
     if (!this.deps.capabilityRouter) return undefined;
 
     /*
@@ -300,13 +312,43 @@ export class QualityControlService {
      * routes.
      */
     const canonicalTask = await this.deps.tasks.getById(taskId);
-    const routing = await this.deps.capabilityRouter.route({
-      requiredCapabilities: canonicalTask?.requiredCapabilities ?? [],
-      workerKind,
-    });
+
+    /*
+     * WHAT EVERY EARLIER ATTEMPT OF THIS TASK DID (decision 0054): which worker ran it, how it
+     * ended, what the independent reviewer said. Read from the ledger, so a restarted process
+     * escalates exactly as the one that died would have. Attempt history is only READ here.
+     */
+    const verdictOf = new Map(taskReviews.map((r) => [r.workflowId, r.decision] as const));
+    const priorAttempts: PriorAttemptFact[] = [];
+    for (let n = 1; n <= executionAttempt; n += 1) {
+      const attempt = await this.deps.dispatchAttempts.getByWorkflowId(workflowIdForAttempt(taskId, n));
+      if (!attempt) continue;
+      priorAttempts.push({
+        attempt: n,
+        workerId: attempt.workerId,
+        failureClass: attempt.failureClass,
+        reviewVerdict: verdictOf.get(attempt.workflowId),
+      });
+    }
+
+    const routing = await this.deps.capabilityRouter.route(
+      {
+        requiredCapabilities: canonicalTask?.requiredCapabilities ?? [],
+        workerKind,
+      },
+      {
+        role: "writer",
+        taskType: canonicalTask?.requiredCapabilities?.[0],
+        complexity: complexityFromRisk(canonicalTask?.riskClass),
+        risk: canonicalTask?.riskClass,
+        repositoryMutation: (canonicalTask?.allowedFileScope?.length ?? 0) > 0,
+        correctionAttempt: taskReviews.filter((r) => r.decision === "REQUEST_CHANGES").length,
+        priorAttempts,
+      },
+    );
 
     if (routing.decision === "ROUTED" && routing.worker) {
-      return routing.worker.id;
+      return { workerId: routing.worker.id, evidence: routing.evidence };
     }
 
     if (routing.decision === "NO_ELIGIBLE_WORKER") {
@@ -316,6 +358,47 @@ export class QualityControlService {
 
     /* ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour. */
     return undefined;
+  }
+
+  /**
+   * Routes the REVIEWER's compute independently of the writer's (decision 0054): a candidate
+   * that can review (capability `review`), not the writer's worker, and — when any other model
+   * qualifies — not the writer's model. No candidate means the deployment's configured reviewer
+   * reviews, exactly as before: this can only add independence, never remove the review.
+   */
+  private async routeReviewer(
+    workflowId: string,
+    taskId: string,
+  ): Promise<ReviewerCompute | undefined> {
+    if (!this.deps.capabilityRouter) return undefined;
+    const writer = await this.deps.dispatchAttempts.getByWorkflowId(workflowId);
+    const canonicalTask = await this.deps.tasks.getById(taskId);
+    const routing = await this.deps.capabilityRouter.route(
+      {
+        requiredCapabilities: [REVIEW_CAPABILITY],
+        excludeWorkerIds: writer?.workerId ? [writer.workerId] : [],
+      },
+      {
+        role: "reviewer",
+        taskType: canonicalTask?.requiredCapabilities?.[0],
+        complexity: complexityFromRisk(canonicalTask?.riskClass),
+        risk: canonicalTask?.riskClass,
+        repositoryMutation: false,
+        /* Legitimate rejections only: an infrastructure retry is not a harder review. */
+        correctionAttempt: (await this.deps.reviewDecisions.listByTaskId(taskId)).filter(
+          (d) => d.decision === "REQUEST_CHANGES",
+        ).length,
+        priorAttempts: [],
+        writerWorkerId: writer?.workerId,
+      },
+    );
+    if (routing.decision !== "ROUTED" || !routing.worker) return undefined;
+    return {
+      workerId: routing.worker.id,
+      model: routing.worker.metadata?.model,
+      provider: routing.worker.metadata?.provider,
+      routing: routing.evidence,
+    };
   }
 
   private async review(workflowId: string, signal?: AbortSignal) {
@@ -335,7 +418,9 @@ export class QualityControlService {
     }
 
     signal?.throwIfAborted();
+    const reviewerCompute = await this.routeReviewer(workflowId, task.id);
     const review = await this.deps.reviewer.review({
+      reviewerCompute,
       mission,
       missionTask,
       task: {

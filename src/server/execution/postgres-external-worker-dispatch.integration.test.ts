@@ -429,6 +429,48 @@ describe("M6.3 external worker dispatch end to end (PostgreSQL)", () => {
     expect(await git(repo, ["branch", "--list", "icos/worker/*"])).toBe("");
   });
 
+  it("DECISION 0054 — the budget/lease refusal is FENCED: it never fails another runner's live attempt", async () => {
+    const { id, workflowId } = await makeAttempt(1);
+    /* The routed budget cannot fit this runner's lease (600s budget vs 300s lease). */
+    await seed.handle.db
+      .update(dispatchAttempts)
+      .set({ routingDecision: { kind: "ROUTING_DECISION", budget: { ms: 600_000 } } })
+      .where(eq(dispatchAttempts.id, id));
+    expect(await restart().ledger.acquireExecutionLease(id, "runner-A", 600_000)).toBe(true);
+
+    const ctx = restart();
+    await dispatcherWith(ctx, COMMITTING_WORKER, { owner: "runner-B", leaseMs: 300_000 }).dispatch({
+      taskId: TASK_ID,
+      missionId: MISSION_ID,
+      workflowId,
+      prompt: "work",
+      capability: CAPABILITY,
+    });
+    /* Runner A still owns a live attempt: nothing was written over it. */
+    const after = restart();
+    expect((await after.ledger.getByWorkflowId(workflowId))?.state).toBe("dispatched");
+    expect(await after.ledger.holdsExecutionLease(id, "runner-A")).toBe(true);
+    expect(await after.executionResults.getByWorkflowId(workflowId)).toBeNull();
+
+    /* The lease holder ITSELF refuses before running anything. */
+    const fresh = await makeAttempt(2);
+    await seed.handle.db
+      .update(dispatchAttempts)
+      .set({ routingDecision: { kind: "ROUTING_DECISION", budget: { ms: 600_000 } } })
+      .where(eq(dispatchAttempts.id, fresh.id));
+    await dispatcherWith(restart(), COMMITTING_WORKER, { leaseMs: 300_000 }).dispatch({
+      taskId: TASK_ID,
+      missionId: MISSION_ID,
+      workflowId: fresh.workflowId,
+      prompt: "work",
+      capability: CAPABILITY,
+    });
+    const refused = await restart().ledger.getByWorkflowId(fresh.workflowId);
+    expect(refused?.state).toBe("failed");
+    expect(refused?.lastError).toMatch(/BUDGET_EXCEEDS_LEASE/);
+    expect(await git(repo, ["branch", "--list", "icos/worker/*"])).toBe("");
+  });
+
   it("A RUN THAT LOSES ITS LEASE MID-FLIGHT IS FENCED, even when it SUCCEEDED", async () => {
     const { id, workflowId } = await makeAttempt(1);
     const ctx = restart();

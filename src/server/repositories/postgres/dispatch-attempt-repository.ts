@@ -12,9 +12,11 @@ import {
 } from "@/core/contracts/dispatch-attempt";
 import type { AuditEntry } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
+import type { ComputeOutcome } from "@/core/workers/compute-routing";
 import {
   actions,
   auditEntries,
+  decisions,
   dispatchAttempts,
   missionTasks,
   tasks,
@@ -46,6 +48,8 @@ function mapRow(row: typeof dispatchAttempts.$inferSelect): DispatchAttempt {
     failureClass: (row.failureClass as DispatchAttempt["failureClass"]) ?? undefined,
     resumeToken: row.resumeToken ?? undefined,
     handoff: (row.handoff as Record<string, unknown> | null) ?? undefined,
+    routingDecision: (row.routingDecision as Record<string, unknown> | null) ?? undefined,
+    executionDurationMs: row.executionDurationMs ?? undefined,
   };
 }
 
@@ -67,6 +71,47 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
       );
 
     return rows.map((row) => row.workerId as string).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Terminal attempts that name a worker, settled at or after `since`, newest first, with the
+   * independent review verdict on each (decision 0054). Bounded by `limit`: routing history is
+   * a recent window, never a table scan.
+   */
+  async listRecentComputeOutcomes(since: Date, limit = 2_000): Promise<ComputeOutcome[]> {
+    const rows = await this.db
+      .select({
+        workerId: dispatchAttempts.workerId,
+        taskId: dispatchAttempts.taskId,
+        attempt: dispatchAttempts.attempt,
+        state: dispatchAttempts.state,
+        failureClass: dispatchAttempts.failureClass,
+        durationMs: dispatchAttempts.executionDurationMs,
+        at: dispatchAttempts.updatedAt,
+        verdict: decisions.decision,
+      })
+      .from(dispatchAttempts)
+      .leftJoin(decisions, eq(decisions.workflowId, dispatchAttempts.workflowId))
+      .where(
+        and(
+          isNotNull(dispatchAttempts.workerId),
+          inArray(dispatchAttempts.state, ["completed", "failed"]),
+          gte(dispatchAttempts.updatedAt, since),
+        ),
+      )
+      .orderBy(desc(dispatchAttempts.updatedAt), asc(dispatchAttempts.id))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      workerId: row.workerId as string,
+      taskId: row.taskId,
+      attempt: row.attempt,
+      state: row.state as ComputeOutcome["state"],
+      failureClass: (row.failureClass as ComputeOutcome["failureClass"]) ?? undefined,
+      reviewVerdict: row.verdict ?? undefined,
+      durationMs: row.durationMs ?? undefined,
+      at: row.at.toISOString(),
+    }));
   }
 
   async prepare(input: PrepareDispatchAttemptInput): Promise<PrepareDispatchAttemptResult> {
@@ -140,6 +185,7 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
           workerKind: input.workerKind ?? null,
           workerId: input.workerId ?? null,
           capability: input.capability ?? null,
+          routingDecision: input.routingDecision ?? null,
           state: "prepared",
           createdAt: now,
           updatedAt: now,
@@ -487,6 +533,7 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         failureClass: input.failureClass,
         resumeToken: input.resumeToken ?? null,
         handoff: input.handoff ?? null,
+        executionDurationMs: durationOrNull(input.durationMs),
         executionLeaseOwner: null,
         executionLeaseUntil: null,
       })
@@ -574,12 +621,13 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     };
   }
 
-  async markCompletedByWorkflowId(workflowId: string): Promise<void> {
+  async markCompletedByWorkflowId(workflowId: string, durationMs?: number): Promise<void> {
     const updated = await this.db
       .update(dispatchAttempts)
       .set({
         state: "completed",
         updatedAt: new Date(),
+        ...(durationMs === undefined ? {} : { executionDurationMs: durationOrNull(durationMs) }),
         claimToken: null,
         claimUntil: null,
       })
@@ -646,4 +694,9 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
 
     return rows.map(mapRow);
   }
+}
+
+/** A duration is a non-negative integer or nothing: never a value the CHECK would refuse. */
+function durationOrNull(ms: number | undefined): number | null {
+  return ms === undefined || !Number.isFinite(ms) || ms < 0 ? null : Math.round(ms);
 }

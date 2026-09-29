@@ -43,13 +43,16 @@ const config = parseWorkerFailureConfig(
 );
 
 describe("M6.3 worker failure taxonomy", () => {
-  it("ALL EIGHT REQUIRED CLASSES EXIST", () => {
+  it("ALL REQUIRED CLASSES EXIST (M6.3 eight + decision 0054 three)", () => {
     expect(workerFailureClassSchema.options).toEqual([
       "SESSION_EXHAUSTED",
       "PROVIDER_UNAVAILABLE",
       "RATE_LIMITED",
       "STREAM_FAILED",
       "WORKER_CRASHED",
+      "EXECUTION_TIMEOUT",
+      "AUTH_FAILURE",
+      "MODEL_UNAVAILABLE",
       "LEASE_EXPIRED",
       "FAILED_RETRYABLE",
       "FAILED_TERMINAL",

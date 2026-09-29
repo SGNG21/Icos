@@ -43,6 +43,11 @@ export interface WorkerExecutionRequest {
    * failure this whole layer exists to prevent.
    */
   stillOwnsLease?: () => Promise<boolean>;
+  /**
+   * The execution budget ROUTING selected for this attempt (decision 0054). Overrides the
+   * runtime command's timeout; the dispatcher has already checked it fits the lease.
+   */
+  timeoutMs?: number;
 }
 
 /** One runtime's way of launching a worker. */

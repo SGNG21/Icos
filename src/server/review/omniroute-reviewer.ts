@@ -124,7 +124,8 @@ export class OmniRouteReviewer implements ReviewerPort {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: this.options.model,
+          /* The routed reviewer model when there is one; OmniRoute serves any model it lists. */
+          model: input.reviewerCompute?.model ?? this.options.model,
           temperature: 0,
           response_format: { type: "json_object" },
           messages: [
@@ -167,9 +168,14 @@ export class OmniRouteReviewer implements ReviewerPort {
       return {
         ...parsed.data,
         providerMetadata: {
-          provider: "omniroute",
-          model: this.options.model,
+          provider: input.reviewerCompute?.model
+            ? (input.reviewerCompute.provider ?? "omniroute")
+            : "omniroute",
+          model: input.reviewerCompute?.model ?? this.options.model,
           temperature: 0,
+          ...(input.reviewerCompute?.model && input.reviewerCompute.routing
+            ? { routing: input.reviewerCompute.routing }
+            : {}),
         },
       };
     } catch (error) {

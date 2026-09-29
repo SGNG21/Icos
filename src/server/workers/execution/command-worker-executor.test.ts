@@ -400,8 +400,8 @@ describe("M6.3 command worker executor", () => {
 
     const failure = asFailure(outcome);
     expect(failure.process?.timedOut).toBe(true);
-    // We killed it, so we do NOT know what it had already written.
-    expect(failure.failureClass).toBe("STREAM_FAILED");
+    // We killed it for its budget: a timeout, not a transport death (decision 0054).
+    expect(failure.failureClass).toBe("EXECUTION_TIMEOUT");
     expect(failure.retryable).toBe(true);
   });
 

@@ -41,6 +41,13 @@ export interface DispatchAttempt {
   resumeToken?: string;
   /** What this attempt had already accomplished when it stopped. */
   handoff?: Record<string, unknown>;
+  /**
+   * ROUTING_DECISION evidence (decision 0054, migration 0048): why this compute, written with
+   * the attempt and never changed. Absent on attempts routed before 0054 or not routed.
+   */
+  routingDecision?: Record<string, unknown>;
+  /** What the worker process actually took, when observed. */
+  executionDurationMs?: number;
 }
 
 /**
@@ -59,6 +66,8 @@ export interface ResumableAttemptState {
 export interface RecordExecutionFailureInput {
   failureClass: WorkerFailureClass;
   message: string;
+  /** What the worker process took, when a process ran. Feeds routing history. */
+  durationMs?: number;
   resumeToken?: string;
   handoff?: Record<string, unknown>;
 }
@@ -99,6 +108,8 @@ export interface PrepareDispatchAttemptInput {
    */
   workerId?: string;
   capability?: string;
+  /** ROUTING_DECISION evidence, persisted in the same transaction as the intent (0054). */
+  routingDecision?: Record<string, unknown>;
 }
 
 /**
@@ -218,7 +229,8 @@ export interface DispatchAttemptRepository {
    */
   latestResumableState(missionTaskId: string): Promise<ResumableAttemptState | null>;
 
-  markCompletedByWorkflowId(workflowId: string): Promise<void>;
+  /** `durationMs`: what the worker process took, when a process ran (routing history, 0054). */
+  markCompletedByWorkflowId(workflowId: string, durationMs?: number): Promise<void>;
 
   getByWorkflowId(workflowId: string): Promise<DispatchAttempt | null>;
 

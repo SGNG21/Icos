@@ -38,6 +38,20 @@ export interface ReviewInput {
   policyContext?: Record<string, unknown>;
   /** Annulation coopérative sur perte de propriété du runner. */
   signal?: AbortSignal;
+  /**
+   * The compute ROUTED to review this work (decision 0054), chosen independently of the
+   * writer's. A reviewer backend that can steer its model uses it and reports it; one that
+   * cannot ignores it and reports its own identity, so the durable record never claims a
+   * model that did not run.
+   */
+  reviewerCompute?: ReviewerCompute;
+}
+
+export interface ReviewerCompute {
+  workerId: string;
+  model?: string;
+  provider?: string;
+  routing?: Record<string, unknown>;
 }
 
 /**
@@ -71,6 +85,7 @@ export interface ReviewerPort {
       model: string;
       temperature?: number;
       promptVersion?: string;
+      routing?: Record<string, unknown>;
     };
   }>;
 }

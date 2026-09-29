@@ -36,6 +36,9 @@ import { runNonInteractive, type NonInteractiveRunner } from "@/server/workers/p
 export const REVIEWER_PLACEHOLDERS = {
   /** The full prompt: canonical review policy followed by the untrusted review context. */
   prompt: "{{prompt}}",
+  /** The ROUTED reviewer model/provider (decision 0054). */
+  model: "{{model}}",
+  provider: "{{provider}}",
 } as const;
 
 export interface CommandReviewerOptions {
@@ -115,8 +118,22 @@ export class CommandReviewer implements ReviewerPort {
      * reviewer sends as two messages.
      */
     const prompt = `${reviewerSystemPrompt()}\n\n${reviewerUserPrompt(input)}`;
+    /*
+     * A command that names `{{model}}` reviews on ROUTED compute only. With no routed reviewer
+     * it would run with an empty model and the CLI's default — an unattributable review — so it
+     * refuses, and QC parks the review as unavailable: no review, no integration.
+     */
+    const compute = input.reviewerCompute;
+    const steers = this.options.args.some((arg) => arg.includes(REVIEWER_PLACEHOLDERS.model));
+    if (steers && !compute?.model) throw reviewerError("COMPUTE_UNROUTED");
     const args = this.options.args.map((arg) =>
-      arg.split(REVIEWER_PLACEHOLDERS.prompt).join(prompt),
+      arg
+        .split(REVIEWER_PLACEHOLDERS.prompt)
+        .join(prompt)
+        .split(REVIEWER_PLACEHOLDERS.model)
+        .join(compute?.model ?? "")
+        .split(REVIEWER_PLACEHOLDERS.provider)
+        .join(compute?.provider ?? ""),
     );
 
     let result;
@@ -160,12 +177,23 @@ export class CommandReviewer implements ReviewerPort {
 
     return {
       ...parsed.data,
-      providerMetadata: {
-        provider: "command",
-        /* The deployment's choice of binary, never a product name compiled in. */
-        model: this.options.command.split("/").pop() ?? "command",
-        temperature: 0,
-      },
+      /*
+       * The model that ACTUALLY reviewed: the routed one only when the command steered it,
+       * otherwise the deployment's binary — never a product name compiled in.
+       */
+      providerMetadata:
+        steers && compute?.model
+          ? {
+              provider: compute.provider ?? "command",
+              model: compute.model,
+              temperature: 0,
+              ...(compute.routing ? { routing: compute.routing } : {}),
+            }
+          : {
+              provider: "command",
+              model: this.options.command.split("/").pop() ?? "command",
+              temperature: 0,
+            },
     };
   }
 }

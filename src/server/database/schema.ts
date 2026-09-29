@@ -776,13 +776,20 @@ export const dispatchAttempts = pgTable(
     handoff: jsonb("handoff"),
     executionLeaseOwner: text("execution_lease_owner"),
     executionLeaseUntil: timestamp("execution_lease_until", { withTimezone: true }),
+    /*
+     * ROUTING_DECISION evidence (migration 0048, decision 0054): why THIS compute. Written in
+     * the transaction that creates the attempt and never updated.
+     */
+    routingDecision: jsonb("routing_decision"),
+    /** What the worker process actually took. Not updated_at - created_at: that includes queueing. */
+    executionDurationMs: integer("execution_duration_ms"),
   },
   (t) => [
     unique("dispatch_attempts_workflow_id_unique").on(t.workflowId),
     /* ALLOW-list, NULL permitted: an unknown class cannot become a retry decision. */
     check(
       "dispatch_attempts_failure_class_check",
-      sql`${t.failureClass} is null or ${t.failureClass} in ('SESSION_EXHAUSTED','PROVIDER_UNAVAILABLE','RATE_LIMITED','STREAM_FAILED','WORKER_CRASHED','LEASE_EXPIRED','FAILED_RETRYABLE','FAILED_TERMINAL')`,
+      sql`${t.failureClass} is null or ${t.failureClass} in ('SESSION_EXHAUSTED','PROVIDER_UNAVAILABLE','RATE_LIMITED','STREAM_FAILED','WORKER_CRASHED','EXECUTION_TIMEOUT','AUTH_FAILURE','MODEL_UNAVAILABLE','LEASE_EXPIRED','FAILED_RETRYABLE','FAILED_TERMINAL')`,
     ),
     unique(
       "dispatch_attempts_mission_task_attempt_unique"
