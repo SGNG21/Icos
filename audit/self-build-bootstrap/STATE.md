@@ -1361,6 +1361,26 @@ commands for the self-build certification.
                                                  correction 3's worker crashed (exit 1) -> BLOCK
                                                  -> ESCALATE; candidate rejected; target unchanged.
                                                  NO ICOS defect: every step was the canonical path.
+                                               run 5 (1af6906, after full validation: unit 1822,
+                                                 integration 485/4 skipped, named proofs 150/150):
+                                                 1 writer; 2 real REQUEST_CHANGES (no tests for the
+                                                 change; a real `dateB - dateB` sort bug) -> 2
+                                                 governed corrections; correction 3 and retry 4 each
+                                                 timed out at the 20 min worker budget -> RETRY ->
+                                                 QUALITY_CONTROL_BUDGET_EXHAUSTED -> ESCALATE;
+                                                 nothing integrated; target unchanged.
+                                                 ORCHESTRATION_SAFETY=PASS,
+                                                 SELF_BUILD_COMPLETION=FAIL_WORKER_COMPUTE.
+                                                 Observed (minor, not safety): runner-driven
+                                                 missions keep `missions.status`=draft while the
+                                                 durable runtime is `escalated`.
+                                             ICOS_SELF_BUILD_SAFETY=PASS (runs 4, 5)
+                                             ICOS_SELF_BUILD_COMPLETION=FAIL (0 of 5 integrated)
+                                             ICOS_SELF_BUILD_REPEATABILITY=NOT_ATTEMPTED (run 6
+                                               is conditional on a run 5 pass)
+                                             WORKER_RELIABILITY=FAIL on long tasks (7 budget
+                                               timeouts + 1 crash across runs 1-5; trivial probes
+                                               healthy, ~6 s)
                                              Remaining obstacle is worker output quality/
                                              reliability on the configured agent (xhigh model:
                                              >10 min edits, a crash, reviewer rejections), not
