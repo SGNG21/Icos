@@ -28,7 +28,12 @@ export const askEventSchema = z.discriminatedUnion("type", [
     summary: z.string().optional(),
     ...base,
   }),
-  z.object({ type: z.literal("mission.created"), missionId: z.string(), title: z.string(), ...base }),
+  z.object({
+    type: z.literal("mission.created"),
+    missionId: z.string(),
+    title: z.string(),
+    ...base,
+  }),
   /** The runtime asks; the decision goes through the governed approval path, not this chat. */
   z.object({
     type: z.literal("approval.requested"),
@@ -74,7 +79,12 @@ export interface AskState {
   /** Highest seq applied: resume asks for events after it; replays below it are ignored. */
   lastSeq: number;
   text: string;
-  tools: { id: string; name: string; status: "started" | "succeeded" | "failed"; summary?: string }[];
+  tools: {
+    id: string;
+    name: string;
+    status: "started" | "succeeded" | "failed";
+    summary?: string;
+  }[];
   missions: { id: string; title: string }[];
   approvals: { id: string; summary: string; risk: string }[];
   context: { memory: { id: string; label: string }[]; contextTokens?: number } | null;
@@ -132,12 +142,18 @@ function applyEvent(state: AskState, e: AskEvent): AskState {
       return { ...s, status: "streaming", text: s.text + e.text };
     case "tool.call": {
       const tools = s.tools.filter((t) => t.id !== e.toolCallId);
-      return { ...s, tools: [...tools, { id: e.toolCallId, name: e.name, status: e.status, summary: e.summary }] };
+      return {
+        ...s,
+        tools: [...tools, { id: e.toolCallId, name: e.name, status: e.status, summary: e.summary }],
+      };
     }
     case "mission.created":
       return { ...s, missions: [...s.missions, { id: e.missionId, title: e.title }] };
     case "approval.requested":
-      return { ...s, approvals: [...s.approvals, { id: e.approvalId, summary: e.summary, risk: e.risk }] };
+      return {
+        ...s,
+        approvals: [...s.approvals, { id: e.approvalId, summary: e.summary, risk: e.risk }],
+      };
     case "context.used":
       return { ...s, context: { memory: e.memory, contextTokens: e.contextTokens } };
     case "turn.completed":
@@ -147,7 +163,11 @@ function applyEvent(state: AskState, e: AskEvent): AskState {
     case "turn.cancelled":
       return { ...s, status: "cancelled" };
     case "error":
-      return { ...s, status: "error", error: { code: e.code, message: e.message, retryable: e.retryable } };
+      return {
+        ...s,
+        status: "error",
+        error: { code: e.code, message: e.message, retryable: e.retryable },
+      };
   }
 }
 
@@ -161,7 +181,12 @@ export interface AskTransport {
     onEvent: (e: AskEvent) => void,
     signal?: AbortSignal,
   ): Promise<StreamOutcome>;
-  resume(turnId: string, afterSeq: number, onEvent: (e: AskEvent) => void, signal?: AbortSignal): Promise<StreamOutcome>;
+  resume(
+    turnId: string,
+    afterSeq: number,
+    onEvent: (e: AskEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<StreamOutcome>;
   cancel(turnId: string): Promise<"ok" | "not_connected" | "failed">;
   interrupt(turnId: string): Promise<"ok" | "not_connected" | "failed">;
 }

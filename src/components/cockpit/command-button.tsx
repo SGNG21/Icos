@@ -1,6 +1,15 @@
 "use client";
 
-import { Ban, Lock, Pause, Play, Power, ShieldAlert, ShieldOff, type LucideIcon } from "lucide-react";
+import {
+  Ban,
+  Lock,
+  Pause,
+  Play,
+  Power,
+  ShieldAlert,
+  ShieldOff,
+  type LucideIcon,
+} from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import {
@@ -265,14 +274,18 @@ export function CommandButton({
                   </button>
                 </div>
               )}
-              {reauth && proof !== null && <p className="cx-dim">Re-authenticated for this command.</p>}
+              {reauth && proof !== null && (
+                <p className="cx-dim">Re-authenticated for this command.</p>
+              )}
             </>
           )}
 
           <p className="cx-outcome" data-status={phase} role="status" aria-live="polite">
             <strong>{PHASE_TEXT[phase]}</strong>
             {outcome?.detail && <span>{outcome.detail}</span>}
-            {outcome?.result?.replayed && <span>Stored result of an earlier identical request.</span>}
+            {outcome?.result?.replayed && (
+              <span>Stored result of an earlier identical request.</span>
+            )}
           </p>
 
           <footer>

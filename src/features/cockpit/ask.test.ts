@@ -7,22 +7,54 @@ const run = (events: AskEvent[], from: AskState = askReducer(initialAsk(), { typ
   events.reduce((s, event) => askReducer(s, { type: "event", event }), from);
 
 const sse = (frames: unknown[], status = 200) =>
-  new Response(frames.map((f, i) => `id: ${i}\ndata: ${typeof f === "string" ? f : JSON.stringify(f)}\n\n`).join(""), {
-    status,
-    headers: { "content-type": "text/event-stream" },
-  });
+  new Response(
+    frames
+      .map((f, i) => `id: ${i}\ndata: ${typeof f === "string" ? f : JSON.stringify(f)}\n\n`)
+      .join(""),
+    {
+      status,
+      headers: { "content-type": "text/event-stream" },
+    },
+  );
 
 describe("Ask ICOS reducer", () => {
   it("streams text, tools, missions, approvals and context into one turn", () => {
     const s = run([
       { type: "turn.started", conversationId: "c1", turnId: T, seq: 0 },
-      { type: "context.used", turnId: T, seq: 1, memory: [{ id: "m1", label: "CORE3 state" }], contextTokens: 900 },
+      {
+        type: "context.used",
+        turnId: T,
+        seq: 1,
+        memory: [{ id: "m1", label: "CORE3 state" }],
+        contextTokens: 900,
+      },
       { type: "text.delta", turnId: T, seq: 2, text: "CORE3 is " },
-      { type: "tool.call", turnId: T, seq: 3, toolCallId: "tc", name: "missions.read", status: "started" },
-      { type: "tool.call", turnId: T, seq: 4, toolCallId: "tc", name: "missions.read", status: "succeeded" },
+      {
+        type: "tool.call",
+        turnId: T,
+        seq: 3,
+        toolCallId: "tc",
+        name: "missions.read",
+        status: "started",
+      },
+      {
+        type: "tool.call",
+        turnId: T,
+        seq: 4,
+        toolCallId: "tc",
+        name: "missions.read",
+        status: "succeeded",
+      },
       { type: "text.delta", turnId: T, seq: 5, text: "blocked on review." },
       { type: "mission.created", turnId: T, seq: 6, missionId: "ms1", title: "Unblock review" },
-      { type: "approval.requested", turnId: T, seq: 7, approvalId: "ap1", summary: "Cancel mission", risk: "HIGH" },
+      {
+        type: "approval.requested",
+        turnId: T,
+        seq: 7,
+        approvalId: "ap1",
+        summary: "Cancel mission",
+        risk: "HIGH",
+      },
       { type: "turn.completed", turnId: T, seq: 8 },
     ]);
     expect(s).toMatchObject({
@@ -85,7 +117,9 @@ describe("Ask ICOS transport", () => {
         { type: "turn.completed", turnId: T, seq: 2 },
       ]),
     );
-    expect(await httpAskTransport(fetch).start({ conversationId: null, text: "hi" }, onEvent)).toBe("ended");
+    expect(await httpAskTransport(fetch).start({ conversationId: null, text: "hi" }, onEvent)).toBe(
+      "ended",
+    );
     expect(onEvent.mock.calls.map(([e]) => e.type)).toEqual(["turn.started", "turn.completed"]);
   });
 
@@ -99,7 +133,9 @@ describe("Ask ICOS transport", () => {
     const down = vi.fn(async () => {
       throw new TypeError("offline");
     });
-    expect(await httpAskTransport(down).start({ conversationId: null, text: "x" }, vi.fn())).toBe("link_lost");
+    expect(await httpAskTransport(down).start({ conversationId: null, text: "x" }, vi.fn())).toBe(
+      "link_lost",
+    );
     const missing = vi.fn(async () => new Response("", { status: 404 }));
     expect(await httpAskTransport(missing).cancel(T)).toBe("not_connected");
   });

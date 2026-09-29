@@ -18,7 +18,9 @@ export default async function ProvidersPage() {
   const [snapshot, sources] = await Promise.all([loadSnapshot(), loadSources()]);
   if (!snapshot || !sources) return null;
   const compute =
-    snapshot.workers.kind === "real" ? buildCompute(snapshot.workers.value, sources.attempts) : null;
+    snapshot.workers.kind === "real"
+      ? buildCompute(snapshot.workers.value, sources.attempts)
+      : null;
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const tree = snapshot.workers.kind === "real" ? buildResourceTree(snapshot.workers.value) : null;
   const cost = missing<number>("not_available", "No cost ledger.", "BR-05");
@@ -89,7 +91,11 @@ export default async function ProvidersPage() {
                           </span>
                         </td>
                         <td>
-                          <ToneBadge tone={r.tone} label={`${r.health} · ${r.availability}`} size="sm" />
+                          <ToneBadge
+                            tone={r.tone}
+                            label={`${r.health} · ${r.availability}`}
+                            size="sm"
+                          />
                         </td>
                         <td>
                           <TruthValue truth={r.load.used} />/{r.load.max}
@@ -107,7 +113,10 @@ export default async function ProvidersPage() {
                           <TruthValue truth={r.latency} />
                         </td>
                         <td>
-                          <TruthValue truth={r.modelSteered} format={(v) => (v ? "yes" : "label only")} />
+                          <TruthValue
+                            truth={r.modelSteered}
+                            format={(v) => (v ? "yes" : "label only")}
+                          />
                         </td>
                         <td>
                           <TruthValue truth={r.fallbackEvents} />

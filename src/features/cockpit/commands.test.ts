@@ -140,7 +140,9 @@ describe("HTTP transport", () => {
       throw new TypeError("network");
     });
     expect((await executeCommand(httpControlTransport(down), request)).phase).toBe("UNKNOWN");
-    const crash = vi.fn(async () => jsonResponse(500, { error: { code: "internal", message: "" } }));
+    const crash = vi.fn(async () =>
+      jsonResponse(500, { error: { code: "internal", message: "" } }),
+    );
     expect((await executeCommand(httpControlTransport(crash), request)).phase).toBe("UNKNOWN");
     const off = vi.fn(async () =>
       jsonResponse(503, { error: { code: "persistence_unavailable", message: "x" } }),
@@ -237,7 +239,9 @@ describe("re-authentication", () => {
       expect.objectContaining({ method: "POST", body: JSON.stringify({ password: "pw" }) }),
     );
     const bad = vi.fn(async () =>
-      jsonResponse(401, { error: { code: "unauthenticated", message: "re-authentication failed" } }),
+      jsonResponse(401, {
+        error: { code: "unauthenticated", message: "re-authentication failed" },
+      }),
     );
     expect(await reauthenticate(httpControlTransport(bad), "no")).toMatchObject({
       ok: false,
@@ -254,13 +258,21 @@ describe("re-authentication", () => {
 describe("runtime flags view", () => {
   it("an unreadable flag row is fail-closed and never shown healthy", () => {
     const rows = runtimeFlagRows(state);
-    expect(rows.find((r) => r.key === "safeMode")).toMatchObject({ effective: true, tone: "critical" });
+    expect(rows.find((r) => r.key === "safeMode")).toMatchObject({
+      effective: true,
+      tone: "critical",
+    });
     expect(rows.every((r) => r.stored === null)).toBe(true);
     expect(rows.some((r) => r.tone === "ok")).toBe(false);
   });
 
   it("healthy only when stored and effective agree and work is flowing", () => {
-    const on = { safeMode: false, dispatchEnabled: true, integrationEnabled: true, externalActionsEnabled: true };
+    const on = {
+      safeMode: false,
+      dispatchEnabled: true,
+      integrationEnabled: true,
+      externalActionsEnabled: true,
+    };
     const rows = runtimeFlagRows({ ...state, runtime: { stored: on, effective: on, version: 7 } });
     expect(rows.every((r) => r.tone === "ok")).toBe(true);
   });

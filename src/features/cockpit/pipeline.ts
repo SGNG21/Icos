@@ -181,4 +181,3 @@ export function buildPipeline(
   }
   return { stages, alerts };
 }
-

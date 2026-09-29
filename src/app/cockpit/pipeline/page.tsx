@@ -1,6 +1,12 @@
 import Link from "next/link";
 
-import { MetricTile, Panel, ToneBadge, TruthValue, formatTime } from "@/components/cockpit/primitives";
+import {
+  MetricTile,
+  Panel,
+  ToneBadge,
+  TruthValue,
+  formatTime,
+} from "@/components/cockpit/primitives";
 import { loadSnapshot, loadSources } from "@/features/cockpit/load";
 import { buildPipeline, leaseState } from "@/features/cockpit/pipeline";
 
@@ -60,7 +66,9 @@ export default async function PipelinePage() {
                 {sources.qualityJobs.value.map((j) => (
                   <tr key={j.workflowId}>
                     <td>
-                      <Link href={`/cockpit/missions/${j.missionId}`}>{j.missionId.slice(0, 8)}</Link>
+                      <Link href={`/cockpit/missions/${j.missionId}`}>
+                        {j.missionId.slice(0, 8)}
+                      </Link>
                     </td>
                     <td>
                       <code>{j.taskId.slice(0, 8)}</code>
@@ -69,7 +77,13 @@ export default async function PipelinePage() {
                     <td>{j.reviewAttemptCount}</td>
                     <td>
                       <ToneBadge
-                        tone={j.state === "review_unavailable" ? "critical" : j.state === "decision_ready" ? "warn" : "flow"}
+                        tone={
+                          j.state === "review_unavailable"
+                            ? "critical"
+                            : j.state === "decision_ready"
+                              ? "warn"
+                              : "flow"
+                        }
                         label={j.state.replace("_", " ")}
                         size="sm"
                       />
@@ -128,7 +142,9 @@ export default async function PipelinePage() {
                       <td>{names[w.workerId] ?? <code>{w.workerId.slice(0, 8)}</code>}</td>
                       <td>
                         {w.missionId ? (
-                          <Link href={`/cockpit/missions/${w.missionId}`}>{w.missionId.slice(0, 8)}</Link>
+                          <Link href={`/cockpit/missions/${w.missionId}`}>
+                            {w.missionId.slice(0, 8)}
+                          </Link>
                         ) : (
                           "—"
                         )}

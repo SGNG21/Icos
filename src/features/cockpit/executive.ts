@@ -10,7 +10,20 @@ import { isReal, mapTruth, missing, real, type Truth } from "./truth";
  * workforce, proposals) is an explicit NOT_CONNECTED contract, never invented.
  */
 export interface ExecutiveView {
-  objectives: Truth<Pick<MissionSummary, "id" | "title" | "objective" | "status" | "progressPct" | "completed" | "total" | "remainingCriticalPath" | "tone">[]>;
+  objectives: Truth<
+    Pick<
+      MissionSummary,
+      | "id"
+      | "title"
+      | "objective"
+      | "status"
+      | "progressPct"
+      | "completed"
+      | "total"
+      | "remainingCriticalPath"
+      | "tone"
+    >[]
+  >;
   blockers: Truth<{ id: string; title: string; href?: string }[]>;
   workforce: Truth<{ total: number; routable: number; busy: number }>;
   autonomousActions24h: Truth<number>;
@@ -25,28 +38,47 @@ export interface ExecutiveView {
 const ACTIVE = new Set(["planning", "ready", "running", "blocked", "awaiting_approval"]);
 const DAY_MS = 86_400_000;
 
-export function buildExecutiveView(snapshot: CockpitSnapshot, audit: Truth<AuditEntry[]>): ExecutiveView {
+export function buildExecutiveView(
+  snapshot: CockpitSnapshot,
+  audit: Truth<AuditEntry[]>,
+): ExecutiveView {
   const objectives = mapTruth(snapshot.missions, (ms) =>
     ms
       .filter((m) => ACTIVE.has(m.status))
-      .map(({ id, title, objective, status, progressPct, completed, total, remainingCriticalPath, tone }) => ({
-        id,
-        title,
-        objective,
-        status,
-        progressPct,
-        completed,
-        total,
-        remainingCriticalPath,
-        tone,
-      })),
+      .map(
+        ({
+          id,
+          title,
+          objective,
+          status,
+          progressPct,
+          completed,
+          total,
+          remainingCriticalPath,
+          tone,
+        }) => ({
+          id,
+          title,
+          objective,
+          status,
+          progressPct,
+          completed,
+          total,
+          remainingCriticalPath,
+          tone,
+        }),
+      ),
   );
 
   const blocking = (a: Alert) => a.severity === "P0" || a.category === "MISSION";
   const blockers = mapTruth(snapshot.missions, (ms) => [
     ...ms
       .filter((m) => m.attention)
-      .map((m) => ({ id: `mission-${m.id}`, title: `${m.title} — ${m.status.replace("_", " ")}`, href: `/cockpit/missions/${m.id}` })),
+      .map((m) => ({
+        id: `mission-${m.id}`,
+        title: `${m.title} — ${m.status.replace("_", " ")}`,
+        href: `/cockpit/missions/${m.id}`,
+      })),
     ...snapshot.alerts
       .filter(blocking)
       .filter((a) => !a.href?.startsWith("/cockpit/missions/"))
@@ -73,7 +105,10 @@ export function buildExecutiveView(snapshot: CockpitSnapshot, audit: Truth<Audit
     objectives,
     blockers,
     workforce,
-    autonomousActions24h: byActor((k) => k !== "human", "audit entries by agent/system actors, 24h"),
+    autonomousActions24h: byActor(
+      (k) => k !== "human",
+      "audit entries by agent/system actors, 24h",
+    ),
     humanActions24h: byActor((k) => k === "human", "audit entries by human actors, 24h"),
     proposals: missing(
       "not_connected",
@@ -85,7 +120,15 @@ export function buildExecutiveView(snapshot: CockpitSnapshot, audit: Truth<Audit
       "Digital Workforce / Mini-ICOS is another lane; no committed read contract yet.",
       "lane D",
     ),
-    clients: missing("not_connected", "ICOS holds no client/project records the cockpit can read.", "business OS"),
-    kpis: missing("not_connected", "No business KPI source exists; none is estimated.", "business OS"),
+    clients: missing(
+      "not_connected",
+      "ICOS holds no client/project records the cockpit can read.",
+      "business OS",
+    ),
+    kpis: missing(
+      "not_connected",
+      "No business KPI source exists; none is estimated.",
+      "business OS",
+    ),
   };
 }

@@ -113,7 +113,10 @@ export function httpControlTransport(doFetch: typeof fetch = fetch): ControlTran
       return parseReply(await doFetch(`/api/control/state${q}`, init("GET")), controlStateSchema);
     },
     async reauth(password) {
-      return parseReply(await doFetch("/api/control/reauth", init("POST", { password })), proofSchema);
+      return parseReply(
+        await doFetch("/api/control/reauth", init("POST", { password })),
+        proofSchema,
+      );
     },
     async submit(request) {
       return parseReply(
@@ -210,7 +213,8 @@ function fromTransportError(
       detail: "The governed control API is not deployed here. Nothing was sent or executed.",
     };
   const text = `${reply.code}${reply.message ? `: ${reply.message}` : ""} (HTTP ${reply.status})`;
-  if (reply.status === 503) return { phase: "UNAVAILABLE", detail: `Control plane unavailable — ${text}` };
+  if (reply.status === 503)
+    return { phase: "UNAVAILABLE", detail: `Control plane unavailable — ${text}` };
   // A server crash after admission may have applied the effect.
   if (mutation && reply.status >= 500) return { phase: "UNKNOWN", detail: text };
   return { phase: "REJECTED", detail: text };
@@ -246,7 +250,8 @@ export async function executeCommand(
   } catch {
     return {
       phase: "UNKNOWN",
-      detail: "The request left the device but no answer came back. Check server state before anything else.",
+      detail:
+        "The request left the device but no answer came back. Check server state before anything else.",
     };
   }
 }
@@ -281,7 +286,8 @@ export async function reauthenticate(
     const outcome = fromTransportError(reply, false);
     return {
       ok: false,
-      outcome: outcome.phase === "REJECTED" ? { phase: "AUTH_REQUIRED", detail: outcome.detail } : outcome,
+      outcome:
+        outcome.phase === "REJECTED" ? { phase: "AUTH_REQUIRED", detail: outcome.detail } : outcome,
     };
   } catch {
     return { ok: false, outcome: { phase: "UNAVAILABLE", detail: "ICOS is unreachable." } };

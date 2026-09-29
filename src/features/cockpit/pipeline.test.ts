@@ -90,7 +90,10 @@ describe("pipeline", () => {
   it("lease state is judged against the clock", () => {
     expect(leaseState(ws("x", "working"), NOW)).toBe("none");
     expect(
-      leaseState(ws("x", "working", { leaseOwner: "o", leaseExpiresAt: "2026-09-29T12:00:01Z" }), NOW),
+      leaseState(
+        ws("x", "working", { leaseOwner: "o", leaseExpiresAt: "2026-09-29T12:00:01Z" }),
+        NOW,
+      ),
     ).toBe("held");
   });
 });

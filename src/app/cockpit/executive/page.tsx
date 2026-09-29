@@ -34,7 +34,10 @@ export default async function ExecutivePage() {
           truth={mapTruth(v.blockers, (b) => b.length)}
           tone={v.blockers.kind === "real" && v.blockers.value.length > 0 ? "critical" : "ok"}
         />
-        <MetricTile label="Routable workforce" truth={mapTruth(v.workforce, (w) => `${w.routable}/${w.total}`)} />
+        <MetricTile
+          label="Routable workforce"
+          truth={mapTruth(v.workforce, (w) => `${w.routable}/${w.total}`)}
+        />
         <MetricTile label="Autonomous actions 24h" truth={v.autonomousActions24h} tone="autonomy" />
         <MetricTile label="Human actions 24h" truth={v.humanActions24h} />
         <MetricTile label="ICOS proposals" truth={v.proposals} tone="autonomy" />

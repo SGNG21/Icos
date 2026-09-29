@@ -158,7 +158,8 @@ export function AskIcos() {
         <p className="cx-dim" aria-label="Context used">
           <Brain aria-hidden size={12} /> Context: {state.context.memory.length} memory item(s)
           {state.context.contextTokens !== undefined && ` · ${state.context.contextTokens} tokens`}
-          {state.context.memory.length > 0 && ` — ${state.context.memory.map((m) => m.label).join(", ")}`}
+          {state.context.memory.length > 0 &&
+            ` — ${state.context.memory.map((m) => m.label).join(", ")}`}
         </p>
       )}
 
@@ -189,7 +190,10 @@ export function AskIcos() {
       {state.approvals.map((a) => (
         <p key={a.id} className="cx-outcome" data-status="AUTH_REQUIRED">
           <strong>
-            Approval requested · <span className="cx-risk" data-risk={a.risk}>{a.risk}</span>
+            Approval requested ·{" "}
+            <span className="cx-risk" data-risk={a.risk}>
+              {a.risk}
+            </span>
           </strong>
           <span>{a.summary} — decide it in the governed approvals flow, not in this chat.</span>
         </p>

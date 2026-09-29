@@ -42,18 +42,45 @@ const evidence = {
   requiredTier: 4,
   escalationReason: ["2nd legitimate rejection"],
   candidateSet: [
-    { workerId: W120, selectable: false, excludedBecause: ["BELOW_REQUIRED_TIER"], history: { executions: 10, infraFailures: 2, timeouts: 1, reviewed: 8 } },
-    { workerId: W550, selectable: true, fallback: "TIER_FALLBACK", excludedBecause: [], history: { executions: 0, infraFailures: 0, timeouts: 0, reviewed: 0 } },
+    {
+      workerId: W120,
+      selectable: false,
+      excludedBecause: ["BELOW_REQUIRED_TIER"],
+      history: { executions: 10, infraFailures: 2, timeouts: 1, reviewed: 8 },
+    },
+    {
+      workerId: W550,
+      selectable: true,
+      fallback: "TIER_FALLBACK",
+      excludedBecause: [],
+      history: { executions: 0, infraFailures: 0, timeouts: 0, reviewed: 0 },
+    },
   ],
   selected: { workerId: W550, score: 0.71, modelSteered: true },
   futureField: "tolerated",
 };
 const attempt = (routingDecision?: unknown) =>
-  ({ id: "a1", missionId: "m", missionTaskId: "mt", taskId: "t", attempt: 1, state: "dispatched", routingDecision }) as unknown as DispatchAttempt;
+  ({
+    id: "a1",
+    missionId: "m",
+    missionTaskId: "mt",
+    taskId: "t",
+    attempt: 1,
+    state: "dispatched",
+    routingDecision,
+  }) as unknown as DispatchAttempt;
 
 const fleet = [
-  worker(W120, { model: "nvidia/nemotron-3-super-120b-a12b", provider: "nvidia", modelFamily: "NEMOTRON_120B" }),
-  worker(W550, { model: "nvidia/nemotron-3-ultra-550b-a55b", provider: "nvidia", modelFamily: "NEMOTRON_550B" }),
+  worker(W120, {
+    model: "nvidia/nemotron-3-super-120b-a12b",
+    provider: "nvidia",
+    modelFamily: "NEMOTRON_120B",
+  }),
+  worker(W550, {
+    model: "nvidia/nemotron-3-ultra-550b-a55b",
+    provider: "nvidia",
+    modelFamily: "NEMOTRON_550B",
+  }),
   worker("legacy", {}),
 ];
 
@@ -63,13 +90,26 @@ describe("compute view", () => {
       [...fleet, worker("f", { model: "acme/next-gen-9", modelFamily: "ACME_NEXT" })],
       real([]),
     );
-    expect(groups.map((g) => g.family)).toEqual(["ACME_NEXT", "NEMOTRON_120B", "NEMOTRON_550B", UNDECLARED_FAMILY]);
+    expect(groups.map((g) => g.family)).toEqual([
+      "ACME_NEXT",
+      "NEMOTRON_120B",
+      "NEMOTRON_550B",
+      UNDECLARED_FAMILY,
+    ]);
     expect(groups.at(-1)!.rows[0].family.kind).toBe("unknown");
   });
 
   it("without routing evidence, router facts are NOT_CONNECTED — never zero", () => {
     const row = buildCompute(fleet, real([attempt()]))[0].rows[0];
-    for (const k of ["timeoutRate", "infraFailureRate", "routingExclusions", "rateLimit", "modelSteered", "fallbackEvents", "routingReason"] as const)
+    for (const k of [
+      "timeoutRate",
+      "infraFailureRate",
+      "routingExclusions",
+      "rateLimit",
+      "modelSteered",
+      "fallbackEvents",
+      "routingReason",
+    ] as const)
       expect(row[k].kind, k).toBe("not_connected");
     expect(row.latency.kind).toBe("not_available");
     expect(row.credentialHealth.kind).toBe("not_available");

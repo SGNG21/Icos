@@ -128,7 +128,15 @@ export interface WorkerView {
   metadata: Record<string, string>;
   assignments: WorkerAssignment[];
   /** Workspace leases held by this worker (workspace registry). */
-  leases: Truth<{ slug: string; status: string; state: LeaseState; expiresAt: string | null; fencingToken: number }[]>;
+  leases: Truth<
+    {
+      slug: string;
+      status: string;
+      state: LeaseState;
+      expiresAt: string | null;
+      fencingToken: number;
+    }[]
+  >;
   tone: Tone;
   routable: boolean;
 }

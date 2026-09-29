@@ -138,7 +138,10 @@ export function buildCompute(
         : missing("not_available", "No capacity pool declared."),
       family: family
         ? real(family, "declared in registration metadata")
-        : missing("unknown", "Family not declared; the router infers it from the model id at dispatch."),
+        : missing(
+            "unknown",
+            "Family not declared; the router infers it from the model id at dispatch.",
+          ),
       modelId: w.model,
       health: w.health,
       availability: w.availability,
@@ -147,7 +150,9 @@ export function buildCompute(
       latency: missing("not_available", "No per-model latency telemetry.", "BR-04"),
       timeoutRate: rate(history?.timeouts, "Timeout rate"),
       infraFailureRate: rate(history?.infraFailures, "Infrastructure failure rate"),
-      routingExclusions: latest ? real(exclusions, "latest routing decision") : NO_EVIDENCE("Routing exclusions"),
+      routingExclusions: latest
+        ? real(exclusions, "latest routing decision")
+        : NO_EVIDENCE("Routing exclusions"),
       rateLimit: !latest
         ? NO_EVIDENCE("Rate-limit state")
         : exclusions.some((x) => x.includes("COOLDOWN"))
@@ -170,7 +175,9 @@ export function buildCompute(
       routingReason: lastSelected
         ? real(
             `tier ≥ ${lastSelected.requiredTier}${
-              lastSelected.escalationReason.length ? ` (${lastSelected.escalationReason.join("; ")})` : ""
+              lastSelected.escalationReason.length
+                ? ` (${lastSelected.escalationReason.join("; ")})`
+                : ""
             }${lastSelected.selected?.score !== undefined ? ` · score ${lastSelected.selected.score.toFixed(2)}` : ""} · ${lastSelected.policyVersion}`,
             "latest decision that selected this candidate",
           )
@@ -186,6 +193,9 @@ export function buildCompute(
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   return [...groups.entries()]
-    .sort(([a], [b]) => Number(a === UNDECLARED_FAMILY) - Number(b === UNDECLARED_FAMILY) || a.localeCompare(b))
+    .sort(
+      ([a], [b]) =>
+        Number(a === UNDECLARED_FAMILY) - Number(b === UNDECLARED_FAMILY) || a.localeCompare(b),
+    )
     .map(([family, rows]) => ({ family, declared: family !== UNDECLARED_FAMILY, rows }));
 }

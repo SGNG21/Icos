@@ -94,7 +94,13 @@ export function LiveRefresh({ generatedAt }: { generatedAt: string }) {
   }[link];
 
   return (
-    <span className="cx-live" data-link={link} data-stale={stale || undefined} role="status" aria-live="polite">
+    <span
+      className="cx-live"
+      data-link={link}
+      data-stale={stale || undefined}
+      role="status"
+      aria-live="polite"
+    >
       {stale ? <WifiOff aria-hidden size={14} /> : <Radio aria-hidden size={14} />}
       {label}
     </span>

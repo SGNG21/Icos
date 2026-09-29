@@ -121,20 +121,18 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
         const visible = new Set(missions.value.map((m) => m.mission.id));
         return (await container.qualityControlJobs.listPending())
           .filter((j) => visible.has(j.missionId))
-          .map(
-            (j): QualityFact => ({
-              workflowId: j.workflowId,
-              missionId: j.missionId,
-              missionTaskId: j.missionTaskId,
-              taskId: j.taskId,
-              executionAttempt: j.executionAttempt,
-              reviewAttemptCount: j.reviewAttemptCount,
-              state: j.state,
-              action: j.action ?? null,
-              lastError: j.lastError ?? null,
-              updatedAt: new Date(j.updatedAt).toISOString(),
-            }),
-          );
+          .map((j): QualityFact => ({
+            workflowId: j.workflowId,
+            missionId: j.missionId,
+            missionTaskId: j.missionTaskId,
+            taskId: j.taskId,
+            executionAttempt: j.executionAttempt,
+            reviewAttemptCount: j.reviewAttemptCount,
+            state: j.state,
+            action: j.action ?? null,
+            lastError: j.lastError ?? null,
+            updatedAt: new Date(j.updatedAt).toISOString(),
+          }));
       })
     : missions;
 
@@ -145,22 +143,20 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
       ? missing("not_available", "The workspace manager is not composed in this process.")
       : await read("Workspace registry", async () =>
           // Paths, test database names and file scopes are deliberately not carried.
-          (await manager.list()).map(
-            (w): WorkspaceFact => ({
-              id: w.workspaceId,
-              slug: w.slug,
-              workerId: w.workerId,
-              missionId: w.missionId,
-              taskId: w.taskId,
-              status: w.status,
-              branch: w.branch,
-              leaseOwner: w.leaseOwner,
-              leaseExpiresAt: w.leaseExpiresAt,
-              fencingToken: w.fencingToken,
-              sourceCommit: w.sourceCommit,
-              updatedAt: w.updatedAt,
-            }),
-          ),
+          (await manager.list()).map((w): WorkspaceFact => ({
+            id: w.workspaceId,
+            slug: w.slug,
+            workerId: w.workerId,
+            missionId: w.missionId,
+            taskId: w.taskId,
+            status: w.status,
+            branch: w.branch,
+            leaseOwner: w.leaseOwner,
+            leaseExpiresAt: w.leaseExpiresAt,
+            fencingToken: w.fencingToken,
+            sourceCommit: w.sourceCommit,
+            updatedAt: w.updatedAt,
+          })),
         );
 
   return {
