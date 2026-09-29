@@ -1,0 +1,79 @@
+{
+  "bounds": {
+    "maxDepth": 4,
+    "maxAgents": 200,
+    "maxConcurrentAssignmentsPerAgent": 5
+  },
+  "departments": [
+    {
+      "departmentId": "sales",
+      "name": "Sales",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Revenue generation"
+    },
+    {
+      "departmentId": "marketing",
+      "name": "Marketing",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Brand and demand"
+    },
+    {
+      "departmentId": "marketing-brand",
+      "name": "Brand",
+      "parentDepartmentId": "marketing",
+      "supervisorAgentId": null,
+      "purpose": "Identity and creative"
+    },
+    {
+      "departmentId": "engineering",
+      "name": "Engineering",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Software delivery"
+    },
+    {
+      "departmentId": "security",
+      "name": "Security",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Security posture"
+    },
+    {
+      "departmentId": "security-appsec",
+      "name": "Application security",
+      "parentDepartmentId": "security",
+      "supervisorAgentId": null,
+      "purpose": "Application security reviews"
+    },
+    {
+      "departmentId": "operations",
+      "name": "Operations",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Operational delivery"
+    },
+    {
+      "departmentId": "finance",
+      "name": "Finance",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Financial analysis"
+    },
+    {
+      "departmentId": "customer-support",
+      "name": "Customer support",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Customer requests"
+    },
+    {
+      "departmentId": "research",
+      "name": "Research",
+      "parentDepartmentId": null,
+      "supervisorAgentId": null,
+      "purpose": "Research and intelligence"
+    }
+  ]
+}
