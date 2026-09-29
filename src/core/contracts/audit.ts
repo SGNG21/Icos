@@ -43,6 +43,11 @@ export const auditEventTypeSchema = z.enum([
   "goal.status_updated",
   "goal.converted",
   "goal.idempotency_key_set",
+  // Tool Gateway (decision 0055). `details.tenantId` scopes every entry.
+  "tool.execution.recorded",
+  "tool.approval.requested",
+  "tool.approval.decided",
+  "tool.grant.changed",
 ]);
 
 export const auditActorSchema = z.object({
