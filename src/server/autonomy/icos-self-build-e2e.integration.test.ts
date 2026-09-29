@@ -109,6 +109,8 @@ async function productionContainer(): Promise<Container> {
        */
       binary: { command: HERMES, args: ["-z", "{{prompt}}", "--cli", "--yolo"], timeoutMs: 1_200_000 },
     }),
+    /* Must outlive the worker budget, or a run that uses it is fenced (refused at boot). */
+    ICOS_WORKER_EXECUTION_LEASE_MS: "1500000",
     ICOS_REPO_PATH: REPO,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
     ICOS_GATE_COMMANDS: JSON.stringify(REAL_GATE_COMMANDS),

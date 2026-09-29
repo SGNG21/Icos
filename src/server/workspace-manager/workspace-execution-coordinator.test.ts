@@ -3,7 +3,7 @@ import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
 import type { IntegrationGate } from "./integration-gate";
 import type { IntegrationReport } from "./report";
-import type { Workspace } from "./types";
+import { WorkspaceError, type Workspace } from "./types";
 import type {
   TaskExecutionDispatcher,
   TaskExecutionDispatchInput,
@@ -791,6 +791,34 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
   });
 
   describe("lease renewal coordination", () => {
+    it("a transiently LOCKED registry does not lose ownership (self-build run 3)", async () => {
+      /*
+       * The registry is guarded by a TRY-lock: any concurrent mutation answers REGISTRY_LOCKED.
+       * Read as a lost lease, one collision during a long run failed the task with
+       * OWNERSHIP_LOST although nobody else ever held the workspace.
+       */
+      const renew = vi.mocked(mockManager.renewLease);
+      const real = renew.getMockImplementation()!;
+      let calls = 0;
+      /* Every other renewal collides with a concurrent registry mutation. */
+      renew.mockImplementation(async (...args) => {
+        calls += 1;
+        if (calls % 2 === 0) {
+          throw new WorkspaceError("REGISTRY_LOCKED", "Could not acquire advisory lock");
+        }
+        return real(...args);
+      });
+      await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
+
+      const result = await coordinator.executeInWorkspace("mission-1", "task-1", {
+        taskId: "task-1",
+        prompt: "Test prompt",
+        workerKind: "digitalos",
+        capability: "test-capability",
+      });
+      expect(result.error ?? "").not.toContain("OWNERSHIP_LOST");
+    });
+
     it("starts lease renewal timer on allocation", async () => {
       await coordinator.allocateWorkspace("mission-1", "task-1", "worker-1");
 

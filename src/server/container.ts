@@ -46,7 +46,10 @@ import {
 } from "@/server/workers/execution/exec-command-config";
 import { parseWorkerFailureConfig } from "@/server/workers/execution/failure-classifier";
 import { WorkerExecutor } from "@/server/workers/execution/worker-executor";
-import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/external-worker-task-execution-dispatcher";
+import {
+  DEFAULT_EXECUTION_LEASE_MS,
+  ExternalWorkerTaskExecutionDispatcher,
+} from "@/server/execution/external-worker-task-execution-dispatcher";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
@@ -677,6 +680,7 @@ export async function buildPostgresContainer(
     env.TEMPORAL_DISPATCH_TIMEOUT_MS,
   );
   const externalExecution = buildWorkerExecutor(env);
+  assertExecutionLeaseOutlivesWorkers(env);
   const taskExecution: TaskExecutionDispatcher = externalExecution
     ? new RuntimeDispatchRouter({
         dispatchAttempts,
@@ -1079,4 +1083,20 @@ function governedWorkflow(
       })
     );
   };
+}
+
+/**
+ * A worker allowed to run as long as (or longer than) its execution lease is fenced every time it
+ * uses its budget: the lease is not renewed while it runs, so the result is discarded as stale
+ * (self-build run 3). Refused at boot rather than discovered twenty minutes into a run.
+ */
+function assertExecutionLeaseOutlivesWorkers(env: Env): void {
+  const leaseMs = env.ICOS_WORKER_EXECUTION_LEASE_MS ?? DEFAULT_EXECUTION_LEASE_MS;
+  for (const [runtime, command] of Object.entries(parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS))) {
+    if (command?.timeoutMs !== undefined && command.timeoutMs >= leaseMs) {
+      throw new Error(
+        `WORKER_TIMEOUT_EXCEEDS_EXECUTION_LEASE: ${runtime} timeoutMs=${command.timeoutMs} >= ICOS_WORKER_EXECUTION_LEASE_MS=${leaseMs}`,
+      );
+    }
+  }
 }

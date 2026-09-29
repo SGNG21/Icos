@@ -1306,6 +1306,16 @@ commands for the self-build certification.
                                              the retry stranded. Retirement now commits the
                                              edits to the superseded attempt's own branch
                                              (preserved, never integrated) before cleanup.
+  LEASE_RENEWAL_LOCK_IS_NOT_LOSS           — CLOSED. Found by self-build run 3: one transient
+                                             REGISTRY_LOCKED on a lease renewal (the registry is
+                                             a try-lock) was read as a lost lease; the correction
+                                             attempt ended OWNERSHIP_LOST and the task failed.
+  WORKER_TIMEOUT_VS_EXECUTION_LEASE        — CLOSED. A worker budget >= the (unrenewed) execution
+                                             lease is fenced every time it is used; now refused
+                                             at container boot.
+  PENDING_PASS_ABORTS_ON_ONE_WORKSPACE     — CLOSED. OWNERSHIP_LOST on one workspace (e.g. a
+                                             superseded attempt retired mid-pass) aborted the
+                                             whole pending-review pass; it now skips that one.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
                                              0049 settlement + 0050 correction + 0051):
                                              core3-autonomous-orchestration 10/10,

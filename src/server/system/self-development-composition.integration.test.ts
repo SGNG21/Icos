@@ -132,6 +132,27 @@ describe("DEFECT 25 LINK 3 — self-development is composed in the REAL runtime"
     expect(container.workerRegistry.getWorker(id)).toBeUndefined();
   }, 120_000);
 
+  it("A WORKER BUDGET THAT OUTLIVES ITS EXECUTION LEASE IS REFUSED AT BOOT (self-build run 3)", async () => {
+    root = await mkdtemp(join(tmpdir(), "sd-composition-"));
+    const env = loadEnv({
+      NODE_ENV: "test",
+      PERSISTENCE: "postgres",
+      DATABASE_URL,
+      OMNIROUTE_BASE_URL: "http://127.0.0.1:65535",
+      OMNIROUTE_API_KEY: "composition-key",
+      ICOS_REVIEWER_MODEL: "composition-model",
+      ICOS_WORKER_EXEC_COMMANDS: JSON.stringify({
+        binary: { command: process.execPath, args: ["-e", ""], timeoutMs: 1_200_000 },
+      }),
+      ICOS_WORKER_EXECUTION_LEASE_MS: "1200000",
+      ICOS_REPO_PATH: root,
+      ICOS_WORKER_WORKSPACE_ROOT: root,
+    });
+    await expect(buildPostgresContainer(DATABASE_URL, undefined, env)).rejects.toThrow(
+      /WORKER_TIMEOUT_EXCEEDS_EXECUTION_LEASE/,
+    );
+  }, 120_000);
+
   it("IT REFERENCES THE CANONICAL REPOSITORIES AND SERVICES", async () => {
     const container = await productionContainer();
 

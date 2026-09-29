@@ -674,6 +674,8 @@ export class WorkspaceExecutionCoordinator {
         throw error;
       }
 
+      /* A lease legitimately re-acquired is ours again, whatever an earlier holder lost. */
+      this.ownershipLost.delete(ws.workspaceId);
       this.executionWorkspaces.set(ws.taskId, {
         workspaceId: ws.workspaceId,
         taskId: ws.taskId,
@@ -726,11 +728,32 @@ export class WorkspaceExecutionCoordinator {
       ].join("|");
       if (this.inconclusiveGates.get(execWs.workspaceId) === fingerprint) continue;
 
-      const gateResult = await this.handoffToIntegrationGate(
-        execWs.workspaceId,
-        execWs.workflowId,
-        humanApprovedBy,
-      );
+      let gateResult: IntegrationReport;
+      try {
+        gateResult = await this.handoffToIntegrationGate(
+          execWs.workspaceId,
+          execWs.workflowId,
+          humanApprovedBy,
+        );
+      } catch (error) {
+        /*
+         * ONE WORKSPACE, NOT THE PASS. A workspace can leave this process's hands mid-pass — a
+         * superseded attempt retired by the supervisor, a lease taken over. Gating it is then
+         * correctly refused, but aborting the pass stopped every OTHER parked workspace from
+         * being gated on that tick.
+         */
+        if (error instanceof Error && error.message.startsWith("OWNERSHIP_LOST")) {
+          results.push({
+            workspaceId: execWs.workspaceId,
+            taskId: execWs.taskId,
+            success: false,
+            error: error.message,
+            workflowId: execWs.workflowId,
+          });
+          continue;
+        }
+        throw error;
+      }
 
       if (gateResult.decision === "ACCEPT" || gateResult.decision === "REJECT") {
         this.inconclusiveGates.delete(execWs.workspaceId);
@@ -939,8 +962,15 @@ export class WorkspaceExecutionCoordinator {
           return;
         }
         await this.manager.renewLease(workspaceId, owner, fencingToken, this.leaseMs);
-      } catch {
-        // Lease renewal failed - ownership lost
+      } catch (error) {
+        /*
+         * REGISTRY_LOCKED is "not now", never "not yours": the registry is a TRY-lock that any
+         * concurrent mutation holds briefly. The lease outlives several renewal intervals, so
+         * the next renewal retries. Read as a loss, one collision during a long run failed the
+         * task with OWNERSHIP_LOST (self-build run 3). A real loss (expired, stale fence,
+         * another owner) still ends ownership, here or in `assertOwned`.
+         */
+        if (error instanceof WorkspaceError && error.code === "REGISTRY_LOCKED") return;
         this.ownershipLost.add(workspaceId);
         this.stopLeaseRenewal(workspaceId);
       }
