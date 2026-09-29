@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 
 import { loadEnv } from "@/config/env";
@@ -16,6 +16,7 @@ import {
   classifyModels,
   computeSnapshot,
   listOmniRouteModels,
+  representativeModels,
 } from "@/server/workers/compute-fleet";
 
 /*
@@ -48,8 +49,22 @@ const DATABASE_URL = process.env.ICOS_SELF_BUILD_DATABASE_URL ?? TEST_DATABASE_U
 
 /** The whole input. */
 const INSTRUCTION = "Improve ICOS autonomously.";
+/*
+ * THE CANONICAL PROBE, per candidate model, through the worker's own path (0054). Health is what
+ * this answers — a model that is listed but refused, throttled or silent is unhealthy. Set on the
+ * PROCESS env, as every certified suite does: the container's probe adapters read it there.
+ */
+const PROBE_COMMANDS = JSON.stringify({
+      binary: {
+        command: HERMES,
+        args: ["-z", "Reply with exactly the word OK and nothing else.", "--cli", "-m", "{{model}}"],
+        timeoutMs: 45_000,
+        healthyStdout: "^\\s*OK\\.?\\s*$",
+      },
+    });
+
 const containers: Container[] = [];
-const heartbeats: NodeJS.Timeout[] = [];
+const stopProbing: Array<() => Promise<void>> = [];
 let worktreeRoot: string | undefined;
 
 const git = (cwd: string, ...args: string[]) =>
@@ -89,6 +104,7 @@ const REAL_GATE_COMMANDS = {
 };
 
 async function productionContainer(): Promise<Container> {
+  vi.stubEnv("ICOS_WORKER_PROBE_COMMANDS", PROBE_COMMANDS);
   worktreeRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "icos-selfbuild-")));
   const env = loadEnv({
     NODE_ENV: "test",
@@ -122,10 +138,24 @@ async function productionContainer(): Promise<Container> {
         /* `{{model}}`: the ROUTED candidate's model runs, not the agent's default (0054). */
         args: ["-z", "{{prompt}}", "--cli", "--yolo", "-m", "{{model}}"],
         timeoutMs: 1_200_000,
+        /*
+         * The agent CLI exits 0 when the gateway REFUSES the model, printing the refusal on
+         * stdout (live, 2026-09-29). Without the result block the run is a classified failure,
+         * never a success the reviewer would then have to reject as bad work.
+         */
+        requireStructuredResult: true,
       },
     }),
     /* Must outlive the worker budget, or a run that uses it is fenced (refused at boot). */
     ICOS_WORKER_EXECUTION_LEASE_MS: "1500000",
+    /* How a refused model reads on stdout, so routing can route around it (0054). Data, not code. */
+    ICOS_WORKER_FAILURE_CONFIG: JSON.stringify({
+      patterns: {
+        RATE_LIMITED: ["HTTP 429", "quota threshold", "rate.?limit"],
+        AUTH_FAILURE: ["HTTP 40[13]", "credits exhausted", "unauthori[sz]ed"],
+        MODEL_UNAVAILABLE: ["HTTP 404", "not supported", "no active credentials"],
+      },
+    }),
     ICOS_REPO_PATH: REPO,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
     ICOS_GATE_COMMANDS: JSON.stringify(REAL_GATE_COMMANDS),
@@ -136,7 +166,8 @@ async function productionContainer(): Promise<Container> {
 }
 
 afterAll(async () => {
-  for (const h of heartbeats.splice(0)) clearInterval(h);
+  for (const stop of stopProbing.splice(0)) await stop();
+  vi.unstubAllEnvs();
   await Promise.all(containers.splice(0).map((c) => c.close().catch(() => undefined)));
   if (worktreeRoot) rmSync(worktreeRoot, { recursive: true, force: true });
 });
@@ -166,42 +197,56 @@ describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an inte
     expect(omniroute.baseUrl && omniroute.credential, "OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY required to discover compute").toBeTruthy();
     const served = await listOmniRouteModels(omniroute);
     console.log(`SELF_BUILD compute snapshot: ${JSON.stringify(computeSnapshot(new URL(omniroute.baseUrl).origin, served), null, 2)}`);
-    const discovered = classifyModels(served);
+    /* One representative per (family, provider): not every effort variant of one model. */
+    const discovered = representativeModels(classifyModels(served));
     expect(discovered.length, "OmniRoute serves no model of a recognised family").toBeGreaterThan(1);
 
-    const fleet: string[] = [];
+    /*
+     * REGISTERED IN THE FAIL-CLOSED STATE, PROBED BY THE CANONICAL PROBER. Nothing here says
+     * "healthy": a candidate is routable only if its own probe got a real answer from its model.
+     * (Until 0054's live certification the fixture wrote `healthy` for every worker by hand.)
+     */
     for (const model of discovered) {
-      const registration = candidateRegistration(model, {
-        runtime: "binary",
-        capabilities: ["code_editing", "documentation", "analysis", "review"],
-      });
-      await container.workerRegistration.register(registration);
-      await container.workerRegistration.probe(registration.id, {
-        health: "healthy",
-        availability: "available",
-      });
-      fleet.push(registration.id);
+      await container.workerRegistration.register(
+        candidateRegistration(model, {
+          runtime: "binary",
+          capabilities: ["code_editing", "documentation", "analysis", "review"],
+        }),
+      );
     }
+    const probed = await container.workerHealthProber.probeAll();
+    const byId = new Map(discovered.map((d) => [candidateRegistration(d, { runtime: "binary", capabilities: [] }).id, d]));
+    console.log(
+      `SELF_BUILD candidate health: ${JSON.stringify(
+        probed.map((r) => ({ model: byId.get(r.workerId)?.modelId, outcome: r.outcome, health: r.health, error: r.error })),
+        null,
+        2,
+      )}`,
+    );
+    const healthyFamilies = new Set(
+      probed.filter((r) => r.health === "healthy").map((r) => byId.get(r.workerId)?.family),
+    );
+    expect(healthyFamilies.size, "fewer than two reachable compute families: no real fallback exists").toBeGreaterThan(1);
 
     /*
-     * KEEP THE FLEET'S EVIDENCE DATED, as production's scheduled probe job does.
-     *
-     * Health evidence expires after HEALTH_EVIDENCE_MAX_AGE_MS (120s) and the canonical
-     * matcher then refuses to route — correctly. An autonomous cycle's own THINKING takes
-     * longer than that: proposing and planning with a real model is minutes, so by the time
-     * the supervisor routes, a fleet probed once at the start has gone ineligible and the
-     * task blocks. `startProductionServices` runs a durable `probe_workers` job every 30s
-     * for exactly this reason; `composeAutonomyRuntime` alone does not, so the fixture
-     * stands in for it here.
+     * KEEP THE EVIDENCE DATED, as production's scheduled probe job does — by PROBING, never by
+     * asserting. Health evidence expires after HEALTH_EVIDENCE_MAX_AGE_MS (120s); an autonomous
+     * cycle's own thinking takes minutes. `startProductionServices` runs a durable
+     * `probe_workers` job for this; `composeAutonomyRuntime` alone does not, so the fixture runs
+     * the SAME prober in a loop. A model that stops answering stops being routable.
      */
-    const heartbeat = setInterval(() => {
-      for (const id of fleet) {
-        void container.workerRegistration
-          .probe(id, { health: "healthy", availability: "available" })
-          .catch(() => undefined);
+    let probing = true;
+    const loop = (async () => {
+      while (probing) {
+        await container.workerHealthProber.probeAll().catch(() => undefined);
+        /* Evidence lasts 120s; a <=45s round + 60s keeps it fresh at half the probe cost. */
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
       }
-    }, 30_000);
-    heartbeats.push(heartbeat);
+    })();
+    stopProbing.push(async () => {
+      probing = false;
+      await loop;
+    });
 
     const startedAt = new Date().toISOString();
     const beforeTarget = git(REPO, "rev-parse", "integration/phase-7");

@@ -56,6 +56,13 @@ const execCommandSchema = z
     timeoutMs: z.number().int().positive().optional(),
     /** Exit codes meaning success. Defaults to [0]. */
     successExitCodes: z.array(z.number().int()).nonempty().optional(),
+    /**
+     * A run without the ICOS result block is a FAILURE, classified from its output (decision
+     * 0054). For an agent CLI that reports a refused model on stdout and exits 0, silence is
+     * not success: counted as one, a dead model reaches the reviewer as "bad work" and burns the
+     * correction budget instead of being routed around.
+     */
+    requireStructuredResult: z.boolean().optional(),
   })
   .strict();
 

@@ -191,7 +191,16 @@ afterEach(() => fx.cleanup());
 function buildCoordinator(
   dispatcher: TaskExecutionDispatcher,
   over: {
-    reviewDecisions?: { getByWorkflowId(id: string): Promise<{ decision: string; reviewerKind?: string } | null> };
+    reviewDecisions?: {
+      getByWorkflowId(id: string): Promise<{
+        decision: string;
+        reviewerKind?: string;
+        providerMetadata?: { provider?: string; model?: string; routing?: Record<string, unknown> };
+      } | null>;
+    };
+    writerAttempts?: {
+      getByWorkflowId(id: string): Promise<{ routingDecision?: Record<string, unknown> } | null>;
+    };
   } = {},
 ) {
   const reviewDecisions =
@@ -217,6 +226,7 @@ function buildCoordinator(
      * structurally impossible.
      */
     reviewDecisions,
+    writerAttempts: over.writerAttempts,
     dispatcher,
     missions: { listTasks: async () => [] } as never,
     tasks: {} as never,
@@ -413,6 +423,81 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
     expect(result.decision).toBe("REJECT");
     expect(result.integration).toBeUndefined();
     expect(await target()).toBe(before);
+  }, 120_000);
+
+  it("DECISION 0054 — AN APPROVAL BY THE WRITER'S OWN MODEL IS NOT INDEPENDENT: nothing integrates", async () => {
+    const run = async (reviewerModel: string) => {
+      const { router } = buildRuntime();
+      const coordinator = buildCoordinator(router, {
+        reviewDecisions: {
+          getByWorkflowId: async () => ({
+            decision: "APPROVE",
+            reviewerKind: "llm",
+            /* A ROUTED reviewer on another worker, as QC persists it. */
+            providerMetadata: {
+              provider: "reviewer-route",
+              model: reviewerModel,
+              routing: { kind: "ROUTING_DECISION", selected: { workerId: "reviewer-worker" } },
+            },
+          }),
+        },
+        /* The writer's durable routing evidence: steered, so its model is known. */
+        writerAttempts: {
+          getByWorkflowId: async () => ({
+            routingDecision: {
+              selected: { model: "oc/nemotron-3-ultra-free", modelSteered: true },
+            },
+          }),
+        },
+      });
+      await coordinator.allocateWorkspace(MISSION_ID, TASK_ID, WORKER_ID, "e2e", WORKFLOW_ID);
+      return coordinator.executeInWorkspace(MISSION_ID, TASK_ID, {
+        taskId: TASK_ID,
+        missionId: MISSION_ID,
+        prompt: "build the feature",
+        workflowId: WORKFLOW_ID,
+      });
+    };
+    const before = await target();
+
+    /* Same model, different name/route/worker: the canonical gate refuses. */
+    const same = await run("nvidia/nvidia/nemotron-3-ultra-550b-a55b");
+    expect(same.decision).toBe("NEEDS_HUMAN_APPROVAL");
+    expect(same.reasons?.join(" ")).toMatch(/même modèle/);
+    expect(same.integration).toBeUndefined();
+    expect(await target()).toBe(before);
+  }, 120_000);
+
+  it("DECISION 0054 — control: a DIFFERENT model's approval integrates exactly as before", async () => {
+    const { router } = buildRuntime();
+    const coordinator = buildCoordinator(router, {
+      reviewDecisions: {
+        getByWorkflowId: async () => ({
+          decision: "APPROVE",
+          reviewerKind: "llm",
+          providerMetadata: {
+            provider: "cc",
+            model: "cc/claude-opus-5",
+            routing: { kind: "ROUTING_DECISION", selected: { workerId: "reviewer-worker" } },
+          },
+        }),
+      },
+      writerAttempts: {
+        getByWorkflowId: async () => ({
+          routingDecision: { selected: { model: "oc/nemotron-3-ultra-free", modelSteered: true } },
+        }),
+      },
+    });
+    const before = await target();
+    await coordinator.allocateWorkspace(MISSION_ID, TASK_ID, WORKER_ID, "e2e", WORKFLOW_ID);
+    const result = await coordinator.executeInWorkspace(MISSION_ID, TASK_ID, {
+      taskId: TASK_ID,
+      missionId: MISSION_ID,
+      prompt: "build the feature",
+      workflowId: WORKFLOW_ID,
+    });
+    expect(result.decision).toBe("ACCEPT");
+    expect(await target()).not.toBe(before);
   }, 120_000);
 
   it("A NON-APPROVING VERDICT (escalation) IS NOT CONSENT", async () => {

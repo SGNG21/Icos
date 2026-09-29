@@ -18,9 +18,21 @@ Independent review: REQUEST_CHANGES (B1 cooldown blocked tasks permanently; B2 u
 refusal) — both fixed with mutation-proven tests, plus tier fallback, per-runtime budget, reviewer
 tier from REQUEST_CHANGES only, snapshot prints origin only.
 Self-build harness now registers the fleet from OmniRoute `/v1/models`; `pnpm compute:snapshot`.
-RUN 6 NOT STARTED — requires a separate owner decision. The live model inventory has NOT been
-read (the agent may not read the local gateway credential): run `pnpm compute:snapshot` with
-OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY set first.
+LIVE CERTIFICATION (2026-09-29, gateway 127.0.0.1:20129 via ICOS .env.local, 440 ids listed):
+probed through the worker path (hermes -m <id>) with the canonical CommandWorkerProbe —
+  AVAILABLE: NEMOTRON_120B (nvidia, openrouter:free), NEMOTRON_550B (nvidia, openrouter:free),
+             CLAUDE_SONNET (cc, claude), CLAUDE_OPUS (cc, claude), CLAUDE_HAIKU (cc, claude)
+  RATE_LIMITED: GPT_SOL (all 3 routes; gateway 429 "All codex accounts reached configured quota
+             threshold", reset ~3h; hermes HANGS on it -> probe timeout -> unhealthy)
+  `oc/*` Nemotron routes: 401/403 (OpenCode free tier) — unhealthy.
+Fixed this round: gate self-review refusal was dead code (now effective worker/model identity,
+same-family = same judge, proven end to end); hermes exit-0-on-refusal (probe healthyStdout,
+exec requireStructuredResult); fake health removed from the harness (canonical prober, pool of
+6); Nemotron family patterns. `pnpm compute:snapshot`, `pnpm compute:probe`.
+  CLAUDE_FABLE: NOT_CONFIGURED (OmniRoute lists no Fable id; not reached any other way).
+Integration note: full-suite failures (core3-dag-settlement GATE_NO_DECISION / timeouts) occurred
+ONLY while other worktrees' suites ran concurrently; isolated and quiet full runs are green.
+RUN 6 NOT STARTED — requires a separate owner decision.
 
 ## CURRENT_MILESTONE
 M13 — DEFECT 28 CLOSED, decision 0044. The IntegrationGate now runs only AFTER an

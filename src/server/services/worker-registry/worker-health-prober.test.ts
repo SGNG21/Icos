@@ -4,7 +4,7 @@ import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import { evaluateWorkerEligibility } from "@/core/workers/worker-eligibility";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
 import { WorkerRegistrationService } from "./worker-registration-service";
-import {
+import { PROBE_CONCURRENCY,
   WorkerHealthProber,
   type WorkerHealthObservation,
   type WorkerHealthProbePort,
@@ -300,5 +300,33 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(entry.health).toBe("degraded");
     expect(entry.lastProbeOutcome).toBe("ok"); // the PROBE worked; the WORKER is degraded
     expect(eligibleAt(entry, clock.now().toISOString())).toBe(false);
+  });
+});
+
+describe("decision 0054 — model probes are concurrent AND bounded", () => {
+  it("one hung probe does not delay the others, and no more than PROBE_CONCURRENCY run at once", async () => {
+    const { clock, store, registration } = harness();
+    const ids = Array.from({ length: 10 }, (_, i) => `00000000-0000-4000-8000-00000000000${i}`.slice(-36));
+    for (const id of ids) await registerAgent(registration, id);
+    let inFlight = 0;
+    let peak = 0;
+    const prober = new WorkerHealthProber(store, registration, {
+      adapters: {
+        node: {
+          probe: async () => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            inFlight -= 1;
+            return { health: "healthy", availability: "available" };
+          },
+        },
+      },
+      now: clock.now,
+    });
+    const records = await prober.probeAll();
+    expect(records.map((r) => r.workerId)).toEqual([...ids].sort());
+    expect(records.every((r) => r.health === "healthy")).toBe(true);
+    expect(peak).toBe(PROBE_CONCURRENCY);
   });
 });

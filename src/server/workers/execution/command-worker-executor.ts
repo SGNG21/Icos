@@ -346,7 +346,13 @@ export class CommandWorkerExecutor implements WorkerExecutorPort {
        * exit code is the weaker signal, because an agent wrapper commonly exits 0
        * after reporting that it could not do the job.
        */
-      if (exitedWell && structured?.status !== "failed") {
+      /*
+       * Only a COMPLETE stdout can prove the block is absent: output past the capture limit is
+       * dropped, and a verbose run's block may be there. A refusal is one short line, never that.
+       */
+      const missingResult =
+        command.requireStructuredResult === true && structured === undefined && !result.truncated;
+      if (exitedWell && structured?.status !== "failed" && !missingResult) {
         return {
           ok: true,
           identity,
@@ -367,7 +373,7 @@ export class CommandWorkerExecutor implements WorkerExecutorPort {
         identity,
         failureClass: classification.failureClass,
         retryable: classification.retryable,
-        message: `${classification.failureClass}: ${classification.reason}`,
+        message: `${missingResult ? "WORKER_RESULT_MISSING: " : ""}${classification.failureClass}: ${classification.reason}`,
         process,
         structured,
         evidence,

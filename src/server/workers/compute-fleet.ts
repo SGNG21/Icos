@@ -75,6 +75,28 @@ export function classifyModels(modelIds: readonly string[]): DiscoveredModel[] {
     });
 }
 
+/** Effort / tier variants of one model, and prompt-mode wrappers: not distinct compute. */
+const VARIANT = /(-(low|medium|high|xhigh|max|ultra)|:free-[a-z]+)$/i;
+const WRAPPER = /^no-think\//i;
+
+/**
+ * ONE representative per (family, provider): the base id, not its effort variants or prompt
+ * wrappers, and the newest version (greatest id). The live gateway lists ~20 ids per family;
+ * registering each as a candidate would multiply one model's history and capacity by 20.
+ */
+export function representativeModels(discovered: readonly DiscoveredModel[]): DiscoveredModel[] {
+  const best = new Map<string, DiscoveredModel>();
+  for (const d of discovered) {
+    if (VARIANT.test(d.modelId) || WRAPPER.test(d.modelId)) continue;
+    const key = `${d.family}|${d.provider}`;
+    const current = best.get(key);
+    if (!current || d.modelId > current.modelId) best.set(key, d);
+  }
+  return [...best.values()].sort(
+    (a, b) => a.family.localeCompare(b.family) || a.modelId.localeCompare(b.modelId),
+  );
+}
+
 export function computeSnapshot(source: string, modelIds: readonly string[]): ComputeSnapshot {
   const discovered = classifyModels(modelIds);
   return {
@@ -145,4 +167,28 @@ export function candidateRegistration(
     capacityPool: `provider:${model.provider}`,
     metadata,
   };
+}
+
+export type ProbeClassification =
+  "AVAILABLE" | "UNAVAILABLE" | "NOT_CONFIGURED" | "RATE_LIMITED" | "AUTH_FAILURE" | "UNKNOWN";
+
+/**
+ * What a FAILED probe means, from its message. Ordered: "no credentials for provider" is a
+ * deployment gap (NOT_CONFIGURED), not a refused credential, even though it arrives as a 404.
+ * Anything unrecognised — including a timeout — is UNKNOWN, never AVAILABLE.
+ */
+export function classifyProbeFailure(message: string): ProbeClassification {
+  if (/no active credentials|not configured|no credentials/i.test(message)) return "NOT_CONFIGURED";
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (api )?key|authentication/i.test(message)) {
+    return "AUTH_FAILURE";
+  }
+  if (/\b429\b|rate.?limit|quota|too many requests/i.test(message)) return "RATE_LIMITED";
+  if (
+    /\b(404|502|503)\b|not found|unknown model|no such model|unavailable|not available/i.test(
+      message,
+    )
+  ) {
+    return "UNAVAILABLE";
+  }
+  return "UNKNOWN";
 }

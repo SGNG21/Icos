@@ -1,6 +1,7 @@
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import {
   evaluateCompute,
+  sameEffectiveModel,
   scoreCompute,
   type ComputeContext,
   type ComputeExclusion,
@@ -378,12 +379,13 @@ export function rankComputePool(
 
   const writerModel = ctx.requirement.role === "reviewer" ? ctx.requirement.writerModelKey : undefined;
   if (writerModel) {
-    const independentExists = verdicts.some(
-      (v) => v.selectable && v.profile.modelKey !== writerModel,
-    );
+    /* Same JUDGE, not same route: the gate refuses on exactly this rule (sameEffectiveModel). */
+    const sameModel = (v: ComputeCandidateVerdict) =>
+      v.profile.model !== undefined && sameEffectiveModel(v.profile.model, writerModel);
+    const independentExists = verdicts.some((v) => v.selectable && !sameModel(v));
     if (independentExists) {
       for (const v of verdicts) {
-        if (v.selectable && v.profile.modelKey === writerModel) {
+        if (v.selectable && sameModel(v)) {
           v.exclusions.push("SAME_MODEL_AS_WRITER" satisfies ComputeExclusion);
           v.selectable = false;
         }

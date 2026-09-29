@@ -51,6 +51,8 @@ export interface WorkerProbeCommand {
    * readiness with a non-zero code, so this is configuration, not a guess.
    */
   healthyExitCodes?: readonly number[];
+  /** Regex stdout must match to be healthy (see probe-command-config). */
+  healthyStdout?: string;
 }
 
 /** Derives the probe command for one worker, or null when it cannot. */
@@ -70,6 +72,8 @@ export interface CommandRunResult {
   /** True when the process was killed for exceeding the timeout. */
   timedOut: boolean;
   stderr: string;
+  /** Bounded. Read only when the command declares `healthyStdout`. */
+  stdout?: string;
 }
 
 export type CommandRunner = (
@@ -128,12 +132,24 @@ export class CommandWorkerProbe implements WorkerHealthProbePort {
       );
     }
 
+    if (command.healthyStdout && !new RegExp(command.healthyStdout).test(result.stdout ?? "")) {
+      /* Exited 0 and said something else: the refusal text IS the diagnosis. */
+      throw new Error(
+        `WORKER_PROBE_UNEXPECTED_OUTPUT: ${command.command} — ${firstLine((result.stdout ?? "").trim()) || "<empty>"}`,
+      );
+    }
+
     return { health: "healthy", availability: "available" };
   }
 }
 
+/** One line, bounded, with token-shaped strings masked: some gateways echo keys in 401 bodies. */
 function firstLine(text: string): string {
-  return text.split("\n")[0]!.slice(0, 200);
+  return text
+    .split("\n")[0]!
+    .replace(/(sk-|Bearer\s+)[A-Za-z0-9._-]{6,}/gi, "$1<redacted>")
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "<redacted>")
+    .slice(0, 200);
 }
 
 /**
@@ -149,9 +165,14 @@ export const runCommand: CommandRunner = async (command, timeoutMs) => {
     command: command.command,
     args: command.args,
     timeoutMs,
-    /* A verdict needs the first line of stderr, never a megabyte of it. */
+    /* A verdict needs a line or two, never a megabyte. */
     maxOutputBytes: 4_096,
   });
 
-  return { exitCode: result.exitCode, timedOut: result.timedOut, stderr: result.stderr };
+  return {
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    stderr: result.stderr,
+    stdout: command.healthyStdout ? result.stdout : undefined,
+  };
 };

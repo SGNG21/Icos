@@ -26,7 +26,8 @@
     "db:verify-ledger": "tsx scripts/verify-migration-ledger.ts",
     "scheduler:enqueue": "tsx scripts/schedule-job.ts",
     "workspace:manager": "tsx scripts/workspace-manager.ts",
-    "compute:snapshot": "tsx scripts/compute-snapshot.ts"
+    "compute:snapshot": "tsx scripts/compute-snapshot.ts",
+    "compute:probe": "tsx scripts/compute-probe.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",

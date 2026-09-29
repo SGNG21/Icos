@@ -476,6 +476,50 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       expect(result.awaitingReview).toBeUndefined();
     });
 
+    it("DECISION 0054 — the gate receives the EFFECTIVE writer and reviewer identities from durable rows", async () => {
+      const c = new WorkspaceExecutionCoordinator({
+        git: mockGit,
+        manager: mockManager,
+        integrationGate: mockIntegrationGate,
+        reviewDecisions: {
+          getByWorkflowId: async () => ({
+            decision: "APPROVE",
+            reviewerKind: "llm",
+            providerMetadata: {
+              provider: "claude",
+              model: "claude/claude-sonnet-5",
+              routing: { selected: { workerId: "reviewer-worker" } },
+            },
+          }),
+        },
+        writerAttempts: {
+          getByWorkflowId: async () => ({
+            routingDecision: { selected: { model: "cc/claude-sonnet-5", modelSteered: true } },
+          }),
+        },
+        dispatcher: mockDispatcher,
+        missions: mockMissions,
+        tasks: mockTasks,
+        durableMemory: mockDurableMemory,
+        ownerToken: "coordinator",
+      });
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+      await exec(c);
+
+      expect(mockIntegrationGate.integrate).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          review: {
+            verdict: "APPROVED",
+            reviewer: "llm",
+            reviewerWorkerId: "reviewer-worker",
+            reviewerModel: "claude/claude-sonnet-5",
+            writerModel: "cc/claude-sonnet-5",
+          },
+        }),
+      );
+    });
+
     it("THE LATER GOVERNED PASS gates work whose review arrived after execution", async () => {
       /*
        * The natural order: execute with no review, QC writes one, the next pass gates it.

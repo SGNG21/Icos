@@ -746,6 +746,8 @@ export async function buildPostgresContainer(
     integrationApplier,
     /* The CANONICAL review decisions feed the gate: one reviewer, not two. */
     reviewDecisions,
+    /* The writer's effective model, for the gate's same-model refusal (0054). */
+    writerAttempts: dispatchAttempts,
     /* The same dispatcher the rest of the runtime uses: one execution authority. */
     dispatcher: taskExecution,
     missions: mission,

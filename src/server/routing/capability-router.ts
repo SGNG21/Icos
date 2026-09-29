@@ -2,6 +2,7 @@ import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import {
   computeWorkerLoad,
+  evaluateWorkerEligibility,
   evaluateWorkerPool,
   isTransientRefusal,
   rankComputePool,
@@ -13,6 +14,7 @@ import {
 } from "@/core/workers/worker-eligibility";
 import {
   aggregateHistory,
+  computeProfileOf,
   modelKeyOf,
   requiredTier,
   COMPUTE_POLICY_VERSION,
@@ -227,6 +229,7 @@ export class CapabilityRouter {
           })),
           leaseMs: compute.role === "writer" ? this.options.executionLeaseMs : undefined,
           defaultBudgetMs: this.options.defaultBudgetMs,
+          maxAvailableTier: maxEligibleTier(pool, requirement),
         },
         history: aggregateHistory(
           outcomes,
@@ -352,4 +355,16 @@ function buildEvidence(
         ? { ms: req.leaseMs, settlementMarginMs: SETTLEMENT_MARGIN_MS }
         : undefined,
   };
+}
+
+/** Highest known family tier among workers passing the canonical gates now; undefined if none known. */
+function maxEligibleTier(
+  pool: readonly WorkerRegistryEntry[],
+  requirement: WorkerRequirement,
+): number | undefined {
+  const tiers = pool
+    .filter((w) => evaluateWorkerEligibility(w, { ...requirement, compute: undefined }).eligible)
+    .map((w) => computeProfileOf(w).tier)
+    .filter((t): t is number => t !== undefined);
+  return tiers.length > 0 ? Math.max(...tiers) : undefined;
 }

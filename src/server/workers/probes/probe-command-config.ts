@@ -27,6 +27,24 @@ const probeCommandSchema = z.object({
   args: z.array(z.string()).optional(),
   timeoutMs: z.number().int().positive().optional(),
   healthyExitCodes: z.array(z.number().int()).nonempty().optional(),
+  /**
+   * A regex the probe's STDOUT must match to count as healthy (decision 0054). Needed for any
+   * agent CLI that reports a refused model on stdout and still exits 0 — the live gateway path
+   * does exactly that ("HTTP 404: No active credentials for provider"), so an exit code alone
+   * would certify a dead model.
+   */
+  healthyStdout: z
+    .string()
+    .min(1)
+    .refine((p) => {
+      try {
+        new RegExp(p);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "a valid regular expression")
+    .optional(),
 });
 
 /*

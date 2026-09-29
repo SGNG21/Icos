@@ -19,6 +19,12 @@ import {
   candidateWorkerId,
   classifyModels,
 } from "@/server/workers/compute-fleet";
+import { PostgresReviewDecisionRepository } from "@/server/repositories/postgres/review-decision-repository";
+import {
+  effectiveModelKey,
+  reviewerEffectiveIdentity,
+  writerEffectiveModel,
+} from "@/core/workers/compute-routing";
 
 /*
  * DECISION 0054 — governed compute routing against a real PostgreSQL.
@@ -328,5 +334,53 @@ describe("DECISION 0054 on PostgreSQL", () => {
         prompt: "x",
       }),
     ).rejects.toThrow(/DISPATCH_ATTEMPT_STALE|DISPATCH_ATTEMPT_CONFLICT/);
+  });
+
+  it("WRITER/REVIEWER IDENTITY SURVIVES RESTART: the gate's inputs are resolved from durable rows", async () => {
+    const first = restart();
+    await first.supervisor.run(MISSION_ID);
+    const attempt = (await first.ledger.getByWorkflowId(workflowIdForAttempt(TASK, 1)))!;
+    /* The writer's routing evidence, made steered as the container records it. */
+    await seed.handle.db.execute(
+      sql.raw(
+        `update dispatch_attempts set routing_decision = jsonb_set(routing_decision, '{selected,modelSteered}', 'true') where id = '${attempt.id}'`,
+      ),
+    );
+    const writerModel = (attempt.routingDecision as any).selected.model as string;
+    /* A routed reviewer that turned out to be the SAME model via another account. */
+    await new PostgresReviewDecisionRepository(first.handle.db).save({
+      id: "review-identity-1",
+      missionId: MISSION_ID,
+      taskId: TASK,
+      workflowId: attempt.workflowId,
+      decision: "APPROVE",
+      reviewerKind: "llm",
+      severity: "info",
+      reasons: ["ok"],
+      evidenceRefs: [],
+      findingRefs: [],
+      policyRefs: ["llm-review"],
+      providerMetadata: {
+        provider: "other-account",
+        model: `other-account/${writerModel.split("/").pop()}-high`,
+        routing: { kind: "ROUTING_DECISION", selected: { workerId: "reviewer-worker" } },
+      },
+      createdAt: new Date().toISOString(),
+      humanOverridden: false,
+    });
+
+    /* A different process. */
+    const later = restart();
+    const decision = await new PostgresReviewDecisionRepository(later.handle.db).getByWorkflowId(
+      attempt.workflowId,
+    );
+    const reviewer = reviewerEffectiveIdentity(decision!.providerMetadata);
+    const writer = writerEffectiveModel(
+      (await later.ledger.getByWorkflowId(attempt.workflowId))!.routingDecision,
+    );
+    expect(reviewer.workerId).toBe("reviewer-worker");
+    expect(writer).toBe(writerModel);
+    /* Same judge => the gate's same-model refusal fires on these persisted values. */
+    expect(effectiveModelKey(reviewer.model!)).toBe(effectiveModelKey(writer!));
   });
 });

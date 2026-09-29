@@ -6,7 +6,11 @@ import {
   aggregateHistory,
   budgetFitsLease,
   computeProfileOf,
+  effectiveModelKey,
   normalizeFailure,
+  sameEffectiveModel,
+  reviewerEffectiveIdentity,
+  writerEffectiveModel,
   requiredTier,
   COMPUTE_POLICY_VERSION,
   SETTLEMENT_MARGIN_MS,
@@ -19,6 +23,8 @@ import {
   candidateRegistration,
   candidateWorkerId,
   classifyModels,
+  classifyProbeFailure,
+  representativeModels,
 } from "@/server/workers/compute-fleet";
 
 /*
@@ -412,19 +418,15 @@ describe("decision 0054 — routing policy (Phase 12 proofs)", () => {
     expect(unhealthy.transient).toBe(false);
   });
 
-  it("N1. when nothing meets the required tier, the strongest capable candidate is used AND marked", async () => {
+  it("N1. a fleet that cannot meet the tier still routes: the requirement is CAPPED at what exists, and says so", async () => {
     const result = await router(fleet(["haiku", "n120"])).route(
       { requiredCapabilities: ["code_editing"] },
       writer({ complexity: "high", correctionAttempt: 2 }),
     );
     expect(result.decision).toBe("ROUTED");
     expect(result.worker?.id).toBe(id("n120"));
-    expect(result.evidence!.candidateSet.find((c) => c.workerId === id("n120"))!.fallback).toBe(
-      "TIER_FALLBACK",
-    );
-    expect(result.evidence!.candidateSet.find((c) => c.workerId === id("haiku"))!.selectable).toBe(
-      false,
-    );
+    expect(result.evidence!.requiredTier).toBe(2);
+    expect(result.evidence!.escalationReason.join(" ")).toMatch(/capped at 2/);
   });
 
   it("16. one bad result does not blacklist; a cold-start model scores its prior and stays selectable", async () => {
@@ -495,7 +497,7 @@ describe("decision 0054 — escalation and history are bounded", () => {
       correctionAttempt: 5,
       priorAttempts: [{ attempt: 3, failureClass: "EXECUTION_TIMEOUT" as const }],
     };
-    expect(requiredTier(req).tier).toBe(5);
+    expect(requiredTier(req).tier).toBe(6);
     expect(requiredTier({ ...req, correctionAttempt: 0, priorAttempts: [] }).tier).toBe(3);
   });
 
@@ -547,5 +549,201 @@ describe("decision 0054 — normalized failure classes drive policy", () => {
     expect(h.infraFailures).toBe(0);
     expect(h.reviewed).toBe(4);
     expect(h.firstPassApprovals).toBe(0);
+  });
+});
+
+describe("decision 0054 live certification — identity and inventory", () => {
+  it("recognises Nemotron 3 only: llama-nemotron 49B/253B are NOT the 120B/550B families", () => {
+    const got = classifyModels([
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+      "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "oc/nemotron-3-ultra-free",
+    ]).map((d) => [d.modelId, d.family]);
+    expect(got).toEqual([
+      ["nvidia/nvidia/nemotron-3-super-120b-a12b", "NEMOTRON_120B"],
+      ["oc/nemotron-3-ultra-free", "NEMOTRON_550B"],
+    ]);
+  });
+
+  it("one representative per (family, provider): newest base id, no effort variants or wrappers", () => {
+    const reps = representativeModels(
+      classifyModels([
+        "cc/claude-sonnet-4-6",
+        "cc/claude-sonnet-5",
+        "cc/claude-sonnet-5-high",
+        "no-think/cc/claude-sonnet-5",
+        "claude/claude-sonnet-5",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free-high",
+      ]),
+    ).map((d) => d.modelId);
+    expect(reps).toEqual([
+      "cc/claude-sonnet-5",
+      "claude/claude-sonnet-5",
+      "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    ]);
+  });
+
+  it("probe failures classify factually; a timeout or unknown text is never AVAILABLE", () => {
+    expect(classifyProbeFailure("HTTP 404: No active credentials for provider: bogus")).toBe(
+      "NOT_CONFIGURED",
+    );
+    expect(classifyProbeFailure("HTTP 401: [401]: Model oc/x is not supported")).toBe(
+      "AUTH_FAILURE",
+    );
+    expect(classifyProbeFailure("HTTP 403: credits exhausted")).toBe("AUTH_FAILURE");
+    expect(
+      classifyProbeFailure("HTTP 429: All codex accounts reached configured quota threshold"),
+    ).toBe("RATE_LIMITED");
+    expect(classifyProbeFailure("WORKER_PROBE_TIMEOUT: hermes did not answer")).toBe("UNKNOWN");
+  });
+
+  it("effective identity: same model across accounts/variants; unsteered or command-binary = UNKNOWN", () => {
+    expect(effectiveModelKey("cc/claude-sonnet-5-high")).toBe(
+      effectiveModelKey("claude/claude-sonnet-5"),
+    );
+    expect(effectiveModelKey("openrouter/nvidia/nemotron-3-super-120b-a12b:free")).toBe(
+      effectiveModelKey("nvidia/nvidia/nemotron-3-super-120b-a12b"),
+    );
+    expect(effectiveModelKey("cc/claude-opus-5")).not.toBe(effectiveModelKey("cc/claude-sonnet-5"));
+
+    expect(
+      writerEffectiveModel({ selected: { model: "cc/claude-sonnet-5", modelSteered: true } }),
+    ).toBe("cc/claude-sonnet-5");
+    expect(
+      writerEffectiveModel({ selected: { model: "cc/claude-sonnet-5", modelSteered: false } }),
+    ).toBeUndefined();
+    expect(writerEffectiveModel({ selected: { model: "cc/claude-sonnet-5" } })).toBeUndefined();
+
+    expect(
+      reviewerEffectiveIdentity({
+        provider: "cc",
+        model: "cc/claude-opus-5",
+        routing: { selected: { workerId: "w2" } },
+      }),
+    ).toEqual({ workerId: "w2", model: "cc/claude-opus-5" });
+    expect(reviewerEffectiveIdentity({ provider: "omniroute", model: "gpt-x" })).toEqual({
+      workerId: undefined,
+      model: "gpt-x",
+    });
+    expect(reviewerEffectiveIdentity({ provider: "command", model: "hermes" })).toEqual({
+      workerId: undefined,
+      model: undefined,
+    });
+  });
+
+  it("the router's same-model rule uses the gate's key: another account of the writer's model is avoided", async () => {
+    const cc = candidate("sonnet");
+    const claude = {
+      ...candidate("sonnet"),
+      id: "99999999-9999-4999-8999-999999999999",
+      metadata: {
+        ...candidate("sonnet").metadata,
+        model: "claude/claude-sonnet-5",
+        provider: "claude",
+      },
+    };
+    const review = await router([cc, claude, candidate("opus")]).route(
+      { requiredCapabilities: ["review"], excludeWorkerIds: [cc.id] },
+      {
+        role: "reviewer",
+        complexity: "medium",
+        repositoryMutation: false,
+        correctionAttempt: 0,
+        priorAttempts: [],
+        writerWorkerId: cc.id,
+      },
+    );
+    expect(review.worker?.id).toBe(id("opus"));
+    expect(
+      review.evidence!.candidateSet.find((c) => c.workerId === claude.id)!.excludedBecause,
+    ).toContain("SAME_MODEL_AS_WRITER");
+  });
+
+  it("the same model under another route's NAME is the same judge (router side)", () => {
+    expect(
+      sameEffectiveModel("oc/nemotron-3-ultra-free", "nvidia/nvidia/nemotron-3-ultra-550b-a55b"),
+    ).toBe(true);
+    expect(
+      sameEffectiveModel("oc/oc/nemotron-3-super-free", "nvidia/nvidia/nemotron-3-super-120b-a12b"),
+    ).toBe(true);
+    expect(sameEffectiveModel("cc/claude-sonnet-5-20260915", "claude/claude-sonnet-5")).toBe(true);
+    expect(sameEffectiveModel("cc/claude-opus-5", "nvidia/nvidia/nemotron-3-ultra-550b-a55b")).toBe(
+      false,
+    );
+    /* Not every -max/-ultra is an effort variant: these are distinct models. */
+    expect(sameEffectiveModel("x/qwen3-max", "x/qwen3")).toBe(false);
+  });
+
+  it("FABLE is escalation compute: never chosen for routine work, chosen after repeated lower-tier failure", async () => {
+    const fable = (() => {
+      const [m] = classifyModels(["anthropic/claude-fable-5-1"]);
+      expect(m!.family).toBe("CLAUDE_FABLE");
+      return candidate("opus", {
+        id: "fab1e000-0000-4000-8000-000000000000",
+        metadata: { model: m!.modelId, provider: "anthropic", modelFamily: "CLAUDE_FABLE" },
+      });
+    })();
+    const pool = [...fleet(["haiku", "n120", "sonnet", "sol", "n550", "opus"]), fable];
+
+    for (const complexity of ["low", "medium", "high"] as const) {
+      const routine = await router(pool).route(
+        { requiredCapabilities: ["code_editing"] },
+        writer({ complexity }),
+      );
+      expect(routine.worker?.id).not.toBe(fable.id);
+    }
+
+    const history = [
+      ...outcomes("opus", 6, { failureClass: "EXECUTION_TIMEOUT" }),
+      ...outcomes("n550", 6, { failureClass: "EXECUTION_TIMEOUT" }),
+    ];
+    const escalated = await router(pool, { history }).route(
+      { requiredCapabilities: ["code_editing"] },
+      writer({
+        complexity: "high",
+        correctionAttempt: 3,
+        priorAttempts: [
+          { attempt: 1, workerId: id("sonnet"), reviewVerdict: "REQUEST_CHANGES" },
+          { attempt: 2, workerId: id("sol"), reviewVerdict: "REQUEST_CHANGES" },
+          { attempt: 3, workerId: id("opus"), reviewVerdict: "REQUEST_CHANGES" },
+          { attempt: 4, workerId: id("n550"), failureClass: "EXECUTION_TIMEOUT" },
+        ],
+      }),
+    );
+    expect(escalated.evidence!.requiredTier).toBe(6);
+    expect(escalated.worker?.id).toBe(fable.id);
+  });
+
+  it("without Fable, the worst escalation is capped at the fleet's top tier: no forced Opus, no spurious fallback", async () => {
+    const result = await router(fleet()).route(
+      { requiredCapabilities: ["code_editing"] },
+      writer({
+        complexity: "high",
+        correctionAttempt: 3,
+        priorAttempts: [{ attempt: 4, workerId: id("sonnet"), failureClass: "EXECUTION_TIMEOUT" }],
+      }),
+    );
+    expect(result.evidence!.requiredTier).toBe(5);
+    expect(result.evidence!.escalationReason.join(" ")).toMatch(/capped at 5/);
+    expect(result.evidence!.candidateSet.some((c) => c.fallback)).toBe(false);
+    for (const k of ["sol", "n550", "opus"] as const) {
+      expect(result.evidence!.candidateSet.find((c) => c.workerId === id(k))!.selectable).toBe(
+        true,
+      );
+    }
+  });
+
+  it("TIER_FALLBACK: the only fitting model is cooling down -> the strongest remaining one is used, and marked", async () => {
+    const limited = outcomes("opus", 1, { failureClass: "RATE_LIMITED", at: ago(60_000) });
+    const result = await router(fleet(["n120", "opus"]), { history: limited }).route(
+      { requiredCapabilities: ["code_editing"] },
+      writer({ complexity: "high", correctionAttempt: 2 }),
+    );
+    expect(result.worker?.id).toBe(id("n120"));
+    expect(result.evidence!.candidateSet.find((c) => c.workerId === id("n120"))!.fallback).toBe(
+      "TIER_FALLBACK",
+    );
   });
 });

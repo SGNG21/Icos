@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { sameEffectiveModel } from "@/core/workers/compute-routing";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -45,7 +46,17 @@ export interface GateDatabase {
 }
 
 export interface GateOptions {
-  review?: { verdict: "APPROVED" | "CHANGES_REQUESTED"; reviewer: string };
+  review?: {
+    verdict: "APPROVED" | "CHANGES_REQUESTED";
+    reviewer: string;
+    /**
+     * EFFECTIVE identities (decision 0054), resolved from durable rows. Absent = unknown: never
+     * guessed, and never treated as "different".
+     */
+    reviewerWorkerId?: string;
+    reviewerModel?: string;
+    writerModel?: string;
+  };
   /** Approbation humaine explicite ; ne peut pas venir du worker lui-même. */
   humanApprovedBy?: string;
   /** Mandatory durable ownership evidence for autonomous gate mutations. */
@@ -356,11 +367,30 @@ export class IntegrationGate {
               reasons: [`revue : changements demandés par ${r.reviewer}`],
             };
           if (!r) return { decision: "NEEDS_HUMAN_APPROVAL", reasons: ["revue absente"] };
-          if (r.reviewer === ws.workerId)
+          if (r.reviewer === ws.workerId || r.reviewerWorkerId === ws.workerId)
             return {
               decision: "NEEDS_HUMAN_APPROVAL",
               reasons: ["auto-revue : le reviewer est le worker"],
             };
+          /*
+           * SAME MODEL = SAME JUDGE (decision 0054). A different worker running the model that
+           * wrote the change is not an independent review, whichever account or route served it.
+           */
+          if (r.reviewerModel && r.writerModel && sameEffectiveModel(r.reviewerModel, r.writerModel))
+            return {
+              decision: "NEEDS_HUMAN_APPROVAL",
+              reasons: [
+                `auto-revue : même modèle en écriture (${r.writerModel}) et en revue (${r.reviewerModel})`,
+              ],
+            };
+          /*
+           * UNKNOWN IS SAID, NOT HIDDEN. When either effective model is unknown (an unsteered
+           * writer running a CLI default, an unrouted command reviewer) independence could not
+           * be verified. The decision is unchanged — refusing on unknown would stop every
+           * pre-0054 deployment — but the report says so, durably.
+           */
+          if (r.reviewer === "llm" && (!r.reviewerModel || !r.writerModel))
+            return { reasons: ["indépendance non vérifiée : modèle effectif inconnu (écriture ou revue)"] };
           return {};
         },
       ],

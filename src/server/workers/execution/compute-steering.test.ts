@@ -220,3 +220,65 @@ describe("decision 0054 — the routed reviewer model is the one that reviews", 
     expect(decision.providerMetadata).toMatchObject({ provider: "command", model: "agent" });
   });
 });
+
+describe("decision 0054 live certification — refusals are never successes", () => {
+  const refuse = createWorkerExecResolver(
+    parseWorkerExecCommands(
+      JSON.stringify({
+        node: {
+          command: process.execPath,
+          /* What the live gateway path does: prints the refusal and exits 0. */
+          args: [
+            "-e",
+            "process.stdout.write('HTTP 404: No active credentials for provider: x')",
+            "{{model}}",
+          ],
+          timeoutMs: 20_000,
+          requireStructuredResult: true,
+        },
+      }),
+    ),
+  );
+
+  it("exit 0 WITHOUT the result block is a classified failure, not a success", async () => {
+    const outcome = await new CommandWorkerExecutor(refuse, {
+      failureConfig: { patterns: { MODEL_UNAVAILABLE: ["HTTP 404", "no active credentials"] } },
+    }).execute({ worker: worker({ model: "x/m" }), contract, workspace });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failureClass).toBe("MODEL_UNAVAILABLE");
+    expect(outcome.message).toMatch(/^WORKER_RESULT_MISSING: MODEL_UNAVAILABLE/);
+  });
+
+  it("the probe requires the ANSWER, not just exit 0", async () => {
+    const { CommandWorkerProbe } = await import("@/server/workers/probes/command-worker-probe");
+    const probeWith = (stdout: string) =>
+      new CommandWorkerProbe(
+        () => ({ command: "agent", args: [], healthyStdout: "^\\s*OK\\.?\\s*$" }),
+        { run: async () => ({ exitCode: 0, timedOut: false, stderr: "", stdout }) },
+      ).probe(worker({ model: "x/m" }));
+    await expect(probeWith("OK\n")).resolves.toEqual({
+      health: "healthy",
+      availability: "available",
+    });
+    await expect(probeWith("HTTP 401: Model x is not supported")).rejects.toThrow(
+      /WORKER_PROBE_UNEXPECTED_OUTPUT: agent — HTTP 401/,
+    );
+  });
+});
+
+describe("decision 0054 live certification — probe text never carries a credential", () => {
+  it("masks token-shaped strings in the probe's failure line", async () => {
+    const { CommandWorkerProbe } = await import("@/server/workers/probes/command-worker-probe");
+    const leak = "HTTP 401: invalid key sk-abcDEF1234567890 Bearer eyJhbGciOiJIUzI1NiJ9.x";
+    const probe = new CommandWorkerProbe(
+      () => ({ command: "agent", args: [], healthyStdout: "^OK$" }),
+      {
+        run: async () => ({ exitCode: 0, timedOut: false, stderr: "", stdout: leak }),
+      },
+    );
+    const error = await probe.probe(worker({ model: "x/m" })).catch((e: Error) => e.message);
+    expect(error).toMatch(/HTTP 401/);
+    expect(error).not.toMatch(/abcDEF1234567890|eyJhbGci/);
+  });
+});

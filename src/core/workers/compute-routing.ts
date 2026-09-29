@@ -34,12 +34,13 @@ export const MODEL_FAMILIES = [
   "CLAUDE_SONNET",
   "CLAUDE_OPUS",
   "CLAUDE_HAIKU",
+  "CLAUDE_FABLE",
 ] as const;
 export type ModelFamily = (typeof MODEL_FAMILIES)[number];
 
 export interface FamilyHint {
   /**
-   * 1..5: the hardest task class this family is a bootstrap FIT for. A PRIOR, not a ranking:
+   * 1..MAX_TIER: the hardest task class this family is a bootstrap FIT for. A PRIOR, not a ranking:
    * it only shapes `taskFit`, and measured history (reliability, review quality) carries more
    * combined weight than it does.
    */
@@ -57,6 +58,9 @@ export interface FamilyHint {
  *   NEMOTRON_550 deep reasoning, long/complex tasks, alternative high-capability compute
  *   OPUS         difficult escalation, ambiguous/high-risk, repeated-rejection correction
  */
+/** The highest tier escalation can require: the top family's. */
+export const MAX_TIER = 6;
+
 export const FAMILY_HINTS: Readonly<Record<ModelFamily, FamilyHint>> = Object.freeze({
   CLAUDE_HAIKU: { tier: 1, costTier: 1 },
   NEMOTRON_120B: { tier: 2, costTier: 1 },
@@ -64,6 +68,13 @@ export const FAMILY_HINTS: Readonly<Record<ModelFamily, FamilyHint>> = Object.fr
   GPT_SOL: { tier: 4, costTier: 4 },
   NEMOTRON_550B: { tier: 4, costTier: 2 },
   CLAUDE_OPUS: { tier: 5, costTier: 5 },
+  /*
+   * Owner hint (2026-09-29): long-horizon cross-module engineering, unresolved failures,
+   * principal-level review, escalation after repeated lower-tier failure — NOT every task. Tier
+   * 6 is reachable only by escalation (see requiredTier); below that it is over-provisioned and
+   * the most expensive, so it scores behind a fitting candidate.
+   */
+  CLAUDE_FABLE: { tier: 6, costTier: 5 },
 });
 
 /**
@@ -72,12 +83,18 @@ export const FAMILY_HINTS: Readonly<Record<ModelFamily, FamilyHint>> = Object.fr
  * provider name is compared anywhere else.
  */
 export const FAMILY_PATTERNS: ReadonlyArray<readonly [ModelFamily, RegExp]> = [
-  ["NEMOTRON_550B", /nemotron.*(550b|ultra)/i],
-  ["NEMOTRON_120B", /nemotron.*(120b|super)/i],
+  /*
+   * Nemotron 3 only: `nemotron-3-ultra` is the 550B, `nemotron-3-super` the 120B. A bare
+   * "super"/"ultra" is NOT enough — `llama-3.3-nemotron-super-49b` and
+   * `llama-3.1-nemotron-ultra-253b` are different, smaller models (live snapshot, 2026-09-29).
+   */
+  ["NEMOTRON_550B", /nemotron-3-ultra|nemotron[^/]*550b/i],
+  ["NEMOTRON_120B", /nemotron-3-super|nemotron[^/]*120b/i],
   ["GPT_SOL", /gpt[-_.]?5[^/]*sol|(^|\/)sol([-_.]|$)/i],
   ["CLAUDE_OPUS", /opus/i],
   ["CLAUDE_SONNET", /sonnet/i],
   ["CLAUDE_HAIKU", /haiku/i],
+  ["CLAUDE_FABLE", /fable/i],
 ];
 
 export function inferModelFamily(modelId: string | undefined): ModelFamily | undefined {
@@ -163,6 +180,70 @@ function positiveInt(value: string | undefined): number | undefined {
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
+/**
+ * The MODEL an id names, independent of which account/route serves it and of its effort or
+ * tier variant (decision 0054): `cc/claude-sonnet-5-high`, `claude/claude-sonnet-5` and
+ * `no-think/cc/claude-sonnet-5` are one model; `nvidia/nvidia/nemotron-3-super-120b-a12b` and
+ * `openrouter/nvidia/nemotron-3-super-120b-a12b:free` are one model. Review independence is
+ * about the judging model, so this — not `provider/model` — is what "same model" means.
+ */
+export function effectiveModelKey(modelId: string): string {
+  return (modelId.split("/").pop() ?? modelId)
+    .toLowerCase()
+    .replace(/[:@].*$/, "")
+    .replace(/-(low|medium|high|xhigh)$/, "")
+    .replace(/-(free|latest|\d{8})$/, "");
+}
+
+/**
+ * SAME JUDGE (decision 0054): one rule for the router's same-model preference and the gate's
+ * refusal. Two ids are the same judge when their normalized ids match OR they belong to the same
+ * recognised family. Family is deliberately coarse: `oc/nemotron-3-ultra-free` and
+ * `nvidia/nemotron-3-ultra-550b-a55b` are one model under two names, and no suffix rule can
+ * know every route's naming. The cost is refusing e.g. Sonnet 4.6 reviewing Sonnet 5 — an
+ * over-refusal, the safe direction.
+ */
+export function sameEffectiveModel(a: string, b: string): boolean {
+  if (effectiveModelKey(a) === effectiveModelKey(b)) return true;
+  const fa = inferModelFamily(a);
+  return fa !== undefined && fa === inferModelFamily(b);
+}
+
+/**
+ * The model that ACTUALLY wrote an attempt, from its durable routing evidence — or undefined
+ * when it is not known: the runtime did not steer (`modelSteered !== true`), so the recorded
+ * model is a label and the CLI's default ran. Unknown is never guessed.
+ */
+export function writerEffectiveModel(
+  routingDecision: Record<string, unknown> | undefined,
+): string | undefined {
+  const selected = routingDecision?.selected as
+    { model?: unknown; modelSteered?: unknown } | undefined;
+  return selected?.modelSteered === true && typeof selected.model === "string"
+    ? selected.model
+    : undefined;
+}
+
+/**
+ * The reviewer's effective identity, from the persisted decision's provider metadata. The model
+ * is known when the reviewer was ROUTED (its `routing` evidence is present only when the model
+ * was steered) or when it is the OmniRoute reviewer (which always names a real model). A command
+ * reviewer that did not steer reports its binary's name — not a model — so: unknown.
+ */
+export function reviewerEffectiveIdentity(
+  providerMetadata:
+    { provider?: string; model?: string; routing?: Record<string, unknown> } | undefined,
+): { workerId?: string; model?: string } {
+  if (!providerMetadata) return {};
+  const selected = providerMetadata.routing?.selected as { workerId?: unknown } | undefined;
+  const steered =
+    providerMetadata.routing !== undefined || providerMetadata.provider === "omniroute";
+  return {
+    workerId: typeof selected?.workerId === "string" ? selected.workerId : undefined,
+    model: steered ? providerMetadata.model : undefined,
+  };
+}
+
 export function modelKeyOf(worker: Pick<WorkerRegistryEntry, "id" | "metadata">): string {
   const { model, provider } = worker.metadata ?? {};
   return model ? `${provider ?? "unknown-provider"}/${model}` : `worker:${worker.id}`;
@@ -220,6 +301,12 @@ export interface ComputeRequirement {
   writerModelKey?: string;
   /** Reviewer routing: the worker that wrote it. The router resolves its model. */
   writerWorkerId?: string;
+  /**
+   * The highest KNOWN tier among candidates eligible right now (set by the router). Escalation
+   * never demands more than the fleet can give: without it, a fleet with no tier-6 family would
+   * gate everything but its top tier out and report a fallback that is not one.
+   */
+  maxAvailableTier?: number;
   /** Execution budget used when a candidate declares none: its OWN runtime's timeout. */
   defaultBudgetMs?: (runtime: WorkerRegistryEntry["runtime"]) => number | undefined;
   /** The execution lease the budget must fit inside. Absent: the lease gate cannot run. */
@@ -258,7 +345,9 @@ export function requiredTier(req: ComputeRequirement): { tier: number; reasons: 
     tier += 1;
     reasons.push(`previous attempt ended ${last.failureClass} -> +1`);
   }
-  return { tier: Math.min(5, tier), reasons };
+  const cap = Math.min(MAX_TIER, req.maxAvailableTier ?? MAX_TIER);
+  if (tier > cap) reasons.push(`capped at ${cap}: the highest tier eligible now`);
+  return { tier: Math.min(cap, tier), reasons };
 }
 
 /* ------------------------------------------------------------------------------------------ */

@@ -93,6 +93,9 @@ export interface WorkerHealthSweepReport {
   expired: string[];
 }
 
+/** Simultaneous probes. Small: model probes share one gateway account's rate limit. */
+export const PROBE_CONCURRENCY = 6;
+
 export class WorkerHealthProber {
   private readonly adapters: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
   private readonly maxEvidenceAgeMs: number;
@@ -117,11 +120,21 @@ export class WorkerHealthProber {
    */
   async probeAll(): Promise<WorkerProbeRecord[]> {
     const pool = await this.workers.list();
+    /*
+     * CONCURRENTLY, BOUNDED (decision 0054). Probes are independent — one row each — and a model
+     * probe is a real LLM round-trip: in sequence, one hung model (a quota-exhausted route makes
+     * the agent CLI retry until its probe timeout) delays every probe behind it past the
+     * evidence horizon, and HEALTHY workers go stale. Unbounded, N simultaneous probes against
+     * one gateway account can throttle it and fail every worker at once. Hence a small pool.
+     */
+    const active = pool.filter((w) => w.status === "active");
     const records: WorkerProbeRecord[] = [];
-
-    for (const worker of pool.filter((w) => w.status === "active")) {
-      records.push(await this.probeOne(worker));
-    }
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(PROBE_CONCURRENCY, active.length) }, async () => {
+        while (next < active.length) records.push(await this.probeOne(active[next++]!));
+      }),
+    );
 
     return records.sort((a, b) => a.workerId.localeCompare(b.workerId));
   }

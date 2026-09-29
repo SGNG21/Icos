@@ -84,6 +84,37 @@ result → review → correction → gate → apply → settlement` found:
     refused), fencing (a terminal attempt cannot be leased), correction bounds, independent
     review, the IntegrationGate and its self-review refusal, apply-before-integrated (0053).
 
+## Live certification amendments (2026-09-29)
+
+Found against the live gateway, fixed, proven:
+
+- **The IntegrationGate self-review refusal was dead code.** The coordinator passed the
+  reviewer's KIND ("llm") and the gate compared it with the writer's worker id. The coordinator
+  now resolves EFFECTIVE identities from durable rows — reviewer worker/model from the decision's
+  `providerMetadata` (model known only when routed/steered or OmniRoute), writer model from the
+  attempt's `routing_decision.selected` only when `modelSteered` — and the gate returns
+  NEEDS_HUMAN_APPROVAL on same worker or `sameEffectiveModel` (normalized id match OR same
+  recognised family: one model under two routes' names is one judge). The router's
+  SAME_MODEL_AS_WRITER uses the same rule. When either model is UNKNOWN the decision is unchanged
+  but the report records "indépendance non vérifiée"; refusing on unknown is an owner policy
+  choice, not taken here. Proven end to end: real worker, real gate, real applier.
+- **The agent CLI exits 0 on a gateway refusal** (stdout "HTTP 404/401 …") and hangs on 429.
+  Probes take `healthyStdout` (health = a real answer); exec takes `requireStructuredResult`
+  (exit 0 without the result block = a classified failure, unless stdout was truncated).
+- **Health is the canonical prober's**, concurrently (pool of 6) so a hung model cannot age
+  healthy evidence past the horizon; the container's own env configures it. The self-build
+  harness no longer writes `healthy`.
+- Family patterns: Nemotron 3 only (`llama-*-nemotron-*` 49B/253B were misclassified).
+  `representativeModels` registers one base id per (family, provider).
+
+- **Claude Fable 5.1** (owner, 2026-09-30): seventh family `CLAUDE_FABLE`, tier 6, top cost —
+  escalation compute only (long-horizon, cross-module, repeated lower-tier failure), proven never
+  chosen for routine low/medium/high work. `MAX_TIER` 6; the required tier is CAPPED at the
+  highest tier eligible now, so a fleet without Fable escalates to its own top tier, not past it.
+  Not routable today: OmniRoute lists no Fable id (0/440); it will be once listed AND probed.
+- The container's probe adapters still read the PROCESS env (a change to the container env broke
+  5 certified suites and was reverted); the harness stubs it as those suites do.
+
 ## Consequences
 
 - The fleet comes from OmniRoute's `/v1/models` (`compute-fleet.ts`, deterministic worker ids,

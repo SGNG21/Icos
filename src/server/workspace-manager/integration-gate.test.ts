@@ -311,6 +311,69 @@ describe("NEEDS_HUMAN_APPROVAL", () => {
     expect(self.decision).toBe("NEEDS_HUMAN_APPROVAL");
   });
 
+  it("DECISION 0054 — auto-revue par IDENTITÉ EFFECTIVE : même worker routé, ou même modèle", async () => {
+    const approved = (review: Partial<NonNullable<GateOptions["review"]>>): GateOptions => ({
+      review: { verdict: "APPROVED", reviewer: "llm", ...review },
+      lease: LEASE,
+    });
+    /* The reviewer KIND alone ("llm") never equals a worker id: before 0054 this passed. */
+    const sameWorker = await gate.integrate(
+      await prepare("7a", { "src/7a/x.ts": "x\n" }),
+      approved({ reviewerWorkerId: "worker-7a" }),
+    );
+    expect(sameWorker.decision).toBe("NEEDS_HUMAN_APPROVAL");
+    expect(sameWorker.reasons.join(" ")).toMatch(/le reviewer est le worker/);
+
+    /* Same model through another account and another effort variant: still the same judge. */
+    const sameModel = await gate.integrate(
+      await prepare("7b", { "src/7b/x.ts": "x\n" }),
+      approved({
+        reviewerWorkerId: "reviewer-w",
+        reviewerModel: "claude/claude-sonnet-5-high",
+        writerModel: "cc/claude-sonnet-5",
+      }),
+    );
+    expect(sameModel.decision).toBe("NEEDS_HUMAN_APPROVAL");
+    expect(sameModel.reasons.join(" ")).toMatch(/même modèle/);
+  });
+
+  it("DECISION 0054 — un reviewer d'un AUTRE modèle, sur un autre worker, n'est pas refusé", async () => {
+    const report = await gate.integrate(await prepare("7c", { "src/7c/x.ts": "x\n" }), {
+      review: {
+        verdict: "APPROVED",
+        reviewer: "llm",
+        reviewerWorkerId: "reviewer-w",
+        reviewerModel: "cc/claude-opus-5",
+        writerModel: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      },
+      lease: LEASE,
+    });
+    expect(report.decision).toBe("ACCEPT");
+    expect(report.reasons.join(" ")).not.toMatch(/indépendance non vérifiée/);
+  });
+
+  it("DECISION 0054 — the same model under ANOTHER NAME (another route) is the same judge", async () => {
+    const report = await gate.integrate(await prepare("7d", { "src/7d/x.ts": "x\n" }), {
+      review: {
+        verdict: "APPROVED",
+        reviewer: "llm",
+        reviewerWorkerId: "reviewer-w",
+        reviewerModel: "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+        writerModel: "oc/nemotron-3-ultra-free",
+      },
+      lease: LEASE,
+    });
+    expect(report.decision).toBe("NEEDS_HUMAN_APPROVAL");
+  });
+
+  it("DECISION 0054 — an UNKNOWN effective model is reported as unverified independence, never hidden", async () => {
+    const report = await gate.integrate(await prepare("7e", { "src/7e/x.ts": "x\n" }), {
+      review: { verdict: "APPROVED", reviewer: "llm", reviewerModel: "cc/claude-opus-5" },
+      lease: LEASE,
+    });
+    expect(report.reasons.join(" ")).toMatch(/indépendance non vérifiée/);
+  });
+
   it("approbation humaine explicite (différente du worker) -> ACCEPT ; sinon refusée", async () => {
     const id = await prepare("7a", { "src/7a/x.ts": "x\n" });
     await gate.integrate(id, { lease: LEASE });

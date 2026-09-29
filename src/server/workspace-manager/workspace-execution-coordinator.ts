@@ -10,8 +10,10 @@ import type { IntegrationApplier, IntegrationApplyOutcome } from "./integration-
 export interface ReviewLike {
   decision: string;
   reviewerKind?: string;
+  providerMetadata?: { provider?: string; model?: string; routing?: Record<string, unknown> };
 }
 import type { IntegrationReport } from "./report";
+import { reviewerEffectiveIdentity, writerEffectiveModel } from "@/core/workers/compute-routing";
 
 import type { TaskExecutionDispatcher, TaskExecutionDispatchInput } from "@/server/execution/ports";
 import type { MissionRepository } from "@/server/mission/ports";
@@ -39,6 +41,13 @@ export interface WorkspaceExecutionCoordinatorOptions {
    * a second review authority, and the gate still refuses a reviewer that is the worker.
    */
   reviewDecisions?: { getByWorkflowId(workflowId: string): Promise<ReviewLike | null> };
+  /**
+   * The attempt ledger, read for the WRITER's effective model (decision 0054) so the gate can
+   * refuse a same-model review. Absent: the writer's model is unknown, as before.
+   */
+  writerAttempts?: {
+    getByWorkflowId(workflowId: string): Promise<{ routingDecision?: Record<string, unknown> } | null>;
+  };
   dispatcher: TaskExecutionDispatcher;
   missions: MissionRepository;
   tasks: TaskRepository;
@@ -115,6 +124,7 @@ export class WorkspaceExecutionCoordinator {
   private readonly integrationGate: IntegrationGate;
   private readonly integrationApplier?: IntegrationApplier;
   private readonly reviewDecisions?: WorkspaceExecutionCoordinatorOptions["reviewDecisions"];
+  private readonly writerAttempts?: WorkspaceExecutionCoordinatorOptions["writerAttempts"];
   private readonly dispatcher: TaskExecutionDispatcher;
   private readonly missions: MissionRepository;
   private readonly tasks: TaskRepository;
@@ -143,6 +153,7 @@ export class WorkspaceExecutionCoordinator {
     this.integrationGate = options.integrationGate;
     this.integrationApplier = options.integrationApplier;
     this.reviewDecisions = options.reviewDecisions;
+    this.writerAttempts = options.writerAttempts;
     this.dispatcher = options.dispatcher;
     this.missions = options.missions;
     this.tasks = options.tasks;
@@ -571,9 +582,11 @@ export class WorkspaceExecutionCoordinator {
      *
      * The gate's review step answers NEEDS_HUMAN_APPROVAL when no verdict is supplied, so
      * before this an autonomous run could never reach ACCEPT. The verdict comes from the
-     * CANONICAL review decision for this workflow — the same record QC produced — and the
-     * reviewer identity is its kind, which can never equal a worker id, so the gate's
-     * self-review refusal remains structurally unreachable.
+     * CANONICAL review decision for this workflow — the same record QC produced. Until 0054
+     * the only reviewer identity passed was its KIND, which can never equal a worker id, so
+     * the gate's self-review refusal could never fire. It now also receives the EFFECTIVE
+     * reviewer worker/model and the writer's effective model (see resolveReview), and refuses
+     * a same-worker or same-model review.
      *
      * A worker's own claim is never consulted: only a persisted review decision counts.
      */
@@ -801,14 +814,29 @@ export class WorkspaceExecutionCoordinator {
    */
   private async resolveReview(
     workflowId: string,
-  ): Promise<{ verdict: "APPROVED" | "CHANGES_REQUESTED"; reviewer: string } | undefined> {
+  ): Promise<NonNullable<Parameters<IntegrationGate["integrate"]>[1]["review"]> | undefined> {
     const decision = await this.reviewDecisions?.getByWorkflowId(workflowId);
     if (!decision) return undefined;
 
     const reviewer = decision.reviewerKind ?? "reviewer";
-    if (decision.decision === "APPROVE") return { verdict: "APPROVED", reviewer };
-    if (decision.decision === "REQUEST_CHANGES") return { verdict: "CHANGES_REQUESTED", reviewer };
-    return undefined;
+    const verdict =
+      decision.decision === "APPROVE"
+        ? ("APPROVED" as const)
+        : decision.decision === "REQUEST_CHANGES"
+          ? ("CHANGES_REQUESTED" as const)
+          : undefined;
+    if (!verdict) return undefined;
+
+    /* EFFECTIVE identities, from durable rows only (decision 0054). */
+    const reviewerIdentity = reviewerEffectiveIdentity(decision.providerMetadata);
+    const attempt = await this.writerAttempts?.getByWorkflowId(workflowId);
+    return {
+      verdict,
+      reviewer,
+      reviewerWorkerId: reviewerIdentity.workerId,
+      reviewerModel: reviewerIdentity.model,
+      writerModel: writerEffectiveModel(attempt?.routingDecision),
+    };
   }
 
   /**
