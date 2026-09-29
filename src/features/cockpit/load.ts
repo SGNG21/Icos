@@ -13,7 +13,12 @@ import type { AgentScope } from "@/server/repositories/ports";
 
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
 import type { QualityFact, WorkspaceFact } from "./pipeline";
-import { buildCockpitSnapshot, type CockpitSources, type MissionWithTasks } from "./snapshot";
+import {
+  buildCockpitSnapshot,
+  redactError,
+  type CockpitSources,
+  type MissionWithTasks,
+} from "./snapshot";
 import { isReal, missing, real, type Truth } from "./truth";
 
 /**
@@ -130,7 +135,7 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
             reviewAttemptCount: j.reviewAttemptCount,
             state: j.state,
             action: j.action ?? null,
-            lastError: j.lastError ?? null,
+            lastError: redactError(j.lastError, global) ?? null,
             updatedAt: new Date(j.updatedAt).toISOString(),
           }));
       })
@@ -223,7 +228,7 @@ export async function loadMissionDetail(id: string): Promise<MissionDetail | nul
         workerId: a.workerId,
         workerKind: a.workerKind,
         failureClass: a.failureClass,
-        lastError: a.lastError,
+        lastError: redactError(a.lastError, scope.kind === "global"),
         dispatchedAt: a.dispatchedAt ? new Date(a.dispatchedAt).toISOString() : undefined,
       },
       review: r && {

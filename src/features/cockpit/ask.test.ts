@@ -145,6 +145,23 @@ describe("Ask ICOS reducer", () => {
   });
 });
 
+describe("Ask ICOS error latch", () => {
+  it("after an error or the display cap, later frames do not revive the turn", () => {
+    const capped = run([
+      started,
+      { type: "text.delta", turnId: T, seq: 1, text: "x".repeat(MAX_ANSWER_CHARS + 1) },
+      { type: "text.delta", turnId: T, seq: 2, text: "small" },
+    ]);
+    expect(capped).toMatchObject({ status: "error", error: { code: "ANSWER_TOO_LONG" } });
+    const failed = run([
+      started,
+      { type: "error", turnId: T, seq: 1, code: "RUNTIME", message: "boom", retryable: true },
+      { type: "text.delta", turnId: T, seq: 2, text: "late" },
+    ]);
+    expect(failed).toMatchObject({ status: "error", text: "" });
+  });
+});
+
 describe("Ask ICOS transport", () => {
   it("POSTs the client turn id (idempotency key)", async () => {
     const fetch = vi.fn(async () => sse([]));

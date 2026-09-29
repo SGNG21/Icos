@@ -298,3 +298,12 @@ describe("metadata secret filter", () => {
     ).toEqual({ model: "nvidia/nemotron-3-super-120b-a12b" });
   });
 });
+
+describe("error text exposure", () => {
+  it("raw error text reaches owner/admin scope only, truncated", async () => {
+    const { redactError } = await import("./snapshot");
+    expect(redactError("x".repeat(500), true)).toHaveLength(200);
+    expect(redactError("provider https://internal/v1 failed", false)).toBeUndefined();
+    expect(redactError(undefined, true)).toBeUndefined();
+  });
+});

@@ -210,6 +210,11 @@ const SECRET_KEY = /key|token|secret|pass|credential|cookie|auth|bearer|private/
 /** Values that look like credentials whatever their key: URL userinfo, bearer tokens, key prefixes. */
 const SECRET_VALUE = /:\/\/[^/\s@]+@|\bbearer\s|\b(sk|pk|rk|ghp|gho|xox[abp])[-_][a-z0-9]{8,}/i;
 
+/** Raw error text can carry provider internals: owner/admin (global) scope only, truncated. */
+export function redactError(text: string | undefined, global: boolean): string | undefined {
+  return global && text ? text.slice(0, 200) : undefined;
+}
+
 export function safeMetadata(metadata: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(metadata).filter(

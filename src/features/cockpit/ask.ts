@@ -90,6 +90,8 @@ export type AskStatus =
   | "not_connected";
 
 const TERMINAL_STATUS = new Set<AskStatus>(["completed", "interrupted", "cancelled"]);
+/** Finished, or failed until an explicit resume (`reconnecting`) re-opens it: later frames are ignored. */
+const isClosed = (s: AskState) => TERMINAL_STATUS.has(s.status) || s.status === "error";
 
 export interface AskState {
   status: AskStatus;
@@ -148,7 +150,7 @@ export function askReducer(state: AskState, action: AskAction): AskState {
       return { ...state, status: "reconnecting", error: null };
     case "link_lost":
       // What arrived stays on screen; the turn outcome is unknown until resumed.
-      return TERMINAL_STATUS.has(state.status)
+      return isClosed(state)
         ? state
         : lost(state, "LINK_LOST", "Connection to ICOS lost mid-turn.");
     case "turn_unknown":
@@ -169,7 +171,7 @@ export function askReducer(state: AskState, action: AskAction): AskState {
 function applyEvent(state: AskState, e: AskEvent): AskState {
   // Strict isolation: only the turn this client started, and nothing after it ended.
   if (state.turnId === null || e.turnId !== state.turnId) return state;
-  if (TERMINAL_STATUS.has(state.status)) return state;
+  if (isClosed(state)) return state;
   if (e.seq <= state.lastSeq) return state; // replay after resume
   if (e.seq !== state.lastSeq + 1)
     return lost(

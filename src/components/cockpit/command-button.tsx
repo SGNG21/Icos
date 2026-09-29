@@ -90,9 +90,20 @@ export function CommandButton({
   const [proof, setProof] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [sent, setSent] = useState<ReturnType<typeof buildRequest> | null>(null);
+  /** A sent command whose outcome is not known yet: its session must survive a close. */
+  const pinned = sent !== null && (phase === "EXECUTING" || phase === "UNKNOWN");
+
+  /** Dialog session: a response belonging to an older (closed/restarted) session is dropped. */
+  const generation = useRef(0);
+  const settle = (gen: number, o: Outcome) => {
+    if (gen !== generation.current) return;
+    setOutcome(o);
+    setPhase(o.phase);
+  };
 
   /** Drops everything sensitive or single-use (password, proof, typed phrase, request). */
   const reset = () => {
+    generation.current += 1;
     setReason("");
     setAck(false);
     setTyped("");
@@ -115,33 +126,30 @@ export function CommandButton({
       return;
     }
     setKey(fresh);
+    const gen = generation.current;
     const v = await loadVersion(transport, target);
-    if (!v.ok) {
-      setOutcome(v.outcome);
-      setPhase(v.outcome.phase);
-      return;
-    }
+    if (gen !== generation.current) return;
+    if (!v.ok) return settle(gen, v.outcome);
     setVersion(v.version);
     setPhase(reauth ? "AUTH_REQUIRED" : "AUTHORIZED");
   };
 
   const open = () => {
     dialog.current?.showModal();
-    void start();
+    if (!pinned) void start();
   };
 
   const doReauth = async () => {
     const pw = password;
     setPassword(""); // never kept past the request
+    const gen = generation.current;
     const r = await reauthenticate(transport, pw);
+    if (gen !== generation.current) return;
     if (r.ok) {
       setProof(r.proof);
       setOutcome(null);
       setPhase("AUTHORIZED");
-    } else {
-      setOutcome(r.outcome);
-      setPhase(r.outcome.phase);
-    }
+    } else settle(gen, r.outcome);
   };
 
   const send = async () => {
@@ -157,17 +165,15 @@ export function CommandButton({
     });
     setSent(request);
     setPhase("EXECUTING");
-    const o = await executeCommand(transport, request);
-    setOutcome(o);
-    setPhase(o.phase);
+    const gen = generation.current;
+    settle(gen, await executeCommand(transport, request));
   };
 
   const reconcile = async () => {
     if (!sent) return;
     setPhase("EXECUTING");
-    const o = await reconcileCommand(transport, sent, outcome?.result);
-    setOutcome(o);
-    setPhase(o.phase);
+    const gen = generation.current;
+    settle(gen, await reconcileCommand(transport, sent, outcome?.result));
   };
 
   const reasonOk = reason.trim().length >= 3 && reason.trim().length <= 500;
@@ -194,7 +200,17 @@ export function CommandButton({
         {compact ? <span className="cx-sr">{COMMAND_LABEL[type]}</span> : COMMAND_LABEL[type]}
       </button>
 
-      <dialog ref={dialog} className="cx-dialog" aria-labelledby={`${id}-t`} onClose={reset}>
+      <dialog
+        ref={dialog}
+        className="cx-dialog"
+        aria-labelledby={`${id}-t`}
+        onClose={() => {
+          // An in-flight or UNKNOWN command keeps its session (the only reconcile
+          // handle); reopening resumes it. Anything else is wiped.
+          if (pinned) setPassword("");
+          else reset();
+        }}
+      >
         <form method="dialog" onSubmit={(e) => e.preventDefault()}>
           <header>
             <span className="cx-risk" data-risk={risk}>

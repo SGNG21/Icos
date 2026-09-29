@@ -8,7 +8,7 @@ Re-verify `CURRENT_HEAD` against `git log` before trusting it.
 See the milestone log below for later heads.
 
 ## CURRENT_MILESTONE
-Cockpit UI scope complete against available backend (C1–C4, C6 contracts, C7–C9 honest shells, PWA). Remaining work is BACKEND-BLOCKED (BR-01, BR-10, BR-12, …) — see latest log entry.
+Lane B "Cockpit + Control Center" mission complete (2026-09-29): controls speak the control-foundation contract (NOT_CONNECTED until merged), real pipeline/leases, router-compatible compute view, Ask ICOS runtime contract (BR-28), executive mode. See latest log entry and CONTROL_CENTER_MATRIX.md.
 
 ## EXISTING_COCKPIT_PATHS (C0 forensic audit)
 | Path | What | Verdict |
@@ -102,3 +102,13 @@ See `BACKEND_REQUIREMENTS.md` (BR-01 … BR-20).
 - MUST_NOW (backend-blocked, not UI): BR-10 governed command bus (+BR-11 versions, BR-18 step-up) is the single blocker for ANY control; BR-12 runtime control flags for real safe mode.
 - SHOULD_NEXT: BR-01 SSE over audit (replace `LiveRefresh` polling), BR-02 runtime event vocabulary, BR-03 worker model/provider/account fields, BR-06/08 autonomy + improvement backlog read models; cockpit side then: C5 SSE client with `Last-Event-ID` resume, alert ack UI (BR-22).
 - NEXT_ACTION: when BR-10 lands, replace `notWiredTransport` in `command-button.tsx` with an HTTP transport (`POST /api/commands`, `GET /api/commands/:id`) — contract and tests already in `commands.ts`; nothing else in the UI needs to change.
+
+### CC — Control Center mission (2026-09-29), lane baseline 437b18c
+- COMMITS: 5770ddf controls ↔ decision 0044 · cc6edc2 pipeline/leases/link states/executive · 00828fe compute (0054) · 6c3dd6b Ask ICOS contract · 16ac824 prettier · cb70fd6 visual fixes · 2342e08 review corrections (+ this docs commit)
+- ARCHITECTURE: `src/core/control/contracts.ts` is BYTE-IDENTICAL to feat/control-foundation and integration/core3-control-foundation (add/add, clean merge; never edit one side alone). `commands.ts` = HTTP transport + lifecycle; `pipeline.ts`, `compute.ts`, `executive.ts`, `ask.ts` pure read models; `load.ts` stays the only server boundary. Matrix: `CONTROL_CENTER_MATRIX.md`.
+- NEW ROUTES: `/cockpit/executive`, `/cockpit/pipeline`; `/cockpit/providers` is now "Compute".
+- TESTS: `pnpm test` 154 files / 1896 passed; cockpit 12 files / 120+. typecheck, eslint --max-warnings=0 (changed files), prettier, `next build`, `git diff --check`: PASS.
+- VISUAL: headless Chrome (CDP; extension not connected) at 390×844 DPR2 and 1440×900 against scratch Postgres `icos_cockpit_cc_preview` (migrated, owner via auth:bootstrap, 3 compute workers + 1 mission via ICOS services): 14 renders, 0 console errors, 0 horizontal overflow after cb70fd6. Live flows: Enter safe mode → dialog NOT CONNECTED, no Send; Ask → NOT CONNECTED, no answer.
+- REVIEW: independent Sonnet security-reviewer + principal-architect (Hermes Nemotron workers were blocked by the permission classifier): both REQUEST_CHANGES, no P0; all P1 and most P2 fixed in 2342e08. Security follow-up verified every P1 RESOLVED and caught one fix claimed but not applied (QC lastError) plus NEW-1 (stale in-flight response after close/reopen) and NEW-2 (error not latched): fixed in the next commit (redactError at the loader for QC + attempt lastError; dialog generation fence; unresolved command session survives close instead of pinning the modal; Ask error latch).
+- OPEN / KNOWN GAPS: audit.list() unbounded (pre-existing; executive counts rely on it → bounded time-window read needed); compute rates are decision-time snapshots from in-flight attempts only (terminal-attempt read = CORE3/BR-16); escalated QC jobs not listable; settlement NOT_CONNECTED (CORE3 defect 36); `.cx-sr` fix is global to cockpit CSS.
+- NEXT_ACTION: after control-foundation merges, run the control dialog against the real API (PAUSE/RESUME/CANCEL, DISABLE/ENABLE, ENTER/EXIT safe mode incl. REAUTH_EXPIRED and replay) — no cockpit code change expected; after CORE3 e652469 merges, drop the structural `routingDecision` cast in `compute.routingEvidenceOf` and add a test typed against `RoutingDecisionEvidence`; lane C implements BR-28.
