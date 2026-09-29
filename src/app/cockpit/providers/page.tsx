@@ -7,15 +7,19 @@ import {
   TruthValue,
   Unavailable,
 } from "@/components/cockpit/primitives";
-import { loadSnapshot } from "@/features/cockpit/load";
+import { buildCompute } from "@/features/cockpit/compute";
+import { loadSnapshot, loadSources } from "@/features/cockpit/load";
 import { UNDECLARED, buildResourceTree, providerTelemetry } from "@/features/cockpit/resources";
 import { missing } from "@/features/cockpit/truth";
 
 export const metadata = { title: "Providers" };
 
 export default async function ProvidersPage() {
-  const snapshot = await loadSnapshot();
-  if (!snapshot) return null;
+  const [snapshot, sources] = await Promise.all([loadSnapshot(), loadSources()]);
+  if (!snapshot || !sources) return null;
+  const compute =
+    snapshot.workers.kind === "real" ? buildCompute(snapshot.workers.value, sources.attempts) : null;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
   const tree = snapshot.workers.kind === "real" ? buildResourceTree(snapshot.workers.value) : null;
   const cost = missing<number>("not_available", "No cost ledger.", "BR-05");
 
@@ -23,8 +27,8 @@ export default async function ProvidersPage() {
     <>
       <div className="cx-pagehead">
         <div>
-          <p className="cx-eyebrow">Providers · capacity · cost</p>
-          <h1>Resources</h1>
+          <p className="cx-eyebrow">Compute · providers · capacity · cost</p>
+          <h1>Compute</h1>
         </div>
       </div>
 
@@ -38,6 +42,92 @@ export default async function ProvidersPage() {
         <MetricTile label="Cost by client" truth={cost} />
         <MetricTile label="Queue pressure" truth={snapshot.metrics.readyQueue} />
       </div>
+
+      <Panel
+        title="Compute fleet"
+        eyebrow="Candidates = registered workers (decision 0054) · grouped by model family"
+      >
+        {!compute ? (
+          <TruthValue truth={snapshot.workers} />
+        ) : compute.length === 0 ? (
+          <p className="cx-empty">No compute candidate is registered.</p>
+        ) : (
+          compute.map((g) => (
+            <section key={g.family} aria-label={`Family ${g.family}`}>
+              <h3 className="cx-eyebrow">
+                {g.declared ? g.family : "Family not declared"} · {g.rows.length}
+              </h3>
+              <div className="cx-scroll">
+                <table className="cx-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Provider · route</th>
+                      <th>Health</th>
+                      <th>Load</th>
+                      <th>Timeouts</th>
+                      <th>Infra failures</th>
+                      <th>Rate limit</th>
+                      <th>Latency</th>
+                      <th>Steered</th>
+                      <th>Fallbacks</th>
+                      <th>Routing reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.rows.map((r) => (
+                      <tr key={r.workerId}>
+                        <td>
+                          <Link href={`/cockpit/workers#${r.workerId}`}>
+                            <TruthValue truth={r.modelId} />
+                          </Link>
+                        </td>
+                        <td>
+                          <TruthValue truth={r.provider} />{" "}
+                          <span className="cx-dim">
+                            <TruthValue truth={r.route} />
+                          </span>
+                        </td>
+                        <td>
+                          <ToneBadge tone={r.tone} label={`${r.health} · ${r.availability}`} size="sm" />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.load.used} />/{r.load.max}
+                        </td>
+                        <td>
+                          <TruthValue truth={r.timeoutRate} format={pct} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.infraFailureRate} format={pct} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.rateLimit} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.latency} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.modelSteered} format={(v) => (v ? "yes" : "label only")} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.fallbackEvents} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.routingReason} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ))
+        )}
+        <p className="cx-dim">
+          Credential health is never exposed here; an authentication failure appears as a routing
+          cooldown. Model list comes from OmniRoute through registration, not from this screen.
+        </p>
+      </Panel>
 
       <Panel title="Provider › Account › Model › Worker" eyebrow="Declared in the worker registry">
         {!tree ? (
