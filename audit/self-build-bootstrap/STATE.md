@@ -1342,22 +1342,30 @@ commands for the self-build certification.
                                              DEDICATED database, each leaving a durable
                                              evidence record under
                                              audit/self-build-bootstrap/evidence/.
-  ICOS_SELF_BUILD_E2E                      — PARTIAL, and therefore recorded as FALSE.
-                                             From the single sentence "Improve ICOS
-                                             autonomously", with no candidate/goal/mission/
-                                             task/plan/worker/review/approval/integration
-                                             supplied, ICOS has PROPOSED and INTEGRATED its
-                                             own improvements — including a real source
-                                             change to src/core/context/contracts.ts, gated
-                                             by the repository's own typecheck, lint, unit,
-                                             integration and build.
-                                             It is NOT repeatable: it passes when the plan
-                                             has ONE writer task and blocks when the plan has
-                                             an edge, because a read-only inspection task is
-                                             executed and never settled. That is DEFECT 36,
-                                             closed and merged here (0049); repeatability NOT
-                                             yet re-run — deliberately, until the self-dev
-                                             path converges on the canonical authority below.
+  ICOS_SELF_BUILD_E2E                      — FALSE (not repeatable yet). Re-attempted 2026-09-29
+                                             after the canonical-path convergence, 4 runs from a
+                                             target reset to the certified HEAD, real proposer /
+                                             planner / worker / reviewer (hermes) and REAL gates:
+                                               run 1 (38daa77): worker timeout -> RETRY stranded
+                                                 behind attempt 1's workspace -> FIXED (c1edfd7).
+                                               run 2 (c1edfd7): killed worker left uncommitted
+                                                 edits; retirement could not release -> FIXED
+                                                 (1904ee8).
+                                               run 3 (9972b77): reader->writer DAG settled
+                                                 naturally; real REQUEST_CHANGES; correction ended
+                                                 OWNERSHIP_LOST (locked registry read as lost
+                                                 lease; budget == execution lease) -> FIXED
+                                                 (685b4db).
+                                               run 4 (685b4db): DAG settled; two real
+                                                 REQUEST_CHANGES -> two governed corrections;
+                                                 correction 3's worker crashed (exit 1) -> BLOCK
+                                                 -> ESCALATE; candidate rejected; target unchanged.
+                                                 NO ICOS defect: every step was the canonical path.
+                                             Remaining obstacle is worker output quality/
+                                             reliability on the configured agent (xhigh model:
+                                             >10 min edits, a crash, reviewer rejections), not
+                                             orchestration. Evidence: audit/self-build-bootstrap/
+                                             evidence/ (one record per run).
 ICOS is NOT yet self-building, and must not be described as such.
 
 ### OPEN, NOT FIXED HERE
