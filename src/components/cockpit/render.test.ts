@@ -2,7 +2,6 @@ import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { askPipeline, ASK_STAGES } from "@/features/cockpit/ask";
 import { buildDag } from "@/features/cockpit/dag";
 import { buildCockpitSnapshot, type WorkerView } from "@/features/cockpit/snapshot";
 import { missing, real } from "@/features/cockpit/truth";
@@ -246,24 +245,9 @@ describe("alerts", () => {
 });
 
 describe("Ask ICOS shell", () => {
-  it("never interprets text in the browser: intent compilation is NOT CONNECTED", () => {
-    expect(askPipeline("", false)[0]).toBe("idle");
-    expect(askPipeline("Arrête le worker", false)).toEqual([
-      "ready",
-      ...Array(ASK_STAGES.length - 1).fill("idle"),
-    ]);
-    const sent = askPipeline("Arrête le worker", true);
-    expect(sent[1]).toBe("not_connected");
-    expect(sent.slice(2).every((s) => s === "waiting")).toBe(true);
-  });
-
-  it("rejects oversize input", () => {
-    expect(askPipeline("x".repeat(2001), true)[0]).toBe("idle");
-  });
-
-  it("renders the pipeline with a disabled send button when empty", () => {
+  it("renders no answer and a disabled send button before anything is typed", () => {
     const out = html(h(AskIcos));
-    expect(out).toContain("ProposedIntent");
+    expect(out).not.toContain("cx-answer");
     expect(out).toMatch(/<button type="submit"[^>]*disabled/);
   });
 });

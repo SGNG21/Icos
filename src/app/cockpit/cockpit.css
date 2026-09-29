@@ -1979,3 +1979,14 @@ html[data-cx-stale] .cx-top__health {
     margin: 0;
   }
 }
+
+.cx-answer {
+  padding: 12px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--glass-2);
+  color: var(--text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

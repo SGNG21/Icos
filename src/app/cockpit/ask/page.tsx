@@ -10,11 +10,11 @@ export default async function AskPage() {
     <>
       <div className="cx-pagehead">
         <div>
-          <p className="cx-eyebrow">Natural-language command</p>
+          <p className="cx-eyebrow">Cognitive Runtime · conversation</p>
           <h1>Ask ICOS</h1>
         </div>
       </div>
-      <Panel title="Command surface" eyebrow="The backend decides; this screen asks">
+      <Panel title="Conversation" eyebrow="ICOS answers; this screen only renders what it streams">
         <AskIcos />
       </Panel>
     </>
