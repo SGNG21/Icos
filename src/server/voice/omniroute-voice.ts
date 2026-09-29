@@ -24,7 +24,7 @@ export type OmniRouteVoiceConfig = {
 
 export type VoiceProviderStatus = "CONFIGURED" | "NOT_CONFIGURED";
 
-export function omniRouteVoiceFromEnv(env: NodeJS.ProcessEnv = process.env): {
+export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = process.env): {
   stt: SttProvider | null;
   tts: TtsProvider | null;
   status: { stt: VoiceProviderStatus; tts: VoiceProviderStatus };
@@ -193,7 +193,8 @@ export function speakable(text: string): string {
 /** Complete sentences at the head of `buffer`, and the rest. */
 export function takeSentences(buffer: string): { sentences: string[]; rest: string } {
   const sentences: string[] = [];
-  const pattern = /[^.!?…\n]*[.!?…\n]+/y;
+  // A terminator ends a sentence only before whitespace: "3.14" and URLs stay whole.
+  const pattern = /[\s\S]*?(?:[.!?…]+(?=\s)|\n)/y;
   let rest = buffer;
   for (let match = pattern.exec(rest); match; match = pattern.exec(rest)) {
     if (match[0].trim()) sentences.push(match[0].trim());

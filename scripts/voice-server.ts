@@ -32,35 +32,42 @@ const hostname = process.env.HOST ?? "0.0.0.0";
 const cert = process.env.ICOS_VOICE_TLS_CERT;
 const key = process.env.ICOS_VOICE_TLS_KEY;
 
-const app = next({ dev, hostname, port });
-await app.prepare();
-const handle = app.getRequestHandler();
-const nextUpgrade = app.getUpgradeHandler();
+async function main(): Promise<void> {
+  const app = next({ dev, hostname, port });
+  await app.prepare();
+  const handle = app.getRequestHandler();
+  const nextUpgrade = app.getUpgradeHandler();
 
-// Imported after Next is prepared so both share the one globalThis container.
-const { composeVoiceHost } = await import("@/server/voice/compose");
-const voice = await composeVoiceHost();
+  // Imported after Next is prepared so both share the one globalThis container.
+  const { composeVoiceHost } = await import("@/server/voice/compose");
+  const voice = await composeVoiceHost();
 
-const server =
-  cert && key
-    ? createHttpsServer({ cert: readFileSync(cert), key: readFileSync(key) }, handle)
-    : createServer(handle);
+  const server =
+    cert && key
+      ? createHttpsServer({ cert: readFileSync(cert), key: readFileSync(key) }, handle)
+      : createServer(handle);
 
-server.on("upgrade", (request, socket, head) => {
-  voice.handleUpgrade(request, socket, head).then(
-    (handled) => {
-      if (!handled) void nextUpgrade(request, socket, head);
-    },
-    () => socket.destroy(),
-  );
-});
+  server.on("upgrade", (request, socket, head) => {
+    voice.handleUpgrade(request, socket, head).then(
+      (handled) => {
+        if (!handled) void nextUpgrade(request, socket, head);
+      },
+      () => socket.destroy(),
+    );
+  });
 
-const sweep = setInterval(() => voice.registry.sweep(), 30_000);
-sweep.unref();
+  const sweep = setInterval(() => voice.registry.sweep(), 30_000);
+  sweep.unref();
 
-server.listen(port, hostname, () => {
-  console.log(
-    `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
-      `(STT=${voice.status.stt} TTS=${voice.status.tts} COGNITIVE=${voice.status.cognitive})`,
-  );
+  server.listen(port, hostname, () => {
+    console.log(
+      `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
+        `(STT=${voice.status.stt} TTS=${voice.status.tts} COGNITIVE=${voice.status.cognitive})`,
+    );
+  });
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
 });

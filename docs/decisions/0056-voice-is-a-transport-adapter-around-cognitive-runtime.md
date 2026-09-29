@@ -77,17 +77,44 @@ Audit of committed code at `e652469`:
 - The Cognitive Runtime must provide: idempotent durable acceptance per `turnId`, a streamed
   event iterable, and abort handling that never un-accepts a turn.
 
+## Real path (second increment)
+
+- **Transport**: `ws` added — Next.js 16 route handlers cannot accept an upgrade and Node has
+  no WebSocket server. `pnpm voice:serve` (`scripts/voice-server.ts`) hosts the same Next app
+  and adds `/api/voice/ws`; other upgrades (HMR) pass through to Next. Auth at upgrade through
+  `protectRoute` (`tasks.write` + same origin — the gate of `POST /api/conversation`); ping/pong
+  liveness; 128 KiB frame cap. `pnpm dev` / `pnpm start` are unchanged.
+- **Providers**: OmniRoute (the gateway ICOS already uses). STT `/v1/audio/transcriptions`,
+  request/response — partials are re-transcriptions of the growing utterance. TTS
+  `/v1/audio/speech`, one request per completed sentence, MP3 chunks. Models are configuration
+  (`ICOS_VOICE_STT_MODEL`, `ICOS_VOICE_TTS_MODEL`); unset = `NOT_CONFIGURED`, the client is told.
+  Audited 2026-09-29: `groq/whisper-large-v3-turbo` works (0.3–0.5 s); OpenRouter models have no
+  credits; NVIDIA ASR/TTS return 404; OpenAI/ElevenLabs have no credentials; of the TTS
+  providers only `gtts/fr` answers (Google Translate TTS through OmniRoute: free, unofficial,
+  modest quality — replace when a paid voice is budgeted).
+- **Cognitive Runtime**: no committed API exists (`feat/cognitive-runtime` has no commits;
+  Cockpit's BR-28 `POST /api/ask/turns` is a proposal). `ConversationCognitiveAdapter` is a
+  **temporary** bridge over the existing conversation store + OmniRoute CEO brain. Honest limits:
+  idempotency per process, one shared CEO conversation (no ownership column — same as the text
+  path), a single FINAL event (no streaming), interrupt stops the voice but the brain's answer is
+  still stored. Replace it with the runtime's adapter; the session engine does not change.
+- **Watchdogs**: STT final after end of speech (15 s), runtime acceptance (15 s), silence between
+  runtime events (90 s; 130 s for the CEO brain), TTS tail after the text is complete (20 s);
+  provider requests time out at 20 s. Each is classified (`STT_TIMEOUT`, `COGNITIVE_TIMEOUT`,
+  `TTS_TIMEOUT`); an acceptance timeout releases the serialized queue, so a hung request never
+  blocks later turns, and a later acceptance is harmless (turn ids are idempotent).
+- **Client**: `/voice`, mobile-first, tap to talk / tap to send, AudioWorklet capture → 16 kHz
+  PCM16 frames, ordered MP3 playback, local stop on barge-in plus server `playback_stop`,
+  reconnect with backoff and session resume.
+
 ## Gaps (not done here)
 
-- **WebSocket binding**: needs an authorised dependency (`ws`) or a custom server hosting
-  `VoiceSessionRegistry` — the owner decides.
-- **Real STT/TTS adapters**: none exists locally; provider choice is a budget/privacy decision.
-- **Cognitive Runtime adapter**: `CeoApplicationService` is blocking and not idempotent on a
-  turn id, so it cannot back the port honestly.
-- **Client**: mic capture (AudioWorklet/PCM16 or Opus), playback buffer that honours
-  `playback_stop`, PWA manifest/service worker, iOS Safari user-gesture audio unlock.
+- **Phone reachability**: a phone grants the microphone only to a secure origin. The host
+  supports TLS (`ICOS_VOICE_TLS_CERT` / `ICOS_VOICE_TLS_KEY`) or a TLS proxy such as
+  `tailscale serve` (installed on the host, stopped). Not done here: it needs the owner's
+  account or certificate.
+- **Real Cognitive Runtime** adapter (streaming, durable turn ids, ownership).
+- **PWA** manifest / service worker: app-wide files owned by the Cockpit lane.
 - **Scale**: the registry is in-process; multiple instances need sticky routing.
-- **Timeouts**: no deadline yet on an STT final after commit, a TTS `done`, or a hung
-  acceptance (which, being serialized, would block later turns). Needs a timer policy.
 - **Rate limiting** of messages per connection belongs to the transport.
 - **Tenancy**: identity has no tenant key yet; sessions are keyed by user.

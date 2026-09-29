@@ -1,0 +1,164 @@
+.page {
+  --bg: #0f1115;
+  --fg: #eceef2;
+  --muted: #9aa1ad;
+  --card: #1a1d24;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --ok: #22c55e;
+  /* Fixed to the viewport: the controls stay reachable, the turns scroll. */
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+@media (prefers-color-scheme: light) {
+  .page {
+    --bg: #f6f7f9;
+    --fg: #14161a;
+    --muted: #5b6270;
+    --card: #ffffff;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.link {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.link[data-link="ready"] {
+  color: var(--ok);
+}
+
+.link[data-link="unavailable"],
+.link[data-link="offline"] {
+  color: var(--danger);
+}
+
+.turns {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.hint {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 30vh;
+}
+
+.turn {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px;
+  position: relative;
+}
+
+.you {
+  margin: 0 0 8px;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.you[data-final="true"] {
+  font-style: normal;
+  color: var(--fg);
+}
+
+.icos {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.badge {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.error {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+.controls button {
+  border: 0;
+  border-radius: 999px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  min-height: 64px;
+  color: #fff;
+  touch-action: manipulation;
+}
+
+.controls button:disabled {
+  opacity: 0.4;
+}
+
+.controls button:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.interrupt {
+  flex: 0 0 96px;
+  background: var(--danger);
+}
+
+.mic {
+  flex: 1;
+  background: var(--accent);
+}
+
+.mic[data-talking="true"] {
+  background: var(--ok);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.mic[data-speaking="true"]:not([data-talking="true"]) {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+@keyframes pulse {
+  50% {
+    transform: scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic[data-talking="true"] {
+    animation: none;
+  }
+}
