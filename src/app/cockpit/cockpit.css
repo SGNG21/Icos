@@ -117,8 +117,11 @@ body:has(.cx) {
   color: var(--flow);
 }
 
+/* left: 0 so an offscreen label never sits at its static position past the viewport. */
 .cx-sr {
   position: absolute;
+  left: 0;
+  white-space: nowrap;
   width: 1px;
   height: 1px;
   overflow: hidden;
@@ -916,19 +919,22 @@ html[data-cx-stale] .cx-top__health {
   text-decoration: none;
 }
 
+/* Positioned so absolutely placed descendants stay inside the scroll clip. */
 .cx-scroll {
+  position: relative;
   overflow-x: auto;
 }
 
 /* ---------- Workers ---------- */
 .cx-workers {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr));
   gap: 12px;
 }
 
 .cx-worker {
   display: grid;
+  min-width: 0;
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--line);
@@ -1774,7 +1780,7 @@ html[data-cx-stale] .cx-top__health {
     left: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     align-items: end;
     height: calc(var(--tabbar) + env(safe-area-inset-bottom));
     padding: 0 6px env(safe-area-inset-bottom);
@@ -1830,7 +1836,7 @@ html[data-cx-stale] .cx-top__health {
     bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 8px);
     left: 8px;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 4px;
     margin: 0;
     padding: 8px;

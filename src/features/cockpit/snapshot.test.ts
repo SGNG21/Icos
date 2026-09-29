@@ -272,3 +272,14 @@ describe("missions, focus and timeline", () => {
     ).toMatchObject({ value: 1 });
   });
 });
+
+describe("health rationale", () => {
+  it("names active workers without evidence even when overall health is green", async () => {
+    const { deriveHealth } = await import("./snapshot");
+    const w = (tone: "ok" | "unknown", routable: boolean) =>
+      ({ status: "active", tone, routable }) as never;
+    const h = deriveHealth([], [w("ok", true), w("unknown", false), w("unknown", false)]);
+    expect(h.level).toBe("healthy");
+    expect(h.reasons.join(" ")).toContain("2 active worker(s) have no health evidence");
+  });
+});

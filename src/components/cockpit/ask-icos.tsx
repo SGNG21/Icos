@@ -32,7 +32,7 @@ const STATUS_TEXT: Record<AskState["status"], string> = {
   cancelled: "Cancelled",
   error: "Error",
   reconnecting: "Reconnecting…",
-  not_connected: "NOT CONNECTED — nothing was sent to a model",
+  not_connected: "NOT CONNECTED — no model received your text",
 };
 
 /**
@@ -142,8 +142,8 @@ export function AskIcos() {
           <strong>{STATUS_TEXT[state.status]}</strong>
           {state.status === "not_connected" && (
             <span>
-              The Cognitive Runtime is not deployed with this build (BR-28). Your text stayed on
-              this device; no answer is shown because none was produced.
+              The Cognitive Runtime is not deployed with this build (BR-28): the request found no
+              runtime endpoint. No answer is shown because none was produced.
             </span>
           )}
           {state.error && (

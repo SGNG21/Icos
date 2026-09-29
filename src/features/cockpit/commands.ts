@@ -210,7 +210,8 @@ function fromTransportError(
   if (reply.kind === "not_connected")
     return {
       phase: "NOT_CONNECTED",
-      detail: "The governed control API is not deployed here. Nothing was sent or executed.",
+      detail:
+        "The governed control API is not deployed here: no control endpoint answered, nothing was executed.",
     };
   const text = `${reply.code}${reply.message ? `: ${reply.message}` : ""} (HTTP ${reply.status})`;
   if (reply.status === 503)

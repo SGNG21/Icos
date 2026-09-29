@@ -572,9 +572,13 @@ export function deriveHealth(
   }
   if (relevant.length > 0) return { level: "degraded", reasons: relevant.map((a) => a.title) };
   if (workers?.some((w) => w.routable)) {
+    const unproven = workers.filter((w) => w.status === "active" && w.tone === "unknown").length;
     return {
       level: "healthy",
-      reasons: ["At least one worker is routable with fresh probe evidence; no open incident."],
+      reasons: [
+        "At least one worker is routable with fresh probe evidence; no open incident.",
+        ...(unproven ? [`${unproven} active worker(s) have no health evidence (UNKNOWN).`] : []),
+      ],
     };
   }
   return {

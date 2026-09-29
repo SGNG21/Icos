@@ -49,8 +49,8 @@ const PHASE_TEXT: Record<ControlPhase, string> = {
   REJECTED: "REJECTED — nothing changed",
   FAILED: "FAILED — nothing changed",
   UNKNOWN: "UNKNOWN EXECUTION STATE",
-  NOT_CONNECTED: "NOT CONNECTED — nothing was sent",
-  UNAVAILABLE: "UNAVAILABLE — nothing was sent",
+  NOT_CONNECTED: "NOT CONNECTED — nothing executed",
+  UNAVAILABLE: "UNAVAILABLE — nothing executed",
 };
 
 const transport = httpControlTransport();
