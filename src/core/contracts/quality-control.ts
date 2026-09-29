@@ -95,9 +95,42 @@ export interface QualityControlRepository {
   listPendingWakeups(missionId: string): Promise<string[]>;
   completeWakeups(workflowIds: string[]): Promise<void>;
   recoverUnregistered(missionId?: string): Promise<number>;
+  /** Includes missions with an ACCEPT still awaiting its integrated settlement (DEFECT 36). */
   listRecoverableMissionIds(limit?: number): Promise<string[]>;
+  /**
+   * Completes every ACCEPT whose governed integration has since resolved (DEFECT 36): the
+   * MissionTask becomes `succeeded` (integrated) or `failed` (integration rejected), and the
+   * mission wake-up is queued in the SAME transaction. Idempotent: only a MissionTask still in
+   * flight changes, so a repeated or concurrent sweep settles nothing twice. Returns how many
+   * tasks it settled.
+   */
+  settleAccepted(missionId?: string): Promise<number>;
   getByWorkflowId(workflowId: string): Promise<QualityControlJob | null>;
   listPending(missionId?: string): Promise<QualityControlJob[]>;
+}
+
+/**
+ * Where the governed integration of one workflow's work stands (DEFECT 36, decision 0049).
+ *
+ * - `UNGOVERNED`: no governed workspace exists for the workflow; review acceptance IS the
+ *   canonical completion, exactly as before.
+ * - `PENDING`: the work is not (yet) contained in its integration target.
+ * - `INTEGRATED`: the gate accepted it and the accepted commit is in the target.
+ * - `REJECTED`: the workspace was reaped without being integrated.
+ */
+export type IntegrationSettlement = "UNGOVERNED" | "PENDING" | "INTEGRATED" | "REJECTED";
+
+export interface IntegrationSettlementPort {
+  settlementOf(workflowId: string): Promise<IntegrationSettlement>;
+}
+
+/** The MissionTask status a settlement grants; `null` means "not settled yet". */
+export function completionForSettlement(
+  settlement: IntegrationSettlement,
+): "succeeded" | "failed" | null {
+  if (settlement === "UNGOVERNED" || settlement === "INTEGRATED") return "succeeded";
+  if (settlement === "REJECTED") return "failed";
+  return null;
 }
 
 export type DispatchPreparedQualityAttempt = (

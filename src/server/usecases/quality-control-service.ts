@@ -112,6 +112,12 @@ export class QualityControlService {
   async processPending(missionId: string, signal?: AbortSignal): Promise<void> {
     let replanRequested = false;
     await this.deps.qualityJobs.recoverUnregistered(missionId);
+    /*
+     * DEFECT 36: complete every ACCEPT whose governed integration has since resolved. This is
+     * the step that makes the dependency satisfied — and it queues the durable wake-up that
+     * lets the canonical readiness authority admit the dependents.
+     */
+    await this.deps.qualityJobs.settleAccepted(missionId);
     for (;;) {
       signal?.throwIfAborted();
       await this.deps.assertOwned?.(missionId, signal);

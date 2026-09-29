@@ -21,6 +21,7 @@ import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
+import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 
 export interface ProductionServiceScheduler {
   start(): void;
@@ -314,6 +315,20 @@ function createRecoveryScheduler(
     sweepAll([
       ["autonomy-and-scheduler", sweepWithScheduler(recovery, durableScheduler)],
       ...(runtimeRecovery ? [["runtime-recovery", runtimeRecovery] as const] : []),
+      /*
+       * THE LATER GOVERNED PASS (defect 28 closure). After the QC sweep above has reviewed
+       * recorded executions, gate every parked workspace whose canonical review now exists.
+       * This is the ONLY production caller of `gatePendingReview()`; without it an approval
+       * written after execution was never gated or integrated by the runtime.
+       */
+      ...(container.workspaceExecutionCoordinator
+        ? [
+            [
+              "pending-review-gate",
+              new PendingReviewGateSweeper(container.workspaceExecutionCoordinator),
+            ] as const,
+          ]
+        : []),
     ]),
     options,
   );

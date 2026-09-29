@@ -502,6 +502,24 @@ describe("WorkspaceExecutionCoordinator (Phase 8D)", () => {
       expect(mockIntegrationGate.integrate).toHaveBeenCalledTimes(1);
     });
 
+    it("an inconclusive verdict is NOT re-gated on every sweep while its inputs are unchanged", async () => {
+      let review: { decision: string; reviewerKind: string } | null = null;
+      const c = coordinatorWithReviews({ getByWorkflowId: async () => review });
+      await c.allocateWorkspace("mission-1", "task-1", "worker-1");
+      expect((await exec(c)).awaitingReview).toBe(true);
+      review = { decision: "APPROVE", reviewerKind: "deterministic" };
+
+      /* The mock gate answers NEEDS_HUMAN_APPROVAL without a human approver. */
+      expect((await c.gatePendingReview())[0]!.decision).toBe("NEEDS_HUMAN_APPROVAL");
+      expect(await c.gatePendingReview()).toEqual([]);
+      expect(await c.gatePendingReview()).toEqual([]);
+      expect(mockIntegrationGate.integrate).toHaveBeenCalledTimes(1);
+
+      /* An input moved (a human approver now exists): gated again, and it concludes. */
+      expect((await c.gatePendingReview("human-reviewer"))[0]!.decision).toBe("ACCEPT");
+      expect(mockIntegrationGate.integrate).toHaveBeenCalledTimes(2);
+    });
+
     it("REQUEST_CHANGES reaches the gate as a refusal, not as silence", async () => {
       const c = coordinatorWithReviews({
         getByWorkflowId: async () => ({ decision: "REQUEST_CHANGES", reviewerKind: "deterministic" }),

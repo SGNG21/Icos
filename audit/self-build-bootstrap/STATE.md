@@ -1268,7 +1268,14 @@ commands for the self-build certification.
 - defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
 
 ### CERTIFICATION LEDGER — what is and is NOT true today
-  DEFECT_28                                — CLOSED (M13, decision 0044).
+  DEFECT_28                                — CLOSED (decisions 0044 + 0045). The M13 claim was
+                                             premature: gatePendingReview() had no production
+                                             caller. Closed by the production recovery-sweep
+                                             trigger with durable adoption (599cf30, merged).
+  DEFECT_36                                — MERGED (bcda6cc, decision 0049); merged-runtime
+                                             validation PENDING — see MERGE LEDGER below.
+  REPAIR_WORKSPACE_DEFECT                  — FIXED on this line (b66def3, decision 0050);
+                                             merged-runtime validation PENDING.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE. 10/10 proofs, no pre-seeded review, and
                                              now including a correction attempt reaching the
                                              certified path (M13/M14, decisions 0044, 0050).
@@ -1298,19 +1305,19 @@ commands for the self-build certification.
                                              has ONE writer task and blocks when the plan has
                                              an edge, because a read-only inspection task is
                                              executed and never settled. That is DEFECT 36,
-                                             closed on feat/core3-defect36-dag-settlement and
-                                             NOT MERGED here.
+                                             merged here (0049); repeatability not yet re-run.
 ICOS is NOT yet self-building, and must not be described as such.
 
 ### OPEN, NOT FIXED HERE
-  DEFECT 36 — a dependent task is never settled, so multi-task plans block. Closed on
-              feat/core3-defect36-dag-settlement (bcda6cc), decision 0049. NOT merged.
-  PENDING-REVIEW GATE SWEEP — gatePendingReview() has no production caller on THIS branch.
-              Closed on fix/core3-defect-28-trigger (599cf30), decision 0045. NOT merged.
-              The self-development path does not need it: the coordinator calls the gate
-              directly with the verdict it obtained from the canonical reviewer.
-  SELF-DEV GATE CONVERGENCE — that direct call should become the pending-review sweep, so
-              there is ONE gating path. Not started.
+  SELF_DEVELOPMENT_GATE_PATH_DIVERGENCE — self-development still gates directly and writes
+              `succeeded` itself instead of review -> pending-review sweep (0045) -> gate ->
+              settlement (0049). Not started.
+  INLINE_GATE_NEEDS_REBASE_DEFECT — if a review already exists when execution ends, an inline
+              gate ACCEPT can lead the supervisor to mark `succeeded` although apply returned
+              NEEDS_REBASE.
+  CANCELLED_WORK_INTEGRATION_DEFECT — approved work of a cancelled task may still integrate.
+  STUCK_EXECUTION_CAPACITY_DEFECT — governed attempts can stay `dispatched` and keep worker
+              slots.
   GOVERNANCE PROPOSALS — "Improve ICOS autonomously" sometimes proposes changing a governance
               file, and the gate then answers NEEDS_HUMAN_APPROVAL. That is CORRECT. The E2E
               currently scores it as a failure; whether it should is a certification-standard
@@ -1320,7 +1327,9 @@ ICOS is NOT yet self-building, and must not be described as such.
   defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
 
 Critical path:
-  DEFECT 36 (merge) -> ICOS_SELF_BUILD_E2E repeatable -> self-build certification
+  canonical review/gate/settlement authority (self-dev convergence, inline-gate NEEDS_REBASE,
+  cancelled-work integration, stuck capacity) -> ICOS_SELF_BUILD_E2E repeatable
+  -> self-build certification
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:

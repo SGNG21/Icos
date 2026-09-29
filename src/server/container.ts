@@ -87,6 +87,7 @@ import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-d
 import { PostgresReviewerService } from "@/server/repositories/postgres/postgres-reviewer-service";
 import { PostgresReviewDecisionRepository } from "@/server/repositories/postgres/review-decision-repository";
 import { PostgresQualityControlRepository } from "@/server/repositories/postgres/quality-control-repository";
+import { WorkspaceIntegrationSettlement } from "@/server/workspace-manager/integration-settlement";
 import { PostgresAutonomousMissionRuntimeRepository } from "@/server/repositories/postgres/autonomous-mission-runtime-repository";
 import {
   PostgresConversationRepository,
@@ -442,6 +443,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       reviewDecisions,
       dispatchAttempts,
       autonomousRuntime,
+      new WorkspaceIntegrationSettlement(workspaceManager, git),
     ),
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
@@ -759,7 +761,11 @@ export async function buildPostgresContainer(
     dispatchAttempts,
     reviewer,
     reviewDecisions,
-    qualityControlJobs: new PostgresQualityControlRepository(handle.db),
+    /* DEFECT 36: governed work completes on its INTEGRATION, not on its review (0049). */
+    qualityControlJobs: new PostgresQualityControlRepository(
+      handle.db,
+      new WorkspaceIntegrationSettlement(workspaceManager, pgGit),
+    ),
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
