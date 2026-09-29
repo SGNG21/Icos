@@ -207,8 +207,15 @@ const ACTIVE_MISSION: ReadonlySet<Mission["status"]> = new Set([
 ]);
 const SECRET_KEY = /key|token|secret|pass|credential|cookie|auth|bearer|private/i;
 
+/** Values that look like credentials whatever their key: URL userinfo, bearer tokens, key prefixes. */
+const SECRET_VALUE = /:\/\/[^/\s@]+@|\bbearer\s|\b(sk|pk|rk|ghp|gho|xox[abp])[-_][a-z0-9]{8,}/i;
+
 export function safeMetadata(metadata: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(metadata).filter(([key]) => !SECRET_KEY.test(key)));
+  return Object.fromEntries(
+    Object.entries(metadata).filter(
+      ([key, value]) => !SECRET_KEY.test(key) && !SECRET_VALUE.test(value),
+    ),
+  );
 }
 
 function declared(
@@ -294,7 +301,7 @@ export function buildWorkerViews(
       leases: isReal(workspaces)
         ? real(
             workspaces.value
-              .filter((x) => x.workerId === w.id && x.leaseOwner)
+              .filter((x) => x.workerId === w.id && x.leaseOwner && x.releasedAt === null)
               .map((x) => ({
                 slug: x.slug,
                 status: x.status,

@@ -68,8 +68,8 @@ export interface ComputeRow {
   workerId: string;
   workerName: string;
   provider: Truth<string>;
-  /** OmniRoute route / provider quota = the capacity pool (0054). */
-  route: Truth<string>;
+  /** Provider quota = the capacity pool (0054). Not an OmniRoute route. */
+  capacityPool: Truth<string>;
   family: Truth<string>;
   modelId: Truth<string>;
   health: WorkerView["health"];
@@ -119,12 +119,16 @@ export function buildCompute(
       .filter((x) => x.c);
     const latest = seen[0];
     const history = latest?.c?.history;
+    // History is a decision-time snapshot, per MODEL key, 14-day window, ≤ 50 outcomes (0054 §6).
+    const asOf = latest ? `per model, 14d window ≤50, as of decision ${latest.e.decidedAt}` : "";
     const rate = (n: number | undefined, label: string): Truth<number> =>
       !latest
         ? NO_EVIDENCE(label)
-        : history && history.executions > 0 && n !== undefined
-          ? real(n / history.executions, `router history ${n}/${history.executions}`)
-          : missing("unknown", "No execution history for this model yet.");
+        : !history
+          ? missing("unknown", "The decision carries no history (history is Postgres-only).")
+          : history.executions === 0 || n === undefined
+            ? missing("unknown", "Cold start: no execution recorded for this model in the window.")
+            : real(n / history.executions, `${n}/${history.executions} · ${asOf}`);
     const selectedBy = evidence.filter((e) => e.selected?.workerId === w.id);
     const lastSelected = selectedBy[0];
     const exclusions = latest?.c?.excludedBecause ?? [];
@@ -133,15 +137,17 @@ export function buildCompute(
       workerId: w.id,
       workerName: w.name,
       provider: w.provider,
-      route: w.pool
-        ? real(w.pool.name, "capacity pool declared in the registry")
+      capacityPool: w.pool
+        ? real(w.pool.name, "capacity pool declared in the registry (provider quota)")
         : missing("not_available", "No capacity pool declared."),
       family: family
         ? real(family, "declared in registration metadata")
-        : missing(
-            "unknown",
-            "Family not declared; the router infers it from the model id at dispatch.",
-          ),
+        : latest?.c?.family
+          ? real(latest.c.family, `inferred by the router at decision ${latest.e.decidedAt}`)
+          : missing(
+              "unknown",
+              "Family not declared; the router infers it from the model id at dispatch.",
+            ),
       modelId: w.model,
       health: w.health,
       availability: w.availability,
@@ -151,13 +157,13 @@ export function buildCompute(
       timeoutRate: rate(history?.timeouts, "Timeout rate"),
       infraFailureRate: rate(history?.infraFailures, "Infrastructure failure rate"),
       routingExclusions: latest
-        ? real(exclusions, "latest routing decision")
+        ? real(exclusions, `routing decision ${latest.e.decidedAt}`)
         : NO_EVIDENCE("Routing exclusions"),
       rateLimit: !latest
         ? NO_EVIDENCE("Rate-limit state")
         : exclusions.some((x) => x.includes("COOLDOWN"))
-          ? real("cooldown", "router excluded it for a provider/model cooldown")
-          : real("no cooldown recorded", "latest routing decision"),
+          ? real("cooldown (rate limit or auth)", `routing decision ${latest.e.decidedAt}`)
+          : real("no cooldown recorded", `routing decision ${latest.e.decidedAt}`),
       credentialHealth: missing(
         "not_available",
         "Credential health is not exposed to the cockpit; an AUTH_FAILURE shows as a routing cooldown.",
@@ -166,10 +172,11 @@ export function buildCompute(
         lastSelected?.selected?.modelSteered !== undefined
           ? real(lastSelected.selected.modelSteered, "recorded when selected")
           : NO_EVIDENCE("Model steering"),
-      fallbackEvents: evidence.length
+      // Only in-flight decisions are loaded: a count over that window, not a history.
+      fallbackEvents: seen.length
         ? real(
             seen.filter((x) => x.c?.fallback && x.e.selected?.workerId === w.id).length,
-            "selections marked TIER_FALLBACK on active attempts",
+            "TIER_FALLBACK selections among in-flight routing decisions only",
           )
         : NO_EVIDENCE("Fallback events"),
       routingReason: lastSelected

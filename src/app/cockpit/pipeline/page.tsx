@@ -25,7 +25,7 @@ export default async function PipelinePage() {
   const workspaces =
     sources.workspaces.kind === "real"
       ? [...sources.workspaces.value]
-          .filter((w) => w.status !== "abandoned")
+          .filter((w) => w.status !== "abandoned" && w.releasedAt === null)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       : null;
 
@@ -97,7 +97,10 @@ export default async function PipelinePage() {
         )}
       </Panel>
 
-      <Panel title="Workspaces" eyebrow="Integration lifecycle · leases · fencing">
+      <Panel
+        title="Workspaces"
+        eyebrow="Live (unreleased) · integration lifecycle · leases · fencing"
+      >
         {!workspaces ? (
           <TruthValue truth={sources.workspaces} />
         ) : workspaces.length === 0 ? (

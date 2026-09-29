@@ -283,3 +283,18 @@ describe("health rationale", () => {
     expect(h.reasons.join(" ")).toContain("2 active worker(s) have no health evidence");
   });
 });
+
+describe("metadata secret filter", () => {
+  it("drops credential-looking values whatever the key", async () => {
+    const { safeMetadata } = await import("./snapshot");
+    expect(
+      safeMetadata({
+        endpoint: "https://user:pw@host/v1",
+        note: "Bearer abc.def",
+        hint: "sk-abcdef1234567890",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        apiKey: "x",
+      }),
+    ).toEqual({ model: "nvidia/nemotron-3-super-120b-a12b" });
+  });
+});

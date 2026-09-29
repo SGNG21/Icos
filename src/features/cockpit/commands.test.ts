@@ -5,6 +5,7 @@ import type { ControlCommandResult, ControlState } from "@/core/control/contract
 import {
   buildRequest,
   confirmationPhrase,
+  dialogMode,
   executeCommand,
   httpControlTransport,
   loadVersion,
@@ -135,7 +136,7 @@ describe("HTTP transport", () => {
     }
   });
 
-  it("network failure or a 5xx after sending is UNKNOWN; 503 is UNAVAILABLE", async () => {
+  it("network failure or ANY 5xx after sending is UNKNOWN (effect may be applied)", async () => {
     const down = vi.fn(async () => {
       throw new TypeError("network");
     });
@@ -147,7 +148,35 @@ describe("HTTP transport", () => {
     const off = vi.fn(async () =>
       jsonResponse(503, { error: { code: "persistence_unavailable", message: "x" } }),
     );
-    expect((await executeCommand(httpControlTransport(off), request)).phase).toBe("UNAVAILABLE");
+    // e.g. the completion write failed after cancelMission applied: never "nothing executed".
+    expect((await executeCommand(httpControlTransport(off), request)).phase).toBe("UNKNOWN");
+  });
+
+  it("an unreadable 2xx or non-envelope reply to a mutation is UNKNOWN, not REJECTED", async () => {
+    const drift = vi.fn(async () => jsonResponse(200, { status: "SOMETHING_NEW" }));
+    expect((await executeCommand(httpControlTransport(drift), request)).phase).toBe("UNKNOWN");
+    const html = vi.fn(async () => new Response("<html>login</html>", { status: 200 }));
+    expect((await executeCommand(httpControlTransport(html), request)).phase).toBe("UNKNOWN");
+  });
+
+  it("a read-only 503 (state) is UNAVAILABLE: nothing was sent", async () => {
+    const off = vi.fn(async () =>
+      jsonResponse(503, { error: { code: "persistence_unavailable", message: "x" } }),
+    );
+    const r = await loadVersion(httpControlTransport(off), { kind: "worker", id: WORKER });
+    expect(r).toMatchObject({ ok: false, outcome: { phase: "UNAVAILABLE" } });
+  });
+
+  it("a reconcile GET that fails keeps UNKNOWN, never 'nothing changed'", async () => {
+    const gone = vi.fn(async () =>
+      jsonResponse(404, { error: { code: "not_found", message: "command not found" } }),
+    );
+    const o = await reconcileCommand(
+      httpControlTransport(gone),
+      request,
+      result({ status: "UNKNOWN_EXECUTION_STATE" }),
+    );
+    expect(o.phase).toBe("UNKNOWN");
   });
 
   it("route-level refusals (401/403/422) are REJECTED: nothing executed", async () => {
@@ -247,6 +276,13 @@ describe("re-authentication", () => {
       ok: false,
       outcome: { phase: "AUTH_REQUIRED" },
     });
+    const denied = vi.fn(async () =>
+      jsonResponse(403, { error: { code: "forbidden", message: "cockpit.read" } }),
+    );
+    expect(await reauthenticate(httpControlTransport(denied), "pw")).toMatchObject({
+      ok: false,
+      outcome: { phase: "REJECTED" },
+    });
   });
 
   it("phaseOfResult: only EXECUTED is success", () => {
@@ -275,5 +311,19 @@ describe("runtime flags view", () => {
     };
     const rows = runtimeFlagRows({ ...state, runtime: { stored: on, effective: on, version: 7 } });
     expect(rows.every((r) => r.tone === "ok")).toBe(true);
+  });
+});
+
+describe("dialog never dead-ends", () => {
+  it("a sent REAUTH_* rejection offers restart (fresh key), not a disabled form", () => {
+    const o = { phase: "AUTH_REQUIRED" as const, detail: "REAUTH_EXPIRED" };
+    expect(dialogMode("AUTH_REQUIRED", true, o)).toBe("restart");
+    expect(dialogMode("AUTH_REQUIRED", false, null)).toBe("edit"); // wrong password before send
+    expect(dialogMode("UNKNOWN", true, { phase: "UNKNOWN", detail: "" })).toBe("reconcile");
+    expect(dialogMode("REJECTED", true, { phase: "REJECTED", detail: "" })).toBe("restart");
+    expect(dialogMode("NOT_CONNECTED", false, { phase: "NOT_CONNECTED", detail: "" })).toBe(
+      "restart",
+    );
+    expect(dialogMode("SUCCEEDED", true, { phase: "SUCCEEDED", detail: "" })).toBe("done");
   });
 });

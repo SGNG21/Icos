@@ -25,6 +25,8 @@ export interface WorkspaceFact {
   fencingToken: number;
   sourceCommit: string | null;
   updatedAt: string;
+  /** Set by cleanup: the workspace is history, not current flow. */
+  releasedAt: string | null;
 }
 
 export interface QualityFact {
@@ -54,7 +56,7 @@ export function leaseState(w: WorkspaceFact, now: Date): LeaseState {
 export function integrationBacklog(workspaces: Truth<WorkspaceFact[]>): Truth<number> {
   return isReal(workspaces)
     ? real(
-        workspaces.value.filter((w) => BACKLOG.has(w.status)).length,
+        workspaces.value.filter((w) => w.releasedAt === null && BACKLOG.has(w.status)).length,
         "workspaces ready for or in integration",
       )
     : (workspaces as Truth<number>);
@@ -90,17 +92,21 @@ export function buildPipeline(
   sources: Pick<CockpitSources, "attempts" | "qualityJobs" | "workspaces" | "now">,
 ): { stages: PipelineStage[]; alerts: Alert[] } {
   const { attempts, qualityJobs: qc, workspaces: ws } = sources;
+  // Released workspaces are history; the flow stages count only live ones.
+  const live: Truth<WorkspaceFact[]> = isReal(ws)
+    ? real(ws.value.filter((w) => w.releasedAt === null))
+    : ws;
   const qcIn = (...states: string[]) =>
     count(qc, (j) => states.includes(j.state), "quality-control jobs");
   const wsIn = (...states: string[]) =>
-    count(ws, (w) => states.includes(w.status), "workspace registry");
+    count(live, (w) => states.includes(w.status), "live (unreleased) workspaces");
 
   const stages = [
     stage(
       "execution",
-      "Executing",
-      count(attempts, () => true, "non-terminal attempts of active tasks"),
-      "Dispatch ledger",
+      "Dispatched",
+      count(attempts, (a) => a.state === "dispatched", "dispatched attempts of active tasks"),
+      "Dispatch ledger (prepared-not-launched excluded)",
     ),
     stage("review", "Awaiting review", qcIn("review_pending", "reviewing"), "Independent review"),
     stage(
@@ -117,10 +123,26 @@ export function buildPipeline(
       "Accept / correct / retry / replan / escalate pending",
       "warn",
     ),
-    stage("gate", "Integration backlog", integrationBacklog(ws), "IntegrationGate", "warn"),
+    stage(
+      "gate",
+      "Integration (ready + integrating)",
+      integrationBacklog(live),
+      "IntegrationGate",
+      "warn",
+    ),
     stage("accepted", "Accepted", wsIn("accepted"), "Applied to the integration target"),
     stage("rejected", "Rejected", wsIn("rejected"), "Gate refused; may return to work", "warn"),
     stage("blocked", "Blocked", wsIn("blocked"), "Needs recovery or a decision", "critical"),
+    {
+      key: "escalated",
+      label: "Escalated to a human",
+      count: missing<number>(
+        "not_available",
+        "Escalated quality-control jobs are not listable (listPending excludes them).",
+      ),
+      tone: "unknown" as Tone,
+      note: "Needs a human decision",
+    },
     {
       key: "settlement",
       label: "Settlement",
@@ -156,8 +178,8 @@ export function buildPipeline(
       detail: "No review means no integration. Results are kept and recoverable.",
       href: "/cockpit/pipeline",
     });
-  if (isReal(ws)) {
-    for (const w of ws.value) {
+  if (isReal(live)) {
+    for (const w of live.value) {
       if (w.status === "blocked")
         alerts.push({
           id: `workspace-blocked-${w.id}`,

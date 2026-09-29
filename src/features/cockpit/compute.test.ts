@@ -131,8 +131,45 @@ describe("compute view", () => {
     expect((r550.routingReason as { value: string }).value).toContain("tier ≥ 4");
   });
 
-  it("route is the provider quota (capacity pool)", () => {
+  it("capacity pool is the provider quota", () => {
     const row = buildCompute(fleet, real([]))[1].rows[0];
-    expect(row.route).toMatchObject({ kind: "real", value: "provider:nvidia" });
+    expect(row.capacityPool).toMatchObject({ kind: "real", value: "provider:nvidia" });
+  });
+
+  it("missing history is UNKNOWN (not cold start); rates are dated; fallback is per worker", () => {
+    const noHistory = {
+      ...evidence,
+      candidateSet: [
+        { workerId: W120, selectable: true, excludedBecause: [], family: "NEMOTRON_120B" },
+      ],
+      selected: { workerId: W120 },
+    };
+    const legacy = worker("legacy", { model: "nvidia/nemotron-3-super-120b-a12b" }); // no modelFamily
+    const rows = buildCompute([legacy, fleet[0]], real([attempt(noHistory)])).flatMap(
+      (x) => x.rows,
+    );
+    const r120 = rows.find((r) => r.workerId === W120)!;
+    expect(r120.timeoutRate).toMatchObject({ kind: "unknown" });
+    expect((r120.timeoutRate as { reason: string }).reason).toContain("no history");
+    expect(r120.fallbackEvents).toMatchObject({ kind: "real", value: 0 });
+    const legacyRow = rows.find((r) => r.workerId === "legacy")!;
+    expect(legacyRow.fallbackEvents.kind).toBe("not_connected"); // not in any decision
+    const dated = buildCompute(fleet, real([attempt(evidence)]))[0].rows[0].timeoutRate;
+    expect((dated as { derivation: string }).derivation).toContain("2026-09-29T11:00:00Z");
+  });
+
+  it("an undeclared family falls back to the router-inferred one, labelled as such", () => {
+    const ev = {
+      ...evidence,
+      candidateSet: [{ workerId: "x", excludedBecause: [], family: "CLAUDE_OPUS" }],
+    };
+    const [g] = buildCompute(
+      [worker("x", { model: "anthropic/claude-opus-z" })],
+      real([attempt(ev)]),
+    );
+    expect(g.family).toBe("CLAUDE_OPUS");
+    expect((g.rows[0].family as { derivation: string }).derivation).toContain(
+      "inferred by the router",
+    );
   });
 });

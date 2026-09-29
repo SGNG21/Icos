@@ -83,6 +83,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `routing_decisions` table keyed by dispatch attempt id
 
 ### BR-10 — Governed command bus
+- COCKPIT: **transport WIRED (lane B, 2026-09-29)** — `src/features/cockpit/commands.ts` speaks the 0044 contract (`src/core/control/contracts.ts`, byte-identical); every control reports NOT_CONNECTED until the backend is merged; no UI change needed at merge.
 - STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: `ControlCommandBus`, `POST /api/control/commands` + `GET /api/control/commands/:id`; 7 commands (PAUSE/RESUME/CANCEL_MISSION, DISABLE/ENABLE_WORKER, ENTER/EXIT_SAFE_MODE); deterministic ids, idempotent replay, audited in-transaction; 17/17 mutation proofs. Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: PAUSE / RESUME / STOP / RETRY / CHANGE PRIORITY (workers, missions), ASK ICOS execution
 - NEEDED_DATA_OR_COMMAND: single endpoint accepting `ControlCommand` (see `src/features/cockpit/commands.ts`) → authorization → policy → risk → state validation (`expectedStateVersion`) → execution → audit; idempotent on `idempotencyKey`; status query by `commandId`
@@ -101,6 +102,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `version: integer` column incremented on each write
 
 ### BR-12 — Emergency / safe mode
+- COCKPIT: **WIRED (lane B)** — System page reads `GET /api/control/state` live (stored vs effective, unreadable row shown fail-closed) and offers ENTER (MEDIUM) / EXIT (CRITICAL) safe mode.
 - STATUS: **DONE on `feat/control-foundation` @ `a0412ae` (backend only, not merged, cockpit not wired).** Implemented: `runtime_control_flags` (safeMode, dispatch/integration/externalActions) + `mission_control_holds`; fail closed on unreadable state; enforced at every dispatch admission point, IntegrationGate, IntegrationApplier, dispatcher backstop; `GET /api/control/state`. Evidence: `audit/control-foundation/HANDOFF.md` (that branch).
 - UI_FEATURE: PAUSE NEW WORK, FREEZE INTEGRATIONS, STOP EXTERNAL WORKERS, LOCK SELF-MODIFICATION, ENTER SAFE MODE
 - NEEDED_DATA_OR_COMMAND: durable global flags read by supervisor/dispatcher/integration gate/self-dev coordinator, + a read of current flag state
@@ -118,6 +120,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: extend status enum or expose `lifecycleState` on MissionTask
 
 ### BR-14 — Integration backlog / state
+- STATUS: **CLOSED cockpit-side (lane B, 2026-09-29).** The workspace registry (`WorkspaceManager.list`) already carries the integration lifecycle; the cockpit derives the backlog (`ready_for_integration` + `integrating`) and shows accepted/rejected/blocked on `/cockpit/pipeline`. No gate-specific read needed.
 - UI_FEATURE: INTEGRATION BACKLOG, DAG integration state
 - NEEDED_DATA_OR_COMMAND: list of results awaiting / in integration with gate verdict
 - EXPECTED_CANONICAL_SOURCE: `IntegrationGate` / `IntegrationApplier` (no list/read API)
@@ -126,6 +129,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - SUGGESTED_INTERFACE: `IntegrationGate.listPending()`
 
 ### BR-15 — Worker lease / fencing visibility
+- STATUS: **PARTIAL (lane B, 2026-09-29).** Workspace leases (owner, expiry, fencing token) are REAL from `WorkspaceManager.list` on worker cards and the pipeline, with an expired-lease alert. The dispatch-attempt execution lease is still not readable.
 - UI_FEATURE: worker detail lease + fencing token/state
 - NEEDED_DATA_OR_COMMAND: current lease owner, expiry, fencing token per active attempt
 - EXPECTED_CANONICAL_SOURCE: dispatch attempt lease columns (only `holdsExecutionLease(id, owner)` boolean exists)
@@ -226,3 +230,11 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - EXPECTED_CANONICAL_SOURCE: Better Auth
 - RISK: high
 - BLOCKING_OR_NOT: no (policy hook `secondFactor` exists, `not_enforced`)
+
+### BR-28 — Cognitive Runtime turn stream (ASK ICOS)
+- UI_FEATURE: Ask ICOS conversation (streaming text, tool/action events, mission-created, approval request, memory/context indicator, cancel, interrupt, resume/reconnect)
+- NEEDED_DATA_OR_COMMAND: `POST /api/ask/turns { turnId, conversationId?, text }` (`turnId` client-generated = idempotency key: a re-POST replays that turn from seq 0, never a second turn) → `text/event-stream` of `AskEvent` (SSE `id` = seq); `GET /api/ask/turns/:turnId/events?afterSeq=N` (resume); `POST /api/ask/turns/:turnId/cancel|interrupt`. Event schema: `src/features/cockpit/ask.ts` (`askEventSchema`). Stream rules: seq starts at 0 with `turn.started`, increments by exactly 1 (a gap triggers resume), nothing after a terminal event; a 404 with the ICOS error envelope = unknown turn, without it = runtime not deployed.
+- EXPECTED_CANONICAL_SOURCE: Cognitive Runtime (lane C). The cockpit renders only what it streams; approvals go through the governed approval path, never granted from chat.
+- RISK: high (prompt injection → actions): the runtime must route every action through BR-10 / approvals.
+- BLOCKING_OR_NOT: yes for Ask ICOS (renders NOT CONNECTED today)
+- SUPERSEDES: BR-17's browser-visible intent pipeline (compilation to a command is runtime work).

@@ -16,10 +16,10 @@ import {
   COMMAND_LABEL,
   buildRequest,
   confirmationPhrase,
+  dialogMode,
   executeCommand,
   httpControlTransport,
   loadVersion,
-  mayReconcile,
   needsReauth,
   reauthenticate,
   reconcileCommand,
@@ -91,8 +91,8 @@ export function CommandButton({
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [sent, setSent] = useState<ReturnType<typeof buildRequest> | null>(null);
 
-  const start = async () => {
-    setKey(crypto.randomUUID());
+  /** Drops everything sensitive or single-use (password, proof, typed phrase, request). */
+  const reset = () => {
     setReason("");
     setAck(false);
     setTyped("");
@@ -101,7 +101,20 @@ export function CommandButton({
     setOutcome(null);
     setSent(null);
     setVersion(null);
+  };
+
+  const start = async () => {
+    reset();
     setPhase("REQUESTED");
+    let fresh: string;
+    try {
+      fresh = crypto.randomUUID(); // unavailable outside a secure context
+    } catch {
+      setOutcome({ phase: "UNAVAILABLE", detail: "This page is not a secure context." });
+      setPhase("UNAVAILABLE");
+      return;
+    }
+    setKey(fresh);
     const v = await loadVersion(transport, target);
     if (!v.ok) {
       setOutcome(v.outcome);
@@ -165,8 +178,8 @@ export function CommandButton({
     (risk === "LOW" || ack) &&
     (!reauth || proof !== null) &&
     (risk !== "CRITICAL" || typed === phrase);
-  const editable = phase === "AUTHORIZED" || phase === "AUTH_REQUIRED";
-  const terminal = !editable && phase !== "REQUESTED" && phase !== "EXECUTING";
+  const mode = dialogMode(phase, sent !== null, outcome);
+  const editable = mode === "edit";
 
   return (
     <>
@@ -181,7 +194,7 @@ export function CommandButton({
         {compact ? <span className="cx-sr">{COMMAND_LABEL[type]}</span> : COMMAND_LABEL[type]}
       </button>
 
-      <dialog ref={dialog} className="cx-dialog" aria-labelledby={`${id}-t`}>
+      <dialog ref={dialog} className="cx-dialog" aria-labelledby={`${id}-t`} onClose={reset}>
         <form method="dialog" onSubmit={(e) => e.preventDefault()}>
           <header>
             <span className="cx-risk" data-risk={risk}>
@@ -296,12 +309,12 @@ export function CommandButton({
             >
               Close
             </button>
-            {mayReconcile(outcome) && (
+            {mode === "reconcile" && (
               <button type="button" className="cx-btn" onClick={reconcile}>
                 Check server state
               </button>
             )}
-            {terminal && !mayReconcile(outcome) && phase !== "SUCCEEDED" && (
+            {mode === "restart" && (
               <button type="button" className="cx-btn" onClick={() => void start()}>
                 Start over
               </button>

@@ -64,15 +64,15 @@ export default async function ProvidersPage() {
                   <thead>
                     <tr>
                       <th>Model</th>
-                      <th>Provider · route</th>
+                      <th>Provider · capacity pool</th>
                       <th>Health</th>
                       <th>Load</th>
                       <th>Timeouts</th>
-                      <th>Infra failures</th>
+                      <th>Infra failures (incl. timeouts)</th>
                       <th>Rate limit</th>
                       <th>Latency</th>
                       <th>Steered</th>
-                      <th>Fallbacks</th>
+                      <th>Fallbacks (in-flight)</th>
                       <th>Routing reason</th>
                     </tr>
                   </thead>
@@ -87,7 +87,7 @@ export default async function ProvidersPage() {
                         <td>
                           <TruthValue truth={r.provider} />{" "}
                           <span className="cx-dim">
-                            <TruthValue truth={r.route} />
+                            <TruthValue truth={r.capacityPool} />
                           </span>
                         </td>
                         <td>

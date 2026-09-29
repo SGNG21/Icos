@@ -10,18 +10,13 @@ import {
   askReducer,
   httpAskTransport,
   initialAsk,
+  isTerminalEvent,
   type AskEvent,
   type AskState,
   type StreamOutcome,
 } from "@/features/cockpit/ask";
 
 const transport = httpAskTransport();
-const TERMINAL = new Set<AskEvent["type"]>([
-  "turn.completed",
-  "turn.interrupted",
-  "turn.cancelled",
-  "error",
-]);
 
 const STATUS_TEXT: Record<AskState["status"], string> = {
   idle: "",
@@ -43,28 +38,45 @@ export function AskIcos() {
   const [text, setText] = useState("");
   const [state, dispatch] = useReducer(askReducer, initialAsk());
   const abort = useRef<AbortController | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   /** Runs one stream; a stream that ends without a terminal event did not finish the turn. */
   const run = async (
     open: (onEvent: (event: AskEvent) => void, signal: AbortSignal) => Promise<StreamOutcome>,
   ) => {
     abort.current?.abort();
-    abort.current = new AbortController();
+    const mine = new AbortController();
+    abort.current = mine;
     let terminal = false;
     const outcome = await open((event) => {
-      if (TERMINAL.has(event.type)) terminal = true;
+      if (mine !== abort.current) return; // a newer run owns the screen
+      if (isTerminalEvent(event)) terminal = true;
       dispatch({ type: "event", event });
-    }, abort.current.signal);
+    }, mine.signal);
+    if (mine !== abort.current) return;
     if (outcome === "not_connected") dispatch({ type: "not_connected" });
+    else if (outcome === "not_found") dispatch({ type: "turn_unknown" });
     else if (!terminal) dispatch({ type: "link_lost" });
   };
 
   const send = async () => {
     const body = text.trim();
     if (!body || body.length > ASK_MAX_LENGTH) return;
-    dispatch({ type: "send" });
+    let turnId: string;
+    try {
+      turnId = crypto.randomUUID(); // the turn's idempotency key
+    } catch {
+      setNotice("This page is not a secure context; nothing was sent.");
+      return;
+    }
+    setNotice(null);
+    dispatch({ type: "send", turnId });
     await run((onEvent, signal) =>
-      transport.start({ conversationId: state.conversationId, text: body }, onEvent, signal),
+      transport.start(
+        { turnId, conversationId: state.conversationId, text: body },
+        onEvent,
+        signal,
+      ),
     );
   };
 
@@ -81,6 +93,10 @@ export function AskIcos() {
     if (!turnId) return;
     const r = await transport[kind](turnId);
     if (r === "not_connected") dispatch({ type: "not_connected" });
+    else if (r === "not_found") dispatch({ type: "turn_unknown" });
+    else if (r === "failed")
+      setNotice(`ICOS did not accept the ${kind} request; the turn continues.`);
+    else setNotice(`${kind === "cancel" ? "Cancel" : "Interrupt"} requested; waiting for ICOS.`);
   };
 
   const busy = ["sending", "streaming", "reconnecting"].includes(state.status);
@@ -137,6 +153,12 @@ export function AskIcos() {
         </div>
       </form>
 
+      {notice && (
+        <p className="cx-dim" role="status">
+          {notice}
+        </p>
+      )}
+
       {state.status !== "idle" && (
         <p className="cx-outcome" data-status={state.status} role="status" aria-live="polite">
           <strong>{STATUS_TEXT[state.status]}</strong>
@@ -180,10 +202,11 @@ export function AskIcos() {
         </ul>
       )}
 
+      {/* Reported by the runtime, not verified here: the mission page is the proof. */}
       {state.missions.map((m) => (
-        <p key={m.id} className="cx-outcome" data-status="SUCCEEDED">
-          <strong>Mission created by ICOS</strong>
-          <Link href={`/cockpit/missions/${m.id}`}>{m.title}</Link>
+        <p key={m.id} className="cx-outcome" data-status="REQUESTED">
+          <strong>ICOS reports a mission was created</strong>
+          <Link href={`/cockpit/missions/${encodeURIComponent(m.id)}`}>{m.title}</Link>
         </p>
       ))}
 

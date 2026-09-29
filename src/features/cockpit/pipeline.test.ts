@@ -18,6 +18,7 @@ const ws = (id: string, status: string, over: Partial<WorkspaceFact> = {}): Work
   fencingToken: 1,
   sourceCommit: null,
   updatedAt: NOW.toISOString(),
+  releasedAt: null,
   ...over,
 });
 
@@ -95,5 +96,38 @@ describe("pipeline", () => {
         NOW,
       ),
     ).toBe("held");
+  });
+});
+
+describe("pipeline flow vs history", () => {
+  it("released workspaces are history: excluded from flow stages, backlog and alerts", () => {
+    const released = { releasedAt: "2026-09-29T10:00:00Z" };
+    const { stages, alerts } = buildPipeline({
+      now: NOW,
+      attempts: real([]),
+      qualityJobs: real([]),
+      workspaces: real([
+        ws("old-ok", "accepted", released),
+        ws("old-blk", "blocked", released),
+        ws("old-int", "integrating", released),
+        ws("live", "accepted"),
+      ]),
+    });
+    expect(stages.find((s) => s.key === "accepted")!.count).toMatchObject({ value: 1 });
+    expect(stages.find((s) => s.key === "blocked")!.count).toMatchObject({ value: 0 });
+    expect(stages.find((s) => s.key === "gate")!.count).toMatchObject({ value: 0 });
+    expect(alerts).toHaveLength(0);
+  });
+
+  it("only dispatched attempts count as dispatched; escalations are an explicit gap", () => {
+    const attempts = real([{ state: "prepared" }, { state: "dispatched" }] as never[]);
+    const { stages } = buildPipeline({
+      now: NOW,
+      attempts,
+      qualityJobs: real([]),
+      workspaces: real([]),
+    });
+    expect(stages.find((s) => s.key === "execution")!.count).toMatchObject({ value: 1 });
+    expect(stages.find((s) => s.key === "escalated")!.count.kind).toBe("not_available");
   });
 });

@@ -65,7 +65,8 @@ export type Reply<T> =
   | { kind: "ok"; status: number; value: T }
   /** The control API does not exist on this deployment (route missing). */
   | { kind: "not_connected" }
-  | { kind: "error"; status: number; code: string; message: string };
+  /** `typed`: the body was the ICOS error envelope, so the server stated what happened. */
+  | { kind: "error"; status: number; code: string; message: string; typed: boolean };
 
 export interface ControlTransport {
   state(target: ControlTarget): Promise<Reply<ControlState>>;
@@ -87,10 +88,17 @@ async function parseReply<T>(res: Response, schema: z.ZodType<T>): Promise<Reply
   const value = schema.safeParse(body);
   if (value.success) return { kind: "ok", status: res.status, value: value.data };
   const envelope = errorEnvelope.safeParse(body);
-  if (envelope.success) return { kind: "error", status: res.status, ...envelope.data.error };
+  if (envelope.success)
+    return { kind: "error", status: res.status, ...envelope.data.error, typed: true };
   // A 404 without the ICOS error envelope is the framework's "no such route".
   if (res.status === 404) return { kind: "not_connected" };
-  return { kind: "error", status: res.status, code: "unexpected_response", message: "" };
+  return {
+    kind: "error",
+    status: res.status,
+    code: "unexpected_response",
+    message: "",
+    typed: false,
+  };
 }
 
 /** HTTP transport to `/api/control/*`. Throws only on network failure. */
@@ -214,10 +222,12 @@ function fromTransportError(
         "The governed control API is not deployed here: no control endpoint answered, nothing was executed.",
     };
   const text = `${reply.code}${reply.message ? `: ${reply.message}` : ""} (HTTP ${reply.status})`;
-  if (reply.status === 503)
+  // After a mutation left the device, only a typed 4xx proves nothing happened: a 5xx
+  // (e.g. the completion write failing after the effect) or an unreadable reply may
+  // hide an applied effect. UNKNOWN is safe because reconcile is idempotent.
+  if (mutation && (reply.status >= 500 || !reply.typed)) return { phase: "UNKNOWN", detail: text };
+  if (reply.status >= 500)
     return { phase: "UNAVAILABLE", detail: `Control plane unavailable — ${text}` };
-  // A server crash after admission may have applied the effect.
-  if (mutation && reply.status >= 500) return { phase: "UNKNOWN", detail: text };
   return { phase: "REJECTED", detail: text };
 }
 
@@ -271,7 +281,9 @@ export async function reconcileCommand(
   if (!last) return executeCommand(transport, request);
   try {
     const reply = await transport.get(last.commandId);
-    return reply.kind === "ok" ? fromResult(reply.value) : fromTransportError(reply, true);
+    // A command that was admitted and cannot be re-read is still UNKNOWN, never "nothing changed".
+    if (reply.kind === "ok") return fromResult(reply.value);
+    return { phase: "UNKNOWN", detail: fromTransportError(reply, true).detail };
   } catch {
     return { phase: "UNKNOWN", detail: "Server state still unreachable. Do not act yet." };
   }
@@ -285,10 +297,11 @@ export async function reauthenticate(
     const reply = await transport.reauth(password);
     if (reply.kind === "ok") return { ok: true, ...reply.value };
     const outcome = fromTransportError(reply, false);
+    // Only a refused password means "try again"; 403/429/5xx are not fixed by retyping it.
+    const wrongPassword = reply.kind === "error" && reply.status === 401;
     return {
       ok: false,
-      outcome:
-        outcome.phase === "REJECTED" ? { phase: "AUTH_REQUIRED", detail: outcome.detail } : outcome,
+      outcome: wrongPassword ? { phase: "AUTH_REQUIRED", detail: outcome.detail } : outcome,
     };
   } catch {
     return { ok: false, outcome: { phase: "UNAVAILABLE", detail: "ICOS is unreachable." } };
@@ -297,6 +310,22 @@ export async function reauthenticate(
 
 /** Resending is only offered where the backend's idempotency makes it safe. */
 export const mayReconcile = (outcome: Outcome | null) => outcome?.phase === "UNKNOWN";
+
+/**
+ * What the dialog offers. Once a request was sent its idempotency key is spent (the
+ * server stores even a rejection under it), so after any sent outcome other than
+ * UNKNOWN the only way forward is "restart" with a fresh key — never a dead end.
+ */
+export function dialogMode(
+  phase: ControlPhase,
+  sent: boolean,
+  outcome: Outcome | null,
+): "loading" | "edit" | "reconcile" | "restart" | "done" {
+  if (phase === "REQUESTED" || phase === "EXECUTING") return "loading";
+  if (!sent && (phase === "AUTHORIZED" || phase === "AUTH_REQUIRED")) return "edit";
+  if (mayReconcile(outcome)) return "reconcile";
+  return phase === "SUCCEEDED" ? "done" : "restart";
+}
 
 // ------------------------------------------------------------------ runtime flags view
 

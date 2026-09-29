@@ -156,6 +156,7 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
             fencingToken: w.fencingToken,
             sourceCommit: w.sourceCommit,
             updatedAt: w.updatedAt,
+            releasedAt: w.releasedAt,
           })),
         );
 
