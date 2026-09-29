@@ -483,6 +483,23 @@ export class WorkspaceExecutionCoordinator {
       await this.manager
         .transition(ws.workspaceId, "abandoned", this.ownerToken, fencingToken)
         .catch(() => undefined);
+      /*
+       * PRESERVE, NEVER DISCARD (SUPERSEDED_DIRTY_WORKSPACE_HELD). A worker killed mid-task
+       * leaves uncommitted edits, and cleanup rightly refuses to destroy them — so the
+       * workspace was never released and the retry stranded. The edits are committed to the
+       * superseded attempt's OWN branch, which cleanup keeps (it is not in the target).
+       */
+      if ((await this.git.statusPorcelain(ws.worktreePath).catch(() => [])).length > 0) {
+        await this.git.exec(["add", "-A"], ws.worktreePath);
+        await this.git.exec(
+          [
+            "-c", "user.name=icos", "-c", "user.email=icos@local",
+            "commit", "-q", "--no-verify",
+            "-m", `icos: preserve uncommitted work of superseded attempt ${ws.workflowId}`,
+          ],
+          ws.worktreePath,
+        );
+      }
       try {
         await this.manager.cleanup(ws.workspaceId, this.ownerToken, fencingToken!);
       } finally {

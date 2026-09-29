@@ -63,7 +63,12 @@ const workerScript = (mode: WorkerMode) => `
   const { execFileSync } = require('child_process');
   const id = process.env.ICOS_TASK_ID;
   if ('${mode}' === 'fail-once' && id === '${TASK_A}' && !process.env.ICOS_WORKFLOW_ID.includes('-attempt-')) {
-    /* Hang past the worker timeout: a WORKER_TIMEOUT, which the canonical review answers RETRY. */
+    /*
+     * Edit, then hang past the worker timeout without committing — what a real agent killed
+     * mid-task leaves (self-build run 2). A WORKER_TIMEOUT, which the canonical review answers RETRY.
+     */
+    fs.mkdirSync('src/' + id, { recursive: true });
+    fs.writeFileSync('src/' + id + '/half-done.txt', 'uncommitted\\n');
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
   }
   if (id === '${TASK_B}' && !fs.existsSync('src/${TASK_A}/feature.txt')) {
@@ -577,6 +582,9 @@ describe("SUPERSEDED_ATTEMPT_WORKSPACE_HELD — a retry after a FAILED execution
 
     /* The failed attempt's workspace was retired, never integrated; the retry had its own. */
     const wsA1 = (await workspaceOf(c, WF_A))!;
+    /* Its uncommitted work was preserved on its own branch, never on the target. */
+    expect(git(repo, "show", `${wsA1.branch}:src/${TASK_A}/half-done.txt`)).toBe("uncommitted");
+    expect(git(repo, "ls-tree", "-r", "--name-only", TARGET)).not.toContain("half-done.txt");
     const wsA2 = (await workspaceOf(c, WF_A2))!;
     expect(wsA1.releasedAt).not.toBeNull();
     expect(wsA1.status).not.toBe("accepted");

@@ -1301,6 +1301,11 @@ commands for the self-build certification.
                                              a RETRY after a worker timeout stranded attempt 2
                                              behind attempt 1's never-released workspace.
                                              Integration 484 / 4 skipped.
+  SUPERSEDED_DIRTY_WORKSPACE_HELD          — CLOSED. Found by self-build run 2: the worker was
+                                             killed mid-edit, cleanup refused UNCOMMITTED_CHANGES,
+                                             the retry stranded. Retirement now commits the
+                                             edits to the superseded attempt's own branch
+                                             (preserved, never integrated) before cleanup.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
                                              0049 settlement + 0050 correction + 0051):
                                              core3-autonomous-orchestration 10/10,
