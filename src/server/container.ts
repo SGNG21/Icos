@@ -155,7 +155,10 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
-import { CanonicalAutonomousMissionPlanner } from "@/server/autonomy/canonical-mission-planner";
+import {
+  CanonicalAutonomousMissionPlanner,
+  type PlannerCompletionProvider,
+} from "@/server/autonomy/canonical-mission-planner";
 import {
   CommandPlannerProvider,
   parsePlannerCommand,
@@ -269,6 +272,12 @@ export interface Container {
   scheduler: SchedulerService;
   autonomousRuntime: AutonomousMissionRuntimeRepository;
   autonomousPlanner?: AutonomousMissionPlanner;
+  /**
+   * The COMPUTE behind proposing an improvement (M14), configured exactly like the planner's.
+   * Kept separate from the planner itself because a proposer runs INSIDE the repository it is
+   * proposing about, and a planner does not.
+   */
+  improvementProposalProvider?: PlannerCompletionProvider;
   conversationService: ConversationService;
   ceoService: CeoApplicationService;
   db?: Database;
@@ -438,6 +447,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
     autonomousPlanner: undefined,
+    improvementProposalProvider: undefined,
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: undefined,
@@ -754,6 +764,7 @@ export async function buildPostgresContainer(
     scheduler: new SchedulerService(scheduledJobs),
     autonomousRuntime,
     autonomousPlanner: buildAutonomousPlanner(env),
+    improvementProposalProvider: buildImprovementProposalProvider(env),
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
     db: handle.db,
@@ -956,6 +967,24 @@ function buildLlmReviewer(env: Env): ReviewerPort | undefined {
   }
 
   return createOmniRouteReviewer(env);
+}
+
+/**
+ * The proposer's compute (M14). Same configured backend as the planner's, run INSIDE the
+ * canonical repository so a proposal is grounded in what is actually there — the opposite of
+ * the reviewer, which is confined to an empty directory (decision 0047), and for the opposite
+ * reason: a proposal is a suggestion everything downstream verifies.
+ */
+function buildImprovementProposalProvider(env: Env): PlannerCompletionProvider | undefined {
+  const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
+  if (!command || !env.ICOS_REPO_PATH) return undefined;
+
+  return new CommandPlannerProvider({
+    command: command.command,
+    args: command.args,
+    cwd: env.ICOS_REPO_PATH,
+    timeoutMs: env.ICOS_PLANNER_TIMEOUT_MS ?? 300_000,
+  });
 }
 
 function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined {

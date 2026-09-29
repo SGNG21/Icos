@@ -47,14 +47,23 @@ export interface AllocationTaskView {
  *
  * Bounded to 32 characters total for the same reason.
  */
-export function workspaceSlug(task: AllocationTaskView): string {
+export function workspaceSlug(task: AllocationTaskView, attempt = 1): string {
   const fromTitle = task.title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 18);
   const suffix = task.taskId.replace(/[^a-z0-9]+/gi, "").slice(0, 8).toLowerCase();
-  return `${fromTitle || "task"}_${suffix}`.slice(0, 32);
+  /*
+   * THE ATTEMPT IS PART OF THE IDENTITY past the first one.
+   *
+   * The slug becomes the branch name, and a refused attempt's branch SURVIVES as evidence
+   * (it is only reaped once contained in the integration target). A correction attempt
+   * therefore collided with its own predecessor's branch and could not be provisioned. The
+   * first attempt keeps the bare slug so nothing already certified changes name.
+   */
+  const base = `${fromTitle || "task"}_${suffix}`;
+  return attempt <= 1 ? base.slice(0, 32) : `${base.slice(0, 28)}_a${attempt}`.slice(0, 32);
 }
 
 export function decideWorkspaceAllocation(

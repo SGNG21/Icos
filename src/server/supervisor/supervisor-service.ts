@@ -5,6 +5,7 @@ import type { TaskRepository } from "@/server/repositories/ports";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
 import {
   WorkerCapacityExceededError,
+  type DispatchAttempt,
   type DispatchAttemptRepository,
 } from "@/core/contracts/dispatch-attempt";
 import type { DurableMemory } from "@/core/context/durable-memory";
@@ -18,10 +19,27 @@ import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import {
   decideWorkspaceAllocation,
+  workspaceSlug,
   type WorkspaceAllocationDecision,
 } from "./workspace-allocation-policy";
 
+/** A task in one of these is finished; a leftover intent must not resurrect it. */
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "superseded",
+]);
+
 const RECOVERY_DISPATCH_LEASE_MS = 5 * 60_000;
+/**
+ * How long a supervisor holds a PREPARED attempt it has picked up.
+ *
+ * Long enough for a real external worker run, because the claim is what stops a second
+ * supervisor executing the same intent; short enough that a supervisor that dies does not
+ * strand the attempt for ever — recovery reclaims it once this lapses.
+ */
+const DISPATCH_CLAIM_LEASE_MS = 30 * 60_000;
 
 export class SupervisorService {
   constructor(
@@ -199,7 +217,36 @@ export class SupervisorService {
     }
 
     let tasks = await this.missionRepository.listTasks(missionId);
-    const readyTasks = computeReadyTasks(mission, tasks);
+    /*
+     * READY TASKS, PLUS TASKS THAT ALREADY HAVE A PENDING INTENT.
+     *
+     * `computeReadyTasks` allows only `draft`, deliberately — a task moves to `queued` the
+     * moment its first attempt is prepared, and re-running a queued task would double-dispatch
+     * it. But a CORRECTION attempt belongs to a task that is long past draft, so the loop
+     * never looked at it again: attempt 2 was prepared in the ledger and no governed path
+     * ever picked it up (REPAIR_WORKSPACE_DEFECT). A reviewer's REQUEST_CHANGES therefore
+     * ended the work outright.
+     *
+     * A prepared attempt IS the durable intent to execute, so a task carrying one is work to
+     * do whatever its status says. Nothing is double-dispatched: the attempt is claimed under
+     * a lease below, and a task with no pending attempt still enters only when ready.
+     */
+    const preparedByTask = new Map(
+      this.dispatchAttempts
+        ? (await this.dispatchAttempts.listPrepared(missionId)).map((a) => [a.missionTaskId, a])
+        : [],
+    );
+    const ready = computeReadyTasks(mission, tasks);
+    const readyIds = new Set(ready.map((t) => t.id));
+    const readyTasks = [
+      ...ready,
+      ...tasks.filter(
+        (t) =>
+          preparedByTask.has(t.id) &&
+          !readyIds.has(t.id) &&
+          !TERMINAL_TASK_STATUSES.has(t.status),
+      ),
+    ];
 
     const env = loadEnv();
     const digitalosFacadePath = env.DIGITALOS_FACADE_PATH;
@@ -207,7 +254,21 @@ export class SupervisorService {
     for (const task of readyTasks) {
       signal?.throwIfAborted();
 
-      const routing = await this.routeReadyTask(task);
+      /*
+       * AN EXISTING INTENT IS NOT RE-ROUTED. It already carries the worker it was routed to,
+       * and routing again would count that very attempt against its own worker's capacity:
+       * a one-slot worker with a pending correction is "fully loaded" by the correction it
+       * is waiting to run, so the router answers NO_ELIGIBLE_WORKER and the task blocks for
+       * a reason that names nothing actually wrong.
+       */
+      const pendingAttempt = preparedByTask.get(task.id);
+      const routing = pendingAttempt
+        ? {
+            blocked: false,
+            workerKind: pendingAttempt.workerKind,
+            workerId: pendingAttempt.workerId,
+          }
+        : await this.routeReadyTask(task);
       if (routing.blocked) {
         await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "blocked");
         continue;
@@ -266,21 +327,54 @@ export class SupervisorService {
               "MISSING_DISPATCH_ATTEMPT_REPOSITORY: workspace execution requires durable canonical workflow identity",
             );
           }
-          const attemptNumber = 1;
-          const workflowId = workflowIdForAttempt(task.taskId, attemptNumber);
-          const prepared = await this.dispatchAttempts
-            .prepare({
-              missionId: mission.id,
-              missionTaskId: task.id,
-              taskId: task.taskId,
-              attempt: attemptNumber,
-              workflowId,
-              prompt,
-              workerKind: routedWorkerKind,
-              workerId: routing.workerId,
-              capability: task.capability || undefined,
-            })
-            .catch(rethrowUnlessCapacity);
+          /*
+           * GOVERN THE ATTEMPT THE LEDGER ALREADY HAS, and only invent one when there is
+           * none (REPAIR_WORKSPACE_DEFECT).
+           *
+           * This used to be `const attemptNumber = 1`, unconditionally. `prepare()` is
+           * idempotent on that key, so once attempt 1 existed every later tick simply
+           * declined to acquire it and returned — and attempt 2 was therefore NEVER prepared
+           * and NEVER allocated a governed workspace. A correction attempt, whether it comes
+           * from QC's CORRECT/RETRY or from the self-development repair loop, could not run
+           * on the certified path at all. In practice that means a reviewer's REQUEST_CHANGES
+           * ended the work: roughly half of real self-development runs died here.
+           *
+           * The attempt number is not the supervisor's to compute. A pending attempt in the
+           * durable ledger IS the intent to execute, so the supervisor picks that one up;
+           * absent one, this is a first dispatch and it prepares attempt 1 as before.
+           */
+          const pending = pendingAttempt;
+
+          let prepared: { attempt: DispatchAttempt; acquired: boolean } | null | undefined;
+          if (pending) {
+            /*
+             * Claiming is what makes this safe under concurrency: exactly one supervisor may
+             * hold a non-expired claim, so two ticks cannot both execute the same intent.
+             */
+            const claimed = await this.dispatchAttempts.claimPrepared(
+              pending.id,
+              `supervisor-${randomUUID()}`,
+              DISPATCH_CLAIM_LEASE_MS,
+            );
+            if (!claimed) continue;
+            prepared = { attempt: pending, acquired: true };
+          } else {
+            const attemptNumber = 1;
+            const workflowId = workflowIdForAttempt(task.taskId, attemptNumber);
+            prepared = await this.dispatchAttempts
+              .prepare({
+                missionId: mission.id,
+                missionTaskId: task.id,
+                taskId: task.taskId,
+                attempt: attemptNumber,
+                workflowId,
+                prompt,
+                workerKind: routedWorkerKind,
+                workerId: routing.workerId,
+                capability: task.capability || undefined,
+              })
+              .catch(rethrowUnlessCapacity);
+          }
           // Back-pressure, not failure: the task stays ready for a later tick.
           if (!prepared || !prepared.acquired) continue;
 
@@ -297,7 +391,10 @@ export class SupervisorService {
             mission.id,
             task.taskId,
             routing.workerId ?? routedWorkerKind ?? "unassigned",
-            allocation.slug,
+            /* A later attempt needs its own branch: its predecessor's survives as evidence. */
+            prepared.attempt.attempt > 1
+              ? workspaceSlug({ taskId: task.taskId, title: task.title }, prepared.attempt.attempt)
+              : allocation.slug,
             prepared.attempt.workflowId,
             allocation.fileScope,
           );
@@ -308,7 +405,12 @@ export class SupervisorService {
             missionId: mission.id,
             taskId: task.taskId,
             taskTitle: task.title,
-            prompt,
+            /*
+             * The ATTEMPT's prompt, not the task's. A correction attempt carries the review
+             * feedback that asked for it; sending the original objective again would throw
+             * that away and re-run the work that was already refused.
+             */
+            prompt: prepared.attempt.prompt,
             workerKind: routedWorkerKind,
             capability: task.capability || undefined,
             digitalosFacadePath,

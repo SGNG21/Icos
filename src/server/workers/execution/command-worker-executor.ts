@@ -102,6 +102,16 @@ export function composeWorkerPrompt(contract: WorkerTaskContract): string {
     lines.push("", "## You may write ONLY these paths");
     for (const scope of contract.allowedFileScope) lines.push(`- ${scope}`);
     /*
+     * SAY WHAT HAPPENS OTHERWISE. The scope was listed and its consequence was not, so an
+     * agent that wrote a good file one directory too high had its whole run REJECTED by the
+     * gate — correctly, and after paying for the work. The fence is not advice.
+     */
+    lines.push(
+      "Every path you create or modify must be INSIDE one of them. A file anywhere else",
+      "causes the Integration Gate to reject this entire run, including the work that was",
+      "correct. If a path above names a directory, put your files inside that directory.",
+    );
+    /*
      * SAY TO COMMIT (defect 33). The contract described the work, the workspace and the
      * scope, and never asked for the one act that makes the work exist outside the worktree.
      * A real agent obligingly edited files and stopped; `writerWorkspaceEvidence` then

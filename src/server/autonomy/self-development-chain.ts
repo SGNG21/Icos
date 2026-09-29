@@ -234,8 +234,29 @@ export class SelfDevelopmentChain {
   }
 
   /** The planner's brief. Rationale is included: WHY it is worth doing is part of the work. */
+  /**
+   * The objective handed to the canonical planner.
+   *
+   * IT NAMES THE TARGET PATH EXPLICITLY. The candidate declares `targetComponent`, and until
+   * this carried it the planner had to infer the path from prose — so it declared
+   * `allowedFileScope: ["src/server/workspace-execution-coordinator.ts"]` for a candidate
+   * targeting `src/server/workspace-manager/workspace-execution-coordinator.ts`, one segment
+   * short. The worker then edited the RIGHT file and the gate rejected the whole run as out
+   * of scope. Passing the target the candidate already declared removes the guess.
+   */
   private objectiveOf(candidate: ImprovementCandidate): string {
     const parts = [candidate.description?.trim(), candidate.rationale?.trim()].filter(Boolean);
-    return `${candidate.title}. ${parts.join(" ")}`.trim();
+    const objective = `${candidate.title}. ${parts.join(" ")}`.trim();
+    /*
+     * A DIRECTORY TARGET IS WRITTEN AS A DIRECTORY. The scope matcher compiles `docs` to
+     * `^docs$`, which matches a FILE called `docs` and nothing inside it, while `docs/`
+     * expands to `docs/**`. Since the planner is told to reproduce this path verbatim in
+     * `allowedFileScope`, a bare directory name would fence the writer out of the very place
+     * it was asked to write.
+     */
+    const target = /\.[a-z0-9]+$/i.test(candidate.targetComponent)
+      ? candidate.targetComponent
+      : `${candidate.targetComponent.replace(/\/+$/, "")}/`;
+    return `${objective}\nTarget path: ${target}`;
   }
 }

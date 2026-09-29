@@ -495,6 +495,73 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     ).rejects.toThrow(/WORKFLOW_COLLISION/);
   }, 120_000);
 
+  it("REPAIR: a CORRECTION ATTEMPT reaches the certified path and gets its own workspace", async () => {
+    makeRepo();
+    const c = await container();
+    await seed(c);
+    const runtime = composeAutonomyRuntime(c);
+
+    /* Attempt 1 runs the certified path and leaves its workspace awaiting review. */
+    await runtime.supervisor.run(MISSION_ID);
+    const first = (await c.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
+    expect(first, "attempt 1 was not governed").toBeDefined();
+
+    /*
+     * THE REVIEWER REFUSED. Settle attempt 1 the way the self-development coordinator does
+     * before correcting — `abandoned`, because the gate never ran — and prepare the
+     * correction in the durable ledger, which is what QC's CORRECT and the repair loop both
+     * do. Nothing here dispatches: that is the supervisor's job, and the point of the proof.
+     */
+    /*
+     * Free the worker's slot, as the coordinator does. Durable load counts NON-TERMINAL
+     * attempts, so an attempt left `dispatched` holds its worker's only capacity and the
+     * correction is refused at ROUTING — the task blocks for a reason that names nothing
+     * actually wrong.
+     */
+    const firstAttempt = await c.dispatchAttempts.getByWorkflowId(WORKFLOW_ID);
+    await c.dispatchAttempts.recordExecutionFailure(firstAttempt!.id, {
+      failureClass: "FAILED_RETRYABLE",
+      message: "REVIEW_REFUSED: an independent review asked for changes; correcting.",
+    });
+    await c.workspaceManager!.transition(
+      first!.workspaceId, "abandoned", first!.leaseOwner!, first!.fencingToken,
+    );
+    await c.workspaceManager!.cleanup(first!.workspaceId, first!.leaseOwner!, first!.fencingToken);
+
+    const secondWorkflowId = workflowIdForAttempt(TASK_ID, 2);
+    const correction = await c.dispatchAttempts.prepare({
+      missionId: MISSION_ID,
+      missionTaskId: MISSION_TASK_ID,
+      taskId: TASK_ID,
+      attempt: 2,
+      workflowId: secondWorkflowId,
+      prompt: "Correction requested by independent review: put the file in src/core3/.",
+      workerKind: "agent",
+      workerId: WORKER_ID,
+      capability: CAPABILITY,
+    });
+    expect(correction?.acquired).toBe(true);
+
+    /*
+     * THE SUPERVISOR PICKS UP THE PENDING INTENT. It used to hardcode attempt 1, so attempt 2
+     * was never dispatched and never allocated a workspace — a reviewer's REQUEST_CHANGES
+     * ended the work outright (REPAIR_WORKSPACE_DEFECT).
+     */
+    await runtime.supervisor.run(MISSION_ID);
+    const second = (await c.workspaceManager!.list()).find(
+      (w) => w.workflowId === secondWorkflowId,
+    );
+    expect(second, "the correction attempt got no governed workspace").toBeDefined();
+    expect(second!.workspaceId).not.toBe(first!.workspaceId);
+    /* Its own branch: two attempts' work must never land on one. */
+    expect(second!.branch).not.toBe(first!.branch);
+
+    /* And it ran the CORRECTION's prompt, not the original objective. */
+    const dispatched = await c.dispatchAttempts.getByWorkflowId(secondWorkflowId);
+    expect(dispatched?.state).not.toBe("prepared");
+    expect(dispatched?.prompt).toContain("Correction requested by independent review");
+  }, 180_000);
+
   it("A READ-ONLY TASK needs no workspace and creates no branch", async () => {
     makeRepo();
     const c = await container();

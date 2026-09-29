@@ -1,6 +1,6 @@
 # ICOS Self-Build Bootstrap — Durable State
 
-Updated: 2026-09-28 (M13 — DEFECT 28 CLOSED; CORE3 RE-CERTIFIED with NO pre-seeded review)
+Updated: 2026-09-29 (M14 — ICOS improves itself from one sentence; SELF_DEVELOPMENT_E2E repeatable)
 Worktree: /Users/coco/icos-worktrees/autonomy-core3-goal-planner-dag
 Branch: feat/autonomy-core3-goal-planner-dag
 
@@ -1269,19 +1269,58 @@ commands for the self-build certification.
 
 ### CERTIFICATION LEDGER — what is and is NOT true today
   DEFECT_28                                — CLOSED (M13, decision 0044).
-  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN after defect 28 (M13, 0044).
-                                             9 proofs, NO pre-seeded review anywhere.
-  MULTI_WORKER_E2E_PASS                    — TRUE, RE-PROVEN after defect 28 (M5.4, 0035).
-  AUTO_SESSION_RECOVERY_PASS               — TRUE, RE-PROVEN after defect 28 (M7, 0039/0040).
-  SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11).
+  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE. 10/10 proofs, no pre-seeded review, and
+                                             now including a correction attempt reaching the
+                                             certified path (M13/M14, decisions 0044, 0050).
+  MULTI_WORKER_E2E_PASS                    — TRUE, re-proven after defect 28 (M5.4, 0035).
+  AUTO_SESSION_RECOVERY_PASS               — TRUE, re-proven after defect 28 (M7, 0039/0040).
+  SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11), and JOINED to its coordinator (0046).
   SELF_DEVELOPMENT_PLANNING_E2E_PASS       — TRUE (M12, commit 9444447).
-  SELF_DEVELOPMENT_E2E_PASS                — NOT YET RUN end to end. Its blocker (defect 28)
-                                             is now closed; the full run is the next action.
-  ICOS_SELF_BUILD_E2E                      — NOT ATTEMPTED. Requires the above.
+  SELF_DEVELOPMENT_E2E_PASS                — TRUE (M14). Candidate -> goal -> mission -> real
+                                             plan -> governed workspace -> external worker
+                                             writes and commits -> independent review -> gate
+                                             -> REAL repository gates -> integration exactly
+                                             once by ancestry -> durable learning.
+                                             TWO consecutive passes from a reset target, on a
+                                             DEDICATED database, each leaving a durable
+                                             evidence record under
+                                             audit/self-build-bootstrap/evidence/.
+  ICOS_SELF_BUILD_E2E                      — PARTIAL, and therefore recorded as FALSE.
+                                             From the single sentence "Improve ICOS
+                                             autonomously", with no candidate/goal/mission/
+                                             task/plan/worker/review/approval/integration
+                                             supplied, ICOS has PROPOSED and INTEGRATED its
+                                             own improvements — including a real source
+                                             change to src/core/context/contracts.ts, gated
+                                             by the repository's own typecheck, lint, unit,
+                                             integration and build.
+                                             It is NOT repeatable: it passes when the plan
+                                             has ONE writer task and blocks when the plan has
+                                             an edge, because a read-only inspection task is
+                                             executed and never settled. That is DEFECT 36,
+                                             closed on feat/core3-defect36-dag-settlement and
+                                             NOT MERGED here.
 ICOS is NOT yet self-building, and must not be described as such.
 
+### OPEN, NOT FIXED HERE
+  DEFECT 36 — a dependent task is never settled, so multi-task plans block. Closed on
+              feat/core3-defect36-dag-settlement (bcda6cc), decision 0049. NOT merged.
+  PENDING-REVIEW GATE SWEEP — gatePendingReview() has no production caller on THIS branch.
+              Closed on fix/core3-defect-28-trigger (599cf30), decision 0045. NOT merged.
+              The self-development path does not need it: the coordinator calls the gate
+              directly with the verdict it obtained from the canonical reviewer.
+  SELF-DEV GATE CONVERGENCE — that direct call should become the pending-review sweep, so
+              there is ONE gating path. Not started.
+  GOVERNANCE PROPOSALS — "Improve ICOS autonomously" sometimes proposes changing a governance
+              file, and the gate then answers NEEDS_HUMAN_APPROVAL. That is CORRECT. The E2E
+              currently scores it as a failure; whether it should is a certification-standard
+              decision for the owner, not a test to quietly relax.
+  defect 18 / 10 — provider names as routing keys in `CompositeTaskExecutionDispatcher` and
+              `AIResourceCatalog`. Retiring the composite is the moment to close them.
+  defect 20 — `recovery_units.kind` has no CHECK while `scheduled_jobs.kind` does.
+
 Critical path:
-  DEFECT 28 (closed) -> SELF_DEVELOPMENT_E2E_PASS -> ICOS_SELF_BUILD_E2E
+  DEFECT 36 (merge) -> ICOS_SELF_BUILD_E2E repeatable -> self-build certification
 
 ## SUPERSEDED SECTION — M2 (kept for orientation)
 `validateMissionPlan()` in src/server/mission/mission-plan.ts ALREADY rejects:
@@ -1489,3 +1528,19 @@ Then M3 durable readiness/dependency gating (mission N13).
   stack trace named `supervisor-service.ts:326` and `git status` did not list that file — two
   seconds of evidence against a remembered edit. Trust the working tree, never the memory of
   having changed it. (Same shape as the defect-24 patch that silently failed to apply.)
+- A DEFECT THAT LOOKS LIKE ONE LINE CAN BE FIVE. `const attemptNumber = 1` was the visible
+  half of REPAIR_WORKSPACE_DEFECT; behind it sat a ready-status allow-list, a held workspace,
+  a held capacity slot, a stale in-memory binding and a per-task branch name. Each was
+  invisible until the one in front of it was fixed and the path run again. Budget for the
+  NEXT layer when a fix reveals one — and re-run the real path after every single layer,
+  because reasoning could not have found any of them.
+- THE SYSTEM REFUSING IS NOT THE SYSTEM FAILING. Runs died on POLICY_UNKNOWN (a category the
+  self-modification policy denies), on NEEDS_HUMAN_APPROVAL (ICOS proposing to change its own
+  governance) and on out-of-scope rejections (a writer one directory too high). Three of
+  those were the constitution working exactly as written. A red E2E is a question, not a
+  verdict: ask what refused and whether it was right before changing anything.
+- A CERTIFICATION MARKER NEEDS A PASS RATE, NOT A PASS. SELF_DEVELOPMENT_E2E and
+  ICOS_SELF_BUILD_E2E each passed on their first real run, and both were then shown to be
+  roughly coin-flips by running them again. Passing once proves the path EXISTS; only
+  repetition tells you whether it WORKS. Run a marker twice from a clean target before
+  writing it into the ledger.

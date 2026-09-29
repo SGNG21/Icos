@@ -169,7 +169,7 @@ export interface GovernedSelfDevelopmentDependencies {
    */
   integrationApplier?: Pick<IntegrationApplier, "apply">;
   /** Reaps the workspace after a terminal outcome. Same authority as every other reap. */
-  workspaces?: Pick<WorkspaceManager, "cleanup">;
+  workspaces?: Pick<WorkspaceManager, "cleanup" | "transition">;
   durableMemory: DurableMemory;
 }
 
@@ -443,6 +443,22 @@ export class GovernedSelfDevelopmentCoordinator {
         }
 
         repairAttemptsUsed = repairDecision.candidate.attemptNumber;
+        /*
+         * SETTLE THE REFUSED ATTEMPT BEFORE CORRECTING IT (REPAIR_WORKSPACE_DEFECT).
+         *
+         * A correction is a NEW attempt with its own workflow id, and `allocateWorkspace`
+         * refuses to bind a second workflow id to a task whose workspace is still held —
+         * correctly, or the two attempts' work would land on one branch. So while the
+         * refused attempt kept its workspace, the correction could never be allocated one,
+         * and the run died with NO_GOVERNED_WORKSPACE. In practice that is what a reviewer's
+         * REQUEST_CHANGES did to roughly half of all self-development runs.
+         *
+         * `abandoned`, not `rejected`: the gate never ran. The branch SURVIVES either way —
+         * cleanup only reaps a branch already contained in the integration target — so the
+         * refused work stays inspectable while the correction proceeds.
+         */
+        await this.settleRefusedAttempt(currentExecution);
+
         const repairedExecution = await this.dependencies.execution.repair({
           candidate: request.candidate,
           missionId: request.missionId,
@@ -673,6 +689,44 @@ export class GovernedSelfDevelopmentCoordinator {
       return "CORRELATION_ERROR:workflowId is not owned by canonical durable dispatch intent";
     }
     return null;
+  }
+
+  /**
+   * Releases the workspace of an attempt the reviewer refused, so its successor can have one.
+   *
+   * Best effort by design: a workspace that is already gone, already terminal, or held by
+   * someone else must not stop the correction. The failure that matters — no workspace for
+   * the correction — is detected downstream by the execution handoff's bypass detector,
+   * which is the authority on whether the certified path ran.
+   */
+  private async settleRefusedAttempt(execution: CompletedExecution): Promise<void> {
+    /*
+     * FREE THE WORKER'S SLOT FIRST. Durable load is derived by counting non-terminal
+     * attempts, so an attempt left `dispatched` holds its worker's capacity for ever. With
+     * a one-slot worker that means the correction is refused at ROUTING — the task blocks,
+     * and the reason ("no eligible worker") names nothing that is actually wrong.
+     */
+    const attempt = await this.dependencies.dispatchAttempts
+      .getByWorkflowId(execution.executionResult.workflowId)
+      .catch(() => null);
+    if (attempt && attempt.state !== "completed" && attempt.state !== "failed") {
+      await this.dependencies.dispatchAttempts
+        .recordExecutionFailure(attempt.id, {
+          failureClass: "FAILED_RETRYABLE",
+          message: "REVIEW_REFUSED: an independent review asked for changes; correcting.",
+        })
+        .catch(() => undefined);
+    }
+
+    const workspaces = this.dependencies.workspaces;
+    if (!workspaces) return;
+    const { owner, fencingToken } = execution.workspaceLease;
+    try {
+      await workspaces.transition(execution.workspaceId, "abandoned", owner, fencingToken);
+    } catch {
+      /* Already terminal, already released, or not ours: cleanup below decides. */
+    }
+    await workspaces.cleanup(execution.workspaceId, owner, fencingToken).catch(() => undefined);
   }
 
   private async reviewExecution(

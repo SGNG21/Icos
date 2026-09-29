@@ -222,6 +222,8 @@ export class CanonicalAutonomousMissionPlanner implements AutonomousMissionPlann
       "- priority: 1 (highest) to 5 (lowest). attemptBudget: at least 1.",
       "- successCriteria: how completion is verified. allowedFileScope: the paths the task may touch,",
       "  written as repository-relative paths such as docs/ or src/server/, never absolute paths.",
+      "  If the objective names a target path, allowedFileScope MUST contain it EXACTLY as",
+      "  written there. A scope that is one segment short rejects the whole run at the gate.",
       "- expectedArtifacts: what the task must produce.",
       "Required schema (fields marked optional may be omitted, but omitting an envelope field accepts the default):",
       '{"version":1,"tasks":[{"key":"string","title":"string","description":"string (optional)","dependsOn":["task-key"],"workerKind":"string (optional)","capability":"string (optional)","objective":"string (optional)","instructions":"string (optional)","successCriteria":["string"],"requiredCapabilities":["string"],"riskClass":"read_only|reversible|sensitive","allowedFileScope":["string"],"expectedArtifacts":["string"],"priority":1,"attemptBudget":3,"reviewPolicy":"never|if_risky|always","integrationPolicy":"string (optional)"}]}',

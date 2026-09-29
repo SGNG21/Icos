@@ -223,6 +223,8 @@ describe("M6.3 command worker executor", () => {
     const writer = composeWorkerPrompt(contract({ allowedFileScope: ["src/"] }));
     expect(writer).toContain("You may write ONLY these paths");
     expect(writer).toContain("- src/");
+    /* The fence is not advice: a file outside it rejects the whole run, after paying for it. */
+    expect(writer).toContain("reject this entire run");
   });
 
   it("DEFECT 33 — A WRITER IS TOLD TO COMMIT; a reader is not", () => {

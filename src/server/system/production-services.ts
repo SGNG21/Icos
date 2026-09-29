@@ -4,6 +4,7 @@ import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-swe
 import { AutonomyWakeupService } from "@/server/autonomy/autonomy-wakeup-service";
 import { createContainer as createApplicationContainer, type Container } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
+import { CanonicalImprovementProposer } from "@/server/autonomy/canonical-improvement-proposer";
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
 import { SelfDevelopmentChain } from "@/server/autonomy/self-development-chain";
 import { GovernedSelfDevelopmentCoordinator } from "@/server/autonomy/governed-self-development-coordinator";
@@ -82,6 +83,11 @@ export function composeAutonomyRuntime(container: Container): {
   backlog: DurableImprovementBacklog;
   selfDevelopmentChain: SelfDevelopmentChain;
   selfDevelopment: GovernedSelfDevelopmentCoordinator;
+  /**
+   * M14 — ICOS deciding WHAT to improve. Absent when no proposer compute is configured, and
+   * absent means ICOS cannot start from an instruction: it never means "invent something".
+   */
+  improvementProposer?: CanonicalImprovementProposer;
 } {
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
@@ -208,7 +214,33 @@ export function composeAutonomyRuntime(container: Container): {
     durableMemory: container.durableMemory,
   });
 
-  return { supervisor, qualityControl, wakeup, backlog, selfDevelopmentChain, selfDevelopment };
+  /*
+   * M14 — the entry point for "improve yourself".
+   *
+   * Every self-development capability before this started from a candidate SOMEBODY ELSE had
+   * written; nothing in ICOS produced one, so an empty backlog could only answer
+   * NO_CANDIDATE. This proposes into the same durable backlog the chain already selects from,
+   * so nothing downstream changes: policy, planning, governance, review and the gate all
+   * judge a proposal exactly as they judge a human's.
+   */
+  const improvementProposer = container.improvementProposalProvider
+    ? new CanonicalImprovementProposer({
+        provider: container.improvementProposalProvider,
+        backlog,
+        repoPath: loadEnv().ICOS_REPO_PATH,
+        timeoutMs: loadEnv().ICOS_PLANNER_TIMEOUT_MS ?? 300_000,
+      })
+    : undefined;
+
+  return {
+    supervisor,
+    qualityControl,
+    wakeup,
+    backlog,
+    selfDevelopmentChain,
+    selfDevelopment,
+    improvementProposer,
+  };
 }
 
 function createRecoveryScheduler(

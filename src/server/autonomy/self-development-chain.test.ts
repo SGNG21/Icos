@@ -228,3 +228,31 @@ describe("DEFECT 25 LINK 1 — self-development chain owner", () => {
     expect(outcome.status).toBe("NO_CANDIDATE");
   });
 });
+
+describe("objective — the target path the planner must scope to", () => {
+  const objectiveFor = async (targetComponent: string) => {
+    const h = await seeded({ targetComponent });
+    const outcome = await h.chain.advance();
+    if (outcome.status !== "STARTED") throw new Error("unreachable");
+    return (await h.missions.findById(outcome.missionId))!.objective;
+  };
+
+  it("A DIRECTORY TARGET IS WRITTEN AS A DIRECTORY", async () => {
+    /*
+     * The scope matcher compiles `docs` to `^docs$` — a FILE named `docs`, nothing inside
+     * it — while `docs/` expands to `docs/**`. The planner reproduces this path verbatim in
+     * `allowedFileScope`, so a bare directory name fences the writer out of the very place
+     * it was asked to write.
+     */
+    expect(await objectiveFor("docs")).toContain("Target path: docs/");
+    expect(await objectiveFor("src/server/autonomy")).toContain(
+      "Target path: src/server/autonomy/",
+    );
+  });
+
+  it("A FILE TARGET IS LEFT EXACTLY AS DECLARED", async () => {
+    expect(await objectiveFor("src/core/context/contracts.ts")).toContain(
+      "Target path: src/core/context/contracts.ts",
+    );
+  });
+});

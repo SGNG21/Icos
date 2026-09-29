@@ -285,6 +285,7 @@ interface Harness {
   review: ScriptedReviewHandoff;
   integrate: ReturnType<typeof vi.fn>;
   runner: FakeRunner;
+  dispatchAttempts: InMemoryDispatchAttemptRepository;
   cleanup(): void;
 }
 
@@ -417,6 +418,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     review,
     integrate,
     runner,
+    dispatchAttempts,
     cleanup: () => fx.cleanup(),
   };
 }
@@ -488,6 +490,36 @@ describe("GovernedSelfDevelopmentCoordinator Phase 8E E2E", () => {
         0,
       ),
     ).toBe(5);
+  });
+
+  it("REPAIR_WORKSPACE_DEFECT — the refused attempt is SETTLED so its successor can be governed", async () => {
+    const transition = vi.fn(async () => ({}) as never);
+    const cleanup = vi.fn(async () => ({
+      worktreeRemoved: true,
+      branchDeleted: false,
+      databaseDropped: true,
+      archivePath: "/tmp/a.json",
+    }));
+    const h = await createHarness({
+      review: { decisions: ["REQUEST_CHANGES", "APPROVE"] },
+      workspaces: { cleanup, transition },
+    });
+
+    await h.coordinator.process(h.request);
+
+    /*
+     * A correction is a NEW attempt with its own workflow id, and both the workspace manager
+     * and the worker's capacity refuse it while the refused attempt still holds them. Left
+     * unsettled, the correction could never be allocated a governed workspace at all.
+     */
+    expect(transition).toHaveBeenCalledTimes(1);
+    /* `abandoned`, not `rejected`: the gate never ran on this attempt. */
+    expect((transition.mock.calls[0] as unknown as unknown[])[1]).toBe("abandoned");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+
+    /* And the worker's slot is freed: durable load counts NON-TERMINAL attempts. */
+    const settled = await h.dispatchAttempts.getByWorkflowId(workflowIdForAttempt(h.taskId, 1));
+    expect(settled?.state).toBe("failed");
   });
 
   it("escalates when bounded repair is exhausted and never invokes IntegrationGate", async () => {
@@ -636,7 +668,7 @@ describe("GovernedSelfDevelopmentCoordinator Phase 8E E2E", () => {
     }));
     const h = await createHarness({
       integrationApplier: { apply },
-      workspaces: { cleanup },
+      workspaces: { cleanup, transition: vi.fn(async () => ({}) as never) },
     });
 
     const outcome = await h.coordinator.process(h.request);
@@ -683,7 +715,10 @@ describe("GovernedSelfDevelopmentCoordinator Phase 8E E2E", () => {
       databaseDropped: true,
       archivePath: "/tmp/a.json",
     }));
-    const h = await createHarness({ integrationApplier: { apply }, workspaces: { cleanup } });
+    const h = await createHarness({
+      integrationApplier: { apply },
+      workspaces: { cleanup, transition: vi.fn(async () => ({}) as never) },
+    });
 
     const outcome = await h.coordinator.process(h.request);
 

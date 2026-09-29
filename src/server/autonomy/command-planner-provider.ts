@@ -30,6 +30,16 @@ export const PLANNER_PLACEHOLDERS = {
 export interface CommandPlannerProviderOptions {
   command: string;
   args: readonly string[];
+  /**
+   * Where the agent runs. Omitted, it inherits the server's working directory.
+   *
+   * A PLANNER needs none — it plans from the mission text it is given. A PROPOSER does: it
+   * has to look at the repository to find something worth improving. The reviewer's opposite
+   * rule (an empty directory, decision 0047) is not a contradiction: a proposer is a source
+   * of suggestions that everything downstream verifies, while a reviewer IS the verification
+   * and must not go looking for its own evidence.
+   */
+  cwd?: string;
   /** Diagnostics only. Defaults to the executable's basename. */
   name?: string;
   timeoutMs: number;
@@ -64,6 +74,7 @@ export class CommandPlannerProvider implements PlannerCompletionProvider {
     const result = await this.run({
       command: this.options.command,
       args,
+      cwd: this.options.cwd,
       timeoutMs: this.options.timeoutMs,
       /* A plan is small; a runaway agent must not be able to grow this without bound. */
       maxOutputBytes: 512 * 1024,

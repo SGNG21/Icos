@@ -173,18 +173,36 @@ export class WorkspaceExecutionCoordinator {
      */
     fileScope?: FileScope,
   ): Promise<ExecutionWorkspace> {
+    /*
+     * THE REGISTRY DECIDES WHETHER A BINDING STILL HOLDS, not this map.
+     *
+     * The in-memory record was treated as authoritative about release, so a workspace
+     * released by anyone else — a reaping sweep, recovery, or the self-development
+     * coordinator settling a refused attempt — left a stale binding here. The next attempt
+     * for that task was then refused with WORKFLOW_COLLISION against a workspace that no
+     * longer existed, which is what stopped every correction attempt from being allocated.
+     * The durable row is the truth; this map is a cache.
+     */
     const existing = this.executionWorkspaces.get(taskId);
-    if (existing && existing.status !== "released") {
+    const durable =
+      existing && existing.status !== "released"
+        ? await this.manager.get(existing.workspaceId).catch(() => null)
+        : null;
+    const stillHeld = durable !== null && durable.releasedAt === null;
+
+    if (existing && stillHeld) {
       if (workflowId && existing.workflowId && existing.workflowId !== workflowId) {
         throw new Error(
           `WORKFLOW_COLLISION: task ${taskId} is bound to ${existing.workflowId}, not ${workflowId}`,
         );
       }
-      // Already allocated - verify workspace still exists and is valid
-      const ws = await this.manager.get(existing.workspaceId);
-      if (ws.releasedAt === null) {
-        return existing;
-      }
+      return existing;
+    }
+    if (existing && !stillHeld) {
+      /* The binding is gone; forget it rather than letting it refuse the successor. */
+      existing.status = "released";
+      existing.releasedAt = existing.releasedAt ?? new Date().toISOString();
+      this.stopLeaseRenewal(existing.workspaceId);
     }
 
     // Create new workspace

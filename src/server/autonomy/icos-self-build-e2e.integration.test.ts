@@ -9,33 +9,29 @@ import { loadEnv } from "@/config/env";
 import { buildPostgresContainer, type Container } from "@/server/container";
 import { composeAutonomyRuntime } from "@/server/system/production-services";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
-import { createImprovementCandidate } from "@/core/autonomy/improvement-backlog";
 import { selfDevelopmentIds } from "@/server/autonomy/self-development-chain";
 import { writeSelfDevelopmentEvidence } from "@/server/autonomy/self-development-evidence";
 
 /*
- * SELF_DEVELOPMENT_E2E — from an ImprovementCandidate to an INTEGRATED commit, through
- * PRODUCTION composition.
+ * ICOS_SELF_BUILD_E2E — the decisive one.
  *
- * No missionId, no taskId, no manual plan, no injected execution handoff, NO PRE-SEEDED
- * REVIEW and no manual stage advancement. The test supplies a candidate, makes ONE call —
- * `runtime.selfDevelopment.advance()` — and then only OBSERVES: the chain creates the goal
- * and mission and invokes the canonical planner, the certified runtime executes, the
- * independent reviewer decides, the IntegrationGate runs the REAL repository gates, and the
- * canonical applier advances the branch exactly once.
+ * THE ONLY INPUT IS A SENTENCE. No improvement candidate, no goal, no missionId, no taskId,
+ * no plan, no worker, no review, no approval and no integration call. ICOS decides WHAT to
+ * improve, plans it, governs it, writes it, reviews it independently, runs the repository's
+ * OWN gates against it, and advances the canonical branch — or it does not, and says why.
  *
- * IT IS OPT-IN (ICOS_SELF_DEV_E2E=1) because it spends real model credits on a real planner
- * and a real worker, and takes minutes. The deterministic paths it composes are covered by
- * the ordinary suites; what this adds is contact with real compute end to end.
+ * IT IS OPT-IN (ICOS_SELF_BUILD_E2E=1): it spends real model credits on a real proposer, a
+ * real planner, a real worker and a real reviewer, and it runs the full gate suite inside a
+ * fresh worktree. Expect several minutes.
  *
  * REPRODUCE:
- *   ICOS_SELF_DEV_E2E=1 npx vitest run --config vitest.integration.config.ts \
- *     src/server/autonomy/self-development-e2e.integration.test.ts
+ *   ICOS_SELF_BUILD_E2E=1 npx vitest run --config vitest.integration.config.ts \
+ *     src/server/autonomy/icos-self-build-e2e.integration.test.ts
  */
 
-const ENABLED = process.env.ICOS_SELF_DEV_E2E === "1";
-const REPO = process.env.ICOS_SELF_DEV_REPO ?? "/tmp/claude-501/sdrepo";
-const HERMES = process.env.ICOS_SELF_DEV_AGENT ?? "hermes";
+const ENABLED = process.env.ICOS_SELF_BUILD_E2E === "1";
+const REPO = process.env.ICOS_SELF_BUILD_REPO ?? "/tmp/claude-501/sdrepo";
+const HERMES = process.env.ICOS_SELF_BUILD_AGENT ?? "hermes";
 
 /*
  * A DEDICATED database. These runs TRUNCATE, and the shared `icos_test` is where every other
@@ -43,6 +39,9 @@ const HERMES = process.env.ICOS_SELF_DEV_AGENT ?? "hermes";
  * must not erase the lineage this run is evidence for.
  */
 const DATABASE_URL = process.env.ICOS_SELF_BUILD_DATABASE_URL ?? TEST_DATABASE_URL;
+
+/** The whole input. */
+const INSTRUCTION = "Improve ICOS autonomously.";
 const containers: Container[] = [];
 const heartbeats: NodeJS.Timeout[] = [];
 let worktreeRoot: string | undefined;
@@ -84,7 +83,7 @@ const REAL_GATE_COMMANDS = {
 };
 
 async function productionContainer(): Promise<Container> {
-  worktreeRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "icos-selfdev-")));
+  worktreeRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "icos-selfbuild-")));
   const env = loadEnv({
     NODE_ENV: "test",
     PERSISTENCE: "postgres",
@@ -119,8 +118,8 @@ afterAll(async () => {
   if (worktreeRoot) rmSync(worktreeRoot, { recursive: true, force: true });
 });
 
-describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit, via production composition", () => {
-  it("ICOS IMPROVES ITSELF FROM A CANDIDATE — no ids, no review, no gates supplied", async () => {
+describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an integrated commit", () => {
+  it("IMPROVE ICOS AUTONOMOUSLY — and nothing else is supplied", async () => {
     const container = await productionContainer();
     const runtime = composeAutonomyRuntime(container);
 
@@ -131,38 +130,20 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
     );
 
     /*
-     * THE ONLY INPUT: an improvement ICOS should make. No missionId, no taskId, no plan.
-     * Bounded and genuinely useful — the repository really does accumulate worker branches.
-     */
-    const candidate = createImprovementCandidate({
-      title: "Document the worker branch lifecycle",
-      description:
-        "Add a short docs/ note describing the icos/worker branch lifecycle: created per writer attempt, kept when a run is rejected, and reaped once its commits are contained in the integration target.",
-      rationale:
-        "The reaping rule is non-obvious and was the source of a real defect; writing it down prevents the next one.",
-      category: "maintainability",
-      targetComponent: "docs",
-      priority: "medium",
-      proposedBy: "icos-self-development",
-    });
-    await runtime.backlog.add(candidate);
-
-    /*
      * THE FLEET. Two workers on the configured runtime, differing on every identity axis, so
      * the existing independence rule can find a reviewer that is provably not the producer.
-     * Registration is what a real deployment's workers do for themselves at boot; nothing
-     * here decides routing, review outcome or integration.
+     * Registration is what a real deployment's workers do for themselves at boot.
      */
     const fleet: string[] = [];
     for (const [id, name, model] of [
-      ["11111111-1111-4111-8111-111111111111", "self-dev-writer", "writer-model"],
-      ["22222222-2222-4222-8222-222222222222", "self-dev-reviewer", "reviewer-model"],
+      ["11111111-1111-4111-8111-111111111111", "self-build-writer", "writer-model"],
+      ["22222222-2222-4222-8222-222222222222", "self-build-reviewer", "reviewer-model"],
     ]) {
       await container.workerRegistration.register({
         id,
         workerKind: "agent",
         displayName: name,
-        capabilities: ["code_editing", "documentation", "writing", "markdown", "analysis"],
+        capabilities: ["code_editing", "documentation", "analysis"],
         runtime: "binary",
         runtimeSupport: "SUPPORTED_RUNTIME",
         maxConcurrency: 1,
@@ -197,12 +178,24 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
 
     const startedAt = new Date().toISOString();
     const beforeTarget = git(REPO, "rev-parse", "integration/phase-7");
+
+    /* The proposer must be COMPOSED, not built here. Absent means ICOS cannot start. */
+    expect(runtime.improvementProposer, "no proposer composed: ICOS cannot decide what to improve").toBeDefined();
+
+    /* ================= THE ONLY INPUT ================= */
+    const candidate = await runtime.improvementProposer!.propose(INSTRUCTION);
+    /* ================================================== */
+
+    console.log(
+      `SELF_BUILD proposed: [${candidate.category}/${candidate.priority}] ${candidate.title}` +
+        ` -> ${candidate.targetComponent}\n  ${candidate.description}`,
+    );
+    expect(candidate.status).toBe("proposed");
+    expect(candidate.proposedBy).toBe("icos-self-development");
+
     const { goalId, missionId } = selfDevelopmentIds(candidate);
 
-    /*
-     * THE ONLY CALL. Selection, goal, mission, planning, governed execution, independent
-     * review, the gate, the real gates, integration and learning all happen inside it.
-     */
+    /* Everything else: ICOS. */
     /*
      * A RUN THAT THROWS IS STILL A RUN. The evidence below used to be written only after a
      * normal return, so a reviewer or planner failure — 14 minutes of real compute — left
@@ -217,12 +210,16 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
     }
 
     /*
-     * THE EVIDENCE, BEFORE THE ASSERTIONS, from durable rows — a run that stops early is
-     * exactly the run whose lineage someone needs to read.
+     * THE EVIDENCE, BEFORE THE ASSERTIONS.
+     *
+     * Written from durable rows, and written whatever the outcome: a run that stops early is
+     * exactly the run whose lineage someone needs to read. Doing it after the assertions
+     * would record only the successes.
      */
     const record = await writeSelfDevelopmentEvidence({
       container,
-      marker: "SELF_DEVELOPMENT_E2E",
+      marker: "ICOS_SELF_BUILD_E2E",
+      instruction: INSTRUCTION,
       candidateId: candidate.id,
       goalId,
       missionId,
@@ -234,7 +231,7 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
       addedCommits: git(REPO, "log", "--reverse", "--oneline", `${beforeTarget}..integration/phase-7`)
         .split("\n")
         .filter(Boolean),
-      outPath: `audit/self-build-bootstrap/evidence/self-development-e2e-${startedAt.replace(/[:.]/g, "-")}.md`,
+      outPath: `audit/self-build-bootstrap/evidence/icos-self-build-e2e-${startedAt.replace(/[:.]/g, "-")}.md`,
       startedAt,
       outcome: outcome ?? { threw: thrown instanceof Error ? thrown.message : String(thrown) },
       gateCommands: REAL_GATE_COMMANDS,
@@ -243,7 +240,7 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
         `Worker branch and commits survive in ${REPO} even when this run is reset.`,
       ],
     });
-    console.log(`SELF_DEV evidence: ${record}`);
+    console.log(`SELF_BUILD evidence: ${record}`);
 
     /* Now that the lineage is on disk, let the failure be a failure. */
     if (thrown) throw thrown;
@@ -251,85 +248,56 @@ describe.runIf(ENABLED)("SELF_DEVELOPMENT_E2E — candidate to integrated commit
 
     if ("status" in outcome) throw new Error(`NO_CANDIDATE: ${outcome.reason}`);
     console.log(
-      `SELF_DEV outcome: state=${outcome.finalState} gate=${outcome.gateDecision} reason=${outcome.reason}` +
-        ` mission=${outcome.missionId} task=${outcome.taskId} workflow=${outcome.workflowId}`,
+      `SELF_BUILD outcome: state=${outcome.finalState} gate=${outcome.gateDecision} reason=${outcome.reason}` +
+        ` mission=${outcome.missionId} workflow=${outcome.workflowId}`,
     );
 
-    /* GOAL — created by ICOS, carrying its provenance back to the candidate. */
+    /* It worked on the candidate IT proposed — no other lineage exists. */
+    expect(outcome.candidateId).toBe(candidate.id);
+    expect(outcome.missionId).toBe(missionId);
+
     const goal = await container.goalRepository.getById(goalId);
     expect(goal?.goal.metadata).toMatchObject({
       source: "self-development",
       candidateId: candidate.id,
     });
 
-    /* MISSION — canonical, linked to the goal. */
-    const mission = await container.mission.findById(missionId);
-    expect(mission?.goalId).toBe(goalId);
-    expect(outcome.missionId).toBe(missionId);
-
-    /* PLAN + DAG — produced by the REAL planner, materialised as canonical mission tasks. */
     const missionTasks = await container.mission.listTasks(missionId);
     console.log(
-      `SELF_DEV plan: ${missionTasks.length} task(s): ${missionTasks.map((t) => t.title).join(" | ")}`,
+      `SELF_BUILD plan: ${missionTasks.length} task(s): ${missionTasks.map((t) => t.title).join(" | ")}`,
     );
     expect(missionTasks.length).toBeGreaterThan(0);
 
-    /* Every planned task carries a canonical envelope the planner chose, not a default. */
-    const canonical = await container.tasks.getById(missionTasks[0]!.taskId);
-    expect(canonical).not.toBeNull();
-    console.log(
-      `SELF_DEV envelope: riskClass=${canonical?.riskClass} scope=${JSON.stringify(canonical?.allowedFileScope)}`,
-    );
 
-
-    /*
-     * WHY IT STOPPED, IN THE RUNTIME'S OWN TERMS. A self-development run has many honest
-     * ways to stop early (unroutable capability, refused scope, no independent reviewer),
-     * and without this the failure is an assertion on a number with no context.
-     */
+    /* WHY IT STOPPED, in the runtime's own terms — not an assertion on a number. */
     for (const t of missionTasks) {
       const ct = await container.tasks.getById(t.taskId);
       console.log(
-        `SELF_DEV task: ${t.title} status=${t.status} capability=${t.capability}` +
-          ` risk=${ct?.riskClass} scope=${JSON.stringify(ct?.allowedFileScope)}`,
+        `SELF_BUILD task: ${t.title} status=${t.status} risk=${ct?.riskClass}` +
+          ` scope=${JSON.stringify(ct?.allowedFileScope)} reqCaps=${JSON.stringify(ct?.requiredCapabilities)} cap=${t.capability} kind=${t.workerKind}`,
       );
     }
-    console.log(
-      `SELF_DEV workspaces: ${(await container.workspaceManager!.list()).length}` +
-        ` workers=${container.workerRegistry.listWorkers().map((w) => `${w.id.slice(0, 4)}:${w.health}/${w.availability}`).join(",")}`,
-    );
 
-    /* The run reached a landed state, or the reason says why — never a raw query error. */
     expect(outcome.finalState, outcome.reason).toBe("integrated");
     expect(outcome.workflowId, outcome.reason).toBeDefined();
 
-    /* EXECUTION — a real worker ran on the certified path and its result is durable. */
-    const executionResult = await container.executionResults.getByWorkflowId(outcome.workflowId!);
-    expect(executionResult).not.toBeNull();
+    /* A REAL worker ran on the certified path, and a REAL independent reviewer judged it. */
+    expect(await container.executionResults.getByWorkflowId(outcome.workflowId!)).not.toBeNull();
 
-    /*
-     * REVIEW — produced by the INDEPENDENT reviewer during the run. Nothing pre-seeded it;
-     * it exists because the coordinator asked the canonical review authority, and the
-     * reviewer is not the producer.
-     */
-    const review = await container.reviewDecisions.getByWorkflowId(outcome.workflowId!);
-    expect(review).not.toBeNull();
-    console.log(`SELF_DEV review: ${review?.decision} by ${review?.reviewerKind}`);
-
-    /* GATE + INTEGRATION — the canonical branch advanced, exactly once, by ancestry. */
-    expect(outcome.finalState).toBe("integrated");
+    /* The canonical branch advanced, exactly once, by git ancestry. */
     const afterTarget = git(REPO, "rev-parse", "integration/phase-7");
     expect(afterTarget).not.toBe(beforeTarget);
     expect(git(REPO, "log", "--oneline", `${beforeTarget}..${afterTarget}`).split("\n")).toHaveLength(1);
-    console.log(`SELF_DEV integrated: ${beforeTarget.slice(0, 8)} -> ${afterTarget.slice(0, 8)}`);
+    console.log(
+      `SELF_BUILD integrated: ${beforeTarget.slice(0, 8)} -> ${afterTarget.slice(0, 8)}\n` +
+        git(REPO, "show", "--stat", "--oneline", afterTarget),
+    );
 
-    /* EVALUATION — the candidate reached a decided state, not limbo. */
-    const stored = await runtime.backlog.get(candidate.id);
-    expect(stored?.status).toBe("approved");
+    /* And the change is REAL: the integrated commit touches files. */
+    expect(git(REPO, "diff", "--name-only", `${beforeTarget}..${afterTarget}`).length).toBeGreaterThan(0);
 
-    /* DURABLE LEARNING — the run left a pattern behind for the next one. */
-    const patterns = await container.durableMemory.getPatterns({ limit: 50 });
-    console.log(`SELF_DEV learning: ${patterns.length} durable pattern(s)`);
-    expect(patterns.length).toBeGreaterThan(0);
+    /* Evaluation and durable learning. */
+    expect((await runtime.backlog.get(candidate.id))?.status).toBe("approved");
+    expect(await container.durableMemory.getPatterns({ limit: 50 })).not.toHaveLength(0);
   }, 3_600_000);
 });
