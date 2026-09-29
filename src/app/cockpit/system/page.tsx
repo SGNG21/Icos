@@ -1,32 +1,19 @@
-import { CommandButton } from "@/components/cockpit/command-button";
+import { CommandButton, NotCommandable } from "@/components/cockpit/command-button";
+import { ControlStatePanel } from "@/components/cockpit/control-state";
 import { Panel, ToneBadge } from "@/components/cockpit/primitives";
-import { COMMAND_ACTIONS, type CommandAction } from "@/features/cockpit/commands";
 import { loadSnapshot, loadSystemFacts } from "@/features/cockpit/load";
 
 export const metadata = { title: "System" };
 
-const EMERGENCY: { action: CommandAction; effect: string }[] = [
-  { action: "system.pause_new_work", effect: "No new task is dispatched; running work continues." },
-  {
-    action: "system.freeze_integrations",
-    effect: "No result is integrated; reviews and evidence continue to accumulate.",
-  },
-  {
-    action: "system.stop_external_workers",
-    effect: "External worker processes are stopped; in-flight attempts must be recovered.",
-  },
-  {
-    action: "system.lock_self_modification",
-    effect: "No self-development change can be planned, executed or integrated.",
-  },
-  {
-    action: "system.enter_safe_mode",
-    effect:
-      "All of the above except stopping workers: ICOS observes, preserves state, acts on nothing.",
-  },
-];
+const RUNTIME = { kind: "runtime" as const, id: "global" as const };
 
-const SYSTEM = { kind: "system" as const, id: "icos", label: "ICOS" };
+/** Emergency levers the owner expects but the control plane does not expose yet. */
+const NOT_COMMANDABLE = [
+  { label: "Pause new work only", requirement: "BR-26" },
+  { label: "Freeze integrations only", requirement: "BR-26" },
+  { label: "Lock external actions only", requirement: "BR-26" },
+  { label: "Stop external workers", requirement: "no command" },
+];
 
 export default async function SystemPage() {
   const [facts, snapshot] = await Promise.all([loadSystemFacts(), loadSnapshot()]);
@@ -42,44 +29,37 @@ export default async function SystemPage() {
       </div>
 
       <Panel title="Emergency controls" eyebrow="Safe mode" className="cx-panel--danger">
-        <div className="cx-safestate" role="status">
-          <span
-            className="cx-missing"
-            data-kind="unknown"
-            title="No runtime control flags exist to read (BR-12)."
-          >
-            SAFE MODE STATE: UNKNOWN <span className="cx-missing__req">BR-12</span>
-          </span>
-          <p>
-            The cockpit cannot read any emergency flag, so it never shows one as engaged. Until the
-            command bus (BR-10) and runtime control flags (BR-12) exist, these controls confirm your
-            intent and then report <strong>NOT YET WIRED</strong>: nothing is executed. In a real
-            emergency, stop ICOS processes at the host.
-          </p>
-        </div>
+        <ControlStatePanel />
         <div className="cx-emergency">
-          {EMERGENCY.map(({ action, effect }) => (
-            <div key={action}>
-              <strong>{COMMAND_ACTIONS[action].label}</strong>
-              <p>{effect}</p>
-              <p className="cx-dim">
-                Current state:{" "}
-                <span className="cx-missing" data-kind="unknown">
-                  UNKNOWN
-                </span>
-              </p>
-              <CommandButton action={action} target={SYSTEM} />
-            </div>
+          <div>
+            <strong>Enter safe mode</strong>
+            <p>
+              No new dispatch, no integration, no external action. Running state and evidence are
+              preserved; the cockpit stays observable. MEDIUM risk: reachable under stress.
+            </p>
+            <CommandButton type="ENTER_SAFE_MODE" target={RUNTIME} label="ICOS" />
+          </div>
+          <div>
+            <strong>Exit safe mode</strong>
+            <p>
+              Re-opens dispatch and integration. CRITICAL: fresh password proof and the exact
+              confirmation phrase are required.
+            </p>
+            <CommandButton type="EXIT_SAFE_MODE" target={RUNTIME} label="ICOS" />
+          </div>
+        </div>
+        <div className="cx-actions" aria-label="Not commandable yet">
+          {NOT_COMMANDABLE.map((c) => (
+            <NotCommandable key={c.label} {...c} />
           ))}
         </div>
         <div className="cx-safemode" aria-label="What safe mode guarantees">
-          <h4>Safe mode, once wired, must guarantee</h4>
+          <h4>Safe mode guarantees (control foundation)</h4>
           <ul>
-            <li>no new autonomous dispatch</li>
-            <li>no autonomous integration</li>
+            <li>no new autonomous dispatch at any admission point</li>
+            <li>no integration (gate and applier refuse)</li>
             <li>state and evidence preserved</li>
-            <li>cockpit remains observable</li>
-            <li>a flag read failure is treated as “safe mode ON” (fail closed)</li>
+            <li>an unreadable flag row is treated as everything off (fail closed)</li>
           </ul>
         </div>
       </Panel>

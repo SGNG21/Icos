@@ -99,7 +99,7 @@ export default async function AlertsPage({
 
       <Panel title="Notification preferences" eyebrow="Delivery">
         <Unavailable
-          title="Push delivery and per-category preferences are NOT YET WIRED"
+          title="Push delivery and per-category preferences are NOT CONNECTED"
           requirement="BR-19"
         >
           P0 is meant to reach your phone immediately, P1 as a normal notification, P2 only here.

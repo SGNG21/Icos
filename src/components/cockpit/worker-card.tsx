@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { WorkerView } from "@/features/cockpit/snapshot";
 import { missing } from "@/features/cockpit/truth";
 
-import { CommandButton } from "./command-button";
+import { CommandButton, NotCommandable } from "./command-button";
 import { ToneBadge, TruthValue, formatAge } from "./primitives";
 
 /**
@@ -11,7 +11,7 @@ import { ToneBadge, TruthValue, formatAge } from "./primitives";
  * rendered as separate facts; registry values are shown verbatim.
  */
 export function WorkerCard({ worker: w }: { worker: WorkerView }) {
-  const target = { kind: "worker" as const, id: w.id, label: w.name };
+  const target = { kind: "worker" as const, id: w.id };
   const used = w.slots.used.kind === "real" ? w.slots.used.value : 0;
   const current = w.assignments[0];
 
@@ -150,10 +150,12 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
       )}
 
       <div className="cx-actions" aria-label={`Controls for ${w.name}`}>
-        <CommandButton action="worker.pause" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.resume" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.retry" target={target} expectedStateVersion={w.probe.at} />
-        <CommandButton action="worker.stop" target={target} expectedStateVersion={w.probe.at} />
+        {w.status === "active" ? (
+          <CommandButton type="DISABLE_WORKER" target={target} label={w.name} />
+        ) : (
+          <CommandButton type="ENABLE_WORKER" target={target} label={w.name} />
+        )}
+        <NotCommandable label="Retry task" requirement="BR-23" />
       </div>
     </article>
   );

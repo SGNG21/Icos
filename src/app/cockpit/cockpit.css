@@ -411,7 +411,7 @@ html[data-cx-stale] .cx-top__health {
   cursor: help;
 }
 
-.cx-missing[data-kind="not_yet_wired"] {
+.cx-missing[data-kind="not_connected"] {
   border-color: rgb(167 139 250 / 55%);
   color: var(--autonomy);
 }
@@ -1920,7 +1920,7 @@ html[data-cx-stale] .cx-top__health {
   border-color: rgb(56 189 248 / 45%);
 }
 
-.cx-pipeline li[data-status="not_yet_wired"] {
+.cx-pipeline li[data-status="not_connected"] {
   border-color: rgb(167 139 250 / 55%);
   background: rgb(167 139 250 / 8%);
 }

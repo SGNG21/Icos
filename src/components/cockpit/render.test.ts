@@ -24,16 +24,16 @@ const { AlertList } = await import("./alert-list");
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el);
 
 describe("truth rendering", () => {
-  it("renders UNKNOWN / NOT AVAILABLE / NOT YET WIRED with reason and requirement, never a number", () => {
+  it("renders UNKNOWN / NOT AVAILABLE / NOT CONNECTED with reason and requirement, never a number", () => {
     const u = html(h(TruthValue, { truth: missing("unknown", "db down") }));
     expect(u).toContain("UNKNOWN");
     expect(u).toContain('title="db down"');
     const n = html(h(TruthValue, { truth: missing("not_available", "no ledger", "BR-05") }));
     expect(n).toContain("NOT AVAILABLE");
     expect(n).toContain("BR-05");
-    const w = html(h(TruthValue, { truth: missing("not_yet_wired", "bus", "BR-10") }));
-    expect(w).toContain("NOT YET WIRED");
-    expect(w).toMatch(/data-kind="not_yet_wired"/);
+    const w = html(h(TruthValue, { truth: missing("not_connected", "bus", "BR-10") }));
+    expect(w).toContain("NOT CONNECTED");
+    expect(w).toMatch(/data-kind="not_connected"/);
   });
 
   it("marks derived real values and renders the value", () => {
@@ -94,15 +94,24 @@ describe("governed controls", () => {
   it("renders a control that opens a dialog, with its risk exposed", () => {
     const out = html(
       h(CommandButton, {
-        action: "system.enter_safe_mode",
-        target: { kind: "system", id: "icos", label: "ICOS" },
+        type: "ENTER_SAFE_MODE",
+        target: { kind: "runtime", id: "global" },
+        label: "ICOS",
       }),
     );
     expect(out).toContain('data-risk="MEDIUM"');
     expect(out).toContain('aria-haspopup="dialog"');
     expect(out).toContain("Enter safe mode");
     // Nothing is claimed before the owner acts.
-    expect(out).not.toMatch(/Executed|Accepted/);
+    expect(out).not.toMatch(/SUCCEEDED|Executed/);
+  });
+
+  it("a control with no canonical command is never clickable", async () => {
+    const { NotCommandable } = await import("./command-button");
+    const out = html(h(NotCommandable, { label: "Retry task", requirement: "BR-23" }));
+    expect(out).toContain('aria-disabled="true"');
+    expect(out).not.toContain("<button");
+    expect(out).toContain("NO COMMAND");
   });
 });
 
@@ -231,14 +240,14 @@ describe("alerts", () => {
 });
 
 describe("Ask ICOS shell", () => {
-  it("never interprets text in the browser: intent compilation is NOT YET WIRED", () => {
+  it("never interprets text in the browser: intent compilation is NOT CONNECTED", () => {
     expect(askPipeline("", false)[0]).toBe("idle");
     expect(askPipeline("Arrête le worker", false)).toEqual([
       "ready",
       ...Array(ASK_STAGES.length - 1).fill("idle"),
     ]);
     const sent = askPipeline("Arrête le worker", true);
-    expect(sent[1]).toBe("not_yet_wired");
+    expect(sent[1]).toBe("not_connected");
     expect(sent.slice(2).every((s) => s === "waiting")).toBe(true);
   });
 
@@ -290,35 +299,27 @@ describe("worker card", () => {
     expect(out).toContain("BR-15"); // lease/fencing honestly missing
     expect(out).toContain("pool nv-quota ≤2");
     expect(out).toContain("unsupported");
-    expect(out.match(/class="cx-cmd"/g)?.length).toBe(4); // governed controls only
+    // One governed control (disable, since the worker is active) + retry shown as not commandable.
+    expect(out.match(/<button[^>]*class="cx-cmd"/g)?.length).toBe(1);
+    expect(out).toContain("Disable");
+    expect(out).toContain("BR-23");
   });
 });
 
 describe("emergency controls", () => {
-  it("are never single-click and never report success without the command bus", async () => {
-    const { COMMAND_ACTIONS, createCommand, notWiredTransport, submitCommand } =
-      await import("@/features/cockpit/commands");
-    const emergency = Object.entries(COMMAND_ACTIONS).filter(([a]) => a.startsWith("system."));
-    expect(emergency.map(([a]) => a).sort()).toEqual([
-      "system.enter_safe_mode",
-      "system.exit_safe_mode",
-      "system.freeze_integrations",
-      "system.lock_self_modification",
-      "system.pause_new_work",
-      "system.stop_external_workers",
-    ]);
-    for (const [action, spec] of emergency) {
-      expect(spec.risk, action).not.toBe("LOW");
-      const out = await submitCommand(
-        notWiredTransport,
-        createCommand({
-          action: action as never,
-          target: { kind: "system", id: "icos", label: "ICOS" },
-        }),
-      );
-      expect(out.status, action).toBe("not_wired");
-    }
-    expect(COMMAND_ACTIONS["system.exit_safe_mode"].risk).toBe("HIGH"); // loosening is harder than tightening
+  it("mirror the backend risk: entering is reachable, leaving is CRITICAL", async () => {
+    const { COMMAND_SPECS, needsReauth } = await import("@/features/cockpit/commands");
+    expect(COMMAND_SPECS.ENTER_SAFE_MODE.risk).toBe("MEDIUM");
+    expect(COMMAND_SPECS.EXIT_SAFE_MODE.risk).toBe("CRITICAL");
+    expect(needsReauth("ENTER_SAFE_MODE")).toBe(false);
+    expect(needsReauth("EXIT_SAFE_MODE")).toBe(true);
+  });
+
+  it("control state renders UNKNOWN before ICOS answers, never on/off", async () => {
+    const { ControlStatePanel } = await import("./control-state");
+    const out = html(h(ControlStatePanel));
+    expect(out).toContain("UNKNOWN");
+    expect(out).not.toMatch(/>on<|>off</);
   });
 });
 

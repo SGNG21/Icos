@@ -1,246 +1,324 @@
 "use client";
 
-import {
-  Lock,
-  Pause,
-  Play,
-  RotateCcw,
-  ShieldAlert,
-  Snowflake,
-  Square,
-  ArrowUpDown,
-  type LucideIcon,
-} from "lucide-react";
+import { Ban, Lock, Pause, Play, Power, ShieldAlert, ShieldOff, type LucideIcon } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import {
-  COMMAND_ACTIONS,
-  canSubmit,
-  confirmationPolicy,
-  createCommand,
-  mayResubmit,
-  notWiredTransport,
+  COMMAND_LABEL,
+  buildRequest,
+  confirmationPhrase,
+  executeCommand,
+  httpControlTransport,
+  loadVersion,
+  mayReconcile,
+  needsReauth,
+  reauthenticate,
   reconcileCommand,
-  submitCommand,
-  type CommandAction,
-  type CommandOutcome,
-  type ControlCommand,
+  riskOf,
+  type ControlCommandType,
+  type ControlPhase,
+  type ControlTarget,
+  type Outcome,
 } from "@/features/cockpit/commands";
 
-const ICON: Partial<Record<CommandAction, LucideIcon>> = {
-  "worker.pause": Pause,
-  "mission.pause": Pause,
-  "worker.resume": Play,
-  "mission.resume": Play,
-  "worker.stop": Square,
-  "mission.stop": Square,
-  "worker.retry": RotateCcw,
-  "mission.change_priority": ArrowUpDown,
-  "system.freeze_integrations": Snowflake,
-  "system.lock_self_modification": Lock,
-  "system.enter_safe_mode": ShieldAlert,
+const ICON: Record<ControlCommandType, LucideIcon> = {
+  PAUSE_MISSION: Pause,
+  RESUME_MISSION: Play,
+  CANCEL_MISSION: Ban,
+  DISABLE_WORKER: Power,
+  ENABLE_WORKER: Play,
+  ENTER_SAFE_MODE: ShieldAlert,
+  EXIT_SAFE_MODE: ShieldOff,
 };
 
-const OUTCOME_TEXT: Record<CommandOutcome["status"], string> = {
-  accepted: "Accepted by ICOS",
-  executed: "Executed by ICOS",
-  rejected: "Rejected by ICOS policy",
-  requires_reauth: "ICOS requires re-authentication",
-  not_wired: "NOT YET WIRED — nothing was executed",
-  unknown_execution_state: "UNKNOWN EXECUTION STATE",
-  not_received: "Not received by ICOS",
+const PHASE_TEXT: Record<ControlPhase, string> = {
+  REQUESTED: "Reading current version from ICOS…",
+  AUTH_REQUIRED: "Re-authentication required",
+  AUTHORIZED: "Ready to send",
+  EXECUTING: "Executing — waiting for ICOS",
+  SUCCEEDED: "SUCCEEDED",
+  REJECTED: "REJECTED — nothing changed",
+  FAILED: "FAILED — nothing changed",
+  UNKNOWN: "UNKNOWN EXECUTION STATE",
+  NOT_CONNECTED: "NOT CONNECTED — nothing was sent",
+  UNAVAILABLE: "UNAVAILABLE — nothing was sent",
 };
+
+const transport = httpControlTransport();
 
 /**
- * One governed control. It builds a ControlCommand, walks the owner through
- * the confirmation its risk class demands, and hands it to the command
- * transport. It never mutates ICOS state and never reports success it did not
- * receive from the backend.
+ * One governed control (decision 0044). Reads the target version, collects
+ * reason / re-auth / confirmation as the risk demands, sends ONE request and
+ * renders the backend's typed answer. It never reports success it did not
+ * receive and never resends except through the idempotent reconcile path.
  */
 export function CommandButton({
-  action,
+  type,
   target,
-  expectedStateVersion = null,
+  label,
   compact = false,
 }: {
-  action: CommandAction;
-  target: ControlCommand["target"];
-  expectedStateVersion?: string | null;
+  type: ControlCommandType;
+  target: ControlTarget;
+  /** Human name of the target (display only; the id is what is sent). */
+  label: string;
   compact?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const id = useId();
-  const [command, setCommand] = useState<ControlCommand | null>(null);
+  const risk = riskOf(type);
+  const reauth = needsReauth(type);
+  const phrase = confirmationPhrase(type, target);
+  const Icon = ICON[type];
+
+  const [phase, setPhase] = useState<ControlPhase>("REQUESTED");
+  const [version, setVersion] = useState<number | null>(null);
+  const [key, setKey] = useState("");
+  const [reason, setReason] = useState("");
   const [ack, setAck] = useState(false);
   const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<CommandOutcome | null>(null);
-  const spec = COMMAND_ACTIONS[action];
-  const policy = confirmationPolicy(spec.risk);
-  const Icon = ICON[action] ?? ShieldAlert;
+  const [password, setPassword] = useState("");
+  const [proof, setProof] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [sent, setSent] = useState<ReturnType<typeof buildRequest> | null>(null);
 
-  const open = () => {
-    setCommand(createCommand({ action, target, expectedStateVersion }));
+  const start = async () => {
+    setKey(crypto.randomUUID());
+    setReason("");
     setAck(false);
     setTyped("");
+    setPassword("");
+    setProof(null);
     setOutcome(null);
+    setSent(null);
+    setVersion(null);
+    setPhase("REQUESTED");
+    const v = await loadVersion(transport, target);
+    if (!v.ok) {
+      setOutcome(v.outcome);
+      setPhase(v.outcome.phase);
+      return;
+    }
+    setVersion(v.version);
+    setPhase(reauth ? "AUTH_REQUIRED" : "AUTHORIZED");
+  };
+
+  const open = () => {
     dialog.current?.showModal();
+    void start();
+  };
+
+  const doReauth = async () => {
+    const pw = password;
+    setPassword(""); // never kept past the request
+    const r = await reauthenticate(transport, pw);
+    if (r.ok) {
+      setProof(r.proof);
+      setOutcome(null);
+      setPhase("AUTHORIZED");
+    } else {
+      setOutcome(r.outcome);
+      setPhase(r.outcome.phase);
+    }
   };
 
   const send = async () => {
-    if (!command) return;
-    setBusy(true);
-    setOutcome(await submitCommand(notWiredTransport, command));
-    setBusy(false);
+    if (version === null) return;
+    const request = buildRequest({
+      type,
+      target,
+      expectedVersion: version,
+      reason: reason.trim(),
+      idempotencyKey: key,
+      reauthProof: proof ?? undefined,
+      confirmation: typed,
+    });
+    setSent(request);
+    setPhase("EXECUTING");
+    const o = await executeCommand(transport, request);
+    setOutcome(o);
+    setPhase(o.phase);
   };
 
   const reconcile = async () => {
-    if (!command) return;
-    setBusy(true);
-    setOutcome(await reconcileCommand(notWiredTransport, command));
-    setBusy(false);
+    if (!sent) return;
+    setPhase("EXECUTING");
+    const o = await reconcileCommand(transport, sent, outcome?.result);
+    setOutcome(o);
+    setPhase(o.phase);
   };
 
-  // Step-up re-auth does not exist yet (BR-18): HIGH can never be submitted today.
-  const ready = command
-    ? canSubmit(command, { acknowledged: ack, typed, reauthenticated: false })
-    : false;
-  const firstSend = outcome === null;
+  const reasonOk = reason.trim().length >= 3 && reason.trim().length <= 500;
+  const ready =
+    phase === "AUTHORIZED" &&
+    version !== null &&
+    reasonOk &&
+    (risk === "LOW" || ack) &&
+    (!reauth || proof !== null) &&
+    (risk !== "CRITICAL" || typed === phrase);
+  const editable = phase === "AUTHORIZED" || phase === "AUTH_REQUIRED";
+  const terminal = !editable && phase !== "REQUESTED" && phase !== "EXECUTING";
 
   return (
     <>
       <button
         type="button"
         className="cx-cmd"
-        data-risk={spec.risk}
+        data-risk={risk}
         onClick={open}
         aria-haspopup="dialog"
       >
         <Icon aria-hidden size={14} />
-        {!compact && spec.label}
-        {compact && <span className="cx-sr">{spec.label}</span>}
+        {compact ? <span className="cx-sr">{COMMAND_LABEL[type]}</span> : COMMAND_LABEL[type]}
       </button>
 
-      <dialog
-        ref={dialog}
-        className="cx-dialog"
-        aria-labelledby={`${id}-t`}
-        onClose={() => setCommand(null)}
-      >
-        {command && (
-          <form method="dialog" onSubmit={(e) => e.preventDefault()}>
-            <header>
-              <span className="cx-risk" data-risk={spec.risk}>
-                {spec.risk} RISK
-              </span>
-              <h2 id={`${id}-t`}>
-                {spec.label} · {target.label}
-              </h2>
-            </header>
+      <dialog ref={dialog} className="cx-dialog" aria-labelledby={`${id}-t`}>
+        <form method="dialog" onSubmit={(e) => e.preventDefault()}>
+          <header>
+            <span className="cx-risk" data-risk={risk}>
+              {risk} RISK
+            </span>
+            <h2 id={`${id}-t`}>
+              {COMMAND_LABEL[type]} · {label}
+            </h2>
+          </header>
 
-            <dl className="cx-kv">
-              <dt>Intent</dt>
-              <dd>{command.intent}</dd>
-              <dt>Target</dt>
-              <dd>
-                {target.kind} <code>{target.id}</code>
-              </dd>
-              <dt>Command</dt>
-              <dd>
-                <code>{command.commandId}</code>
-              </dd>
-              <dt>Idempotency</dt>
-              <dd>
-                <code>{command.idempotencyKey}</code>
-              </dd>
-              <dt>Expected version</dt>
-              <dd>
-                {command.expectedStateVersion ?? (
-                  <span className="cx-missing" data-kind="not_available">
-                    NOT AVAILABLE <span className="cx-missing__req">BR-11</span>
-                  </span>
-                )}
-              </dd>
-            </dl>
+          <dl className="cx-kv">
+            <dt>Command</dt>
+            <dd>
+              <code>{type}</code>
+            </dd>
+            <dt>Target</dt>
+            <dd>
+              {target.kind} <code>{target.id}</code>
+            </dd>
+            <dt>Expected version</dt>
+            <dd>
+              {version ?? (
+                <span className="cx-missing" data-kind="unknown">
+                  UNKNOWN
+                </span>
+              )}
+            </dd>
+            <dt>Idempotency</dt>
+            <dd>
+              <code>{key || "—"}</code>
+            </dd>
+          </dl>
 
-            <p className="cx-dim">
-              Path: authorization → policy → risk → state validation → execution → audit. ICOS
-              decides; this screen only asks.
-            </p>
+          <p className="cx-dim">
+            ICOS decides: authorization → risk → re-auth → version → state → execution → audit.
+          </p>
 
-            {policy.kind === "explicit" || policy.kind === "typed_reauth" ? (
-              <label className="cx-check">
+          {editable && (
+            <>
+              <label className="cx-field">
+                <span>Reason (recorded in the audit log)</span>
                 <input
-                  type="checkbox"
-                  checked={ack}
-                  onChange={(e) => setAck(e.target.checked)}
-                  disabled={!firstSend}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  maxLength={500}
+                  autoComplete="off"
+                  required
                 />
-                I understand the effect of “{spec.label}” on {target.label}.
               </label>
-            ) : null}
-
-            {policy.kind === "typed_reauth" && (
-              <>
+              {risk !== "LOW" && (
+                <label className="cx-check">
+                  <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                  I understand the effect of “{COMMAND_LABEL[type]}” on {label}.
+                </label>
+              )}
+              {risk === "CRITICAL" && (
                 <label className="cx-field">
                   <span>
-                    Type <strong>{target.label}</strong> to confirm
+                    Type <code>{phrase}</code> to confirm
                   </span>
                   <input
                     value={typed}
                     onChange={(e) => setTyped(e.target.value)}
                     autoComplete="off"
-                    disabled={!firstSend}
+                    spellCheck={false}
                   />
                 </label>
-                <button type="button" className="cx-btn" disabled>
-                  <Lock aria-hidden size={14} /> Re-authenticate (passkey) — NOT YET WIRED · BR-18
-                </button>
-              </>
-            )}
+              )}
+              {reauth && proof === null && (
+                <div className="cx-reauth">
+                  <label className="cx-field">
+                    <span>
+                      <Lock aria-hidden size={12} /> Password (fresh authentication, single use, 5
+                      min)
+                    </span>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="cx-btn"
+                    onClick={doReauth}
+                    disabled={password.length === 0}
+                  >
+                    Re-authenticate
+                  </button>
+                </div>
+              )}
+              {reauth && proof !== null && <p className="cx-dim">Re-authenticated for this command.</p>}
+            </>
+          )}
 
-            {policy.kind === "escalation" && (
-              <p className="cx-warn-text">
-                CRITICAL actions never execute from the cockpit. Governance escalation is NOT YET
-                WIRED (BR-10).
-              </p>
-            )}
+          <p className="cx-outcome" data-status={phase} role="status" aria-live="polite">
+            <strong>{PHASE_TEXT[phase]}</strong>
+            {outcome?.detail && <span>{outcome.detail}</span>}
+            {outcome?.result?.replayed && <span>Stored result of an earlier identical request.</span>}
+          </p>
 
-            {outcome && (
-              <p className="cx-outcome" data-status={outcome.status} role="status">
-                <strong>{OUTCOME_TEXT[outcome.status]}</strong>
-                {outcome.detail && <span>{outcome.detail}</span>}
-              </p>
+          <footer>
+            <button
+              type="button"
+              className="cx-btn cx-btn--ghost"
+              onClick={() => dialog.current?.close()}
+            >
+              Close
+            </button>
+            {mayReconcile(outcome) && (
+              <button type="button" className="cx-btn" onClick={reconcile}>
+                Check server state
+              </button>
             )}
-
-            <footer>
+            {terminal && !mayReconcile(outcome) && phase !== "SUCCEEDED" && (
+              <button type="button" className="cx-btn" onClick={() => void start()}>
+                Start over
+              </button>
+            )}
+            {editable && (
               <button
                 type="button"
-                className="cx-btn cx-btn--ghost"
-                onClick={() => dialog.current?.close()}
+                className="cx-btn cx-btn--primary"
+                data-risk={risk}
+                onClick={send}
+                disabled={!ready}
               >
-                Close
+                Send command
               </button>
-              {outcome?.status === "unknown_execution_state" && (
-                <button type="button" className="cx-btn" onClick={reconcile} disabled={busy}>
-                  Check server state
-                </button>
-              )}
-              {(firstSend || mayResubmit(outcome)) && policy.kind !== "escalation" && (
-                <button
-                  type="button"
-                  className="cx-btn cx-btn--primary"
-                  data-risk={spec.risk}
-                  onClick={send}
-                  disabled={!ready || busy}
-                >
-                  {firstSend ? "Send command" : "Send again (same command)"}
-                </button>
-              )}
-            </footer>
-          </form>
-        )}
+            )}
+          </footer>
+        </form>
       </dialog>
     </>
+  );
+}
+
+/** A control the owner may expect but ICOS has no canonical command for. Never clickable. */
+export function NotCommandable({ label, requirement }: { label: string; requirement: string }) {
+  return (
+    <span className="cx-cmd" data-risk="NONE" aria-disabled="true" title="No canonical command">
+      {label}
+      <span className="cx-missing" data-kind="not_connected">
+        NO COMMAND <span className="cx-missing__req">{requirement}</span>
+      </span>
+    </span>
   );
 }

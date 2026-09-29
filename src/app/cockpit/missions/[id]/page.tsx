@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { CommandButton } from "@/components/cockpit/command-button";
+import { CommandButton, NotCommandable } from "@/components/cockpit/command-button";
 import { DagView } from "@/components/cockpit/dag-view";
 import { NODE_TONE, nodeLabel } from "@/components/cockpit/node-tone";
 import { Panel, ToneBadge, TruthValue, formatTime } from "@/components/cockpit/primitives";
@@ -24,7 +24,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
       ? Object.fromEntries(snapshot.workers.value.map((w) => [w.id, w.name]))
       : {};
   const current = dag.nodes.filter((n) => ["RUNNING", "DISPATCHED", "CLAIMED"].includes(n.status));
-  const target = { kind: "mission" as const, id: mission.id, label: mission.title };
+  const target = { kind: "mission" as const, id: mission.id };
   const elapsedMs = Date.parse(snapshot.generatedAt) - new Date(mission.createdAt).getTime();
   const layers = Math.max(0, ...dag.nodes.map((n) => n.layer + 1));
 
@@ -38,26 +38,10 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
           <h1>{mission.title}</h1>
         </div>
         <div className="cx-actions" aria-label="Mission controls">
-          <CommandButton
-            action="mission.pause"
-            target={target}
-            expectedStateVersion={new Date(mission.updatedAt).toISOString()}
-          />
-          <CommandButton
-            action="mission.resume"
-            target={target}
-            expectedStateVersion={new Date(mission.updatedAt).toISOString()}
-          />
-          <CommandButton
-            action="mission.change_priority"
-            target={target}
-            expectedStateVersion={new Date(mission.updatedAt).toISOString()}
-          />
-          <CommandButton
-            action="mission.stop"
-            target={target}
-            expectedStateVersion={new Date(mission.updatedAt).toISOString()}
-          />
+          <CommandButton type="PAUSE_MISSION" target={target} label={mission.title} />
+          <CommandButton type="RESUME_MISSION" target={target} label={mission.title} />
+          <CommandButton type="CANCEL_MISSION" target={target} label={mission.title} />
+          <NotCommandable label="Change priority" requirement="no command" />
         </div>
       </div>
 
@@ -69,8 +53,14 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
         <div className="cx-metric" data-tone="flow">
           <span className="cx-metric__label">Progress</span>
           <span className="cx-metric__value">
-            {summary ? `${summary.completed}/${summary.total}` : "—"}{" "}
-            <small className="cx-dim">{summary?.progressPct ?? 0}%</small>
+            {summary ? (
+              <>
+                {summary.completed}/{summary.total}{" "}
+                <small className="cx-dim">{summary.progressPct}%</small>
+              </>
+            ) : (
+              <TruthValue truth={missing("unknown", "Mission summary could not be read.")} />
+            )}
           </span>
         </div>
         <div className="cx-metric" data-tone="ok">

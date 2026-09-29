@@ -2,7 +2,7 @@
  * ASK ICOS pipeline model. The browser holds the text and nothing else: it
  * does not parse intent, pick actions or classify risk — that would be a
  * browser-side authority. Every stage past "composed" is server work (BR-17,
- * then the command bus BR-10), shown honestly as NOT YET WIRED / waiting.
+ * then the command bus BR-10), shown honestly as NOT CONNECTED / waiting.
  */
 export const ASK_STAGES = [
   { key: "text", label: "Natural language", owner: "you" },
@@ -15,7 +15,7 @@ export const ASK_STAGES = [
   { key: "audit", label: "Audit event", owner: "ICOS", requirement: "BR-10" },
 ] as const;
 
-export type StageStatus = "idle" | "ready" | "not_yet_wired" | "waiting";
+export type StageStatus = "idle" | "ready" | "not_connected" | "waiting";
 
 export const ASK_EXAMPLES = [
   "Pourquoi CORE3 est bloqué ?",
@@ -35,6 +35,6 @@ export function askPipeline(text: string, submitted: boolean): StageStatus[] {
   return ASK_STAGES.map((stage, i) => {
     if (i === 0) return composed ? "ready" : "idle";
     if (!submitted || !composed) return "idle";
-    return i === 1 ? "not_yet_wired" : "waiting";
+    return i === 1 ? "not_connected" : "waiting";
   });
 }

@@ -14,7 +14,7 @@ import {
 const STATUS_TEXT: Record<StageStatus, string> = {
   idle: "—",
   ready: "composed",
-  not_yet_wired: "NOT YET WIRED",
+  not_connected: "NOT CONNECTED",
   waiting: "waiting",
 };
 
@@ -65,7 +65,7 @@ export function AskIcos() {
 
       {submitted && (
         <p className="cx-outcome" data-status="not_wired" role="status">
-          <strong>NOT YET WIRED — nothing was sent</strong>
+          <strong>NOT CONNECTED — nothing was sent</strong>
           <span>
             ICOS has no endpoint that turns language into a proposed command (BR-17). Your text
             stayed on this device and was not interpreted.
@@ -80,11 +80,11 @@ export function AskIcos() {
               <strong>{stage.label}</strong> <span className="cx-dim">· {stage.owner}</span>
             </span>
             <span
-              className={stages[i] === "not_yet_wired" ? "cx-missing" : "cx-dim"}
-              data-kind={stages[i] === "not_yet_wired" ? "not_yet_wired" : undefined}
+              className={stages[i] === "not_connected" ? "cx-missing" : "cx-dim"}
+              data-kind={stages[i] === "not_connected" ? "not_connected" : undefined}
             >
               {STATUS_TEXT[stages[i]]}
-              {stages[i] === "not_yet_wired" && "requirement" in stage && (
+              {stages[i] === "not_connected" && "requirement" in stage && (
                 <span className="cx-missing__req">{stage.requirement}</span>
               )}
             </span>

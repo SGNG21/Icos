@@ -5,7 +5,7 @@
  * canonical ICOS source) or explicitly missing. There is no third option: the
  * UI never renders a default, an estimate or a placeholder number.
  */
-export type MissingKind = "unknown" | "not_available" | "not_yet_wired";
+export type MissingKind = "unknown" | "not_available" | "not_connected";
 
 export type Truth<T> =
   | {
@@ -33,7 +33,7 @@ export const missing = <T = never>(
 export const MISSING_LABEL: Record<MissingKind, string> = {
   unknown: "UNKNOWN",
   not_available: "NOT AVAILABLE",
-  not_yet_wired: "NOT YET WIRED",
+  not_connected: "NOT CONNECTED",
 };
 
 export function isReal<T>(truth: Truth<T>): truth is Extract<Truth<T>, { kind: "real" }> {
