@@ -27,7 +27,7 @@ describe("tool policy (pure)", () => {
     expect(canDecideApproval(humanOnly, req, { kind: "agent", id: "agent-2" })).toBe(false);
   });
 
-  it("the fingerprint is key-order independent and tenant-bound", () => {
+  it("the fingerprint is key-order independent, tenant-bound and requester-bound", () => {
     const i = (input: Record<string, never>) => ({
       toolId: "mail",
       action: "SEND" as const,
@@ -35,11 +35,14 @@ describe("tool policy (pure)", () => {
       input,
     });
     const a = requestFingerprint({ tenantId: "t1", agentId: "x" }, i({ a: 1, b: 2 } as never));
-    expect(requestFingerprint({ tenantId: "t1", agentId: "y" }, i({ b: 2, a: 1 } as never))).toBe(
+    expect(requestFingerprint({ tenantId: "t1", agentId: "x" }, i({ b: 2, a: 1 } as never))).toBe(
       a,
     );
     expect(
       requestFingerprint({ tenantId: "t2", agentId: "x" }, i({ a: 1, b: 2 } as never)),
+    ).not.toBe(a);
+    expect(
+      requestFingerprint({ tenantId: "t1", agentId: "y" }, i({ a: 1, b: 2 } as never)),
     ).not.toBe(a);
   });
 });

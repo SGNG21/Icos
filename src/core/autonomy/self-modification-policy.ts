@@ -1,11 +1,7 @@
 /**
  * Classification of a self-modification action.
  */
-export const selfModificationClassificationSchema = [
-  "allowed",
-  "protected",
-  "unknown",
-] as const;
+export const selfModificationClassificationSchema = ["allowed", "protected", "unknown"] as const;
 
 export type SelfModificationClassification = (typeof selfModificationClassificationSchema)[number];
 
@@ -84,6 +80,11 @@ export const PROTECTED_PATHS: Record<ProtectedDomain, string[]> = {
     "src/core/mission/contracts.ts",
     "src/core/contracts/scheduler.ts",
     "src/core/contracts/tool-gateway.ts",
+    // Tool Gateway authority (decision 0055): policy, grants, approvals, credentials.
+    "src/core/tool-gateway/",
+    "src/server/tool-gateway/",
+    "src/server/database/tool-gateway-schema.ts",
+    "drizzle/0049_tool_gateway.sql",
     "src/server/usecases/start-autonomous-mission.ts",
   ],
   "completion-certification-authority": [
@@ -285,8 +286,7 @@ export function classifySelfModification(
   }
 
   // Check if explicitly in allowed improvement domains, directly or by backlog category.
-  const domain =
-    BACKLOG_CATEGORY_DOMAINS[input.improvementCategory] ?? input.improvementCategory;
+  const domain = BACKLOG_CATEGORY_DOMAINS[input.improvementCategory] ?? input.improvementCategory;
   const isAllowedDomain = ALLOWED_IMPROVEMENT_DOMAINS.includes(domain as AllowedImprovementDomain);
 
   if (isAllowedDomain) {

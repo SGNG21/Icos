@@ -7,7 +7,8 @@
 --    ledger: UNIQUE (tenant_id, idempotency_key) makes a duplicate side effect impossible to
 --    even claim, and `version` is the compare-and-set that lets exactly one runner dispatch.
 -- 2. `tool_approval_requests` binds a human (or, for MEDIUM and below, policy-allowed agent)
---    decision to ONE request fingerprint, with an expiry. HIGH/CRITICAL rows can only carry a
+--    decision to ONE request fingerprint (tenant, requester, tool, action, instance, input), with
+--    an expiry, and stores the secret-screened input the approver actually decides on. HIGH/CRITICAL rows can only carry a
 --    human decision (CHECK), whatever the application does.
 -- 3. `tool_grants` is the explicit per-(tenant, agent, tool, action) permission. No wildcard.
 -- 4. `audit_event_type_check` is widened with the four `tool.*` events written in the SAME
@@ -19,12 +20,12 @@
 -- `result_summary` is a bounded (8 KiB) digest. Additive only: three new tables, and a CHECK
 -- that is only WIDENED (every value admitted before is still admitted). Guarded, idempotent.
 --
--- ROLLBACK
---   DELETE FROM audit_entries WHERE event_type LIKE 'tool.%';   -- audit is append-only:
---     (disable the append-only trigger for this statement if present, as for 0047)
---   re-run the DO block of 0047 (restores the narrower CHECK), then
---   DROP TABLE IF EXISTS tool_approval_requests, tool_grants, tool_executions;
---   Rolling back loses tool evidence and grants; it touches no mission, task or action row.
+-- ROLLBACK (never deletes audit rows: audit_entries is append-only evidence)
+--   Keep the widened CHECK (harmless once nothing writes tool.* events), or re-add the 0047
+--   list as `... CHECK (...) NOT VALID` so existing tool.* audit rows are preserved; then
+--     DROP TABLE IF EXISTS tool_approval_requests, tool_grants, tool_executions;
+--   Rolling back loses tool evidence rows and grants (export them first if needed); it touches
+--   no mission, task, action or audit row.
 
 CREATE TABLE IF NOT EXISTS tool_executions (
   id text PRIMARY KEY,
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   tool_id text NOT NULL,
   action text NOT NULL,
   risk_class text NOT NULL,
+  input_preview jsonb NOT NULL,
   status text NOT NULL,
   decided_by_kind text,
   decided_by_id text,
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   decided_at timestamp with time zone,
   expires_at timestamp with time zone NOT NULL,
   CONSTRAINT tool_approval_tenant_check CHECK (length(tenant_id) > 0),
+  CONSTRAINT tool_approval_preview_size_check CHECK (octet_length(input_preview::text) <= 16384),
   CONSTRAINT tool_approval_status_check CHECK (status IN ('PENDING','APPROVED','REJECTED')),
   CONSTRAINT tool_approval_action_check CHECK (action IN ('READ','SEARCH','CREATE','WRITE','UPDATE','SEND','PUBLISH','DEPLOY','DELETE','EXECUTE','PURCHASE','PAY','GRANT_ACCESS','REVOKE_ACCESS','CONFIGURE','MERGE')),
   CONSTRAINT tool_approval_risk_check CHECK (risk_class IN ('LOW','MEDIUM','HIGH','CRITICAL')),

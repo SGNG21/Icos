@@ -172,6 +172,7 @@ export interface ToolGatewayDeps {
 }
 
 const MAX_SUMMARY_BYTES = 4096;
+const MAX_PREVIEW_BYTES = 8192;
 
 export class ToolGateway implements ToolGatewayPort {
   private readonly connectors: ReadonlyMap<string, Connector>;
@@ -213,10 +214,16 @@ export class ToolGateway implements ToolGatewayPort {
     const fingerprint = requestFingerprint(caller, intent);
 
     let exec = await this.d.executions.getByKey(caller.tenantId, idempotencyKey);
-    if (exec && exec.requestFingerprint !== fingerprint) {
-      return fail("IDEMPOTENCY_CONFLICT", "idempotencyKey reused for a different request", exec);
-    }
     if (exec) {
+      const refused = await this.refuseResume(
+        exec,
+        caller,
+        fingerprint,
+        tool.toolId,
+        actionDef,
+        now,
+      );
+      if (refused) return refused;
       const settled = await this.resumeExisting(exec, connector, tool, actionDef, instance);
       if (settled) return settled;
       exec = (await this.d.executions.getByKey(caller.tenantId, idempotencyKey))!;
@@ -251,13 +258,15 @@ export class ToolGateway implements ToolGatewayPort {
       exec = claimed.execution;
       if (!claimed.created) {
         // Lost a concurrent claim for the same key: behave as a retry.
-        if (exec.requestFingerprint !== fingerprint) {
-          return fail(
-            "IDEMPOTENCY_CONFLICT",
-            "idempotencyKey reused for a different request",
-            exec,
-          );
-        }
+        const refused = await this.refuseResume(
+          exec,
+          caller,
+          fingerprint,
+          tool.toolId,
+          actionDef,
+          now,
+        );
+        if (refused) return refused;
         const settled = await this.resumeExisting(exec, connector, tool, actionDef, instance);
         if (settled) return settled;
         exec = (await this.d.executions.getByKey(caller.tenantId, idempotencyKey))!;
@@ -307,6 +316,10 @@ export class ToolGateway implements ToolGatewayPort {
 
     if (decision.outcome === "approval_required") {
       let req = approvalReq && apState === "pending" ? approvalReq : null;
+      // The approver must see exactly what will run: no preview, no approval request.
+      if (!req && JSON.stringify(intent.input).length > MAX_PREVIEW_BYTES) {
+        return this.settleDenied(exec, "INVALID_INPUT", "input too large to present for approval");
+      }
       if (!req) {
         const ttl = effectiveApproval(actionDef).ttlSeconds;
         req = {
@@ -318,6 +331,7 @@ export class ToolGateway implements ToolGatewayPort {
           toolId: tool.toolId,
           action: actionDef.action,
           riskClass: actionDef.risk,
+          inputPreview: intent.input,
           status: "PENDING",
           requestedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + ttl * 1000).toISOString(),
@@ -362,6 +376,26 @@ export class ToolGateway implements ToolGatewayPort {
     if (!credential.ok)
       return this.settleFailure(exec, credential.failureClass, "NOT_APPLIED", credential.message);
 
+    // Re-check what can change while we resolved the credential (revoked grant, lapsing approval).
+    const at = this.now();
+    const stillGranted = grantCovers(
+      await this.d.grants.listForAgent(caller.tenantId, caller.agentId),
+      caller,
+      tool.toolId,
+      actionDef.action,
+      at,
+    );
+    if (!stillGranted)
+      return this.settleDenied(exec, "PERMISSION_DENIED", "grant revoked before dispatch");
+    if (
+      effectiveApproval(actionDef).mode !== "none" &&
+      approvalState(approvalReq ?? undefined, fingerprint, at) !== "approved"
+    ) {
+      return this.settleDenied(exec, "APPROVAL_EXPIRED", "approval lapsed before dispatch", {
+        approvalRequestId: undefined,
+      });
+    }
+
     return this.dispatch(
       exec,
       connector,
@@ -372,6 +406,35 @@ export class ToolGateway implements ToolGatewayPort {
       credential.secret,
       progress,
     );
+  }
+
+  /**
+   * Only the original requester, still allowed to use this action, may replay,
+   * resume or trigger reconciliation of an execution. Another agent reusing the
+   * key learns nothing about it (no id, no audit references).
+   */
+  private async refuseResume(
+    exec: ToolExecution,
+    caller: ToolCaller,
+    fingerprint: string,
+    toolId: string,
+    action: ToolActionDefinition,
+    now: Date,
+  ): Promise<ToolOutcome | null> {
+    if (exec.requesterAgentId !== caller.agentId) {
+      return fail("IDEMPOTENCY_CONFLICT", "idempotencyKey already used by another requester");
+    }
+    if (exec.requestFingerprint !== fingerprint) {
+      return fail("IDEMPOTENCY_CONFLICT", "idempotencyKey reused for a different request", exec);
+    }
+    const grants = await this.d.grants.listForAgent(caller.tenantId, caller.agentId);
+    if (
+      !(await this.resolveAgent(caller.agentId)) ||
+      !grantCovers(grants, caller, toolId, action.action, now)
+    ) {
+      return fail("PERMISSION_DENIED", `no grant for ${toolId}:${action.action}`);
+    }
+    return null;
   }
 
   /** Terminal or in-flight rows are answered without re-dispatch. Returns null when re-decision is allowed. */
@@ -488,8 +551,8 @@ export class ToolGateway implements ToolGatewayPort {
       out = await this.transition(dispatched, {
         status: "SUCCEEDED",
         settlementState: "APPLIED",
-        providerOperationId: result.providerOperationId,
-        resultReference: result.resultReference,
+        providerOperationId: safeRef(result.providerOperationId, credential),
+        resultReference: safeRef(result.resultReference, credential),
         resultSummary:
           tool.auditPolicy.persistResult === "summary"
             ? safeSummary(result.summary, credential)
@@ -659,7 +722,9 @@ export class ToolGateway implements ToolGatewayPort {
     if (approver.kind === "human" && !hasPermission(approver.roles, "approvals.decide")) {
       return { ok: false, failureClass: "PERMISSION_DENIED", message: "approvals.decide required" };
     }
-    if (approver.kind === "agent" && !(await this.resolveAgent(approver.id))) {
+    // An approving agent needs the kernel's operator level (the level to act on reversible changes).
+    const approvingAgent = approver.kind === "agent" ? await this.resolveAgent(approver.id) : null;
+    if (approver.kind === "agent" && (!approvingAgent || approvingAgent.authorizationLevel < 2)) {
       return { ok: false, failureClass: "PERMISSION_DENIED", message: "unknown approving agent" };
     }
     const action = this.actionOf(req.toolId, req.action);
@@ -1039,6 +1104,16 @@ function scrub<T extends JsonValue | Record<string, JsonValue>>(value: T, secret
   return JSON.parse(
     JSON.stringify(value).split(JSON.stringify(secret).slice(1, -1)).join("[REDACTED]"),
   ) as T;
+}
+
+/** Provider-supplied identifiers are persisted and audited: drop anything secret-shaped. */
+function safeRef(
+  value: string | undefined,
+  credential: SecretValue | undefined,
+): string | undefined {
+  if (value === undefined || containsSecret(value)) return undefined;
+  if (credential && value.includes(credential.reveal())) return undefined;
+  return value;
 }
 
 function safeSummary(

@@ -138,6 +138,10 @@ export class ConnectorRegistry {
   private readonly windows = new Map<string, number[]>();
 
   register(instance: ConnectorInstance): void {
+    const existing = this.instances.get(instance.instanceId);
+    if (existing && existing.tenantId !== instance.tenantId) {
+      throw new Error(`connector instance ${instance.instanceId} belongs to another tenant`);
+    }
     this.instances.set(instance.instanceId, structuredClone(instance));
   }
   get(tenantId: string, instanceId: string): ConnectorInstance | null {

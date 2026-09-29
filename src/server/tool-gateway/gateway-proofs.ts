@@ -399,6 +399,90 @@ export function defineGatewayProofs(
       expect(JSON.stringify(invB)).not.toContain("inst-a");
     });
 
+    it("R1 — a key and its approval belong to the requester; another agent cannot spend or replay them", async () => {
+      const merge = {
+        toolId: "repo",
+        action: "MERGE",
+        connectorInstanceId: "inst-a",
+        input: { pr: 42 },
+        idempotencyKey: "merge-key-01",
+      };
+      await h.grant("agent-1", "repo", "MERGE");
+      await h.grant("agent-2", "repo", "MERGE");
+      const first = await h.gateway.execute(caller("agent-1"), merge);
+      if (first.kind !== "approval_required") throw new Error(first.kind);
+      expect(
+        (await h.gateway.decideApproval(TENANT_A, first.approvalRequestId, human(), "APPROVED")).ok,
+      ).toBe(true);
+      const stolen = await h.gateway.execute(caller("agent-2"), merge);
+      expect(stolen).toEqual({
+        kind: "failed",
+        toolExecutionId: undefined,
+        failureClass: "IDEMPOTENCY_CONFLICT",
+        retryable: false,
+        message: "idempotencyKey already used by another requester",
+        auditReferences: [],
+      });
+      expect(h.connector.effectCount()).toBe(0);
+      const own = await h.gateway.execute(caller("agent-1"), merge);
+      expect(own.kind).toBe("succeeded");
+      expect(h.connector.effects.get("merge-key-01")).toBe(1);
+      // Without the grant any more, even the requester gets no replay.
+      await h.gateway.setGrant(
+        human("admin-1", ["admin"]),
+        { tenantId: TENANT_A, agentId: "agent-1", toolId: "repo", action: "MERGE" },
+        "revoke",
+      );
+      expect(await h.gateway.execute(caller("agent-1"), merge)).toMatchObject({
+        kind: "failed",
+        failureClass: "PERMISSION_DENIED",
+        auditReferences: [],
+      });
+    });
+
+    it("R2 — the approver sees exactly what will run", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      const input = { to: "client@example.com", subject: "Invoice 42", body: "Please find…" };
+      const r = await h.gateway.execute(caller(), mail("SEND", "prev-key-001", input));
+      if (r.kind !== "approval_required") throw new Error(r.kind);
+      const pending = (await h.gateway.cockpitSnapshot(TENANT_A)).pendingApprovals;
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({
+        approvalRequestId: r.approvalRequestId,
+        inputPreview: input,
+        riskClass: "HIGH",
+      });
+      const huge = await h.gateway.execute(
+        caller(),
+        mail("SEND", "prev-key-002", { body: "x".repeat(9000) }),
+      );
+      expect(huge).toMatchObject({ kind: "failed", failureClass: "INVALID_INPUT" });
+    });
+
+    it("R3 — an approving agent needs operator authority", async () => {
+      await h.grant("agent-1", "vfs", "WRITE");
+      const r = await h.gateway.execute(caller(), fs("WRITE", "fs-write-low"));
+      if (r.kind !== "approval_required") throw new Error(r.kind);
+      expect(
+        await h.gateway.decideApproval(
+          TENANT_A,
+          r.approvalRequestId,
+          { kind: "agent", id: "agent-low" },
+          "APPROVED",
+        ),
+      ).toMatchObject({ ok: false, failureClass: "PERMISSION_DENIED" });
+      expect(
+        (
+          await h.gateway.decideApproval(
+            TENANT_A,
+            r.approvalRequestId,
+            { kind: "agent", id: "agent-2" },
+            "APPROVED",
+          )
+        ).ok,
+      ).toBe(true);
+    });
+
     it("P15 — UNKNOWN safety state fails closed", async () => {
       await h.grant("agent-1", "mail", "CREATE");
       await h.grant("agent-1", "mail", "READ");

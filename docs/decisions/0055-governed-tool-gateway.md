@@ -11,16 +11,16 @@ letting a model decide its own permissions, leak a credential, or repeat a side 
 
 Audit of the committed state (`e652469`):
 
-| Existing | Finding | Decision |
-|---|---|---|
-| `core/contracts/tool-definition.ts`, `tool-call.ts` | Conceptual stubs, **no caller** | Removed; replaced by the canonical model |
-| `core/contracts/tool-gateway.ts` | Conceptual stub, governance-protected path | Kept as the entry point; re-exports the canonical model |
-| `core/authorization/decide.ts` (`decideExecution`) | Kernel risk/approval floor | **Reused** as the floor of every tool decision |
-| `core/identity/permissions.ts` (`hasPermission`) | Human permission matrix | **Reused**: `approvals.decide` to approve, `agentCapabilities.write` to grant |
-| `audit_entries` + `AuditEntry` | Canonical append-only audit | **Reused**: four `tool.*` event types, written in the same transaction as each state change |
-| `core/memory/rules.ts` (`containsSecret`) | Secret detector | **Reused** on tool input and persisted summaries |
-| `actions` / `approvals` tables | Human approval of agent actions | Not reused for tools: no tenant, no expiry, no binding to a request payload, no create path. Tool approvals get their own tenant-scoped, expiring, fingerprint-bound store; the decision authority (a human with `approvals.decide`) is the same |
-| MCP, connectors, credential resolver | None exist | New |
+| Existing                                            | Finding                                    | Decision                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `core/contracts/tool-definition.ts`, `tool-call.ts` | Conceptual stubs, **no caller**            | Removed; replaced by the canonical model                                                                                                                                                                                                         |
+| `core/contracts/tool-gateway.ts`                    | Conceptual stub, governance-protected path | Kept as the entry point; re-exports the canonical model                                                                                                                                                                                          |
+| `core/authorization/decide.ts` (`decideExecution`)  | Kernel risk/approval floor                 | **Reused** as the floor of every tool decision                                                                                                                                                                                                   |
+| `core/identity/permissions.ts` (`hasPermission`)    | Human permission matrix                    | **Reused**: `approvals.decide` to approve, `agentCapabilities.write` to grant                                                                                                                                                                    |
+| `audit_entries` + `AuditEntry`                      | Canonical append-only audit                | **Reused**: four `tool.*` event types, written in the same transaction as each state change                                                                                                                                                      |
+| `core/memory/rules.ts` (`containsSecret`)           | Secret detector                            | **Reused** on tool input and persisted summaries                                                                                                                                                                                                 |
+| `actions` / `approvals` tables                      | Human approval of agent actions            | Not reused for tools: no tenant, no expiry, no binding to a request payload, no create path. Tool approvals get their own tenant-scoped, expiring, fingerprint-bound store; the decision authority (a human with `approvals.decide`) is the same |
+| MCP, connectors, credential resolver                | None exist                                 | New                                                                                                                                                                                                                                              |
 
 ## Decision
 
@@ -86,3 +86,22 @@ ToolIntent (model, strict) → ToolGateway(caller: tenant + agent, resolved serv
 - Connector-instance health and rate-limit windows are per process (documented ceiling).
 - Postgres RLS is not introduced (repo-wide COMPLIANCE-1 item); isolation is enforced in
   the store layer and proven by tests.
+
+## Independent review (security) — applied
+
+- An idempotency key and its approval belong to one requester: the fingerprint includes the
+  agent, another agent reusing a key gets `IDEMPOTENCY_CONFLICT` with no id or audit refs, and
+  replay / resume / reconciliation require the requester's grant to still be in force.
+- Approval requests store the exact, secret-screened input (≤ 8 KiB) the approver decides on;
+  input too large to present is refused for approval-gated actions.
+- Grant and approval are re-checked immediately before the dispatch compare-and-set.
+- An approving agent needs kernel level ≥ 2; provider identifiers are secret-screened.
+- Every side-effecting action (not only external ones) is `key_required`.
+- `local-files` refuses symlink leaves and opens with `O_NOFOLLOW`.
+- The Tool Gateway paths are added to `PROTECTED_PATHS["global-governance-policy"]`.
+- The migration rollback never deletes audit rows.
+
+Accepted gaps: dedup across _different_ keys (fingerprint-level in-flight lock), agent
+approver tenant membership and human tenant scoping (single-tenant shim until COMPLIANCE-1),
+audit of pre-claim denials, `inputSchema` enforcement, shared (multi-process) connector
+health, a composite tenant FK on approvals, model-facing output screening for prompt injection.

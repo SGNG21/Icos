@@ -206,16 +206,16 @@ export const toolActionDefinitionSchema = z
   })
   .strict()
   .superRefine((a, ctx) => {
-    // External effects must not duplicate; approved requests are matched on retry by key.
+    // Any effect must not duplicate on retry; approved requests are matched on retry by key.
     const needsKey =
-      a.sideEffects === "external" ||
+      a.sideEffects !== "none" ||
       a.approval.mode !== "none" ||
       RISK_ORDER[a.risk] >= RISK_ORDER.HIGH;
     if (needsKey && a.idempotency !== "key_required") {
       ctx.addIssue({
         code: "custom",
         path: ["idempotency"],
-        message: "external, approval-gated or HIGH+ actions require key_required idempotency",
+        message: "side-effecting, approval-gated or HIGH+ actions require key_required idempotency",
       });
     }
   });
@@ -384,6 +384,8 @@ export const toolApprovalRequestSchema = z
     toolId: z.string().min(1),
     action: actionClassSchema,
     riskClass: riskClassSchema,
+    /** Exactly what will run (secret-screened, ≤ 8 KiB): the approver decides on this, not on a hash. */
+    inputPreview: z.record(z.string(), jsonValueSchema),
     status: z.enum(["PENDING", "APPROVED", "REJECTED"]),
     decidedBy: z
       .object({ kind: z.enum(["human", "agent"]), id: z.string().min(1) })
@@ -416,7 +418,7 @@ const OBJECT: Record<string, JsonValue> = { type: "object" };
 
 /**
  * Compact action builder. Side effects decide idempotency: anything that
- * changes an external system, needs approval or is HIGH+ is `key_required`.
+ * changes state, needs approval or is HIGH+ is `key_required`.
  */
 export function act(
   action: ActionClass,
@@ -430,7 +432,7 @@ export function act(
   const approvalMode =
     more.approval?.mode ?? (risk === "HIGH" || risk === "CRITICAL" ? "human" : "none");
   const keyed =
-    sideEffects === "external" || approvalMode !== "none" || risk === "HIGH" || risk === "CRITICAL";
+    sideEffects !== "none" || approvalMode !== "none" || risk === "HIGH" || risk === "CRITICAL";
   return {
     action,
     description,

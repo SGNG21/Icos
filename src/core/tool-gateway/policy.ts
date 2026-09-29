@@ -189,6 +189,8 @@ export function requestFingerprint(caller: ToolCaller, intent: ToolIntent): stri
     .update(
       canonical({
         tenantId: caller.tenantId,
+        // An approval and an idempotency key belong to one requester.
+        agentId: caller.agentId,
         toolId: intent.toolId,
         action: intent.action,
         connectorInstanceId: intent.connectorInstanceId,

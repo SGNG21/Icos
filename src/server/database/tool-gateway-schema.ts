@@ -108,6 +108,7 @@ export const toolApprovalRequests = pgTable(
     toolId: text("tool_id").notNull(),
     action: text("action").notNull(),
     riskClass: text("risk_class").notNull(),
+    inputPreview: jsonb("input_preview").notNull(),
     status: text("status").notNull(),
     decidedByKind: text("decided_by_kind"),
     decidedById: text("decided_by_id"),
@@ -118,6 +119,7 @@ export const toolApprovalRequests = pgTable(
   },
   (t) => [
     check("tool_approval_tenant_check", sql`length(${t.tenantId}) > 0`),
+    check("tool_approval_preview_size_check", sql`octet_length(${t.inputPreview}::text) <= 16384`),
     check("tool_approval_status_check", sql`${t.status} in ('PENDING','APPROVED','REJECTED')`),
     check("tool_approval_action_check", sql`${t.action} in (${ACTIONS})`),
     check("tool_approval_risk_check", sql`${t.riskClass} in (${RISKS})`),

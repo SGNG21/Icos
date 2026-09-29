@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -30,6 +30,56 @@ defineGatewayProofs(
     ...(h.grants as InMemoryToolGrantStore).audit,
   ],
 );
+
+describe("time of check / time of use", () => {
+  it("a grant revoked while the credential resolves stops the dispatch", async () => {
+    const h = makeHarness();
+    await h.grant("agent-1", "mail", "READ");
+    const grants = h.grants as InMemoryToolGrantStore;
+    const gw = new ToolGateway({
+      connectors: [h.connector],
+      registry: h.registry,
+      agents: { getById: async (id) => agent(id) },
+      grants,
+      executions: h.executions,
+      approvals: h.approvals,
+      credentials: {
+        resolve: async () => {
+          grants.rows.splice(0); // revoked mid-flight
+          return { ok: true, secret: new SecretValue(SECRET) };
+        },
+      },
+    });
+    const r = await gw.execute(caller(), {
+      toolId: "mail",
+      action: "READ",
+      connectorInstanceId: "inst-a",
+      input: {},
+    });
+    expect(r).toMatchObject({ kind: "failed", failureClass: "PERMISSION_DENIED" });
+    expect(h.connector.seenCredential).toBeUndefined();
+  });
+
+  it("a connector instance id cannot be taken over by another tenant", () => {
+    const registry = new ConnectorRegistry();
+    registry.register({
+      instanceId: "shared-1",
+      connectorId: "fake",
+      tenantId: "t1",
+      config: {},
+      status: "HEALTHY",
+    });
+    expect(() =>
+      registry.register({
+        instanceId: "shared-1",
+        connectorId: "fake",
+        tenantId: "t2",
+        config: {},
+        status: "HEALTHY",
+      }),
+    ).toThrow(/another tenant/);
+  });
+});
 
 describe("credential boundary", () => {
   it("SecretValue never serialises its value", () => {
@@ -162,6 +212,20 @@ describe("local files connector", () => {
     expect(
       await localFilesConnector.execute("files", "READ", { path: "missing.txt" }, ctx),
     ).toMatchObject({ ok: false, failureClass: "NOT_FOUND" });
+  });
+
+  it("refuses to write through a dangling symlink to outside the root", async () => {
+    const { root, ctx } = await setup();
+    const outside = await mkdtemp(path.join(tmpdir(), "icos-dangling-"));
+    await symlink(path.join(outside, "pwned.txt"), path.join(root, "evil"));
+    const r = await localFilesConnector.execute(
+      "files",
+      "WRITE",
+      { path: "evil", content: "x" },
+      ctx,
+    );
+    expect(r).toMatchObject({ ok: false, failureClass: "INVALID_INPUT" });
+    await expect(stat(path.join(outside, "pwned.txt"))).rejects.toThrow();
   });
 
   it("refuses absolute paths, traversal and symlink escapes", async () => {

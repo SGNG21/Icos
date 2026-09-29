@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { connectorDefinitionSchema, type ConnectorInstance } from "@/core/tool-gateway/model";
@@ -72,6 +73,16 @@ async function confine(root: string, rel: unknown): Promise<string> {
   return target;
 }
 
+/** Refuse a symlink leaf (a dangling one would pass `confine` and be followed by the write). */
+async function noSymlinkLeaf(target: string): Promise<void> {
+  try {
+    if ((await lstat(target)).isSymbolicLink())
+      throw new ToolInputError("symlinks are not followed");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+
 const rootOf = (i: ConnectorInstance) => {
   const root = i.config.root;
   if (typeof root !== "string" || !path.isAbsolute(root))
@@ -105,7 +116,10 @@ export const localFilesConnector: Connector = {
       const root = rootOf(instance);
       switch (action) {
         case "READ": {
-          const content = await readFile(await confine(root, input.path), "utf8");
+          const target = await confine(root, input.path);
+          await noSymlinkLeaf(target);
+          const fh = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+          const content = await fh.readFile("utf8").finally(() => fh.close());
           if (Buffer.byteLength(content) > MAX_BYTES) throw new ToolInputError("file too large");
           return { ok: true, output: { content }, summary: { bytes: Buffer.byteLength(content) } };
         }
@@ -123,7 +137,15 @@ export const localFilesConnector: Connector = {
           }
           const target = await confine(root, input.path);
           await mkdir(path.dirname(target), { recursive: true });
-          await writeFile(target, input.content, "utf8");
+          // Re-check after mkdir, refuse a symlink leaf, and never follow one when opening.
+          await confine(root, input.path);
+          await noSymlinkLeaf(target);
+          const fh = await open(
+            target,
+            constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+            0o644,
+          );
+          await fh.writeFile(input.content, "utf8").finally(() => fh.close());
           return {
             ok: true,
             output: { written: true },
@@ -165,6 +187,14 @@ export const localFilesConnector: Connector = {
           failureClass: "PERMISSION_DENIED",
           settlement: "NOT_APPLIED",
           message: "access denied by filesystem",
+        };
+      }
+      if (code === "ELOOP") {
+        return {
+          ok: false,
+          failureClass: "INVALID_INPUT",
+          settlement: "NOT_APPLIED",
+          message: "symlinks are not followed",
         };
       }
       if (code === "EISDIR")
