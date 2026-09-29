@@ -5,6 +5,7 @@ import {
   igniteAutonomousMission,
   type IgniteAutonomousMissionDeps,
 } from "@/server/usecases/ignite-autonomous-mission";
+import { createObservationHandler } from "@/server/proactive/observations";
 import {
   createWorkerProbeHandler,
   type WorkerProbeHandlerDeps,
@@ -22,6 +23,11 @@ export interface SchedulerHandlerDeps {
    * routing bug instead.
    */
   workerProbe?: WorkerProbeHandlerDeps;
+  /**
+   * Proactive Supervisor observations (decision 0055). Absent ⇒ the job fails
+   * PERMANENTLY, never a silent success: an observation nobody runs must show up.
+   */
+  supervisorObservation?: Parameters<typeof createObservationHandler>[0];
 }
 
 const text = (value: unknown): string | null =>
@@ -68,6 +74,12 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
       ? createWorkerProbeHandler(deps.workerProbe)
       : async () => {
           throw new PermanentJobError("SCHEDULER_WORKER_PROBE_UNAVAILABLE");
+        },
+
+    supervisor_observe: deps.supervisorObservation
+      ? createObservationHandler(deps.supervisorObservation)
+      : async () => {
+          throw new PermanentJobError("SCHEDULER_SUPERVISOR_UNAVAILABLE");
         },
   };
 }

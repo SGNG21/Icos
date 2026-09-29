@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { Env } from "@/config/env";
 import type { Container } from "@/server/container";
 import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
+import { COMPUTE_HEALTH_OBSERVATION } from "@/server/proactive/compose";
+import { enqueueObservation } from "@/server/proactive/observations";
 import { startProductionServices } from "@/server/system/production-services";
 import {
   enqueueWorkerProbeSweep,
@@ -203,6 +205,38 @@ describe("production services bootstrap", () => {
     // The occurrence exists, at the grid instant — re-enqueueing it creates nothing.
     const at = nextOccurrenceAt(new Date(), resolveProbeIntervalMs(undefined));
     expect((await enqueueWorkerProbeSweep(scheduledJobs, at)).created).toBe(false);
+  });
+
+  /*
+   * Decision 0055: the Proactive Supervisor's compute-health observation is ignited on
+   * the canonical scheduler at boot — a handler nobody enqueues would never observe.
+   * Without a database there is no supervisor (never a silent in-memory one).
+   */
+  it("IGNITES the compute-health observation when PostgreSQL is composed, idempotently", async () => {
+    const boot = (scheduledJobs: InMemoryScheduledJobRepository, db: unknown) =>
+      startProductionServices({
+        env: env(),
+        createContainer: vi.fn().mockResolvedValue({
+          autonomousRuntime: {},
+          scheduledJobs,
+          db,
+          close: vi.fn().mockResolvedValue(undefined),
+        } as unknown as Container),
+        schedulerFactory: vi.fn().mockReturnValue({ start: vi.fn(), stop: vi.fn() }),
+        signals,
+      });
+    const at = nextOccurrenceAt(new Date(), COMPUTE_HEALTH_OBSERVATION.intervalMs);
+
+    const withoutDb = jobs();
+    await boot(withoutDb, undefined);
+    expect((await enqueueObservation(withoutDb, COMPUTE_HEALTH_OBSERVATION, at)).created).toBe(
+      true,
+    );
+
+    const withDb = jobs();
+    await boot(withDb, {});
+    await boot(withDb, {});
+    expect((await enqueueObservation(withDb, COMPUTE_HEALTH_OBSERVATION, at)).created).toBe(false);
   });
 
   it("IGNITION IS IDEMPOTENT: two boots (or two replicas) yield ONE chain", async () => {
