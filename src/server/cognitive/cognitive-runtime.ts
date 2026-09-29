@@ -1,0 +1,441 @@
+import type {
+  CognitiveScope,
+  ContextSnapshot,
+  Conversation,
+  ConversationEvent,
+  CreateConversationInput,
+  GoalProposal,
+  MemoryRecord,
+  Participant,
+  SubmitTurnInput,
+  Turn,
+  TurnReference,
+  WritebackOutcome,
+} from "@/core/cognitive/contracts";
+import { rememberSchema } from "@/core/cognitive/contracts";
+import { maxSensitivityFor } from "@/core/cognitive/context-selection";
+import { governOutcome } from "@/core/cognitive/turn-policy";
+import type { z } from "zod";
+
+import type { CognitionEngine } from "./cognition";
+import type { ContextAssembler } from "./context-assembler";
+import { renderContext } from "./context-assembler";
+import type { ConversationOwner, PostgresConversationStore } from "./conversation-store";
+import type { MissionGateway } from "./mission-gateway";
+import type { PostgresCognitiveMemoryStore } from "./memory-store";
+
+/** Authenticated human acting on the runtime. Tenant is mandatory (no tenant, no operation). */
+export interface CognitiveActor {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly roles: readonly string[];
+}
+
+export class ConversationNotFoundError extends Error {
+  readonly code = "not_found" as const;
+  constructor() {
+    super("Conversation introuvable");
+    this.name = "ConversationNotFoundError";
+  }
+}
+
+export interface TurnResult {
+  readonly turn: Turn;
+  readonly reply: Turn | null;
+  readonly proposal: TurnReference | null;
+  /** True when this call replayed an already-submitted idempotency key. */
+  readonly replayed: boolean;
+}
+
+export interface ConversationState {
+  readonly conversation: Conversation;
+  readonly participants: readonly Participant[];
+  readonly turns: readonly Turn[];
+  readonly proposals: readonly TurnReference[];
+  readonly recoveredTurnIds: readonly string[];
+}
+
+const owner = (a: CognitiveActor): ConversationOwner => {
+  if (!a.tenantId?.trim()) throw new Error("tenant requis");
+  return { tenantId: a.tenantId, userId: a.userId };
+};
+const scopeOf = (
+  a: CognitiveActor,
+  c: Pick<Conversation, "clientId" | "projectId">,
+): CognitiveScope => ({
+  tenantId: a.tenantId,
+  userId: a.userId,
+  clientId: c.clientId,
+  projectId: c.projectId,
+});
+const textOf = (t: Turn) => t.content.parts.map((p) => p.text).join("\n");
+
+/**
+ * Cognitive turn engine (decision 0056):
+ * USER TURN → DURABLE CONVERSATION → CONTEXT ASSEMBLY → COGNITION → POLICY
+ * → RESPONSE / PROPOSAL → RESULT → MEMORY WRITEBACK.
+ *
+ * Every step is persisted before the next one runs; a process restart loses at most the
+ * in-flight model call, which `resume` closes as `interrupted`.
+ */
+export class CognitiveRuntime {
+  private readonly inflight = new Map<string, AbortController>();
+
+  constructor(
+    private readonly deps: {
+      conversations: PostgresConversationStore;
+      memory: PostgresCognitiveMemoryStore;
+      assembler: ContextAssembler;
+      engine: CognitionEngine;
+      missions: MissionGateway | null;
+      tokenBudget?: number;
+      staleTurnMs?: number;
+    },
+  ) {}
+
+  get engineLabel(): string {
+    return this.deps.engine.label;
+  }
+
+  createConversation(actor: CognitiveActor, input: CreateConversationInput): Promise<Conversation> {
+    return this.deps.conversations.create(owner(actor), input);
+  }
+
+  listConversations(actor: CognitiveActor): Promise<Conversation[]> {
+    return this.deps.conversations.list(owner(actor));
+  }
+
+  /** Resume after restart: close interrupted turns, finish approved-but-unsettled proposals. */
+  async resume(actor: CognitiveActor, conversationId: string): Promise<ConversationState> {
+    const conversation = await this.requireConversation(actor, conversationId);
+    const { conversations } = this.deps;
+    const recoveredTurnIds = await conversations.recoverInterrupted(
+      conversationId,
+      this.deps.staleTurnMs ?? 5 * 60_000,
+    );
+    for (const ref of await conversations.listRefs(conversationId)) {
+      if (ref.status === "approved") await this.settle(actor, conversation, ref);
+    }
+    return {
+      conversation,
+      participants: await conversations.participants(conversationId),
+      turns: await conversations.listTurns(conversationId),
+      proposals: await conversations.listRefs(conversationId),
+      recoveredTurnIds,
+    };
+  }
+
+  async submitTurn(
+    actor: CognitiveActor,
+    conversationId: string,
+    input: SubmitTurnInput,
+  ): Promise<TurnResult> {
+    const { conversations } = this.deps;
+    const begun = await conversations.beginUserTurn(owner(actor), conversationId, input);
+    if (!begun) throw new ConversationNotFoundError();
+    if (!begun.created)
+      return { ...(await this.turnOutcome(conversationId, begun.turn)), replayed: true };
+
+    const conversation = (await conversations.get(owner(actor), conversationId))!;
+    let turn = begun.turn;
+    if (!(await conversations.markProcessing(actor.tenantId, turn))) {
+      return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+    }
+    const abort = new AbortController();
+    this.inflight.set(turn.id, abort);
+    try {
+      const scope = scopeOf(actor, conversation);
+      const recent = (await conversations.recentTurns(conversationId, turn.seq, 6)).reverse();
+      const snapshot = await this.deps.assembler.assemble({
+        scope,
+        conversationId,
+        turn,
+        recentTurns: recent,
+        maxSensitivity: maxSensitivityFor(actor.roles),
+        tokenBudget: this.deps.tokenBudget ?? 2_000,
+      });
+      await conversations.saveSnapshot(snapshot);
+      turn = { ...turn, contextSnapshotId: snapshot.id };
+
+      const thought = await this.deps.engine.think(
+        {
+          userText: textOf(turn),
+          context: renderContext(snapshot),
+          conversationTitle: conversation.title,
+        },
+        abort.signal,
+      );
+      const governed = governOutcome(thought.result);
+      const done = await conversations.completeTurn(actor.tenantId, turn, {
+        outcome: governed.outcome,
+        reply: governed.reply,
+        intent: thought.intent,
+        proposal: governed.proposal,
+      });
+      if (!done) return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+
+      await this.writeback(
+        scope,
+        conversationId,
+        turn,
+        governed.outcome,
+        thought.memorySuggestions,
+      );
+      return {
+        turn: (await conversations.getTurn(conversationId, turn.id))!,
+        reply: done.assistant,
+        proposal: done.ref,
+        replayed: false,
+      };
+    } catch (error) {
+      const reason = abort.signal.aborted
+        ? "cancelled_by_user"
+        : `${error instanceof Error ? error.name : "Error"}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`;
+      await conversations.failTurn(actor.tenantId, turn, reason);
+      return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+    } finally {
+      this.inflight.delete(turn.id);
+    }
+  }
+
+  /** Cancels an in-flight turn: durable status first, then aborts the local model call. */
+  async cancelTurn(
+    actor: CognitiveActor,
+    conversationId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    const cancelled = await this.deps.conversations.cancelTurn(
+      owner(actor),
+      conversationId,
+      turnId,
+    );
+    if (cancelled) this.inflight.get(turnId)?.abort();
+    return cancelled;
+  }
+
+  async decideProposal(
+    actor: CognitiveActor,
+    conversationId: string,
+    refId: string,
+    decision: "approve" | "reject",
+  ): Promise<
+    { ok: true; proposal: TurnReference } | { ok: false; reason: "not_found" | "already_decided" }
+  > {
+    const conversation = await this.requireConversation(actor, conversationId);
+    const decided = await this.deps.conversations.decideRef(
+      owner(actor),
+      conversationId,
+      refId,
+      decision,
+    );
+    if (!decided.ok) return decided;
+    if (decision === "reject") return { ok: true, proposal: decided.ref };
+    return { ok: true, proposal: await this.settle(actor, conversation, decided.ref) };
+  }
+
+  async getContext(
+    actor: CognitiveActor,
+    conversationId: string,
+    turnId: string,
+  ): Promise<{ snapshot: ContextSnapshot; memories: MemoryRecord[] } | null> {
+    const conversation = await this.requireConversation(actor, conversationId);
+    const snapshot = await this.deps.conversations.getSnapshot(
+      owner(actor),
+      conversationId,
+      turnId,
+    );
+    if (!snapshot) return null;
+    const scope = scopeOf(actor, conversation);
+    const memories: MemoryRecord[] = [];
+    for (const item of snapshot.items) {
+      if (!item.ref.startsWith("memory:")) continue;
+      const r = await this.deps.memory.get(scope, item.ref.slice("memory:".length));
+      if (r) memories.push(r);
+    }
+    return { snapshot, memories };
+  }
+
+  async events(
+    actor: CognitiveActor,
+    conversationId: string,
+    afterSeq: number,
+  ): Promise<ConversationEvent[]> {
+    await this.requireConversation(actor, conversationId);
+    return this.deps.conversations.listEvents(conversationId, afterSeq);
+  }
+
+  /** Explicit human "remember this": the only path to USER_ASSERTED memory. */
+  remember(
+    actor: CognitiveActor,
+    input: z.output<typeof rememberSchema>,
+  ): Promise<WritebackOutcome> {
+    const scope: CognitiveScope = {
+      tenantId: owner(actor).tenantId,
+      userId: actor.userId,
+      clientId: input.clientId ?? null,
+      projectId: input.projectId ?? null,
+    };
+    return this.deps.memory.write(scope, {
+      type: input.type,
+      subjectKey: input.subjectKey,
+      content: input.content,
+      epistemic: "USER_ASSERTED",
+      statementKind: input.statementKind,
+      confidence: 1,
+      originTrust: "trusted",
+      provenance: {
+        sourceType: "api",
+        sourceId: `user:${actor.userId}`,
+        conversationId: null,
+        turnId: null,
+        engine: null,
+      },
+      entityKey: input.entityKey,
+      personal: input.personal,
+      sensitivity: input.sensitivity,
+      tags: input.tags,
+    });
+  }
+
+  memoryHistory(
+    actor: CognitiveActor,
+    scope: Omit<CognitiveScope, "tenantId" | "userId">,
+    id: string,
+  ): Promise<MemoryRecord[]> {
+    return this.deps.memory.history(
+      { tenantId: owner(actor).tenantId, userId: actor.userId, ...scope },
+      id,
+    );
+  }
+
+  /** Right to erasure: tombstone (content erased, provenance kept). */
+  forgetMemory(
+    actor: CognitiveActor,
+    scope: Omit<CognitiveScope, "tenantId" | "userId">,
+    id: string,
+  ): Promise<boolean> {
+    return this.deps.memory.forget(
+      { tenantId: owner(actor).tenantId, userId: actor.userId, ...scope },
+      id,
+    );
+  }
+
+  // ── internals ──────────────────────────────────────────────────────────────
+  private async requireConversation(actor: CognitiveActor, id: string): Promise<Conversation> {
+    const c = await this.deps.conversations.get(owner(actor), id);
+    if (!c) throw new ConversationNotFoundError();
+    return c;
+  }
+
+  private async turnOutcome(
+    conversationId: string,
+    turn: Turn,
+  ): Promise<Omit<TurnResult, "replayed">> {
+    const { conversations } = this.deps;
+    const turns = await conversations.listTurns(conversationId);
+    const current = turns.find((t) => t.id === turn.id) ?? turn;
+    const reply = turns.find((t) => t.replyToTurnId === turn.id) ?? null;
+    const proposal =
+      (await conversations.listRefs(conversationId)).find((r) => r.turnId === turn.id) ?? null;
+    return { turn: current, reply, proposal };
+  }
+
+  private async settle(
+    actor: CognitiveActor,
+    conversation: Conversation,
+    ref: TurnReference,
+  ): Promise<TurnReference> {
+    const { conversations, missions } = this.deps;
+    if (ref.kind !== "goal_proposal" || !missions) {
+      return conversations.settleRef(
+        actor.tenantId,
+        ref,
+        "not_connected",
+        null,
+        `${ref.kind}: no canonical backend connected`,
+      );
+    }
+    try {
+      const res = await missions.submitGoal(ref.payload as GoalProposal, {
+        refId: ref.id,
+        conversationId: conversation.id,
+        turnId: ref.turnId,
+        approvedBy: ref.decidedBy ?? actor.userId,
+        clientId: conversation.clientId,
+        projectId: conversation.projectId,
+      });
+      return res.status === "submitted"
+        ? conversations.settleRef(actor.tenantId, ref, "submitted", res.externalId, null)
+        : conversations.settleRef(actor.tenantId, ref, res.status, null, res.detail);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.slice(0, 300) : "submission failed";
+      return conversations.settleRef(actor.tenantId, ref, "failed", null, detail);
+    }
+  }
+
+  /**
+   * Memory writeback after the result is durable. The exchange itself is a
+   * SYSTEM_OBSERVED episodic observation; model suggestions are MODEL_INFERRED
+   * candidates (never active facts). A writeback failure never un-completes the turn.
+   */
+  private async writeback(
+    scope: CognitiveScope,
+    conversationId: string,
+    turn: Turn,
+    outcome: string,
+    suggestions: readonly {
+      type: MemoryRecord["type"];
+      subjectKey: string;
+      content: string;
+      entityKey?: string;
+    }[],
+  ): Promise<void> {
+    const provenance = {
+      sourceType: "turn" as const,
+      sourceId: turn.id,
+      conversationId,
+      turnId: turn.id,
+    };
+    const results: { subjectKey: string; outcome: string }[] = [];
+    const write = async (subjectKey: string, run: () => Promise<WritebackOutcome>) => {
+      try {
+        results.push({ subjectKey, outcome: (await run()).kind });
+      } catch (error) {
+        results.push({
+          subjectKey,
+          outcome: `error:${error instanceof Error ? error.name : "unknown"}`,
+        });
+      }
+    };
+    await write(`turn.${turn.seq}`, () =>
+      this.deps.memory.write(scope, {
+        type: "episodic",
+        subjectKey: `conversation.${conversationId}.turn.${turn.seq}`,
+        content: `Demande utilisateur (${outcome}) : ${textOf(turn).slice(0, 1_500)}`,
+        epistemic: "SYSTEM_OBSERVED",
+        statementKind: "observation",
+        confidence: 1,
+        originTrust: "trusted",
+        provenance: { ...provenance, engine: null },
+      }),
+    );
+    for (const s of suggestions) {
+      await write(s.subjectKey, () =>
+        this.deps.memory.write(scope, {
+          type: s.type,
+          subjectKey: s.subjectKey,
+          content: s.content,
+          entityKey: s.entityKey,
+          epistemic: "MODEL_INFERRED",
+          statementKind: "inference",
+          confidence: 0.5,
+          originTrust: "trusted",
+          provenance: { ...provenance, engine: this.deps.engine.label },
+        }),
+      );
+    }
+    await this.deps.conversations
+      .recordEvent(scope.tenantId, conversationId, "memory.written", turn.id, { results })
+      .catch(() => {});
+  }
+}
