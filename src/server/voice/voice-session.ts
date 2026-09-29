@@ -223,9 +223,10 @@ export class VoiceSession {
   private turn(turnId: string): Turn {
     let turn = this.turns.get(turnId);
     if (!turn) {
-      // One utterance is captured at a time: a new segment drops an unfinished one.
+      // One utterance is captured at a time: a new segment drops any older one
+      // the user did not commit (its audio buffer goes with it).
       for (const other of this.turns.values()) {
-        if (other.phase === "capturing" && !other.sttFinished) {
+        if (other.phase === "capturing" && !other.commitRequested) {
           this.discard(other, "superseded by a newer utterance");
         }
       }
@@ -368,6 +369,12 @@ export class VoiceSession {
     if (turn.phase !== "capturing" || !turn.commitRequested || turn.text === null) return;
     if (!turn.text) return this.discard(turn, "nothing was heard");
     turn.stt = null;
+    // Utterance order: an older committed turn still waiting for its final
+    // transcript would otherwise reach ICOS after this one.
+    for (const older of this.turns.values()) {
+      if (older === turn) break;
+      if (older.phase === "capturing") this.discard(older, "a newer utterance was sent first");
+    }
     void this.submit(turn);
   }
 
@@ -521,7 +528,8 @@ export class VoiceSession {
         });
       }
     }
-    response.cancelTimer?.();
+    // After FINAL the timer is already the TTS tail watchdog: keep it.
+    if (!response.textDone) response.cancelTimer?.();
     if (response.abort.signal.aborted) return;
     if (!response.textDone) {
       response.textDone = true;

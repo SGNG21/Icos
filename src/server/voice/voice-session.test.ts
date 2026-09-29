@@ -422,4 +422,57 @@ describe("voice session (SIMULATED providers)", () => {
       });
     });
   });
+
+  describe("second review (regressions)", () => {
+    it("R1. the TTS tail watchdog survives FINAL_RESPONSE and ends a stalled answer", async () => {
+      const s = setup({ timeouts: { ttsTailMs: 20 } });
+      say(s.conn, T1, ["q"]);
+      await flush();
+      s.cognitive.responses.get(T1)!.push({ type: "FINAL_RESPONSE", text: "ok" });
+      await flush(); // TTS never flushes
+      s.advance(25);
+      expect(s.of("error").map((e) => e.code)).toEqual(["TTS_TIMEOUT"]);
+      expect(s.of("playback_stop")).toEqual([
+        { type: "playback_stop", turnId: T1, reason: "TIMEOUT" },
+      ]);
+      expect(s.of("turn_metrics")).toHaveLength(1);
+      expect(s.pendingTimers()).toBe(0);
+    });
+
+    it("R2. uncommitted finished utterances do not accumulate", () => {
+      const s = setup();
+      for (let i = 0; i < 400; i++) {
+        const id = `turn-${String(i).padStart(5, "0")}`;
+        s.conn.receive(frame(id, 0, "x"));
+        s.conn.receive(signal(id, "VOICE_ACTIVITY_END")); // never committed
+      }
+      const session = s.registry.get(s.of("ready")[0].sessionId)!;
+      expect(session.snapshot().turns.filter((t) => t.phase === "capturing")).toHaveLength(1);
+      expect(s.stt.cancelled).toBe(399);
+    });
+
+    it("R4. a late final for an older utterance never overtakes a newer one", async () => {
+      const s = setup();
+      // A: committed, but its STT final is slow.
+      let finishA: (() => void) | undefined;
+      const open = s.stt.open.bind(s.stt);
+      s.stt.open = (o, cb) => {
+        const stream = open(o, cb);
+        if (!finishA) {
+          finishA = () => stream.finish();
+          return { ...stream, finish: () => {} };
+        }
+        return stream;
+      };
+      say(s.conn, T1, ["ancien"]);
+      say(s.conn, T2, ["nouveau"]);
+      await flush();
+      finishA!(); // A's final arrives last
+      await flush();
+      expect(s.cognitive.conversations.get("conv-1")?.map((t) => t.text)).toEqual(["nouveau"]);
+      expect(s.of("error")).toEqual([
+        expect.objectContaining({ code: "TURN_DROPPED", turnId: T1, audioLost: true }),
+      ]);
+    });
+  });
 });

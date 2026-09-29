@@ -151,4 +151,47 @@ describe("voice WebSocket transport", () => {
     expect(h.fellThrough()).toBe(1);
     expect(h.seen).toHaveLength(0);
   });
+
+  it("re-checks authorization on the heartbeat and closes a revoked socket", async () => {
+    let allowed = true;
+    const h = await host({
+      heartbeatMs: 30,
+      authenticate: async () =>
+        allowed ? { ok: true, userId: "user-1" } : { ok: false, status: 401 },
+    });
+    const c = client(h.port);
+    await once(c.ws, "open");
+    allowed = false; // logout / revocation
+    const [code] = (await once(c.ws, "close")) as [number];
+    expect(code).toBe(4403);
+  });
+
+  it("survives a client reset while authentication is pending", async () => {
+    const { connect } = await import("node:net");
+    const h = await host({
+      authenticate: () => new Promise((r) => setTimeout(() => r({ ok: true, userId: "u" }), 50)),
+    });
+    const crashes: unknown[] = [];
+    const onCrash = (e: unknown) => crashes.push(e);
+    process.on("uncaughtException", onCrash);
+    const raw = connect(h.port, "127.0.0.1", () => {
+      raw.write(
+        "GET /api/voice/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+      );
+      setTimeout(() => raw.resetAndDestroy(), 10);
+    });
+    await new Promise((r) => setTimeout(r, 120));
+    process.off("uncaughtException", onCrash);
+    expect(crashes).toEqual([]);
+  });
+
+  it("closes a connection that floods messages", async () => {
+    const h = await host({ maxMessagesPerSecond: 20 });
+    const c = client(h.port);
+    await once(c.ws, "open");
+    for (let i = 0; i < 50; i++) c.ws.send(JSON.stringify({ type: "heartbeat" }));
+    const [code] = (await once(c.ws, "close")) as [number];
+    expect(code).toBe(1008);
+  });
 });

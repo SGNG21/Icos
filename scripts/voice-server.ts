@@ -50,7 +50,8 @@ async function main(): Promise<void> {
   server.on("upgrade", (request, socket, head) => {
     voice.handleUpgrade(request, socket, head).then(
       (handled) => {
-        if (!handled) void nextUpgrade(request, socket, head);
+        if (!handled)
+          Promise.resolve(nextUpgrade(request, socket, head)).catch(() => socket.destroy());
       },
       () => socket.destroy(),
     );

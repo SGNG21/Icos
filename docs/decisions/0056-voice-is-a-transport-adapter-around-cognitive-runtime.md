@@ -103,9 +103,18 @@ Audit of committed code at `e652469`:
   provider requests time out at 20 s. Each is classified (`STT_TIMEOUT`, `COGNITIVE_TIMEOUT`,
   `TTS_TIMEOUT`); an acceptance timeout releases the serialized queue, so a hung request never
   blocks later turns, and a later acceptance is harmless (turn ids are idempotent).
+- **Review hardening**: the socket re-checks authorization every heartbeat (logout, revocation
+  or a lost permission closes it with 4403); 100 messages/s per connection (1008); a socket reset
+  during auth is not an uncaught error; a new utterance drops older uncommitted captures (and
+  their audio buffers); turns commit in utterance order (an older turn whose final arrives late
+  is `TURN_DROPPED`, never answered after a newer one); partials stop after 15 s of speech (each
+  re-uploads the utterance); the adapter keys idempotency on user + turn id.
 - **Client**: `/voice`, mobile-first, tap to talk / tap to send, AudioWorklet capture → 16 kHz
   PCM16 frames, ordered MP3 playback, local stop on barge-in plus server `playback_stop`,
-  reconnect with backoff and session resume.
+  reconnect with backoff and session resume. The audio context is created inside the tap (iOS
+  unlock); the mic stream lives for one utterance only; the worklet is a same-origin file
+  (`public/icos-voice-tap.js`), not a `blob:` URL; a refused upgrade is diagnosed over HTTP
+  (401 → login, 403 → voice unavailable) instead of retrying forever; failed turns can be resent.
 
 ## Gaps (not done here)
 

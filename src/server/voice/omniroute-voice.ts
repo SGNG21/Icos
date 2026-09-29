@@ -52,6 +52,9 @@ export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = 
 
 class ProviderHttpError extends Error {}
 
+/** Beyond this, the utterance only gets its final transcript (partial cost is quadratic). */
+const MAX_PARTIAL_SECONDS = 15;
+
 async function post(
   config: OmniRouteVoiceConfig,
   path: string,
@@ -145,12 +148,21 @@ export class OmniRouteStt implements SttProvider {
     };
 
     const partialBytes = this.partialEverySeconds * options.sampleRate * 2;
+    // Each partial re-sends the whole utterance: stop partials past this length.
+    const partialLimitBytes = MAX_PARTIAL_SECONDS * options.sampleRate * 2;
     return {
       write: (frame: Uint8Array) => {
         if (finished || closed.signal.aborted) return;
         chunks.push(frame);
         bytes += frame.length;
-        if (!partialBytes || interim || bytes - partialAt < partialBytes) return;
+        if (
+          !partialBytes ||
+          interim ||
+          bytes > partialLimitBytes ||
+          bytes - partialAt < partialBytes
+        ) {
+          return;
+        }
         partialAt = bytes;
         const controller = (interim = new AbortController());
         transcribe(AbortSignal.any([controller.signal, closed.signal]))

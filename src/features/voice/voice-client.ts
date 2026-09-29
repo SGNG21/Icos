@@ -160,6 +160,7 @@ function onServer(state: VoiceUiState, m: ServerMessage): VoiceUiState {
       if (m.code === "SESSION_EXPIRED") next = { ...next, sessionId: null };
       return next;
     }
+    case "response_event": // action/mission/approval: none from the temporary adapter yet
     case "audio":
     case "heartbeat_ack":
       return state;

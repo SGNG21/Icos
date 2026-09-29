@@ -162,3 +162,13 @@
     animation: none;
   }
 }
+
+.resend {
+  margin: 8px 0 0 8px;
+  border: 1px solid var(--muted);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}

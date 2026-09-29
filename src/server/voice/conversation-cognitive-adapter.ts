@@ -41,11 +41,12 @@ export class ConversationCognitiveAdapter implements CognitiveRuntimePort {
     turn: CommittedTurn,
     signal: AbortSignal,
   ): Promise<{ conversationId: string; events: AsyncIterable<CognitiveEvent> }> {
-    let entry = this.accepted.get(turn.turnId);
+    const key = `${turn.userId}:${turn.turnId}`; // one user cannot claim another's turn id
+    let entry = this.accepted.get(key);
     if (!entry) {
       entry = this.accept(turn.text);
-      this.accepted.set(turn.turnId, entry);
-      entry.catch(() => this.accepted.delete(turn.turnId)); // not accepted: a resend may retry
+      this.accepted.set(key, entry);
+      entry.catch(() => this.accepted.delete(key)); // not accepted: a resend may retry
       for (const id of this.accepted.keys()) {
         if (this.accepted.size <= this.maxRemembered) break;
         this.accepted.delete(id);

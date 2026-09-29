@@ -26,6 +26,7 @@ export type VoiceUpgradeOptions = {
   /** When set, every connection is told why voice cannot work, then closed. */
   unavailable?: { code: "PROVIDER_NOT_CONFIGURED"; message: string };
   heartbeatMs?: number;
+  maxMessagesPerSecond?: number;
   /** One JSON frame; audio frames are ≤ 64 KiB of base64. */
   maxPayload?: number;
 };
@@ -41,7 +42,7 @@ export function createVoiceUpgradeHandler(options: VoiceUpgradeOptions) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: options.maxPayload ?? 128 * 1024 });
   const heartbeatMs = options.heartbeatMs ?? 15_000;
 
-  const serve = (ws: WebSocket, userId: string) => {
+  const serve = (ws: WebSocket, userId: string, request: Request) => {
     const send = (message: ServerMessage) => {
       if (ws.readyState !== ws.OPEN) throw new Error("voice socket closed");
       ws.send(JSON.stringify(message));
@@ -57,10 +58,26 @@ export function createVoiceUpgradeHandler(options: VoiceUpgradeOptions) {
       if (!alive) return ws.terminate();
       alive = false;
       ws.ping();
+      // A long-lived socket must not outlive logout, revocation or a lost permission.
+      options.authenticate(request).then(
+        (auth) => {
+          if (!auth.ok || auth.userId !== userId) ws.close(4403, "UNAUTHORIZED");
+        },
+        () => ws.close(4403, "UNAUTHORIZED"),
+      );
     }, heartbeatMs);
     beat.unref?.();
+    let windowStart = Date.now();
+    let inWindow = 0;
     ws.on("message", (data, isBinary) => {
       alive = true;
+      // Audio is ~10 frames/s; anything near this cap is abuse, not speech.
+      const now = Date.now();
+      if (now - windowStart >= 1_000) {
+        windowStart = now;
+        inWindow = 0;
+      }
+      if (++inWindow > (options.maxMessagesPerSecond ?? 100)) return ws.close(1008, "RATE_LIMIT");
       let parsed: unknown;
       try {
         parsed = isBinary ? undefined : JSON.parse(data.toString());
@@ -94,12 +111,18 @@ export function createVoiceUpgradeHandler(options: VoiceUpgradeOptions) {
       if (typeof value === "string") headers.set(name, value);
       else if (Array.isArray(value)) headers.set(name, value.join(", "));
     }
+    const authRequest = new Request(url, { headers });
+    // The client may reset the socket while auth is pending: never an uncaught error.
+    const onSocketError = () => socket.destroy();
+    socket.on("error", onSocketError);
     let auth: VoiceAuthResult;
     try {
-      auth = await options.authenticate(new Request(url, { headers }));
+      auth = await options.authenticate(authRequest);
     } catch {
       auth = { ok: false, status: 500 };
     }
+    socket.off("error", onSocketError);
+    if (socket.destroyed) return true;
     if (!auth.ok) {
       socket.end(
         `HTTP/1.1 ${auth.status} ${REASONS[auth.status] ?? "Error"}\r\nConnection: close\r\n\r\n`,
@@ -107,7 +130,7 @@ export function createVoiceUpgradeHandler(options: VoiceUpgradeOptions) {
       return true;
     }
     const userId = auth.userId;
-    wss.handleUpgrade(request, socket, head, (ws) => serve(ws, userId));
+    wss.handleUpgrade(request, socket, head, (ws) => serve(ws, userId, authRequest));
     return true;
   };
 }

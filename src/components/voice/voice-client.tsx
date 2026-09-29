@@ -28,17 +28,8 @@ const SAMPLE_RATE = 16_000;
 const FRAME_MS = 100;
 const HEARTBEAT_MS = 15_000;
 
-// Copies each 128-sample render quantum to the main thread.
-const TAP_WORKLET = `
-class IcosVoiceTap extends AudioWorkletProcessor {
-  process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (channel) this.port.postMessage(channel.slice(0));
-    return true;
-  }
-}
-registerProcessor("icos-voice-tap", IcosVoiceTap);
-`;
+/** Same-origin static file: iOS Safari is unreliable with blob: worklet modules. */
+const TAP_WORKLET_URL = "/icos-voice-tap.js";
 
 const LINK_LABEL: Record<VoiceUiState["link"], string> = {
   connecting: "Connexion…",
@@ -73,13 +64,21 @@ export function VoiceClient() {
     sessionId: null,
     conversationId: null,
   });
-  const audio = useRef<{
-    ctx: AudioContext;
+  /** Output + capture graph, created once on the first tap. */
+  const audio = useRef<{ ctx: AudioContext; tap: Promise<AudioWorkletNode> } | null>(null);
+  /** The utterance being captured: its mic stream lives only this long. */
+  const capture = useRef<{
+    turnId: string;
     stream: MediaStream;
-    tap: AudioWorkletNode;
+    source: MediaStreamAudioSourceNode;
     pending: Float32Array[];
+    buffered: number;
     seq: number;
   } | null>(null);
+  /** Turns silenced locally, updated at the moment of the tap (not after a render). */
+  const silenced = useRef(new Set<string>());
+  const lastAudioTurn = useRef<string | null>(null);
+  const talkingTurn = useRef<string | null>(null);
   const playback = useRef({
     sources: new Set<AudioBufferSourceNode>(),
     nextAt: 0,
@@ -115,7 +114,8 @@ export function VoiceClient() {
 
   const play = useCallback((turnId: string, data: string) => {
     const ctx = audio.current?.ctx;
-    if (!ctx) return;
+    if (!ctx || silenced.current.has(turnId)) return;
+    lastAudioTurn.current = turnId;
     const p = playback.current;
     const generation = p.generation;
     const bytes = base64ToBytes(data);
@@ -123,7 +123,13 @@ export function VoiceClient() {
     p.chain = p.chain
       .then(() => ctx.decodeAudioData(bytes.buffer.slice(0) as ArrayBuffer))
       .then((buffer) => {
-        if (generation !== p.generation || !mayPlay(stateRef.current, turnId)) return;
+        if (
+          generation !== p.generation ||
+          silenced.current.has(turnId) ||
+          !mayPlay(stateRef.current, turnId)
+        ) {
+          return;
+        }
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.destination);
@@ -189,7 +195,10 @@ export function VoiceClient() {
         }
         if (message.type === "turn_accepted")
           session.current.conversationId = message.conversationId;
-        if (message.type === "playback_stop") stopPlayback();
+        if (message.type === "playback_stop") {
+          silenced.current.add(message.turnId);
+          stopPlayback();
+        }
         if (message.type === "audio") play(message.turnId, message.data);
         dispatch({ type: "server", message });
       };
@@ -202,6 +211,21 @@ export function VoiceClient() {
           return dispatch({ type: "link", link: "unavailable" });
         }
         dispatch({ type: "link", link: "reconnecting" });
+        // A refused upgrade looks like any drop (1006): after a few, ask HTTP why.
+        if (attempt >= 2) {
+          void fetch("/api/conversation", { cache: "no-store" }).then(
+            (res) => {
+              if (res.status === 401) location.assign("/login?next=%2Fvoice");
+              if (res.status === 403) {
+                closed = true;
+                clearTimeout(retry);
+                dispatch({ type: "link", link: "unavailable" });
+                dispatch({ type: "local_error", code: "FORBIDDEN", message: "accès voix refusé" });
+              }
+            },
+            () => {},
+          );
+        }
         retry = setTimeout(connect, reconnectDelay(attempt++));
       };
     };
@@ -223,76 +247,101 @@ export function VoiceClient() {
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       ws.current?.close();
-      audio.current?.stream.getTracks().forEach((track) => track.stop());
+      capture.current?.stream.getTracks().forEach((track) => track.stop());
       void audio.current?.ctx.close();
     };
   }, [play, send, stopPlayback]);
 
   // --- microphone --------------------------------------------------------------
-  const ensureAudio = async () => {
-    if (audio.current) {
-      if (audio.current.ctx.state !== "running") await audio.current.ctx.resume();
-      return audio.current;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Micro indisponible : ouvrez ICOS en HTTPS (origine sécurisée).");
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    const ctx = new AudioContext();
-    if (!ctx.audioWorklet)
-      throw new Error("Ce navigateur ne permet pas la capture audio (AudioWorklet).");
-    const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: "application/javascript" }));
-    await ctx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
-    const tap = new AudioWorkletNode(ctx, "icos-voice-tap");
-    ctx.createMediaStreamSource(stream).connect(tap);
-    const mic = { ctx, stream, tap, pending: [] as Float32Array[], seq: 0 };
-    let buffered = 0;
-    tap.port.onmessage = (event: MessageEvent<Float32Array>) => {
-      const turnId = stateRef.current.talkingTurnId;
-      if (!turnId) return;
-      mic.pending.push(event.data);
-      buffered += event.data.length;
-      if (buffered < (ctx.sampleRate * FRAME_MS) / 1000) return;
-      const samples = new Float32Array(buffered);
-      let at = 0;
-      for (const chunk of mic.pending) {
-        samples.set(chunk, at);
-        at += chunk.length;
+  /** Must start synchronously inside the tap: iOS only unlocks audio there. */
+  const ensureAudio = () => {
+    if (!audio.current) {
+      const ctx = new AudioContext();
+      if (!ctx.audioWorklet) {
+        void ctx.close();
+        throw new Error("Ce navigateur ne permet pas la capture audio (AudioWorklet).");
       }
-      mic.pending = [];
-      buffered = 0;
-      const pcm = toPcm16(samples, ctx.sampleRate, SAMPLE_RATE);
-      send({
-        type: "audio",
-        turnId,
-        seq: mic.seq++,
-        encoding: "pcm16",
-        sampleRate: SAMPLE_RATE,
-        data: bytesToBase64(new Uint8Array(pcm.buffer)),
+      const tap = ctx.audioWorklet.addModule(TAP_WORKLET_URL).then(() => {
+        const node = new AudioWorkletNode(ctx, "icos-voice-tap");
+        // Rendering is pulled from the destination: keep the tap in the graph, silently.
+        const mute = ctx.createGain();
+        mute.gain.value = 0;
+        node.connect(mute).connect(ctx.destination);
+        node.port.onmessage = (event: MessageEvent<Float32Array>) => onSamples(ctx, event.data);
+        return node;
       });
-    };
-    audio.current = mic;
-    return mic;
+      audio.current = { ctx, tap };
+    }
+    void audio.current.ctx.resume();
+    return audio.current;
+  };
+
+  const sendFrame = (ctx: AudioContext) => {
+    const c = capture.current;
+    if (!c || c.buffered === 0) return;
+    const samples = new Float32Array(c.buffered);
+    let at = 0;
+    for (const chunk of c.pending) {
+      samples.set(chunk, at);
+      at += chunk.length;
+    }
+    c.pending = [];
+    c.buffered = 0;
+    const pcm = toPcm16(samples, ctx.sampleRate, SAMPLE_RATE);
+    send({
+      type: "audio",
+      turnId: c.turnId,
+      seq: c.seq++,
+      encoding: "pcm16",
+      sampleRate: SAMPLE_RATE,
+      data: bytesToBase64(new Uint8Array(pcm.buffer)),
+    });
+  };
+
+  const onSamples = (ctx: AudioContext, samples: Float32Array) => {
+    const c = capture.current;
+    if (!c) return;
+    c.pending.push(samples);
+    c.buffered += samples.length;
+    if (c.buffered >= (ctx.sampleRate * FRAME_MS) / 1000) sendFrame(ctx);
+  };
+
+  /** Silence whatever ICOS is saying, locally and at once. */
+  const silenceCurrent = () => {
+    const active = activeTurn(stateRef.current)?.id ?? lastAudioTurn.current;
+    if (active) silenced.current.add(active);
+    stopPlayback();
   };
 
   const startTalking = async () => {
     try {
-      const mic = await ensureAudio(); // on the tap: unlocks audio on iOS
+      const { ctx, tap } = ensureAudio(); // synchronous part of the tap
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Micro indisponible : ouvrez ICOS en HTTPS (origine sécurisée).");
+      }
       const turnId = newTurnId();
-      mic.seq = 0;
-      mic.pending = [];
-      stopPlayback(); // barge-in: silence ICOS locally, immediately
+      silenceCurrent(); // barge-in
+      talkingTurn.current = turnId;
       dispatch({ type: "talk", turnId });
       send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_START" });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      if (talkingTurn.current !== turnId) {
+        stream.getTracks().forEach((track) => track.stop()); // sent before the mic opened
+        return;
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      source.connect(await tap);
+      capture.current = { turnId, stream, source, pending: [], buffered: 0, seq: 0 };
     } catch (error) {
+      talkingTurn.current = null;
+      dispatch({ type: "stop_talking" });
       dispatch({
         type: "local_error",
         code: "MICROPHONE",
@@ -302,15 +351,25 @@ export function VoiceClient() {
   };
 
   const stopTalking = () => {
-    const turnId = stateRef.current.talkingTurnId;
-    if (!turnId) return;
+    const turnId = talkingTurn.current;
+    talkingTurn.current = null;
+    const c = capture.current;
+    if (c && audio.current) sendFrame(audio.current.ctx); // don't clip the last word
+    if (c) {
+      c.source.disconnect();
+      c.stream.getTracks().forEach((track) => track.stop()); // mic indicator off
+    }
+    capture.current = null;
     dispatch({ type: "stop_talking" });
+    if (!turnId) return;
     send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_END" });
     send({ type: "turn", turnId, signal: "TURN_COMMIT" });
   };
 
+  const resend = (turnId: string) => send({ type: "turn", turnId, signal: "TURN_COMMIT" });
+
   const interrupt = () => {
-    stopPlayback();
+    silenceCurrent();
     dispatch({ type: "interrupt" });
     send({ type: "interrupt" });
   };
@@ -344,6 +403,11 @@ export function VoiceClient() {
             {turn.icos && <p className={styles.icos}>{plain(turn.icos)}</p>}
             {TURN_LABEL[turn.state] && (
               <span className={styles.badge}>{TURN_LABEL[turn.state]}</span>
+            )}
+            {turn.state === "failed" && (
+              <button type="button" className={styles.resend} onClick={() => resend(turn.id)}>
+                Renvoyer
+              </button>
             )}
           </article>
         ))}
