@@ -1272,15 +1272,29 @@ commands for the self-build certification.
                                              premature: gatePendingReview() had no production
                                              caller. Closed by the production recovery-sweep
                                              trigger with durable adoption (599cf30, merged).
-  DEFECT_36                                — MERGED (bcda6cc, decision 0049); merged-runtime
-                                             validation PENDING — see MERGE LEDGER below.
-  REPAIR_WORKSPACE_DEFECT                  — FIXED on this line (b66def3, decision 0050);
-                                             merged-runtime validation PENDING.
-  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE. 10/10 proofs, no pre-seeded review, and
-                                             now including a correction attempt reaching the
-                                             certified path (M13/M14, decisions 0044, 0050).
-  MULTI_WORKER_E2E_PASS                    — TRUE, re-proven after defect 28 (M5.4, 0035).
-  AUTO_SESSION_RECOVERY_PASS               — TRUE, re-proven after defect 28 (M7, 0039/0040).
+  DEFECT_36                                — CLOSED (bcda6cc, decision 0049), proven on the
+                                             MERGED tree (merge 9cfcd79 + 0051).
+  REPAIR_WORKSPACE_DEFECT                  — CLOSED (b66def3, decision 0050) — closed only once
+                                             DEFECT 40/41 (0051) were fixed: in the merged
+                                             runtime a natural REQUEST_CHANGES correction was
+                                             dispatched UNGOVERNED by QC, then stranded by a
+                                             stale claim. CORRECTION_DAG_E2E now proves it.
+  DEFECT_40 / DEFECT_41                    — CLOSED (decision 0051). 2/2 mutations killed.
+  CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
+                                             0049 settlement + 0050 correction + 0051):
+                                             core3-autonomous-orchestration 10/10,
+                                             core3-dag-settlement 13/13 (incl. TWO_TASK_DAG_E2E
+                                             and CORRECTION_DAG_E2E), core3-natural-review-gate
+                                             8/8, core3-chaos-certification 2/2.
+                                             Merged-tree gates: typecheck PASS, build PASS,
+                                             git diff --check PASS, lint 0 errors / 289
+                                             warnings (baseline), unit 1863/1863, integration
+                                             477 passed / 4 skipped (opt-in E2Es), dedicated DB
+                                             icos_merge36_test. Named restart / recovery /
+                                             multi-worker / exactly-once files: 18 files,
+                                             119/119.
+  MULTI_WORKER_E2E_PASS                    — TRUE, re-proven on the merged tree (M5.4, 0035).
+  AUTO_SESSION_RECOVERY_PASS               — TRUE, re-proven on the merged tree (M7, 0039/0040).
   SELF_DEVELOPMENT_RUNTIME_WIRED           — TRUE (M11), and JOINED to its coordinator (0046).
   SELF_DEVELOPMENT_PLANNING_E2E_PASS       — TRUE (M12, commit 9444447).
   SELF_DEVELOPMENT_E2E_PASS                — TRUE (M14). Candidate -> goal -> mission -> real
@@ -1305,7 +1319,9 @@ commands for the self-build certification.
                                              has ONE writer task and blocks when the plan has
                                              an edge, because a read-only inspection task is
                                              executed and never settled. That is DEFECT 36,
-                                             merged here (0049); repeatability not yet re-run.
+                                             closed and merged here (0049); repeatability NOT
+                                             yet re-run — deliberately, until the self-dev
+                                             path converges on the canonical authority below.
 ICOS is NOT yet self-building, and must not be described as such.
 
 ### OPEN, NOT FIXED HERE
@@ -1316,6 +1332,8 @@ ICOS is NOT yet self-building, and must not be described as such.
               gate ACCEPT can lead the supervisor to mark `succeeded` although apply returned
               NEEDS_REBASE.
   CANCELLED_WORK_INTEGRATION_DEFECT — approved work of a cancelled task may still integrate.
+  PREPARED_RECOVERY_BYPASSES_GOVERNANCE — `reconcilePreparedDispatches` dispatches stale
+              `prepared` intents with no governed workspace (0051 known limit).
   STUCK_EXECUTION_CAPACITY_DEFECT — governed attempts can stay `dispatched` and keep worker
               slots.
   GOVERNANCE PROPOSALS — "Improve ICOS autonomously" sometimes proposes changing a governance

@@ -406,6 +406,10 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
     });
   }
 
+  async releaseClaim(id: string, ownerToken: string): Promise<void> {
+    if (this.recoveryClaims.get(id)?.token === ownerToken) this.recoveryClaims.delete(id);
+  }
+
   async claimPrepared(id: string, ownerToken: string, leaseMs: number): Promise<boolean> {
     if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
       throw new Error("RECOVERY_CLAIM_INVALID_LEASE");

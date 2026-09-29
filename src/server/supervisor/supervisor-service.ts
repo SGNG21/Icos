@@ -321,6 +321,15 @@ export class SupervisorService {
          * destroy the very evidence the reviewer is about to judge.
          */
         let awaitingReview = false;
+        /*
+         * Set only while this run holds a claim on a pending intent whose workspace is not yet
+         * allocated, i.e. nothing can have reached a worker. If allocation fails — typically WORKFLOW_COLLISION while the refused
+         * predecessor still holds the task's workspace, awaiting its gate — the claim is given
+         * back and the error still fails the wake-up, so the durable outbox retries it. Kept,
+         * the claim outlived the failure by its whole lease, the retried wake-up skipped the
+         * intent as "claimed", and the correction never ran.
+         */
+        let releaseUndispatchedClaim: (() => Promise<void>) | null = null;
         try {
           if (!this.dispatchAttempts) {
             throw new Error(
@@ -351,12 +360,15 @@ export class SupervisorService {
              * Claiming is what makes this safe under concurrency: exactly one supervisor may
              * hold a non-expired claim, so two ticks cannot both execute the same intent.
              */
+            const claimToken = `supervisor-${randomUUID()}`;
             const claimed = await this.dispatchAttempts.claimPrepared(
               pending.id,
-              `supervisor-${randomUUID()}`,
+              claimToken,
               DISPATCH_CLAIM_LEASE_MS,
             );
             if (!claimed) continue;
+            releaseUndispatchedClaim = () =>
+              this.dispatchAttempts!.releaseClaim(pending.id, claimToken);
             prepared = { attempt: pending, acquired: true };
           } else {
             const attemptNumber = 1;
@@ -399,6 +411,8 @@ export class SupervisorService {
             allocation.fileScope,
           );
           allocated = true;
+          /* From here the work may reach a worker: never hand the claim back. */
+          releaseUndispatchedClaim = null;
 
           // Prepare the dispatch input (without workflowId, as the coordinator will handle it)
           const dispatchInput = {
@@ -435,6 +449,9 @@ export class SupervisorService {
           } else {
             await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "failed");
           }
+        } catch (error) {
+          await releaseUndispatchedClaim?.();
+          throw error;
         } finally {
           if (allocated && !awaitingReview) {
             // Release workspace

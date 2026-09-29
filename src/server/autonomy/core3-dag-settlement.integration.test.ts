@@ -78,7 +78,7 @@ const workerScript = (mode: WorkerMode) => `
 
 // ------------------------------------------------------------------ OmniRoute network edge
 
-type ReviewerMode = "fail" | "approve" | "changes" | "block";
+type ReviewerMode = "fail" | "approve" | "changes" | "changes-once" | "block";
 let reviewerMode: ReviewerMode = "fail";
 let reviewerRequests = 0;
 let server: Server;
@@ -102,10 +102,13 @@ beforeAll(async () => {
         res.writeHead(503, { "content-type": "application/json" }).end('{"error":"down"}');
         return;
       }
+      /* `changes-once`: the first review asks for changes, every later one approves. */
+      const mode =
+        reviewerMode === "changes-once" ? (reviewerRequests === 1 ? "changes" : "approve") : reviewerMode;
       const content =
-        reviewerMode === "approve"
+        mode === "approve"
           ? { decision: "APPROVE", reasons: ["inside its declared scope"], confidence: 0.9 }
-          : reviewerMode === "block"
+          : mode === "block"
             ? { decision: "BLOCK", reasons: ["unsafe change"], confidence: 0.9 }
             : {
                 decision: "REQUEST_CHANGES",
@@ -473,6 +476,70 @@ describe("DEFECT 36 — natural two-task DAG progression", () => {
     expect(applied.map((o) => o.status)).toEqual(["INTEGRATED", "INTEGRATED"]);
     expect(targetHead()).toBe(wsB.sourceCommit);
   }, 240_000);
+});
+
+describe("DEFECT 36 × 0050 — a correction attempt settles like any governed work", () => {
+  it("CORRECTION_DAG_E2E: REQUEST_CHANGES → own workspace → APPROVE → gate → integrate → settle → B", async () => {
+    makeRepo();
+    await seed(await container());
+    const base = targetHead();
+    reviewerMode = "changes-once";
+    const c = (await boot()).container;
+    const WF_A2 = workflowIdForAttempt(TASK_A, 2);
+
+    const atGate: Array<{ workspaceId: string; bStatus: string; bAttempts: number }> = [];
+    const gate = c.integrationGate!;
+    const realIntegrate = gate.integrate.bind(gate);
+    const gateSpy = vi.spyOn(gate, "integrate").mockImplementation(async (id, options) => {
+      atGate.push({ workspaceId: id, bStatus: await status(c, MT_B), bAttempts: await attempts(c, TASK_B) });
+      return realIntegrate(id, options);
+    });
+    const applySpy = vi.spyOn(c.integrationApplier!, "apply");
+
+    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 240_000);
+
+    /* A was reviewed twice by the real reviewer client: changes, then approval of the correction. */
+    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["REQUEST_CHANGES", "APPROVE"]);
+    expect(await attempts(c, TASK_A)).toBe(2);
+
+    /* The correction got its OWN governed workspace and branch; attempt 1 never integrated. */
+    const wsA1 = (await workspaceOf(c, WF_A))!;
+    const wsA2 = (await workspaceOf(c, WF_A2))!;
+    expect(wsA2.workspaceId).not.toBe(wsA1.workspaceId);
+    expect(wsA2.branch).not.toBe(wsA1.branch);
+    expect(wsA1.status).not.toBe("accepted");
+    expect(wsA2.status).toBe("accepted");
+
+    /*
+     * Attempt 1's REQUEST_CHANGES review is gated by the pending-review sweep and REFUSED (never
+     * applied); B was not admitted when the correction was gated.
+     */
+    const decisions = await Promise.all(gateSpy.mock.results.map((r) => r.value));
+    expect(
+      atGate.flatMap((g, i) => (g.workspaceId === wsA1.workspaceId ? [decisions[i].decision] : [])),
+    ).not.toContain("ACCEPT");
+    expect(atGate.find((g) => g.workspaceId === wsA2.workspaceId)).toEqual({
+      workspaceId: wsA2.workspaceId, bStatus: "draft", bAttempts: 0,
+    });
+
+    /* B was allocated FROM the integrated correction. */
+    const wsB = (await workspaceOf(c, WF_B))!;
+    expect(wsB.baseCommit).toBe(wsA2.sourceCommit);
+    expect(git(repo, "merge-base", "--is-ancestor", wsA2.sourceCommit!, TARGET)).toBe("");
+    expect(targetHead()).toBe(wsB.sourceCommit);
+    expect(targetHead()).not.toBe(base);
+    expect(await status(c, MT_A)).toBe("succeeded");
+    expect(await status(c, MT_B)).toBe("succeeded");
+
+    /* Exactly once. */
+    await ticks(8);
+    expect(await attempts(c, TASK_A)).toBe(2);
+    expect(await attempts(c, TASK_B)).toBe(1);
+    expect(applySpy.mock.calls.map(([id]) => id)).toEqual([wsA2.workspaceId, wsB.workspaceId]);
+    const applied = await Promise.all(applySpy.mock.results.map((r) => r.value));
+    expect(applied.map((o) => o.status)).toEqual(["INTEGRATED", "INTEGRATED"]);
+  }, 420_000);
 });
 
 describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {

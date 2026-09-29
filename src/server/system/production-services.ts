@@ -109,24 +109,13 @@ export function composeAutonomyRuntime(container: Container): {
      * uses: one authority, two callers.
      */
     capabilityRouter: container.capabilityRouter,
-    dispatchPrepared: async (prepared, signal) => {
-      const result = await container.taskExecution.dispatch({
-        missionId: prepared.missionId,
-        taskId: prepared.taskId,
-        taskTitle: (await container.mission.getMissionTaskById(prepared.missionTaskId))?.title,
-        prompt: prepared.prompt,
-        workflowId: prepared.workflowId,
-        workerKind: prepared.workerKind,
-        capability: prepared.capability,
-        digitalosFacadePath: loadEnv().DIGITALOS_FACADE_PATH,
-        signal,
-      });
-      if (result.workflowId !== prepared.workflowId) {
-        throw new Error("DISPATCH_ACKNOWLEDGEMENT_ID_MISMATCH");
-      }
-      signal?.throwIfAborted();
-      await container.dispatchAttempts.markDispatched(prepared.id);
-    },
+    /*
+     * NO `dispatchPrepared` (0050 × 0049). A CORRECT/RETRY prepares its attempt and sets the
+     * durable wake-up in the SAME transaction; the woken supervisor claims that intent and
+     * runs it on the GOVERNED path (workspace, review, gate, settlement). Dispatching it here
+     * went straight to `taskExecution`: the correction got no workspace, stayed `dispatched`,
+     * and the task never settled.
+     */
   });
   const supervisor = new SupervisorService(
     container.mission,

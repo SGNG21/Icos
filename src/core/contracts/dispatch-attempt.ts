@@ -170,6 +170,12 @@ export interface DispatchAttemptRepository {
     leaseMs: number,
   ): Promise<boolean>;
 
+  /**
+   * Gives back a claim this owner holds on a still-PREPARED intent, so the next wake-up can
+   * claim it at once instead of waiting out the lease. Only the holder's token releases it.
+   */
+  releaseClaim(id: string, ownerToken: string): Promise<void>;
+
   markDispatched(id: string): Promise<void>;
 
   markFailed(id: string, message: string): Promise<void>;

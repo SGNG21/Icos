@@ -400,6 +400,19 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     return claimed.length === 1;
   }
 
+  async releaseClaim(id: string, ownerToken: string): Promise<void> {
+    await this.db
+      .update(dispatchAttempts)
+      .set({ claimToken: null, claimUntil: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(dispatchAttempts.id, id),
+          eq(dispatchAttempts.state, "prepared"),
+          eq(dispatchAttempts.claimToken, ownerToken),
+        ),
+      );
+  }
+
   async markDispatched(id: string): Promise<void> {
     const now = new Date();
 
