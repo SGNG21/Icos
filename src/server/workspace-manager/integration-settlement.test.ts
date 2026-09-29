@@ -25,6 +25,15 @@ describe("WorkspaceIntegrationSettlement (DEFECT 36)", () => {
     expect(await settle([ws({ workflowId: "other" })])).toBe("UNGOVERNED");
   });
 
+  it("a WRITER with no workspace ran outside governance: REJECTED, never completed (0052)", async () => {
+    const settlement = new WorkspaceIntegrationSettlement(
+      { list: async () => [] },
+      { isAncestor: async () => true },
+      async () => true,
+    );
+    expect(await settlement.settlementOf("wf")).toBe("REJECTED");
+  });
+
   it("awaiting review or gate: PENDING", async () => {
     expect(await settle([ws({})])).toBe("PENDING");
   });

@@ -20,11 +20,22 @@ export class WorkspaceIntegrationSettlement implements IntegrationSettlementPort
   constructor(
     private readonly manager: Pick<WorkspaceManager, "list">,
     private readonly git: Pick<Git, "isAncestor">,
+    /** Whether the workflow's task may only run governed (`requiresGovernedWorkspace`). */
+    private readonly requiresGovernance: (workflowId: string) => Promise<boolean> = async () =>
+      false,
   ) {}
 
   async settlementOf(workflowId: string): Promise<IntegrationSettlement> {
     const workspaces = (await this.manager.list()).filter((w) => w.workflowId === workflowId);
-    if (workspaces.length === 0) return "UNGOVERNED";
+    if (workspaces.length === 0) {
+      /*
+       * FAIL CLOSED (decision 0052). "No workspace" means ungoverned work only for a task that
+       * never needed one. A WRITER without its workspace ran outside governance — nothing was
+       * gated or integrated — so its approval completes nothing: it is refused, never
+       * `succeeded`. Read as UNGOVERNED, it reported an un-integrated correction as done.
+       */
+      return (await this.requiresGovernance(workflowId)) ? "REJECTED" : "UNGOVERNED";
+    }
 
     for (const ws of workspaces) {
       if (

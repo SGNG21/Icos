@@ -103,3 +103,12 @@ export function decideWorkspaceAllocation(
     slug: workspaceSlug(task),
   };
 }
+
+/**
+ * True when the task may only run in a governed workspace — a writer, including one refused for
+ * an undeclared scope. The supervisor, its recovery path and integrated settlement all ask THIS,
+ * so "governed work" has one definition (decision 0052).
+ */
+export function requiresGovernedWorkspace(task: AllocationTaskView): boolean {
+  return decideWorkspaceAllocation(task).kind !== "NOT_REQUIRED";
+}

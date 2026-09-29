@@ -1280,6 +1280,16 @@ commands for the self-build certification.
                                              dispatched UNGOVERNED by QC, then stranded by a
                                              stale claim. CORRECTION_DAG_E2E now proves it.
   DEFECT_40 / DEFECT_41                    — CLOSED (decision 0051). 2/2 mutations killed.
+  SELF_DEVELOPMENT_GATE_PATH_DIVERGENCE    — CLOSED (decision 0052). Self-development drives the
+                                             production sweeps; it never reviews, gates, applies
+                                             or completes a task. Also closed there:
+                                             PREPARED_RECOVERY_BYPASSES_GOVERNANCE (recovery
+                                             replayed a correction UNGOVERNED) and a fail-open
+                                             0049 settlement (no workspace => UNGOVERNED =>
+                                             `succeeded` with nothing integrated). 3/3 mutations
+                                             killed. Gates: unit 1821 (42 unit tests deleted with
+                                             the removed parallel path), integration 482 / 4
+                                             skipped, lint 0 errors / 278 warnings, build PASS.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
                                              0049 settlement + 0050 correction + 0051):
                                              core3-autonomous-orchestration 10/10,
@@ -1325,15 +1335,10 @@ commands for the self-build certification.
 ICOS is NOT yet self-building, and must not be described as such.
 
 ### OPEN, NOT FIXED HERE
-  SELF_DEVELOPMENT_GATE_PATH_DIVERGENCE — self-development still gates directly and writes
-              `succeeded` itself instead of review -> pending-review sweep (0045) -> gate ->
-              settlement (0049). Not started.
   INLINE_GATE_NEEDS_REBASE_DEFECT — if a review already exists when execution ends, an inline
               gate ACCEPT can lead the supervisor to mark `succeeded` although apply returned
               NEEDS_REBASE.
   CANCELLED_WORK_INTEGRATION_DEFECT — approved work of a cancelled task may still integrate.
-  PREPARED_RECOVERY_BYPASSES_GOVERNANCE — `reconcilePreparedDispatches` dispatches stale
-              `prepared` intents with no governed workspace (0051 known limit).
   STUCK_EXECUTION_CAPACITY_DEFECT — governed attempts can stay `dispatched` and keep worker
               slots.
   GOVERNANCE PROPOSALS — "Improve ICOS autonomously" sometimes proposes changing a governance

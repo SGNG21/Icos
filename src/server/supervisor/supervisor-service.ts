@@ -19,6 +19,7 @@ import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import {
   decideWorkspaceAllocation,
+  requiresGovernedWorkspace,
   workspaceSlug,
   type WorkspaceAllocationDecision,
 } from "./workspace-allocation-policy";
@@ -134,6 +135,16 @@ export class SupervisorService {
    *
    * Reusing the same deterministic workflowId makes replay safe with Temporal.
    */
+  private async requiresWorkspace(taskId: string): Promise<boolean> {
+    const task = await this.taskRepository.getById(taskId);
+    return requiresGovernedWorkspace({
+      taskId,
+      title: task?.title ?? taskId,
+      riskClass: task?.riskClass,
+      allowedFileScope: task?.allowedFileScope,
+    });
+  }
+
   async reconcilePreparedDispatches(missionId?: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
 
@@ -150,6 +161,16 @@ export class SupervisorService {
 
     for (const attempt of prepared) {
       signal?.throwIfAborted();
+
+      /*
+       * GOVERNED INTENTS ARE NOT REPLAYED HERE (decision 0052). This replay dispatches straight
+       * to the dispatcher with no workspace. For a writer that is ungoverned execution: a
+       * correction attempt ran with no branch, no gate and no integration, and was then
+       * reported done. `run()` claims the same pending intent and governs it.
+       */
+      if (this.workspaceExecutionCoordinator && (await this.requiresWorkspace(attempt.taskId))) {
+        continue;
+      }
 
       const claimed = await this.dispatchAttempts.claimPrepared(
         attempt.id,

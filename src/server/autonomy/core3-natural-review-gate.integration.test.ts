@@ -603,18 +603,22 @@ describe("DEFECT 28 closure — one canonical integration authority (structural)
     ]);
   });
 
-  it("the IntegrationGate and IntegrationApplier are driven only by the governed coordinators", () => {
+  it("the IntegrationGate and IntegrationApplier are driven only by the workspace coordinator", () => {
     /*
-     * The self-development coordinator still calls the gate/applier directly with an
-     * unpersisted review (pre-existing, M10). It is listed here so the set cannot grow
-     * silently; converging it onto the persisted-review + pending-review path is recorded as
-     * an open item owned by the self-development work (see decision 0045).
+     * Decision 0052: self-development no longer gates, applies or completes anything itself.
+     * It drives the same production sweeps, so there is ONE review/gate/settlement authority.
      */
-    const expected = [
-      "server/autonomy/governed-self-development-coordinator.ts",
-      "server/workspace-manager/workspace-execution-coordinator.ts",
-    ];
+    const expected = ["server/workspace-manager/workspace-execution-coordinator.ts"];
     expect(callers(/integrationGate\.integrate\(/)).toEqual(expected);
     expect(callers(/integrationApplier\.apply\(/)).toEqual(expected);
+  });
+
+  it("self-development never writes a MissionTask status to `succeeded` itself", () => {
+    const coordinator = readFileSync(
+      path.join(root, "server/autonomy/governed-self-development-coordinator.ts"),
+      "utf8",
+    );
+    expect(coordinator).not.toMatch(/updateMissionTaskStatus\([^)]*"succeeded"/s);
+    expect(coordinator).not.toMatch(/integrationGate|integrationApplier|\.cleanup\(/);
   });
 });

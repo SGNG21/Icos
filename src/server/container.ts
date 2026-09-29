@@ -88,6 +88,7 @@ import { PostgresReviewerService } from "@/server/repositories/postgres/postgres
 import { PostgresReviewDecisionRepository } from "@/server/repositories/postgres/review-decision-repository";
 import { PostgresQualityControlRepository } from "@/server/repositories/postgres/quality-control-repository";
 import { WorkspaceIntegrationSettlement } from "@/server/workspace-manager/integration-settlement";
+import { requiresGovernedWorkspace } from "@/server/supervisor/workspace-allocation-policy";
 import { PostgresAutonomousMissionRuntimeRepository } from "@/server/repositories/postgres/autonomous-mission-runtime-repository";
 import {
   PostgresConversationRepository,
@@ -443,7 +444,11 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       reviewDecisions,
       dispatchAttempts,
       autonomousRuntime,
-      new WorkspaceIntegrationSettlement(workspaceManager, git),
+      new WorkspaceIntegrationSettlement(
+        workspaceManager,
+        git,
+        governedWorkflow(dispatchAttempts, tasksRepository),
+      ),
     ),
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
@@ -764,7 +769,7 @@ export async function buildPostgresContainer(
     /* DEFECT 36: governed work completes on its INTEGRATION, not on its review (0049). */
     qualityControlJobs: new PostgresQualityControlRepository(
       handle.db,
-      new WorkspaceIntegrationSettlement(workspaceManager, pgGit),
+      new WorkspaceIntegrationSettlement(workspaceManager, pgGit, governedWorkflow(dispatchAttempts, tasks)),
     ),
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
@@ -1054,4 +1059,24 @@ function buildWorkerProbeAdapters(): Record<string, CommandWorkerProbe> {
   const probe = new CommandWorkerProbe(createWorkerProbeResolver(configured));
 
   return Object.fromEntries(probeableRuntimes(configured).map((runtime) => [runtime, probe]));
+}
+
+/** Whether a workflow's task may only run governed — the supervisor's own definition (0052). */
+function governedWorkflow(
+  attempts: Pick<DispatchAttemptRepository, "getByWorkflowId">,
+  taskRepository: Pick<TaskRepository, "getById">,
+): (workflowId: string) => Promise<boolean> {
+  return async (workflowId) => {
+    const attempt = await attempts.getByWorkflowId(workflowId);
+    const task = attempt ? await taskRepository.getById(attempt.taskId) : null;
+    return (
+      task !== null &&
+      requiresGovernedWorkspace({
+        taskId: task.id,
+        title: task.title,
+        riskClass: task.riskClass,
+        allowedFileScope: task.allowedFileScope,
+      })
+    );
+  };
 }

@@ -8,8 +8,6 @@ import { CanonicalImprovementProposer } from "@/server/autonomy/canonical-improv
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
 import { SelfDevelopmentChain } from "@/server/autonomy/self-development-chain";
 import { GovernedSelfDevelopmentCoordinator } from "@/server/autonomy/governed-self-development-coordinator";
-import { CertifiedRuntimeExecutionHandoff } from "@/server/autonomy/certified-runtime-execution-handoff";
-import { CanonicalIndependentReview } from "@/server/autonomy/canonical-independent-review";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
 import { QualityControlRecoverySweeper } from "@/server/autonomy/quality-control-recovery-sweeper";
 import { CombinedAutonomyRecoverySweeper } from "@/server/autonomy/combined-autonomy-recovery-sweeper";
@@ -81,6 +79,10 @@ export function composeAutonomyRuntime(container: Container): {
   supervisor: SupervisorService;
   qualityControl: QualityControlService;
   wakeup: AutonomyWakeupService;
+  /** The QC + runtime recovery sweep of every production tick. */
+  recovery: CombinedAutonomyRecoverySweeper;
+  /** The ONLY production caller of `gatePendingReview()` (0045). */
+  pendingReviewGate?: PendingReviewGateSweeper;
   backlog: DurableImprovementBacklog;
   selfDevelopmentChain: SelfDevelopmentChain;
   selfDevelopment: GovernedSelfDevelopmentCoordinator;
@@ -172,34 +174,50 @@ export function composeAutonomyRuntime(container: Container): {
     },
   });
 
+  /*
+   * THE PRODUCTION TICK, composed once (decision 0052). The recovery scheduler runs exactly
+   * these sweepers on its timer; self-development drives the same ones while it waits for its
+   * mission to settle. One review, gate and settlement authority — not a second pipeline.
+   */
+  const recovery = new CombinedAutonomyRecoverySweeper(
+    new AutonomyRecoverySweeper(container.autonomousRuntime, wakeup),
+    new QualityControlRecoverySweeper(qualityControl, container.qualityControlJobs, (missionId) =>
+      wakeup.wake(missionId),
+    ),
+  );
+  const pendingReviewGate = container.workspaceExecutionCoordinator
+    ? new PendingReviewGateSweeper(container.workspaceExecutionCoordinator)
+    : undefined;
+
   const selfDevelopment = new GovernedSelfDevelopmentCoordinator({
     backlog,
     missions: container.mission,
     tasks: container.tasks,
-    /*
-     * THE JOIN (defect 29). The chain planned and the coordinator governed, and nothing
-     * connected them — so `selfDevelopment.advance()` can now run the whole cycle from an
-     * intent instead of requiring a caller to supply missionId/missionTaskId/taskId by hand.
-     */
+    /* THE JOIN (defect 29): the chain plans, the coordinator observes what it planned. */
     chain: selfDevelopmentChain,
-    dispatchAttempts: container.dispatchAttempts,
-    workerRegistry: container.workerRegistry,
-    /* THE adapter that enters the certified path — not a parallel execution handoff. */
-    execution: new CertifiedRuntimeExecutionHandoff({
-      supervisor,
-      workspaces: container.workspaceManager!,
-      dispatchAttempts: container.dispatchAttempts,
-      executionResults: container.executionResults,
-    }),
-    /* The canonical reviewer, with the existing independence rule. Not a second authority. */
-    review: new CanonicalIndependentReview({
-      reviewer: container.reviewer,
-      workerRegistry: container.workerRegistry,
-      missions: container.mission,
-      tasks: container.tasks,
-    }),
-    integrationGate: container.integrationGate!,
-    integrationApplier: container.integrationApplier,
+    pass: {
+      async run() {
+        await recovery.sweep();
+        const gated = await pendingReviewGate?.sweep();
+        const workspaces = gated ? await container.workspaceManager!.list() : [];
+        return (gated?.results ?? []).flatMap((r) =>
+          r.decision
+            ? [
+                {
+                  taskId: r.taskId,
+                  decision: r.decision,
+                  reasons: r.reasons ?? [],
+                  commitSha:
+                    workspaces.find((w) => w.workspaceId === r.workspaceId)?.sourceCommit ??
+                    undefined,
+                },
+              ]
+            : [],
+        );
+      },
+    },
+    executionResults: container.executionResults,
+    reviewDecisions: container.reviewDecisions,
     workspaces: container.workspaceManager,
     durableMemory: container.durableMemory,
   });
@@ -226,6 +244,8 @@ export function composeAutonomyRuntime(container: Container): {
     supervisor,
     qualityControl,
     wakeup,
+    recovery,
+    pendingReviewGate,
     backlog,
     selfDevelopmentChain,
     selfDevelopment,
@@ -237,18 +257,10 @@ function createRecoveryScheduler(
   container: Container,
   options: { intervalMs: number },
 ): ProductionServiceScheduler {
-  const { supervisor, qualityControl, wakeup } = composeAutonomyRuntime(container);
+  const { supervisor, wakeup, recovery, pendingReviewGate } = composeAutonomyRuntime(container);
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
   }
-
-  const autonomySweeper = new AutonomyRecoverySweeper(container.autonomousRuntime, wakeup);
-  const qualitySweeper = new QualityControlRecoverySweeper(
-    qualityControl,
-    container.qualityControlJobs,
-    (missionId) => wakeup.wake(missionId),
-  );
-  const recovery = new CombinedAutonomyRecoverySweeper(autonomySweeper, qualitySweeper);
 
   // Durable Scheduler (ADR-0025): the same timer only triggers a consultation of the
   // durable job table; PostgreSQL stays the source of truth.
@@ -310,14 +322,7 @@ function createRecoveryScheduler(
        * This is the ONLY production caller of `gatePendingReview()`; without it an approval
        * written after execution was never gated or integrated by the runtime.
        */
-      ...(container.workspaceExecutionCoordinator
-        ? [
-            [
-              "pending-review-gate",
-              new PendingReviewGateSweeper(container.workspaceExecutionCoordinator),
-            ] as const,
-          ]
-        : []),
+      ...(pendingReviewGate ? [["pending-review-gate", pendingReviewGate] as const] : []),
     ]),
     options,
   );

@@ -236,7 +236,7 @@ describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an inte
       outcome: outcome ?? { threw: thrown instanceof Error ? thrown.message : String(thrown) },
       gateCommands: REAL_GATE_COMMANDS,
       notes: [
-        "The self-development path gates through GovernedSelfDevelopmentCoordinator's DIRECT call to the IntegrationGate, not through the pending-review sweeper. The review itself IS persisted (section 8), because the coordinator reviews through container.reviewer, which is the canonical PostgresReviewerService.",
+        "Decision 0052: self-development runs on the canonical path only — QC review (persisted, section 8) -> pending-review sweep -> IntegrationGate -> applier -> integrated settlement. The coordinator never reviews, gates, applies or completes a task itself.",
         `Worker branch and commits survive in ${REPO} even when this run is reset.`,
       ],
     });

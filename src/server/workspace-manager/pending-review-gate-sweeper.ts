@@ -1,6 +1,6 @@
 import type { AutonomyRecoverySweepResult } from "@/server/autonomy/autonomy-recovery-sweeper";
 
-import type { WorkspaceExecutionCoordinator } from "./workspace-execution-coordinator";
+import type { CoordinationResult, WorkspaceExecutionCoordinator } from "./workspace-execution-coordinator";
 
 /**
  * THE production trigger of the later governed pass (defect 28 closure).
@@ -24,7 +24,7 @@ export class PendingReviewGateSweeper {
     private readonly coordinator: Pick<WorkspaceExecutionCoordinator, "gatePendingReview">,
   ) {}
 
-  async sweep(): Promise<AutonomyRecoverySweepResult> {
+  async sweep(): Promise<AutonomyRecoverySweepResult & { results: CoordinationResult[] }> {
     const results = await this.coordinator.gatePendingReview();
     const failures = results
       .filter((r) => r.decision !== "ACCEPT" && r.decision !== "REJECT")
@@ -41,6 +41,8 @@ export class PendingReviewGateSweeper {
       ).length,
       failed: failures.length,
       failures,
+      /* Per-workspace verdicts, for a caller that must act on an inconclusive one (0052). */
+      results,
     };
   }
 }
