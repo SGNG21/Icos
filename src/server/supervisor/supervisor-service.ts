@@ -420,6 +420,13 @@ export class SupervisorService {
            * identity used for attribution and for the gate's self-review refusal. It is
            * not a routing input, and no kind, provider or model reaches this call.
            */
+          /* A later attempt supersedes the earlier ones: free their workspaces first. */
+          if (prepared.attempt.attempt > 1) {
+            await this.workspaceExecutionCoordinator.retireSupersededWorkspaces(
+              task.taskId,
+              prepared.attempt.workflowId,
+            );
+          }
           await this.workspaceExecutionCoordinator.allocateWorkspace(
             mission.id,
             task.taskId,

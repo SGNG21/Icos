@@ -446,6 +446,56 @@ export class WorkspaceExecutionCoordinator {
    * Runs IntegrationGate on the workspace after successful execution.
    */
   /**
+   * RETIRES THE WORKSPACES OF SUPERSEDED ATTEMPTS (SUPERSEDED_ATTEMPT_WORKSPACE_HELD).
+   *
+   * A later attempt exists only because QC refused the earlier one (CORRECT / RETRY), so the
+   * earlier attempt's work can never integrate. A REQUEST_CHANGES predecessor used to be freed
+   * by the pending-review gate's REJECT; a FAILED one (e.g. a worker timeout answered RETRY) has
+   * no review, so nothing ever freed it and every allocation of its successor collided. The
+   * predecessor is abandoned and released here, under its lease; the branch survives as
+   * evidence. A workspace another live owner holds is left to that owner.
+   */
+  async retireSupersededWorkspaces(taskId: string, workflowId: string): Promise<void> {
+    for (const ws of await this.manager.list()) {
+      if (ws.taskId !== taskId || ws.releasedAt !== null) continue;
+      if (!ws.workflowId || ws.workflowId === workflowId) continue;
+
+      const bound = this.executionWorkspaces.get(taskId);
+      const ours = bound?.workspaceId === ws.workspaceId && bound.status !== "released";
+      let fencingToken = ours ? bound!.fencingToken : undefined;
+      if (!ours) {
+        try {
+          fencingToken = (await this.manager.acquireLease(ws.workspaceId, this.ownerToken, this.leaseMs))
+            .fencingToken;
+        } catch (error) {
+          if (
+            error instanceof WorkspaceError &&
+            (error.code === "LEASE_HELD" ||
+              error.code === "REGISTRY_LOCKED" ||
+              error.code === "WORKSPACE_RELEASED")
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      await this.manager
+        .transition(ws.workspaceId, "abandoned", this.ownerToken, fencingToken)
+        .catch(() => undefined);
+      try {
+        await this.manager.cleanup(ws.workspaceId, this.ownerToken, fencingToken!);
+      } finally {
+        this.stopLeaseRenewal(ws.workspaceId);
+        if (ours) {
+          bound!.status = "released";
+          bound!.releasedAt = new Date().toISOString();
+        }
+      }
+    }
+  }
+
+  /**
    * CANCELLED WORK NEVER INTEGRATES (CANCELLED_WORK_INTEGRATION_DEFECT).
    *
    * An approval judges the work, not whether it is still wanted. When the MissionTask was

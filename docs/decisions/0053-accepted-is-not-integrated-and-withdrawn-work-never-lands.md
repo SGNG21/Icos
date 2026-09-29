@@ -42,3 +42,19 @@ reproduced by a failing proof before its fix.
 | inline NEEDS_REBASE | INLINE GATE (real QC wins the race; target moves between gate and apply) | supervisor ignores `awaitingIntegration` | fails |
 | cancelled work | cancelled WHILE AWAITING REVIEW ×2 (recovery sweep, completion callback) | guard returns `null` | both fail |
 | stuck capacity | TWO_TASK_DAG_E2E, CORRECTION_DAG_E2E: 0 non-terminal attempts at the end | no `markCompletedByWorkflowId` | fails (2 stuck) |
+
+## Amendment — SUPERSEDED_ATTEMPT_WORKSPACE_HELD (found by self-build run 1)
+
+The first real self-build run after 0053 stopped: the worker exceeded its timeout, the
+canonical review answered RETRY, QC prepared attempt 2 — and attempt 1's workspace was never
+released. A REQUEST_CHANGES predecessor is freed by the pending-review gate's REJECT; a FAILED
+one has no review, so nothing freed it and every allocation of the retry collided
+(WORKFLOW_COLLISION) for ever. Evidence:
+`audit/self-build-bootstrap/evidence/icos-self-build-e2e-run1-2026-09-29-stranded-retry.md`.
+
+Decision: when the supervisor governs attempt N > 1 it first calls
+`retireSupersededWorkspaces(taskId, workflowId)`: every unreleased workspace of the task bound
+to another workflow is abandoned and released under its lease (skipped if a live owner holds
+it). A successor intent exists only because QC refused the predecessor, so that work can never
+integrate. Proof: `core3-dag-settlement` "A's attempt 1 fails → QC RETRY → attempt 2 governed →
+… → B" (worker timeout, as in the run); it failed before the fix exactly as the run did.

@@ -1297,6 +1297,10 @@ commands for the self-build certification.
   STUCK_EXECUTION_CAPACITY_DEFECT          — CLOSED (0053): a successful attempt is completed
                                              when its result is durable.
                                              3/3 mutations killed. Integration 483 / 4 skipped.
+  SUPERSEDED_ATTEMPT_WORKSPACE_HELD        — CLOSED (0053 amendment). Found by self-build run 1:
+                                             a RETRY after a worker timeout stranded attempt 2
+                                             behind attempt 1's never-released workspace.
+                                             Integration 484 / 4 skipped.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
                                              0049 settlement + 0050 correction + 0051):
                                              core3-autonomous-orchestration 10/10,

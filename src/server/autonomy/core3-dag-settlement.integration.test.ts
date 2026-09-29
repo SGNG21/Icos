@@ -55,13 +55,17 @@ const WF_B = workflowIdForAttempt(TASK_B, 1);
 const TARGET = "integration/phase-7";
 
 /** `normal` writes inside the declared scope; `rogue` makes A write OUTSIDE it (gate REJECT). */
-type WorkerMode = "normal" | "rogue";
+type WorkerMode = "normal" | "rogue" | "fail-once";
 let workerMode: WorkerMode = "normal";
 
 const workerScript = (mode: WorkerMode) => `
   const fs = require('fs');
   const { execFileSync } = require('child_process');
   const id = process.env.ICOS_TASK_ID;
+  if ('${mode}' === 'fail-once' && id === '${TASK_A}' && !process.env.ICOS_WORKFLOW_ID.includes('-attempt-')) {
+    /* Hang past the worker timeout: a WORKER_TIMEOUT, which the canonical review answers RETRY. */
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
+  }
   if (id === '${TASK_B}' && !fs.existsSync('src/${TASK_A}/feature.txt')) {
     process.stderr.write('B started before A was integrated');
     process.exit(3);
@@ -78,7 +82,7 @@ const workerScript = (mode: WorkerMode) => `
 
 // ------------------------------------------------------------------ OmniRoute network edge
 
-type ReviewerMode = "fail" | "approve" | "changes" | "changes-once" | "block";
+type ReviewerMode = "fail" | "approve" | "changes" | "changes-once" | "retry-once" | "block";
 let reviewerMode: ReviewerMode = "fail";
 let reviewerRequests = 0;
 let server: Server;
@@ -104,12 +108,18 @@ beforeAll(async () => {
       }
       /* `changes-once`: the first review asks for changes, every later one approves. */
       const mode =
-        reviewerMode === "changes-once" ? (reviewerRequests === 1 ? "changes" : "approve") : reviewerMode;
+        reviewerMode === "changes-once"
+          ? reviewerRequests === 1 ? "changes" : "approve"
+          : reviewerMode === "retry-once"
+            ? reviewerRequests === 1 ? "retry" : "approve"
+            : reviewerMode;
       const content =
         mode === "approve"
           ? { decision: "APPROVE", reasons: ["inside its declared scope"], confidence: 0.9 }
           : mode === "block"
             ? { decision: "BLOCK", reasons: ["unsafe change"], confidence: 0.9 }
+            : mode === "retry"
+              ? { decision: "RETRY", reasons: ["the worker failed; re-execute"], confidence: 0.9 }
             : {
                 decision: "REQUEST_CHANGES",
                 reasons: ["the feature file needs a header"],
@@ -172,7 +182,7 @@ function envOverrides(extra: Record<string, string> = {}) {
       binary: {
         command: process.execPath,
         args: ["-e", workerScript(workerMode)],
-        timeoutMs: 30_000,
+        timeoutMs: workerMode === "fail-once" ? 5_000 : 30_000,
       },
     }),
     ICOS_REPO_PATH: repo,
@@ -549,6 +559,31 @@ describe("DEFECT 36 × 0050 — a correction attempt settles like any governed w
     expect(applySpy.mock.calls.map(([id]) => id)).toEqual([wsA2.workspaceId, wsB.workspaceId]);
     const applied = await Promise.all(applySpy.mock.results.map((r) => r.value));
     expect(applied.map((o) => o.status)).toEqual(["INTEGRATED", "INTEGRATED"]);
+    expect(await nonTerminalAttempts(c)).toBe(0);
+  }, 420_000);
+});
+
+describe("SUPERSEDED_ATTEMPT_WORKSPACE_HELD — a retry after a FAILED execution is governed", () => {
+  it("A's attempt 1 fails → QC RETRY → attempt 2 governed → reviewed → integrated → settled → B", async () => {
+    makeRepo();
+    workerMode = "fail-once";
+    await seed(await container());
+    reviewerMode = "approve";
+    const c = (await boot()).container;
+    const WF_A2 = workflowIdForAttempt(TASK_A, 2);
+
+    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 240_000);
+
+    /* The failed attempt's workspace was retired, never integrated; the retry had its own. */
+    const wsA1 = (await workspaceOf(c, WF_A))!;
+    const wsA2 = (await workspaceOf(c, WF_A2))!;
+    expect(wsA1.releasedAt).not.toBeNull();
+    expect(wsA1.status).not.toBe("accepted");
+    expect(wsA2.status).toBe("accepted");
+    expect((await workspaceOf(c, WF_B))!.baseCommit).toBe(wsA2.sourceCommit);
+    expect(await status(c, MT_A)).toBe("succeeded");
+    expect(await status(c, MT_B)).toBe("succeeded");
     expect(await nonTerminalAttempts(c)).toBe(0);
   }, 420_000);
 });
