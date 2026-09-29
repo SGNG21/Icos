@@ -493,10 +493,10 @@ describe("Cognitive runtime on real PostgreSQL", () => {
     const all = Array.from({ length: 9 }, (_, i) =>
       rt.submitTurn(ME, conv.id, { text: `concurrent ${i}`, idempotencyKey: k() }),
     );
-    const settled: PromiseSettledResult<unknown>[] = [];
+    const allSettled = Promise.allSettled(all); // observe rejections immediately
     await new Promise((r) => setTimeout(r, 1_000));
     release();
-    settled.push(...(await Promise.allSettled(all)));
+    const settled = await allSettled;
     const won = settled.filter((r) => r.status === "fulfilled");
     const lost = settled.filter((r) => r.status === "rejected");
     expect(won).toHaveLength(1);
