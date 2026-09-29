@@ -1,12 +1,14 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { assertWorkerCapacity } from "./worker-capacity";
 
-import type {
-  QualityAction,
-  QualityControlJob,
-  QualityControlRepository,
-  RegisterQualityControlInput,
-  RegisterQualityControlResult,
+import {
+  completionForSettlement,
+  type IntegrationSettlementPort,
+  type QualityAction,
+  type QualityControlJob,
+  type QualityControlRepository,
+  type RegisterQualityControlInput,
+  type RegisterQualityControlResult,
 } from "@/core/contracts/quality-control";
 import type { ReviewDecisionRecord } from "@/core/contracts/review";
 import type { Database } from "@/server/database/client";
@@ -42,8 +44,18 @@ function mapJob(row: typeof qualityControlJobs.$inferSelect): QualityControlJob 
   };
 }
 
+/** MissionTask statuses of work still in flight: the only ones a settlement may change. */
+const IN_FLIGHT = ["queued", "running", "review_pending"] as const;
+
 export class PostgresQualityControlRepository implements QualityControlRepository {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    /**
+     * Governed integration state (DEFECT 36, decision 0049). Absent: no governed workspace can
+     * exist, and review acceptance remains the canonical completion exactly as before.
+     */
+    private readonly settlement?: IntegrationSettlementPort,
+  ) {}
 
   async register(input: RegisterQualityControlInput): Promise<RegisterQualityControlResult> {
     return this.db.transaction(async (tx) => {
@@ -105,6 +117,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       if (!job) throw new Error("QUALITY_CONTROL_REGISTER_RACE");
       this.assertSameIdentity(mapJob(job), input);
 
+      /* In flight only: registering a result never revives a cancelled or settled task (DEFECT 36). */
       await tx
         .update(missionTasks)
         .set({ status: "review_pending", updatedAt: now })
@@ -112,6 +125,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           and(
             eq(missionTasks.id, input.missionTaskId),
             eq(missionTasks.missionId, input.missionId),
+            inArray(missionTasks.status, [...IN_FLIGHT]),
           ),
         );
       return { job: mapJob(job), acquired };
@@ -218,6 +232,19 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       forceEscalate?: boolean;
     },
   ): Promise<{ job: QualityControlJob; dispatchAcquired: boolean }> {
+    /*
+     * DEFECT 36 — an APPROVE is not yet a satisfied dependency. For GOVERNED work the canonical
+     * completion is the integration: marking the task `succeeded` here let the readiness
+     * authority admit its dependents while the work was still only reviewed, so they were built
+     * from the pre-integration target. Asked BEFORE the transaction: it reads git, and nothing
+     * it answers can be invalidated by this transaction (the job's action is already decided).
+     */
+    const pending = await this.getByWorkflowId(workflowId);
+    const acceptCompletion =
+      this.settlement && pending?.action === "ACCEPT" && !input.forceEscalate
+        ? completionForSettlement(await this.settlement.settlementOf(workflowId))
+        : "succeeded";
+
     return this.db.transaction(async (tx) => {
       const job = await this.lockOwned(tx, workflowId, ownerToken);
       if (job.state === "action_applied" || job.state === "escalated") {
@@ -229,8 +256,9 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
 
       const action = input.forceEscalate ? "ESCALATE" : job.action;
       let dispatchAcquired = false;
-      if (action === "ACCEPT" || action === "ESCALATE") {
-        const status = action === "ACCEPT" ? "succeeded" : "failed";
+      /* `null`: ACCEPT recorded, completion deferred to `settleAccepted` (DEFECT 36). */
+      const status = action === "ACCEPT" ? acceptCompletion : "failed";
+      if ((action === "ACCEPT" || action === "ESCALATE") && status) {
         await tx
           .update(missionTasks)
           .set({ status, updatedAt: sql`now()` })
@@ -538,11 +566,73 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           await tx
             .update(missionTasks)
             .set({ status: "review_pending", updatedAt: sql`now()` })
-            .where(eq(missionTasks.id, registered[0].missionTaskId));
+            .where(
+              and(
+                eq(missionTasks.id, registered[0].missionTaskId),
+                inArray(missionTasks.status, [...IN_FLIGHT]),
+              ),
+            );
         }
       }
       return inserted.length;
     });
+  }
+
+  async settleAccepted(missionId?: string): Promise<number> {
+    if (!this.settlement) return 0;
+    const candidates = await this.db
+      .select({
+        workflowId: qualityControlJobs.workflowId,
+        missionTaskId: qualityControlJobs.missionTaskId,
+        taskId: qualityControlJobs.taskId,
+      })
+      .from(qualityControlJobs)
+      .innerJoin(missionTasks, eq(missionTasks.id, qualityControlJobs.missionTaskId))
+      .where(
+        and(
+          eq(qualityControlJobs.action, "ACCEPT"),
+          eq(qualityControlJobs.state, "action_applied"),
+          inArray(missionTasks.status, [...IN_FLIGHT]),
+          missionId ? eq(qualityControlJobs.missionId, missionId) : undefined,
+        ),
+      );
+
+    let settled = 0;
+    for (const candidate of candidates) {
+      const status = completionForSettlement(
+        await this.settlement.settlementOf(candidate.workflowId),
+      );
+      if (!status) continue;
+      /*
+       * One transaction: the terminal status and the durable wake-up (the QC outbox) commit
+       * together, so a crash can never leave a settled task whose dependents nobody wakes.
+       * The in-flight guard is the exactly-once: a concurrent or repeated sweep updates no row.
+       */
+      const changed = await this.db.transaction(async (tx) => {
+        const updated = await tx
+          .update(missionTasks)
+          .set({ status, updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(missionTasks.id, candidate.missionTaskId),
+              inArray(missionTasks.status, [...IN_FLIGHT]),
+            ),
+          )
+          .returning({ id: missionTasks.id });
+        if (updated.length === 0) return false;
+        await tx
+          .update(tasks)
+          .set({ status, updatedAt: sql`now()` })
+          .where(eq(tasks.id, candidate.taskId));
+        await tx
+          .update(qualityControlJobs)
+          .set({ wakeupPending: true, updatedAt: sql`now()` })
+          .where(eq(qualityControlJobs.workflowId, candidate.workflowId));
+        return true;
+      });
+      if (changed) settled += 1;
+    }
+    return settled;
   }
 
   async listRecoverableMissionIds(limit = 100): Promise<string[]> {
@@ -566,6 +656,14 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         where q.workflow_id is null
           and t.status in ('queued','running','review_pending')
           and r.recorded_at <= now() - interval '30 seconds'
+        union
+        -- DEFECT 36: an ACCEPT whose integrated settlement has not been observed yet.
+        select q.mission_id
+        from quality_control_jobs q
+        join mission_tasks t on t.id = q.mission_task_id
+        where q.action = 'ACCEPT'
+          and q.state = 'action_applied'
+          and t.status in ('queued','running','review_pending')
       ) recoverable
       order by mission_id
       limit ${limit}

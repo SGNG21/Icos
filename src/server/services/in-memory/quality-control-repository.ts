@@ -1,15 +1,20 @@
-import type {
-  QualityAction,
-  QualityControlJob,
-  QualityControlRepository,
-  RegisterQualityControlInput,
-  RegisterQualityControlResult,
+import {
+  completionForSettlement,
+  type IntegrationSettlementPort,
+  type QualityAction,
+  type QualityControlJob,
+  type QualityControlRepository,
+  type RegisterQualityControlInput,
+  type RegisterQualityControlResult,
 } from "@/core/contracts/quality-control";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskExecutionResultRepository, TaskRepository } from "@/server/repositories/ports";
 import type { ReviewDecisionRepository } from "@/server/review/review-decision-repository";
+
+/** MissionTask statuses of work still in flight: the only ones a settlement may change. */
+const IN_FLIGHT: ReadonlySet<string> = new Set(["queued", "running", "review_pending"]);
 
 function clone(job: QualityControlJob): QualityControlJob {
   return structuredClone(job);
@@ -27,6 +32,8 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
     private readonly reviewDecisions: ReviewDecisionRepository,
     private readonly dispatchAttempts: DispatchAttemptRepository,
     private readonly autonomousRuntime?: AutonomousMissionRuntimeRepository,
+    /** Governed integration state (DEFECT 36); same semantics as the PostgreSQL repository. */
+    private readonly settlement?: IntegrationSettlementPort,
   ) {}
 
   async register(input: RegisterQualityControlInput): Promise<RegisterQualityControlResult> {
@@ -64,11 +71,14 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       updatedAt: now,
     };
     this.jobs.set(job.workflowId, job);
-    await this.missions.updateMissionTaskStatus(
-      input.missionId,
-      input.missionTaskId,
-      "review_pending",
-    );
+    /* In flight only: registering a result never revives a cancelled or settled task. */
+    if (IN_FLIGHT.has(missionTask.status)) {
+      await this.missions.updateMissionTaskStatus(
+        input.missionId,
+        input.missionTaskId,
+        "review_pending",
+      );
+    }
     return { job: clone(job), acquired: true };
   }
 
@@ -224,10 +234,16 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
 
     let dispatchAcquired = false;
     switch (job.action) {
-      case "ACCEPT":
-        await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, "succeeded");
-        await this.tasks.transition(job.taskId, "succeeded");
+      case "ACCEPT": {
+        /* DEFECT 36: governed work completes on its integration, not on its review. */
+        const status = this.settlement
+          ? completionForSettlement(await this.settlement.settlementOf(workflowId))
+          : "succeeded";
+        if (!status) break;
+        await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, status);
+        await this.tasks.transition(job.taskId, status);
         break;
+      }
       case "ESCALATE":
         await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, "failed");
         await this.tasks.transition(job.taskId, "failed");
@@ -408,7 +424,38 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
   }
 
   async listRecoverableMissionIds(limit = 100): Promise<string[]> {
-    return [...new Set((await this.listPending()).map((job) => job.missionId))].slice(0, limit);
+    const unsettled = (await this.unsettledAccepted()).map((job) => job.missionId);
+    return [
+      ...new Set([...(await this.listPending()).map((job) => job.missionId), ...unsettled]),
+    ].slice(0, limit);
+  }
+
+  async settleAccepted(missionId?: string): Promise<number> {
+    if (!this.settlement) return 0;
+    return this.inActionCriticalSection(async () => {
+      let settled = 0;
+      for (const job of await this.unsettledAccepted(missionId)) {
+        const status = completionForSettlement(await this.settlement!.settlementOf(job.workflowId));
+        const current = await this.missions.getMissionTaskById(job.missionTaskId);
+        if (!status || !current || !IN_FLIGHT.has(current.status)) continue;
+        await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, status);
+        await this.tasks.transition(job.taskId, status);
+        this.jobs.set(job.workflowId, { ...job, wakeupPending: true, updatedAt: new Date() });
+        settled += 1;
+      }
+      return settled;
+    });
+  }
+
+  private async unsettledAccepted(missionId?: string): Promise<QualityControlJob[]> {
+    const out: QualityControlJob[] = [];
+    for (const job of this.jobs.values()) {
+      if (job.action !== "ACCEPT" || job.state !== "action_applied") continue;
+      if (missionId !== undefined && job.missionId !== missionId) continue;
+      const task = await this.missions.getMissionTaskById(job.missionTaskId);
+      if (task && IN_FLIGHT.has(task.status)) out.push(job);
+    }
+    return out;
   }
 
   async getByWorkflowId(workflowId: string): Promise<QualityControlJob | null> {
