@@ -285,6 +285,14 @@ async function missionStatus(c: Container) {
   );
   return row!.status;
 }
+/** STUCK_EXECUTION_CAPACITY_DEFECT: attempts still holding a worker slot. */
+async function nonTerminalAttempts(c: Container) {
+  const [row] = await rows<{ n: number }>(
+    c,
+    "select count(*)::int n from dispatch_attempts where state in ('prepared','dispatched')",
+  );
+  return row!.n;
+}
 async function attempts(c: Container, taskId: string) {
   const [row] = await rows<{ n: number }>(
     c,
@@ -475,6 +483,8 @@ describe("DEFECT 36 — natural two-task DAG progression", () => {
     const applied = await Promise.all(applySpy.mock.results.map((r) => r.value));
     expect(applied.map((o) => o.status)).toEqual(["INTEGRATED", "INTEGRATED"]);
     expect(targetHead()).toBe(wsB.sourceCommit);
+    /* Every finished attempt gave its worker slot back. */
+    expect(await nonTerminalAttempts(c)).toBe(0);
   }, 240_000);
 });
 
@@ -539,6 +549,7 @@ describe("DEFECT 36 × 0050 — a correction attempt settles like any governed w
     expect(applySpy.mock.calls.map(([id]) => id)).toEqual([wsA2.workspaceId, wsB.workspaceId]);
     const applied = await Promise.all(applySpy.mock.results.map((r) => r.value));
     expect(applied.map((o) => o.status)).toEqual(["INTEGRATED", "INTEGRATED"]);
+    expect(await nonTerminalAttempts(c)).toBe(0);
   }, 420_000);
 });
 
@@ -619,6 +630,54 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
     await expectBBlocked(c);
   }, 240_000);
 
+  it("INLINE GATE: review exists at execution end, gate ACCEPTs, apply NEEDS_REBASE — A is not done, B not admitted", async () => {
+    makeRepo();
+    const c = await container();
+    await seed(c);
+    reviewerMode = "approve";
+    const runtime = composeAutonomyRuntime(c);
+
+    /*
+     * THE RACE, driven by the real QC: the worker's result is recorded, and QC reviews it
+     * before the coordinator looks for a review — so the coordinator gates INLINE.
+     */
+    const dispatch = c.taskExecution.dispatch.bind(c.taskExecution);
+    vi.spyOn(c.taskExecution, "dispatch").mockImplementation(async (input) => {
+      const result = await dispatch(input);
+      await runtime.qualityControl.registerExecution({
+        missionId: MISSION_ID,
+        missionTaskId: MT_A,
+        taskId: TASK_A,
+        workflowId: WF_A,
+      });
+      await runtime.qualityControl.recover(MISSION_ID);
+      return result;
+    });
+    /* The target moves between the gate's ACCEPT and the apply. */
+    const gate = c.integrationGate!;
+    const realIntegrate = gate.integrate.bind(gate);
+    vi.spyOn(gate, "integrate").mockImplementation(async (id, options) => {
+      const report = await realIntegrate(id, options);
+      git(repo, "checkout", "-q", TARGET);
+      writeFileSync(path.join(repo, "OTHER.md"), "moved\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "concurrent change");
+      git(repo, "checkout", "-q", "main");
+      return report;
+    });
+    const applySpy = vi.spyOn(c.integrationApplier!, "apply");
+
+    await runtime.supervisor.run(MISSION_ID);
+
+    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["APPROVE"]);
+    expect((await applySpy.mock.results[0]!.value).status).toBe("NEEDS_REBASE");
+    expect(await status(c, MT_A)).not.toBe("succeeded");
+    /* The accepted-but-unapplied work is kept, not reaped. */
+    expect((await workspaceOf(c, WF_A))?.releasedAt).toBeNull();
+    await runtime.supervisor.run(MISSION_ID);
+    await expectBBlocked(c);
+  }, 180_000);
+
   it("A cancelled: B is never admitted", async () => {
     makeRepo();
     const seeded = await container();
@@ -636,10 +695,12 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
   it.each([
     ["the recovery sweep (recoverUnregistered)", false],
     ["the completion callback (registerExecution)", true],
-  ])("A cancelled WHILE AWAITING REVIEW, registered by %s, then approved and integrated: not resurrected", async (_path, viaCallback) => {
+  ])("A cancelled WHILE AWAITING REVIEW, registered by %s, then approved: never integrated, not resurrected", async (_path, viaCallback) => {
     makeRepo();
     const c = await container();
     await seed(c);
+    const base = targetHead();
+    const applySpy = vi.spyOn(c.integrationApplier!, "apply");
     const runtime = composeAutonomyRuntime(c);
     await runtime.supervisor.run(MISSION_ID);
     await c.mission.updateMissionTaskStatus(MISSION_ID, MT_A, "cancelled");
@@ -666,6 +727,10 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
 
     expect(await status(c, MT_A)).toBe("cancelled");
     await expectBBlocked(c);
+    /* CANCELLED_WORK_INTEGRATION_DEFECT: approved work of a cancelled task never lands. */
+    expect(applySpy).not.toHaveBeenCalled();
+    expect(targetHead()).toBe(base);
+    expect((await workspaceOf(c, WF_A))?.releasedAt).not.toBeNull();
   }, 180_000);
 });
 

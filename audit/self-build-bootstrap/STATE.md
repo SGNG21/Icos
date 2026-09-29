@@ -1290,6 +1290,13 @@ commands for the self-build certification.
                                              killed. Gates: unit 1821 (42 unit tests deleted with
                                              the removed parallel path), integration 482 / 4
                                              skipped, lint 0 errors / 278 warnings, build PASS.
+  INLINE_GATE_NEEDS_REBASE_DEFECT          — CLOSED (decision 0053): ACCEPT without an applied
+                                             integration is `awaitingIntegration`, never success.
+  CANCELLED_WORK_INTEGRATION_DEFECT        — CLOSED (0053): withdrawn work is abandoned and
+                                             released before any gate.
+  STUCK_EXECUTION_CAPACITY_DEFECT          — CLOSED (0053): a successful attempt is completed
+                                             when its result is durable.
+                                             3/3 mutations killed. Integration 483 / 4 skipped.
   CORE3_AUTONOMOUS_ORCHESTRATION_CERTIFIED — TRUE, RE-PROVEN on the merged tree (0045 sweep +
                                              0049 settlement + 0050 correction + 0051):
                                              core3-autonomous-orchestration 10/10,
@@ -1335,12 +1342,6 @@ commands for the self-build certification.
 ICOS is NOT yet self-building, and must not be described as such.
 
 ### OPEN, NOT FIXED HERE
-  INLINE_GATE_NEEDS_REBASE_DEFECT — if a review already exists when execution ends, an inline
-              gate ACCEPT can lead the supervisor to mark `succeeded` although apply returned
-              NEEDS_REBASE.
-  CANCELLED_WORK_INTEGRATION_DEFECT — approved work of a cancelled task may still integrate.
-  STUCK_EXECUTION_CAPACITY_DEFECT — governed attempts can stay `dispatched` and keep worker
-              slots.
   GOVERNANCE PROPOSALS — "Improve ICOS autonomously" sometimes proposes changing a governance
               file, and the gate then answers NEEDS_HUMAN_APPROVAL. That is CORRECT. The E2E
               currently scores it as a failure; whether it should is a certification-standard

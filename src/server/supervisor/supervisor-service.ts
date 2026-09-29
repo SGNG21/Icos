@@ -462,7 +462,9 @@ export class SupervisorService {
           await this.dispatchAttempts.markDispatched(prepared.attempt.id);
 
           // Update task status based on coordinator result
-          awaitingReview = coordResult.awaitingReview === true;
+          /* Awaiting review OR awaiting integration: in flight, workspace kept (0049). */
+          awaitingReview =
+            coordResult.awaitingReview === true || coordResult.awaitingIntegration === true;
           if (awaitingReview) {
             // Deliberately no status change: the task stays in flight, pending review.
           } else if (coordResult.success) {

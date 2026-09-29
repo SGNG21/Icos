@@ -87,6 +87,12 @@ export interface CoordinationResult {
    * waiting for QC. A later governed pass gates it once a review is persisted.
    */
   awaitingReview?: boolean;
+  /** The gate ACCEPTed but the apply integrated nothing (NEEDS_REBASE / RACE_LOST): in flight. */
+  awaitingIntegration?: boolean;
+}
+
+function isIntegrated(outcome: IntegrationApplyOutcome | undefined): boolean {
+  return outcome?.status === "INTEGRATED" || outcome?.status === "ALREADY_INTEGRATED";
 }
 
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -366,6 +372,9 @@ export class WorkspaceExecutionCoordinator {
         };
       }
 
+      const withdrawn = await this.refuseWithdrawnWork(execWs);
+      if (withdrawn) return withdrawn;
+
       const gateResult = await this.handoffToIntegrationGate(
         execWs.workspaceId,
         workflowId,
@@ -388,10 +397,19 @@ export class WorkspaceExecutionCoordinator {
             })
           : undefined;
 
+      /*
+       * ACCEPT IS NOT DONE UNTIL IT IS APPLIED (INLINE_GATE_NEEDS_REBASE_DEFECT). An ACCEPT whose
+       * apply answered NEEDS_REBASE / RACE_LOST integrated nothing: reported as success, the
+       * supervisor marked the task `succeeded` and released the workspace, so dependents ran on
+       * a target without the work. It stays in flight, awaiting integration.
+       */
+      const accepted = gateResult.decision === "ACCEPT";
+      const landed = !this.integrationApplier || isIntegrated(integration);
       return {
         workspaceId: execWs.workspaceId,
         taskId,
-        success: gateResult.decision === "ACCEPT",
+        success: accepted && landed,
+        awaitingIntegration: accepted && !landed,
         decision: gateResult.decision,
         reasons: gateResult.reasons,
         workflowId,
@@ -427,6 +445,34 @@ export class WorkspaceExecutionCoordinator {
    * QC ACCEPT → IntegrationGate handoff.
    * Runs IntegrationGate on the workspace after successful execution.
    */
+  /**
+   * CANCELLED WORK NEVER INTEGRATES (CANCELLED_WORK_INTEGRATION_DEFECT).
+   *
+   * An approval judges the work, not whether it is still wanted. When the MissionTask was
+   * cancelled or superseded while its work waited, gating it would land a change nobody asked
+   * for any more — and a self-development policy denial relies on exactly this refusal. The
+   * work is abandoned and released instead; the branch survives as evidence.
+   */
+  private async refuseWithdrawnWork(execWs: ExecutionWorkspace): Promise<CoordinationResult | null> {
+    const missionTask = (await this.missions.listTasks(execWs.missionId)).find(
+      (t) => t.taskId === execWs.taskId,
+    );
+    if (missionTask?.status !== "cancelled" && missionTask?.status !== "superseded") return null;
+
+    await this.manager
+      .transition(execWs.workspaceId, "abandoned", this.ownerToken, execWs.fencingToken)
+      .catch(() => undefined);
+    await this.releaseWorkspace(execWs.taskId).catch(() => undefined);
+    return {
+      workspaceId: execWs.workspaceId,
+      taskId: execWs.taskId,
+      success: false,
+      decision: "REJECT",
+      reasons: [`TASK_${missionTask.status.toUpperCase()}: the work is no longer wanted`],
+      workflowId: execWs.workflowId,
+    };
+  }
+
   private async handoffToIntegrationGate(
     workspaceId: string,
     workflowId: string,
@@ -592,6 +638,12 @@ export class WorkspaceExecutionCoordinator {
       const review = await this.resolveReview(execWs.workflowId);
       if (!review) continue;
 
+      const withdrawn = await this.refuseWithdrawnWork(execWs);
+      if (withdrawn) {
+        results.push(withdrawn);
+        continue;
+      }
+
       /*
        * NO RE-GATE ON UNCHANGED INPUTS (defect 28 closure). A NEEDS_* verdict is not terminal,
        * but gating again with the same review, the same work and the same target can only
@@ -632,18 +684,14 @@ export class WorkspaceExecutionCoordinator {
        * there would have removed the worktree the gate still has to evaluate — and destroyed
        * the commits with it.
        */
-      if (
-        integration?.status === "INTEGRATED" ||
-        integration?.status === "ALREADY_INTEGRATED" ||
-        gateResult.decision === "REJECT"
-      ) {
+      if (isIntegrated(integration) || gateResult.decision === "REJECT") {
         await this.releaseWorkspace(execWs.taskId).catch(() => undefined);
       }
 
       results.push({
         workspaceId: execWs.workspaceId,
         taskId: execWs.taskId,
-        success: gateResult.decision === "ACCEPT",
+        success: gateResult.decision === "ACCEPT" && (!this.integrationApplier || isIntegrated(integration)),
         decision: gateResult.decision,
         reasons: gateResult.reasons,
         workflowId: execWs.workflowId,

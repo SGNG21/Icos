@@ -236,6 +236,14 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
       artifacts: artifactsOf(outcome),
       evidence: evidenceOf(outcome),
     });
+    /*
+     * THE EXECUTION IS OVER once its result is durable (STUCK_EXECUTION_CAPACITY_DEFECT). Failure
+     * already settled the attempt; success left it `dispatched`, and durable load counts
+     * non-terminal attempts — so every successful governed attempt held its worker's slot for
+     * ever, since only the legacy callback route ever completed one. Review and integration
+     * are the task's lifecycle, not the attempt's.
+     */
+    await this.deps.dispatchAttempts.markCompletedByWorkflowId(input.workflowId!);
   }
 
   private async settleFailure(
