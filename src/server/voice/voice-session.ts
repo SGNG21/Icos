@@ -18,7 +18,7 @@ import {
 } from "@/core/voice/contracts";
 
 /**
- * Voice session engine (decision 0055): transport-neutral, provider-neutral.
+ * Voice session engine (decision 0056): transport-neutral, provider-neutral.
  * A transport (WebSocket…) authenticates the user, then feeds raw client
  * messages to `VoiceConnection.receive` and forwards `send` output.
  *
@@ -35,7 +35,36 @@ export type VoiceDeps = {
   newId?: () => string;
   /** A detached session can be resumed for this long after its last activity. */
   idleTtlMs?: number;
+  timeouts?: Partial<VoiceTimeouts>;
+  /** Injectable for tests; returns a cancel function. */
+  setTimer?: (fn: () => void, ms: number) => () => void;
 };
+
+/** Watchdogs: a hung provider or runtime never blocks later turns. */
+export type VoiceTimeouts = {
+  /** STT must deliver the final transcript this long after end of speech. */
+  sttFinalMs: number;
+  /** The runtime must durably accept a turn within this. */
+  acceptMs: number;
+  /** Maximum silence between two runtime events of one response. */
+  responseIdleMs: number;
+  /** TTS must finish (or produce audio) this long after the text is complete. */
+  ttsTailMs: number;
+};
+
+export const DEFAULT_VOICE_TIMEOUTS: VoiceTimeouts = {
+  sttFinalMs: 15_000,
+  acceptMs: 15_000,
+  responseIdleMs: 90_000,
+  ttsTailMs: 20_000,
+};
+
+type ResolvedDeps = Required<Omit<VoiceDeps, "tts" | "timeouts">> & {
+  tts?: TtsProvider;
+  timeouts: VoiceTimeouts;
+};
+
+class AcceptTimeout extends Error {}
 
 type Send = (message: ServerMessage) => void;
 
@@ -53,6 +82,7 @@ type Turn = {
   /** Resent after a failed submission: end-to-end timings would include the user's wait. */
   retried: boolean;
   interruptedTurnId?: string;
+  cancelSttTimer?: () => void;
   t: {
     firstAudio?: number;
     voiceStart?: number;
@@ -72,6 +102,7 @@ type Response = {
   /** Once true, nothing from this response reaches the client as audio. */
   stopped: boolean;
   textDone: boolean;
+  cancelTimer?: () => void;
 };
 
 const MAX_METRICS = 50;
@@ -94,7 +125,7 @@ export class VoiceSession {
   readonly metrics: TurnLatency[] = [];
 
   constructor(
-    private readonly deps: Required<Omit<VoiceDeps, "tts">> & { tts?: TtsProvider },
+    private readonly deps: ResolvedDeps,
     readonly ownerUserId: string,
     id: string,
     private readonly hello: Extract<ClientMessage, { type: "hello" }>,
@@ -283,6 +314,10 @@ export class VoiceSession {
     }
     if (!turn.sttFinished) {
       turn.sttFinished = true;
+      turn.cancelSttTimer = this.deps.setTimer(
+        () => this.onStt(turn, { type: "error", message: "no final transcript", timeout: true }),
+        this.deps.timeouts.sttFinalMs,
+      );
       try {
         turn.stt.finish();
       } catch (error) {
@@ -298,11 +333,13 @@ export class VoiceSession {
       this.discard(turn);
       return this.emit({
         type: "error",
-        code: "STT_UNAVAILABLE",
+        code: event.timeout ? "STT_TIMEOUT" : "STT_UNAVAILABLE",
         retryable: true,
         turnId: turn.id,
         audioLost: true,
-        message: "speech recognition failed; the uncommitted utterance was not kept",
+        message: event.timeout
+          ? "speech recognition timed out; the uncommitted utterance was not kept"
+          : "speech recognition failed; the uncommitted utterance was not kept",
       });
     }
     const now = this.deps.now();
@@ -311,6 +348,7 @@ export class VoiceSession {
       turn.t.firstPartial ??= now;
     } else {
       turn.t.final = now;
+      turn.cancelSttTimer?.();
       turn.text = event.text.trim();
       turn.language = event.language;
     }
@@ -338,6 +376,7 @@ export class VoiceSession {
     const stt = turn.stt;
     turn.stt = null;
     turn.phase = "discarded";
+    turn.cancelSttTimer?.();
     if (stt) quietly(() => stt.cancel());
     if (why) {
       this.emit({
@@ -372,19 +411,22 @@ export class VoiceSession {
     let events: AsyncIterable<CognitiveEvent>;
     // Wait for the previous turn's acceptance: it may create the conversation.
     const attempt = this.acceptance.then(() =>
-      this.deps.cognitive.submitTurn(
-        {
-          conversationId: this.conversationId,
-          userId: this.ownerUserId,
-          voiceSessionId: this.id,
-          turnId: turn.id,
-          text: turn.text ?? "",
-          language: turn.language ?? this.hello.language,
-          speechStartedAt: turn.t.voiceStart ?? turn.t.firstAudio ?? 0,
-          speechEndedAt: turn.t.speechEnd ?? turn.t.final ?? 0,
-          ...(turn.interruptedTurnId ? { interruptedTurnId: turn.interruptedTurnId } : {}),
-        },
-        response.abort.signal,
+      this.withAcceptTimeout(
+        response,
+        this.deps.cognitive.submitTurn(
+          {
+            conversationId: this.conversationId,
+            userId: this.ownerUserId,
+            voiceSessionId: this.id,
+            turnId: turn.id,
+            text: turn.text ?? "",
+            language: turn.language ?? this.hello.language,
+            speechStartedAt: turn.t.voiceStart ?? turn.t.firstAudio ?? 0,
+            speechEndedAt: turn.t.speechEnd ?? turn.t.final ?? 0,
+            ...(turn.interruptedTurnId ? { interruptedTurnId: turn.interruptedTurnId } : {}),
+          },
+          response.abort.signal,
+        ),
       ),
     );
     this.acceptance = attempt.catch(() => {});
@@ -398,7 +440,11 @@ export class VoiceSession {
       const unavailable = error instanceof CognitiveUnavailableError;
       return this.emit({
         type: "error",
-        code: unavailable ? "COGNITIVE_UNAVAILABLE" : "COGNITIVE_ERROR",
+        code: unavailable
+          ? "COGNITIVE_UNAVAILABLE"
+          : error instanceof AcceptTimeout
+            ? "COGNITIVE_TIMEOUT"
+            : "COGNITIVE_ERROR",
         retryable: true,
         turnId: turn.id,
         text: turn.text ?? "",
@@ -412,9 +458,23 @@ export class VoiceSession {
     if (response.abort.signal.aborted) return; // interrupted while being accepted
 
     let streamedText = false;
+    const armIdle = () => {
+      response.cancelTimer?.();
+      response.cancelTimer = this.deps.setTimer(
+        () =>
+          this.timeOut(
+            response,
+            "COGNITIVE_TIMEOUT",
+            "ICOS stopped answering; the turn itself is recorded",
+          ),
+        this.deps.timeouts.responseIdleMs,
+      );
+    };
+    armIdle();
     try {
       for await (const event of events) {
         if (response.abort.signal.aborted) break;
+        armIdle();
         turn.t.firstCognitive ??= this.deps.now();
         switch (event.type) {
           case "TEXT_DELTA":
@@ -461,6 +521,7 @@ export class VoiceSession {
         });
       }
     }
+    response.cancelTimer?.();
     if (response.abort.signal.aborted) return;
     if (!response.textDone) {
       response.textDone = true;
@@ -491,8 +552,10 @@ export class VoiceSession {
   }
 
   private finishTts(response: Response): void {
+    if (!response.tts) return;
+    this.armTtsTail(response);
     try {
-      response.tts?.finish();
+      response.tts.finish();
     } catch (error) {
       this.onTts(response, { type: "error", message: errorText(error) });
     }
@@ -503,10 +566,12 @@ export class VoiceSession {
     if (response.stopped || this.response !== response) return;
     if (event.type === "audio") {
       response.turn.t.firstTtsAudio ??= this.deps.now();
+      if (response.textDone) this.armTtsTail(response);
       this.emit({
         type: "audio",
         turnId: response.turn.id,
         seq: response.audioSeq++,
+        mime: event.mime,
         data: Buffer.from(event.data).toString("base64"),
       });
     } else if (event.type === "done") {
@@ -514,7 +579,7 @@ export class VoiceSession {
     } else {
       this.emit({
         type: "error",
-        code: "TTS_UNAVAILABLE",
+        code: event.timeout ? "TTS_TIMEOUT" : "TTS_UNAVAILABLE",
         retryable: true,
         turnId: response.turn.id,
         message: "speech synthesis failed; the answer continues as text",
@@ -528,6 +593,7 @@ export class VoiceSession {
   private stopAudio(reason: PlaybackStopReason, response = this.response): void {
     if (!response || response.stopped) return;
     response.stopped = true;
+    response.cancelTimer?.();
     const tts = response.tts;
     response.tts = null;
     if (tts) quietly(() => tts.cancel());
@@ -537,15 +603,58 @@ export class VoiceSession {
   private interrupt(reason: CognitiveInterruptReason): void {
     const response = this.response;
     if (!response) return;
-    this.stopAudio(reason === "SESSION_CLOSED" ? "DETACHED" : reason, response);
+    this.stopAudio(
+      reason === "SESSION_CLOSED" ? "DETACHED" : reason === "TIMEOUT" ? "TIMEOUT" : reason,
+      response,
+    );
     response.abort.abort(reason);
     this.lastInterruptedTurnId = response.turn.id;
     this.endResponse(response);
   }
 
+  private armTtsTail(response: Response): void {
+    response.cancelTimer?.();
+    response.cancelTimer = this.deps.setTimer(() => {
+      if (response.stopped || this.response !== response) return;
+      this.emit({
+        type: "error",
+        code: "TTS_TIMEOUT",
+        retryable: true,
+        turnId: response.turn.id,
+        message: "speech synthesis stalled; the answer is complete as text",
+      });
+      this.stopAudio("TIMEOUT", response);
+      this.endResponse(response);
+    }, this.deps.timeouts.ttsTailMs);
+  }
+
+  /** The runtime went silent mid-response: stop waiting, keep the session usable. */
+  private timeOut(response: Response, code: "COGNITIVE_TIMEOUT", message: string): void {
+    if (this.response !== response) return;
+    this.emit({ type: "error", code, retryable: false, turnId: response.turn.id, message });
+    this.stopAudio("TIMEOUT", response);
+    response.abort.abort("TIMEOUT");
+    this.endResponse(response);
+  }
+
+  private withAcceptTimeout<T>(response: Response, work: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const cancel = this.deps.setTimer(() => {
+        // A later acceptance is harmless: resending the turn id is idempotent.
+        response.abort.abort("TIMEOUT");
+        reject(new AcceptTimeout("acceptance timed out"));
+      }, this.deps.timeouts.acceptMs);
+      work.then(
+        (value) => (cancel(), resolve(value)),
+        (error: unknown) => (cancel(), reject(error)),
+      );
+    });
+  }
+
   private endResponse(response: Response): void {
     if (this.response !== response) return;
     this.response = null;
+    response.cancelTimer?.();
     if (response.turn.phase !== "accepted") return; // no latency for a turn never accepted
     const t = response.turn.t;
     const retried = response.turn.retried;
@@ -600,14 +709,20 @@ export type VoiceConnection = {
  */
 export class VoiceSessionRegistry {
   private readonly sessions = new Map<string, VoiceSession>();
-  private readonly deps: Required<Omit<VoiceDeps, "tts">> & { tts?: TtsProvider };
+  private readonly deps: ResolvedDeps;
 
   constructor(deps: VoiceDeps) {
     this.deps = {
       now: Date.now,
       newId: () => crypto.randomUUID(),
       idleTtlMs: 120_000,
+      setTimer: (fn, ms) => {
+        const handle = setTimeout(fn, ms);
+        handle.unref?.();
+        return () => clearTimeout(handle);
+      },
       ...deps,
+      timeouts: { ...DEFAULT_VOICE_TIMEOUTS, ...deps.timeouts },
     };
   }
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Voice realtime contracts (decision 0055).
+ * Voice realtime contracts (decision 0056).
  *
  * The voice layer is a transport/session adapter around the Cognitive Runtime.
  * A VoiceSession is ephemeral transport state; conversation identity, turn
@@ -61,14 +61,18 @@ export const VoiceErrorCodeSchema = z.enum([
   "NOT_READY",
   "SESSION_EXPIRED",
   "SESSION_FORBIDDEN",
+  "PROVIDER_NOT_CONFIGURED",
   "STT_UNAVAILABLE",
+  "STT_TIMEOUT",
   "TTS_UNAVAILABLE",
+  "TTS_TIMEOUT",
   "COGNITIVE_UNAVAILABLE",
   "COGNITIVE_ERROR",
+  "COGNITIVE_TIMEOUT",
 ]);
 export type VoiceErrorCode = z.infer<typeof VoiceErrorCodeSchema>;
 
-export type PlaybackStopReason = "BARGE_IN" | "USER_CANCEL" | "TTS_FAILED" | "DETACHED";
+export type PlaybackStopReason = "BARGE_IN" | "USER_CANCEL" | "TTS_FAILED" | "DETACHED" | "TIMEOUT";
 
 export type ServerMessage =
   | {
@@ -100,7 +104,7 @@ export type ServerMessage =
       payload: unknown;
     }
   | { type: "response_final"; turnId: string; text: string }
-  | { type: "audio"; turnId: string; seq: number; data: string }
+  | { type: "audio"; turnId: string; seq: number; mime: string; data: string }
   | { type: "playback_stop"; turnId: string; reason: PlaybackStopReason }
   | {
       type: "error";
@@ -130,7 +134,7 @@ export type SttEvent =
       startMs?: number;
       endMs?: number;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; timeout?: boolean };
 
 /**
  * Partials may come any time; exactly one "final" (the whole utterance) comes
@@ -158,7 +162,10 @@ export interface SttProvider {
 }
 
 export type TtsEvent =
-  { type: "audio"; data: Uint8Array } | { type: "done" } | { type: "error"; message: string };
+  /** `data` is one independently decodable chunk (e.g. one sentence of audio/mpeg). */
+  | { type: "audio"; data: Uint8Array; mime: string }
+  | { type: "done" }
+  | { type: "error"; message: string; timeout?: boolean };
 
 export interface TtsStream {
   text(chunk: string): void;
@@ -197,7 +204,7 @@ export type CognitiveEvent =
   | { type: "FINAL_RESPONSE"; text: string }
   | { type: "ERROR"; message: string };
 
-export type CognitiveInterruptReason = "BARGE_IN" | "USER_CANCEL" | "SESSION_CLOSED";
+export type CognitiveInterruptReason = "BARGE_IN" | "USER_CANCEL" | "SESSION_CLOSED" | "TIMEOUT";
 
 export interface CognitiveRuntimePort {
   readonly simulated: boolean;

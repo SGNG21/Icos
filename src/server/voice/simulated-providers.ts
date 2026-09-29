@@ -86,7 +86,7 @@ export class SimulatedTts implements TtsProvider {
     for (const stream of this.streams) {
       if (stream.cancelled) continue;
       for (const chunk of stream.pending.splice(0)) {
-        stream.emitRaw({ type: "audio", data: Buffer.from(`say:${chunk}`) });
+        stream.emitRaw({ type: "audio", data: Buffer.from(`say:${chunk}`), mime: "audio/mpeg" });
       }
       if (stream.finished) {
         stream.emitRaw({ type: "done" });

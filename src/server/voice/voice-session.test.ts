@@ -1,62 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_RETENTION, type ServerMessage } from "@/core/voice/contracts";
+import { DEFAULT_RETENTION } from "@/core/voice/contracts";
 
-import { SimulatedCognitiveRuntime, SimulatedStt, SimulatedTts } from "./simulated-providers";
-import { VoiceSessionRegistry, type VoiceConnection } from "./voice-session";
-
-const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-const frame = (turnId: string, seq: number, word: string) => ({
-  type: "audio",
-  turnId,
-  seq,
-  encoding: "pcm16",
-  sampleRate: 16_000,
-  data: Buffer.from(word).toString("base64"),
-});
-const signal = (turnId: string, s: string) => ({ type: "turn", turnId, signal: s });
-
-function setup(options: { tts?: boolean; turnMode?: "push_to_talk" | "auto_vad" } = {}) {
-  let clock = 1_000;
-  let ids = 0;
-  const stt = new SimulatedStt();
-  const tts = new SimulatedTts();
-  const cognitive = new SimulatedCognitiveRuntime();
-  const registry = new VoiceSessionRegistry({
-    stt,
-    ...(options.tts === false ? {} : { tts }),
-    cognitive,
-    now: () => clock,
-    newId: () => `session-${++ids}`,
-    idleTtlMs: 10_000,
-  });
-  const client = (userId = "user-1") => {
-    const out: ServerMessage[] = [];
-    const conn = registry.connect(userId, (m) => out.push(m));
-    return {
-      conn,
-      out,
-      of: <T extends ServerMessage["type"]>(t: T) =>
-        out.filter((m) => m.type === t) as Extract<ServerMessage, { type: T }>[],
-    };
-  };
-  const c = client();
-  c.conn.receive({
-    type: "hello",
-    device: "browser",
-    turnMode: options.turnMode ?? "push_to_talk",
-  });
-  return { stt, tts, cognitive, registry, client, ...c, advance: (ms: number) => (clock += ms) };
-}
-
-/** Push-to-talk utterance: press, frames, release. */
-function say(conn: VoiceConnection, turnId: string, words: string[], firstSeq = 0) {
-  conn.receive(signal(turnId, "VOICE_ACTIVITY_START"));
-  words.forEach((w, i) => conn.receive(frame(turnId, firstSeq + i, w)));
-  conn.receive(signal(turnId, "VOICE_ACTIVITY_END"));
-  conn.receive(signal(turnId, "TURN_COMMIT"));
-}
+import { flush, frame, say, setup, signal } from "./voice-test-harness";
 
 const T1 = "turn-0001";
 const T2 = "turn-0002";
@@ -147,7 +93,7 @@ describe("voice session (SIMULATED providers)", () => {
     const stopAt = s.out.length;
 
     // A misbehaving provider keeps emitting, and the runtime keeps streaming.
-    s.tts.streams[0].emitRaw({ type: "audio", data: Buffer.from("late") });
+    s.tts.streams[0].emitRaw({ type: "audio", data: Buffer.from("late"), mime: "audio/mpeg" });
     s.tts.streams[0].emitRaw({ type: "done" });
     s.tts.flush();
     s.cognitive.responses.get(T1)!.push({ type: "TEXT_DELTA", text: "phrase deux" });
@@ -442,7 +388,7 @@ describe("voice session (SIMULATED providers)", () => {
       await flush();
       s.advance(600_000);
       s.client("user-2").conn.receive({ type: "hello", device: "browser" }); // triggers sweep
-      expect(s.cognitive.aborts).toEqual([]);
+      expect(s.cognitive.aborts.map((a) => a.reason)).not.toContain("SESSION_CLOSED");
       s.conn.receive({ type: "heartbeat" });
       expect(s.of("heartbeat_ack")).toHaveLength(1);
     });

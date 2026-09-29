@@ -26,7 +26,8 @@
     "db:verify-ledger": "tsx scripts/verify-migration-ledger.ts",
     "scheduler:enqueue": "tsx scripts/schedule-job.ts",
     "workspace:manager": "tsx scripts/workspace-manager.ts",
-    "compute:snapshot": "tsx scripts/compute-snapshot.ts"
+    "compute:snapshot": "tsx scripts/compute-snapshot.ts",
+    "voice:serve": "tsx scripts/voice-server.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",
@@ -38,6 +39,7 @@
     "postgres": "3.4.9",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "ws": "^8.22.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -47,6 +49,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/uuid": "^11.0.0",
+    "@types/ws": "^8.18.1",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.10",
