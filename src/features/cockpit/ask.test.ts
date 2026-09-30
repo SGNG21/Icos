@@ -2,236 +2,234 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   askReducer,
-  httpAskTransport,
+  httpCognitiveTransport,
   initialAsk,
-  MAX_ANSWER_CHARS,
-  type AskEvent,
-  type AskState,
+  needsRefresh,
+  submitPhase,
+  type AskTurn,
+  type ConversationEvent,
+  type ConversationState,
+  type TurnResult,
 } from "./ask";
 
-const T = "turn-1";
-const sent = (conversationId: string | null = null) =>
-  askReducer(initialAsk(conversationId), { type: "send", turnId: T });
-const run = (events: AskEvent[], from: AskState = sent()) =>
-  events.reduce((s, event) => askReducer(s, { type: "event", event }), from);
-const started: AskEvent = { type: "turn.started", conversationId: "c1", turnId: T, seq: 0 };
+const C = "conv-1";
+const turn = (over: Partial<AskTurn> = {}): AskTurn => ({
+  id: "t1",
+  conversationId: C,
+  seq: 1,
+  role: "user",
+  content: { parts: [{ kind: "text", text: "Pourquoi CORE3 est bloqué ?" }] },
+  status: "completed",
+  outcome: null,
+  replyToTurnId: null,
+  failureReason: null,
+  createdAt: "2026-09-30T08:00:00Z",
+  ...over,
+});
+const convState = (turns: AskTurn[] = [turn()]): ConversationState => ({
+  conversation: { id: C, title: null, status: "active", updatedAt: "2026-09-30T08:00:00Z" },
+  turns,
+  proposals: [],
+  recoveredTurnIds: [],
+});
+const ev = (
+  seq: number,
+  type: ConversationEvent["type"],
+  turnId: string | null = "t1",
+): ConversationEvent => ({
+  conversationId: C,
+  seq,
+  type,
+  turnId,
+  payload: {},
+  createdAt: "2026-09-30T08:00:00Z",
+});
+const json = (status: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const result = (replayed = false): TurnResult => ({
+  turn: turn(),
+  reply: turn({ id: "t2", role: "assistant", replyToTurnId: "t1", outcome: "ANSWER_ONLY" }),
+  proposal: null,
+  replayed,
+});
 
-const sse = (frames: unknown[], status = 200) =>
-  new Response(
-    frames
-      .map((f, i) => `id: ${i}\ndata: ${typeof f === "string" ? f : JSON.stringify(f)}\n\n`)
-      .join(""),
-    { status, headers: { "content-type": "text/event-stream" } },
-  );
-const input = { turnId: T, conversationId: null, text: "hi" };
+describe("Ask ICOS state (durable state is truth, events are signals)", () => {
+  it("applies events in seq order only, per conversation, and tracks in-flight progress", () => {
+    let s = askReducer(initialAsk, { type: "resumed", state: convState() });
+    for (const e of [
+      ev(1, "turn.received"),
+      ev(2, "turn.processing"),
+      ev(2, "turn.processing"),
+      { ...ev(9, "turn.received"), conversationId: "other" },
+    ])
+      s = askReducer(s, { type: "event", event: e });
+    expect(s.cursor).toBe(2);
+    expect(s.progress).toEqual({ t1: "turn.processing" });
+  });
 
-describe("Ask ICOS reducer", () => {
-  it("streams text, tools, missions, approvals and context into one turn", () => {
-    const s = run([
-      started,
-      {
-        type: "context.used",
-        turnId: T,
-        seq: 1,
-        memory: [{ id: "m1", label: "CORE3" }],
-        contextTokens: 900,
-      },
-      { type: "text.delta", turnId: T, seq: 2, text: "CORE3 is " },
-      {
-        type: "tool.call",
-        turnId: T,
-        seq: 3,
-        toolCallId: "tc",
-        name: "missions.read",
-        status: "started",
-      },
-      {
-        type: "tool.call",
-        turnId: T,
-        seq: 4,
-        toolCallId: "tc",
-        name: "missions.read",
-        status: "succeeded",
-      },
-      { type: "text.delta", turnId: T, seq: 5, text: "blocked on review." },
-      { type: "mission.created", turnId: T, seq: 6, missionId: "ms1", title: "Unblock review" },
-      {
-        type: "approval.requested",
-        turnId: T,
-        seq: 7,
-        approvalId: "ap1",
-        summary: "Cancel",
-        risk: "HIGH",
-      },
-      { type: "turn.completed", turnId: T, seq: 8 },
-    ]);
-    expect(s).toMatchObject({
-      status: "completed",
-      conversationId: "c1",
-      text: "CORE3 is blocked on review.",
-      tools: [{ id: "tc", status: "succeeded" }],
-      missions: [{ id: "ms1" }],
-      approvals: [{ id: "ap1", risk: "HIGH" }],
-      context: { contextTokens: 900 },
-      lastSeq: 8,
+  it("settling events ask for a re-read; resume drops progress of closed turns", () => {
+    expect(needsRefresh(ev(3, "turn.completed"))).toBe(true);
+    expect(needsRefresh(ev(3, "proposal.submitted"))).toBe(true);
+    expect(needsRefresh(ev(3, "context.assembled"))).toBe(false);
+    let s = askReducer(initialAsk, {
+      type: "resumed",
+      state: convState([turn({ status: "processing" })]),
     });
+    s = askReducer(s, { type: "event", event: ev(1, "context.assembled") });
+    s = askReducer(s, { type: "resumed", state: convState([turn({ status: "completed" })]) });
+    expect(s.progress).toEqual({});
+    expect(s.cursor).toBe(1); // same conversation keeps its cursor
   });
 
-  it("the client owns the turn id from send: foreign turns never apply", () => {
-    const s = run([
-      { type: "turn.started", conversationId: "c9", turnId: "hijack", seq: 0 },
-      started,
-      { type: "text.delta", turnId: "hijack", seq: 1, text: "x" },
-      { type: "text.delta", turnId: T, seq: 1, text: "a" },
-      { type: "text.delta", turnId: T, seq: 1, text: "a" }, // replay
-    ]);
-    expect(s).toMatchObject({ turnId: T, conversationId: "c1", text: "a" });
-    expect(run([started], initialAsk()).status).toBe("idle"); // nothing sent → nothing applies
+  it("switching conversation restarts the cursor", () => {
+    let s = askReducer(initialAsk, { type: "resumed", state: convState() });
+    s = askReducer(s, { type: "event", event: ev(5, "turn.completed") });
+    const other = { ...convState(), conversation: { ...convState().conversation, id: "conv-2" } };
+    expect(askReducer(s, { type: "resumed", state: other }).cursor).toBe(0);
   });
 
-  it("nothing resurrects a finished turn", () => {
-    const s = run([
-      started,
-      { type: "turn.completed", turnId: T, seq: 1 },
-      { type: "text.delta", turnId: T, seq: 2, text: "late" },
-    ]);
-    expect(s).toMatchObject({ status: "completed", text: "" });
-    expect(askReducer(s, { type: "link_lost" }).status).toBe("completed");
-  });
-
-  it("a seq gap stops applying and asks for a resume instead of corrupting the text", () => {
-    const s = run([started, { type: "text.delta", turnId: T, seq: 3, text: "skip" }]);
-    expect(s).toMatchObject({
-      status: "error",
-      text: "",
-      lastSeq: 0,
-      error: { code: "SEQ_GAP", retryable: true },
+  it("maps submit replies: accepted / replayed / busy / rejected / UNKNOWN / not connected", () => {
+    expect(submitPhase({ kind: "ok", status: 201, value: result() })).toEqual({
+      phase: "accepted",
     });
-  });
-
-  it("a lost link keeps the partial answer; a successful resume clears the error", () => {
-    const broken = askReducer(
-      run([started, { type: "text.delta", turnId: T, seq: 1, text: "part" }]),
-      {
-        type: "link_lost",
-      },
-    );
-    expect(broken).toMatchObject({ status: "error", text: "part", error: { retryable: true } });
-    const resumed = run(
-      [
-        { type: "text.delta", turnId: T, seq: 2, text: "ial" },
-        { type: "turn.completed", turnId: T, seq: 3 },
-      ],
-      askReducer(broken, { type: "reconnecting" }),
-    );
-    expect(resumed).toMatchObject({ status: "completed", text: "partial", error: null });
-  });
-
-  it("caps the rendered answer", () => {
-    const s = run([
-      started,
-      { type: "text.delta", turnId: T, seq: 1, text: "x".repeat(MAX_ANSWER_CHARS + 1) },
-    ]);
-    expect(s).toMatchObject({ status: "error", text: "", error: { code: "ANSWER_TOO_LONG" } });
-  });
-
-  it("a new turn keeps the conversation id", () => {
-    const done = run([started, { type: "turn.completed", turnId: T, seq: 1 }]);
-    expect(askReducer(done, { type: "send", turnId: "t2" })).toMatchObject({
-      conversationId: "c1",
-      turnId: "t2",
-      text: "",
+    expect(submitPhase({ kind: "ok", status: 200, value: result(true) })).toEqual({
+      phase: "replayed",
     });
+    expect(
+      submitPhase({
+        kind: "error",
+        status: 409,
+        code: "invalid_transition",
+        message: "",
+        typed: true,
+      }),
+    ).toMatchObject({ phase: "busy" });
+    expect(
+      submitPhase({ kind: "error", status: 403, code: "forbidden", message: "", typed: true }),
+    ).toMatchObject({ phase: "rejected" });
+    expect(
+      submitPhase({
+        kind: "error",
+        status: 503,
+        code: "persistence_unavailable",
+        message: "",
+        typed: true,
+      }),
+    ).toMatchObject({ phase: "unknown" });
+    expect(
+      submitPhase({
+        kind: "error",
+        status: 200,
+        code: "unexpected_response",
+        message: "",
+        typed: false,
+      }),
+    ).toMatchObject({ phase: "unknown" });
+    expect(submitPhase({ kind: "not_connected" })).toBe("not_connected");
   });
 });
 
-describe("Ask ICOS error latch", () => {
-  it("after an error or the display cap, later frames do not revive the turn", () => {
-    const capped = run([
-      started,
-      { type: "text.delta", turnId: T, seq: 1, text: "x".repeat(MAX_ANSWER_CHARS + 1) },
-      { type: "text.delta", turnId: T, seq: 2, text: "small" },
-    ]);
-    expect(capped).toMatchObject({ status: "error", error: { code: "ANSWER_TOO_LONG" } });
-    const failed = run([
-      started,
-      { type: "error", turnId: T, seq: 1, code: "RUNTIME", message: "boom", retryable: true },
-      { type: "text.delta", turnId: T, seq: 2, text: "late" },
-    ]);
-    expect(failed).toMatchObject({ status: "error", text: "" });
-  });
-});
-
-describe("Ask ICOS transport", () => {
-  it("POSTs the client turn id (idempotency key)", async () => {
-    const fetch = vi.fn(async () => sse([]));
-    await httpAskTransport(fetch).start(input, vi.fn());
+describe("Cognitive transport (routes committed by lane C)", () => {
+  it("submits {text, idempotencyKey} to the conversation, same-origin", async () => {
+    const fetch = vi.fn(async () => json(201, result()));
+    const r = await httpCognitiveTransport(fetch).submit(C, {
+      text: "x",
+      idempotencyKey: "key-12345678",
+    });
+    expect(r).toMatchObject({ kind: "ok", status: 201 });
     expect(fetch).toHaveBeenCalledWith(
-      "/api/ask/turns",
+      `/api/cognitive/conversations/${C}/turns`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify(input),
         credentials: "same-origin",
+        body: JSON.stringify({ text: "x", idempotencyKey: "key-12345678" }),
       }),
     );
   });
 
-  it("no runtime route → not_connected; no event, no answer", async () => {
-    const onEvent = vi.fn();
-    const fetch = vi.fn(async () => new Response("<html/>", { status: 404 }));
-    expect(await httpAskTransport(fetch).start(input, onEvent)).toBe("not_connected");
-    expect(onEvent).not.toHaveBeenCalled();
-  });
-
-  it("a runtime 404 envelope means an unknown turn, not a missing runtime", async () => {
-    const env = () =>
-      new Response(JSON.stringify({ error: { code: "not_found", message: "turn" } }), {
-        status: 404,
-      });
-    expect(await httpAskTransport(vi.fn(async () => env())).resume(T, 3, vi.fn())).toBe(
-      "not_found",
+  it("framework 404 = not connected; ICOS 404 envelope = unknown conversation", async () => {
+    const missing = vi.fn(async () => new Response("<html/>", { status: 404 }));
+    expect(await httpCognitiveTransport(missing).list()).toEqual({ kind: "not_connected" });
+    const env = vi.fn(async () =>
+      json(404, { error: { code: "not_found", message: "conversation introuvable" } }),
     );
-    expect(await httpAskTransport(vi.fn(async () => env())).cancel(T)).toBe("not_found");
+    expect(await httpCognitiveTransport(env).resume(C)).toMatchObject({
+      kind: "error",
+      status: 404,
+      typed: true,
+    });
     expect(
-      await httpAskTransport(vi.fn(async () => new Response("", { status: 404 }))).cancel(T),
+      await httpCognitiveTransport(
+        vi.fn(async () => json(404, { error: { code: "not_found", message: "" } })),
+      ).events(C, 0, vi.fn()),
+    ).toBe("not_found");
+    expect(
+      await httpCognitiveTransport(vi.fn(async () => new Response("", { status: 404 }))).events(
+        C,
+        0,
+        vi.fn(),
+      ),
     ).toBe("not_connected");
   });
 
-  it("parses SSE frames and drops malformed or unknown ones", async () => {
-    const onEvent = vi.fn();
-    const fetch = vi.fn(async () =>
-      sse([
-        started,
-        "not json",
-        { type: "made.up", turnId: T, seq: 1 },
-        { type: "turn.completed", turnId: T, seq: 1 },
-      ]),
+  it("memory mode answers 503: runtime unavailable, typed", async () => {
+    const off = vi.fn(async () =>
+      json(503, { error: { code: "persistence_unavailable", message: "PostgreSQL requis" } }),
     );
-    expect(await httpAskTransport(fetch).start(input, onEvent)).toBe("ended");
-    expect(onEvent.mock.calls.map(([e]) => e.type)).toEqual(["turn.started", "turn.completed"]);
+    expect(await httpCognitiveTransport(off).list()).toMatchObject({
+      kind: "error",
+      status: 503,
+      typed: true,
+    });
   });
 
-  it("an oversized frame aborts the stream as a lost link", async () => {
+  it("reads the durable event log as SSE after the cursor and drops invalid frames", async () => {
+    const body = [
+      `id: 3\nevent: turn.received\ndata: ${JSON.stringify(ev(3, "turn.received"))}\n\n`,
+      "event: error\ndata: {}\n\n",
+      `id: 4\nevent: turn.completed\ndata: ${JSON.stringify(ev(4, "turn.completed"))}\n\n`,
+    ].join("");
     const fetch = vi.fn(
       async () =>
-        new Response(`data: ${"x".repeat(1_100_000)}`, {
-          headers: { "content-type": "text/event-stream" },
-        }),
+        new Response(body, { headers: { "content-type": "text/event-stream; charset=utf-8" } }),
     );
-    expect(await httpAskTransport(fetch).start(input, vi.fn())).toBe("link_lost");
+    const onEvent = vi.fn();
+    expect(await httpCognitiveTransport(fetch).events(C, 2, onEvent)).toBe("closed");
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/cognitive/conversations/${C}/events?after=2`,
+      expect.objectContaining({ headers: { accept: "text/event-stream" } }),
+    );
+    expect(onEvent.mock.calls.map(([e]) => e.seq)).toEqual([3, 4]);
   });
 
-  it("resume asks for events after the last applied seq", async () => {
-    const fetch = vi.fn(async () => sse([]));
-    await httpAskTransport(fetch).resume(T, 41, vi.fn());
-    expect(fetch).toHaveBeenCalledWith(`/api/ask/turns/${T}/events?afterSeq=41`, expect.anything());
-  });
-
-  it("network failure is link_lost", async () => {
+  it("cancel and proposal decision hit the canonical routes; network failure is link_lost", async () => {
+    const fetch = vi.fn(async (url: string) =>
+      url.includes("/cancel")
+        ? json(200, { cancelled: true })
+        : json(200, {
+            proposal: {
+              id: "r1",
+              turnId: "t1",
+              kind: "goal_proposal",
+              status: "submitted",
+              payload: {},
+              externalId: "goal-1",
+            },
+          }),
+    );
+    const t = httpCognitiveTransport(fetch as unknown as typeof globalThis.fetch);
+    expect(await t.cancel(C, "t1")).toMatchObject({ kind: "ok" });
+    expect(await t.decide(C, "r1", "approve")).toMatchObject({
+      kind: "ok",
+      value: { proposal: { externalId: "goal-1" } },
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/cognitive/conversations/${C}/proposals/r1/decision`,
+      expect.objectContaining({ body: JSON.stringify({ decision: "approve" }) }),
+    );
     const down = vi.fn(async () => {
       throw new TypeError("offline");
     });
-    expect(await httpAskTransport(down).start(input, vi.fn())).toBe("link_lost");
-    expect(await httpAskTransport(down).interrupt(T)).toBe("failed");
+    expect(await httpCognitiveTransport(down).events(C, 0, vi.fn())).toBe("link_lost");
   });
 });

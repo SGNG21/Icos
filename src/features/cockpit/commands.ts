@@ -204,11 +204,47 @@ const RESULT_TEXT: Record<ControlCommandResult["status"], string> = {
   REJECTED: "Rejected by ICOS. Nothing changed.",
 };
 
+/** What the owner must do next for rejections the UI can explain. */
+const REJECTION_HINT: Partial<Record<string, string>> = {
+  SESSION_TOO_OLD: "Your session is older than the policy allows: sign out and sign in again.",
+  REAUTH_REQUIRED: "Start over and re-authenticate.",
+  REAUTH_INVALID: "The proof was refused or already used: start over and re-authenticate.",
+  REAUTH_EXPIRED: "The 5-minute proof expired before ICOS admitted the command: start over.",
+  CONFIRMATION_REQUIRED: "The confirmation phrase did not match exactly.",
+  VERSION_CONFLICT: "The target changed since you opened this dialog: start over to read it again.",
+  IDEMPOTENCY_KEY_REUSED: "This key was already used for another command: start over.",
+};
+
 function fromResult(result: ControlCommandResult): Outcome {
   const detail = result.rejection
-    ? `${result.rejection.code}: ${result.rejection.message}`
+    ? [
+        `${result.rejection.code}: ${result.rejection.message}`,
+        REJECTION_HINT[result.rejection.code],
+      ]
+        .filter(Boolean)
+        .join(" ")
     : RESULT_TEXT[result.status];
   return { phase: phaseOfResult(result), detail, result };
+}
+
+/** Audit trail of a typed result, for display: never invented, only what ICOS returned. */
+export function resultTrail(result: ControlCommandResult): string[] {
+  return [
+    result.replayed
+      ? "Stored result of an earlier identical request (replayed) — nothing ran a second time."
+      : null,
+    `Command ${result.commandId}`,
+    result.version !== null
+      ? `Version ${result.expectedVersion} → ${result.version}`
+      : `Expected version ${result.expectedVersion}`,
+    result.auditEntryId ? `Audit ${result.auditEntryId}` : null,
+    `Re-auth ${result.reauth}`,
+  ].filter((x): x is string => x !== null);
+}
+
+/** A single-use proof is only worth sending while it is valid (server window: 5 min). */
+export function proofUsable(expiresAt: string | null, now: number = Date.now()): boolean {
+  return expiresAt !== null && Date.parse(expiresAt) - now > 5_000;
 }
 
 function fromTransportError(

@@ -21,7 +21,9 @@ import {
   httpControlTransport,
   loadVersion,
   needsReauth,
+  proofUsable,
   reauthenticate,
+  resultTrail,
   reconcileCommand,
   riskOf,
   type ControlCommandType,
@@ -88,6 +90,7 @@ export function CommandButton({
   const [typed, setTyped] = useState("");
   const [password, setPassword] = useState("");
   const [proof, setProof] = useState<string | null>(null);
+  const [proofExpiresAt, setProofExpiresAt] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [sent, setSent] = useState<ReturnType<typeof buildRequest> | null>(null);
   /** A sent command whose outcome is not known yet: its session must survive a close. */
@@ -109,6 +112,7 @@ export function CommandButton({
     setTyped("");
     setPassword("");
     setProof(null);
+    setProofExpiresAt(null);
     setOutcome(null);
     setSent(null);
     setVersion(null);
@@ -147,6 +151,7 @@ export function CommandButton({
     if (gen !== generation.current) return;
     if (r.ok) {
       setProof(r.proof);
+      setProofExpiresAt(r.expiresAt);
       setOutcome(null);
       setPhase("AUTHORIZED");
     } else settle(gen, r.outcome);
@@ -154,6 +159,17 @@ export function CommandButton({
 
   const send = async () => {
     if (version === null) return;
+    if (reauth && !proofUsable(proofExpiresAt)) {
+      // Not sent yet, so the key is still unspent: ask for a fresh proof instead of burning it.
+      setProof(null);
+      setProofExpiresAt(null);
+      setOutcome({
+        phase: "AUTH_REQUIRED",
+        detail: "Your re-authentication expired. Re-authenticate to send.",
+      });
+      setPhase("AUTH_REQUIRED");
+      return;
+    }
     const request = buildRequest({
       type,
       target,
@@ -312,9 +328,12 @@ export function CommandButton({
           <p className="cx-outcome" data-status={phase} role="status" aria-live="polite">
             <strong>{PHASE_TEXT[phase]}</strong>
             {outcome?.detail && <span>{outcome.detail}</span>}
-            {outcome?.result?.replayed && (
-              <span>Stored result of an earlier identical request.</span>
-            )}
+            {outcome?.result &&
+              resultTrail(outcome.result).map((line) => (
+                <span key={line} className="cx-dim">
+                  {line}
+                </span>
+              ))}
           </p>
 
           <footer>
