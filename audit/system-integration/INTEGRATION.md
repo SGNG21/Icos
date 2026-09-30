@@ -18,12 +18,13 @@ on this branch (`docs/architecture/ICOS_INTEGRATION_PLAN.md` §1); every merge c
 |---|---|---|---|---|---|
 | I2a | Control foundation | `6794e21` via `integration/core3-control-foundation` `2156ddd` | 0044 → **0055** | `0048_control_plane` → **0049** (idx 46) | MERGED `beb4afa` |
 | P0 | CORE3 P0 | `518fa0b` | — | — | see below |
-| I1 | Cognitive | waits for commit (lane tree: 33 files, migration 0050→0051 rewrite with launch states) | → **0056** | → **0050** | BLOCKED_ON_LANE |
-| I2b | Cockpit | `ae20ff6` committed; 13 files in flight | — | — | BLOCKED_ON_LANE (and on I1) |
-| I3 | Workforce | `6f344e0` committed; 20 files in flight | → **0057** | → **0051** | BLOCKED_ON_LANE |
-| I4 | Tool gateway | `21d8818` committed; 13 files in flight (composition) | → **0058** | → **0052** | BLOCKED_ON_LANE |
-| I5 | Proactive supervisor | `f79a7b6` clean | → **0059** | → **0053** | READY, waits for wave order |
-| I6 | Voice | `cfb2ad5`; `scripts/voice-server.ts` in flight | → **0060** | — | READY_BUT_NEEDS_FINAL_FIX |
+| I1 | Cognitive | `44eaac7` | 0057 → **0056** | `0051` → **0050** (idx 47) | MERGED `44bc234` |
+| I2b | Cockpit | `0e53db3` | — | — | MERGED `5c14ef7` |
+| I3 | Workforce | `7cd0fc2` | 0056 → **0057** | `0050` → **0051** (idx 48) | MERGED `0291206` |
+| I4 | Tool gateway | `bc95ed7` | 0055 → **0058**, 0056 → **0059** | `0049` → **0052** (idx 49) | MERGED `b43a516` |
+| I5 | Proactive supervisor | `f79a7b6` | 0055 → **0060** | `0049` → **0053** (idx 50); ns `core/proactive` | MERGED `0db464d` |
+| I6 | Voice | `a7e8ab3` (transport HEAD; `49379e1..2eb6e95` mobile-UI redesign NOT merged — cockpit-lane review) | 0056 → **0061** | — | MERGED `3743a37` |
+| follow-ups | Cockpit `e1305a0`, Cognitive `5390a97` | — | — | — | MERGED `f2648d1`, `f9eac18` |
 
 ## I2a — control foundation (merged `beb4afa`)
 
@@ -114,3 +115,14 @@ proxies WebSockets on the same hostname with a second path mapping once that por
 
 Trunk suites were run one at a time (other lanes were running their own suites concurrently; no
 resource-starvation failure occurred, nothing was retried).
+
+## I3–I6 (2026-09-30 afternoon)
+
+| Wave | What was wired | Left NOT_CONNECTED (owner) |
+|---|---|---|
+| I3 workforce `0291206` | `container.workforce` (memory + postgres) from the lane's composition; cockpit BR-29 read port with the caller's session principal; composition test with the real bootstrap | supervisor → `workforce.compute` and `recordExecution` from dispatch evidence (CORE3 + workforce: behaviour change on the certified dispatch path); authority ports for tool gateway / cognitive |
+| I4 tool gateway `b43a516` | composed per container by the lane (`getToolGatewayRuntime`), `/api/tool-gateway/*`; `audit_event_type_check` union proven 45 → 51; all lanes' governance files in `PROTECTED_PATHS` (CCD-16) | worker tool bridge (external CLI workers cannot call the gateway); connectors beyond `local-files`/`http`; no live tool action was executed (no execute route by design) |
+| I5 proactive `0db464d` | lane's production composition on the durable scheduler (`supervisor_observe`), policy ceiling PROPOSE, namespace `core/proactive`; `scheduled_jobs_kind_check` union | ToolGatewayActionPort (dead under PROPOSE), attention delivery (no push adapter — cockpit, CCD-17), EpisodeSink → cognitive memory (needs a system `CognitiveScope.userId` — cognitive, CCD-6), digest into context assembly, workforce capability binding |
+| I6 voice `3743a37` | canonical `CognitiveRuntimeVoiceAdapter` (acceptance semantics, replay on voice `turnId`, FINAL_RESPONSE from rows, MISSION/APPROVAL events, abort → cancel, ownership refused) wired in `compose.ts`; legacy CEO bridge removed; `ws` dependency added by the lane | real STT/TTS run against OmniRoute not exercised here; the WebSocket host is a separate process (`pnpm voice:serve`) — Tailscale path mapping pending; mobile-UI commits `49379e1..2eb6e95` pending cockpit-lane review |
+
+Certification: I5 trunk (`0db464d`) full unit 2381/2381; full integration — see the log below once complete.
