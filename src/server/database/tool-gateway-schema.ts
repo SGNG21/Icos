@@ -8,11 +8,12 @@ import {
   primaryKey,
   text,
   timestamp,
+  foreignKey,
   unique,
 } from "drizzle-orm/pg-core";
 
 /**
- * Tool Gateway persistence (decision 0055). Separate file, like
+ * Tool Gateway persistence (decisions 0055, 0056). Separate file, like
  * `memory-schema.ts`, to avoid churn in `schema.ts`.
  * Migration: drizzle/0049_tool_gateway.sql (hand-written, see
  * docs/icos/database-migrations.md). Parity: postgres-stores.integration.test.ts.
@@ -33,6 +34,8 @@ export const toolExecutions = pgTable(
     tenantId: text("tenant_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     requestFingerprint: text("request_fingerprint").notNull(),
+    operationFingerprint: text("operation_fingerprint").notNull(),
+    duplicateOf: text("duplicate_of"),
     toolId: text("tool_id").notNull(),
     toolVersion: text("tool_version").notNull(),
     action: text("action").notNull(),
@@ -51,6 +54,7 @@ export const toolExecutions = pgTable(
     failureMessage: text("failure_message"),
     resultSummary: jsonb("result_summary"),
     resultReference: text("result_reference"),
+    resultTrust: text("result_trust"),
     auditReferences: jsonb("audit_references").notNull(),
     version: integer("version").notNull(),
     createdAt: ts("created_at").notNull(),
@@ -60,6 +64,8 @@ export const toolExecutions = pgTable(
   },
   (t) => [
     unique("tool_executions_tenant_key_unique").on(t.tenantId, t.idempotencyKey),
+    // Target of the tenant-composite FK from approvals (an approval can never cross tenants).
+    unique("tool_executions_tenant_id_unique").on(t.tenantId, t.id),
     check("tool_executions_tenant_check", sql`length(${t.tenantId}) > 0`),
     check("tool_executions_action_check", sql`${t.action} in (${ACTIONS})`),
     check("tool_executions_risk_check", sql`${t.riskClass} in (${RISKS})`),
@@ -77,9 +83,16 @@ export const toolExecutions = pgTable(
     ),
     check(
       "tool_executions_failure_class_check",
-      sql`${t.failureClass} is null or ${t.failureClass} in ('AUTH_FAILURE','PERMISSION_DENIED','RATE_LIMIT','PROVIDER_UNAVAILABLE','NETWORK_ERROR','TIMEOUT','INVALID_INPUT','CONFLICT','NOT_FOUND','IDEMPOTENCY_CONFLICT','POLICY_DENIED','APPROVAL_REQUIRED','APPROVAL_REJECTED','APPROVAL_EXPIRED','SETTLEMENT_UNKNOWN','NOT_CONNECTED','UNKNOWN')`,
+      sql`${t.failureClass} is null or ${t.failureClass} in ('AUTH_FAILURE','PERMISSION_DENIED','RATE_LIMIT','PROVIDER_UNAVAILABLE','NETWORK_ERROR','TIMEOUT','INVALID_INPUT','CONFLICT','NOT_FOUND','IDEMPOTENCY_CONFLICT','POLICY_DENIED','APPROVAL_REQUIRED','APPROVAL_REJECTED','APPROVAL_EXPIRED','SETTLEMENT_UNKNOWN','NOT_CONNECTED','DUPLICATE_OPERATION','UNKNOWN')`,
     ),
-    check("tool_executions_fingerprint_check", sql`${t.requestFingerprint} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "tool_executions_fingerprint_check",
+      sql`${t.requestFingerprint} ~ '^[a-f0-9]{64}$' and ${t.operationFingerprint} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "tool_executions_result_trust_check",
+      sql`${t.resultTrust} is null or ${t.resultTrust} = 'UNTRUSTED_EXTERNAL_DATA'`,
+    ),
     // A side effect is only ever APPLIED on a SUCCEEDED row, and vice versa.
     check(
       "tool_executions_success_settlement_check",
@@ -92,6 +105,11 @@ export const toolExecutions = pgTable(
     ),
     index("tool_executions_tenant_status_idx").on(t.tenantId, t.status, t.updatedAt),
     index("tool_executions_tenant_settlement_idx").on(t.tenantId, t.settlementState),
+    index("tool_executions_tenant_operation_idx").on(
+      t.tenantId,
+      t.operationFingerprint,
+      t.createdAt,
+    ),
   ],
 );
 
@@ -100,9 +118,7 @@ export const toolApprovalRequests = pgTable(
   {
     id: text("id").primaryKey(),
     tenantId: text("tenant_id").notNull(),
-    toolExecutionId: text("tool_execution_id")
-      .notNull()
-      .references(() => toolExecutions.id, { onDelete: "restrict" }),
+    toolExecutionId: text("tool_execution_id").notNull(),
     requestFingerprint: text("request_fingerprint").notNull(),
     requesterAgentId: text("requester_agent_id").notNull(),
     toolId: text("tool_id").notNull(),
@@ -113,12 +129,20 @@ export const toolApprovalRequests = pgTable(
     decidedByKind: text("decided_by_kind"),
     decidedById: text("decided_by_id"),
     reason: text("reason"),
+    duplicateOf: text("duplicate_of"),
+    consumedAt: ts("consumed_at"),
     requestedAt: ts("requested_at").notNull(),
     decidedAt: ts("decided_at"),
     expiresAt: ts("expires_at").notNull(),
   },
   (t) => [
+    foreignKey({
+      name: "tool_approval_execution_fk",
+      columns: [t.tenantId, t.toolExecutionId],
+      foreignColumns: [toolExecutions.tenantId, toolExecutions.id],
+    }).onDelete("restrict"),
     check("tool_approval_tenant_check", sql`length(${t.tenantId}) > 0`),
+    check("tool_approval_consumed_check", sql`${t.consumedAt} is null or ${t.status} = 'APPROVED'`),
     check("tool_approval_preview_size_check", sql`octet_length(${t.inputPreview}::text) <= 16384`),
     check("tool_approval_status_check", sql`${t.status} in ('PENDING','APPROVED','REJECTED')`),
     check("tool_approval_action_check", sql`${t.action} in (${ACTIONS})`),
@@ -154,10 +178,41 @@ export const toolGrants = pgTable(
     grantedBy: text("granted_by").notNull(),
     grantedAt: ts("granted_at").notNull(),
     expiresAt: ts("expires_at"),
+    reason: text("reason").notNull(),
+    revokedAt: ts("revoked_at"),
+    revokedBy: text("revoked_by"),
+    revokeReason: text("revoke_reason"),
   },
   (t) => [
     primaryKey({ name: "tool_grants_pk", columns: [t.tenantId, t.agentId, t.toolId, t.action] }),
     check("tool_grants_tenant_check", sql`length(${t.tenantId}) > 0`),
     check("tool_grants_action_check", sql`${t.action} in (${ACTIONS})`),
+    check("tool_grants_reason_check", sql`length(${t.reason}) > 0`),
+    check(
+      "tool_grants_revocation_check",
+      sql`(${t.revokedAt} is null) = (${t.revokedBy} is null) and (${t.revokedAt} is null) = (${t.revokeReason} is null)`,
+    ),
+  ],
+);
+
+/** Dated, expirable connector health evidence (restart- and multi-process-safe). */
+export const toolConnectorHealth = pgTable(
+  "tool_connector_health",
+  {
+    tenantId: text("tenant_id").notNull(),
+    instanceId: text("instance_id").notNull(),
+    status: text("status").notNull(),
+    checkedAt: ts("checked_at").notNull(),
+    expiresAt: ts("expires_at").notNull(),
+    rateLimitedUntil: ts("rate_limited_until"),
+    detail: text("detail"),
+  },
+  (t) => [
+    primaryKey({ name: "tool_connector_health_pk", columns: [t.tenantId, t.instanceId] }),
+    check("tool_connector_health_tenant_check", sql`length(${t.tenantId}) > 0`),
+    check(
+      "tool_connector_health_status_check",
+      sql`${t.status} in ('REGISTERED','CONFIGURED','HEALTHY','DEGRADED','RATE_LIMITED','AUTH_FAILED','DISABLED','UNKNOWN')`,
+    ),
   ],
 );

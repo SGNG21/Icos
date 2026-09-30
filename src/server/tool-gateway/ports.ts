@@ -1,9 +1,11 @@
 import { inspect } from "node:util";
 
 import type { AuditEntry, JsonValue } from "@/core/contracts";
+import type { AuditRepository } from "@/server/repositories/ports";
 import type {
   ActionClass,
   ConnectorDefinition,
+  ConnectorHealthRecord,
   ConnectorInstance,
   ConnectorStatus,
   CredentialReference,
@@ -132,6 +134,15 @@ export interface ToolExecutionStore {
   ): Promise<ToolExecution | null>;
   getByKey(tenantId: string, idempotencyKey: string): Promise<ToolExecution | null>;
   list(tenantId: string, query?: ExecutionQuery): Promise<ToolExecution[]>;
+  /**
+   * Executions of the same operation created since `since` that applied, may
+   * have applied, or are on their way to (awaiting approval / executing).
+   */
+  findLiveByOperation(
+    tenantId: string,
+    operationFingerprint: string,
+    since: Date,
+  ): Promise<ToolExecution[]>;
 }
 
 export interface ToolApprovalStore {
@@ -139,15 +150,38 @@ export interface ToolApprovalStore {
   get(tenantId: string, approvalRequestId: string): Promise<ToolApprovalRequest | null>;
   /** Only a PENDING request can be decided; null if it was not PENDING any more. */
   decide(next: ToolApprovalRequest, audit: AuditEntry): Promise<ToolApprovalRequest | null>;
+  /** Mark an APPROVED request used. False if it was already consumed (single use). */
+  consume(
+    tenantId: string,
+    approvalRequestId: string,
+    at: string,
+    audit: AuditEntry,
+  ): Promise<boolean>;
   listPending(tenantId: string): Promise<ToolApprovalRequest[]>;
 }
 
+export type GrantKey = Pick<ToolGrant, "tenantId" | "agentId" | "toolId" | "action">;
+
 export interface ToolGrantStore {
+  /** Active AND revoked grants of an agent (revoked ones never authorise: see `grantCovers`). */
   listForAgent(tenantId: string, agentId: string): Promise<ToolGrant[]>;
-  /** Upsert of one exact (tenant, agent, tool, action) grant. */
+  listForTenant(tenantId: string): Promise<ToolGrant[]>;
+  /** Create, or re-activate, one exact (tenant, agent, tool, action) grant. */
   put(grant: ToolGrant, audit: AuditEntry): Promise<void>;
+  /** Soft revoke (row kept as evidence). False when there was no active grant. */
   revoke(
-    grant: Pick<ToolGrant, "tenantId" | "agentId" | "toolId" | "action">,
+    key: GrantKey,
+    revocation: { revokedAt: string; revokedBy: string; revokeReason: string },
     audit: AuditEntry,
   ): Promise<boolean>;
 }
+
+/** Dated connector health evidence, shared by every process (restart-safe). */
+export interface ConnectorHealthStore {
+  get(tenantId: string, instanceId: string): Promise<ConnectorHealthRecord | null>;
+  put(record: ConnectorHealthRecord): Promise<void>;
+  list(tenantId: string): Promise<ConnectorHealthRecord[]>;
+}
+
+/** The canonical audit port (`AuditRepository.append`). */
+export type ToolAuditPort = Pick<AuditRepository, "append">;

@@ -105,3 +105,5 @@ Accepted gaps: dedup across _different_ keys (fingerprint-level in-flight lock),
 approver tenant membership and human tenant scoping (single-tenant shim until COMPLIANCE-1),
 audit of pre-claim denials, `inputSchema` enforcement, shared (multi-process) connector
 health, a composite tenant FK on approvals, model-facing output screening for prompt injection.
+
+> Update 2026-09-30: most accepted gaps above are closed by [decision 0056](0056-tool-gateway-integration-contracts.md).

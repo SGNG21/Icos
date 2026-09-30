@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { AuditEntry } from "@/core/contracts";
 
 import {
+  HARNESS_HEALTH_TTL_MS,
   SECRET,
   TENANT_A,
   TENANT_B,
@@ -47,8 +48,8 @@ export function defineGatewayProofs(
       ...(key ? { idempotencyKey: key } : {}),
     });
 
-    async function approveSend(key: string) {
-      const first = await h.gateway.execute(caller(), mail("SEND", key));
+    async function approveSend(key: string, input?: Record<string, unknown>) {
+      const first = await h.gateway.execute(caller(), mail("SEND", key, input));
       expect(first.kind).toBe("approval_required");
       if (first.kind !== "approval_required") throw new Error("unreachable");
       const d = await h.gateway.decideApproval(
@@ -204,7 +205,10 @@ export function defineGatewayProofs(
 
       expect((await h.gateway.decideApproval(TENANT_A, id, human(), "APPROVED")).ok).toBe(true);
       // The approval covers this exact request only.
-      const other = await h.gateway.execute(caller(), mail("SEND", "appr-key-002"));
+      const other = await h.gateway.execute(
+        caller(),
+        mail("SEND", "appr-key-002", { to: "someone-else@example.com" }),
+      );
       expect(other.kind).toBe("approval_required");
       const done = await h.gateway.execute(caller(), mail("SEND", "appr-key-001"));
       expect(done).toMatchObject({ kind: "succeeded", replayed: false });
@@ -415,14 +419,16 @@ export function defineGatewayProofs(
         (await h.gateway.decideApproval(TENANT_A, first.approvalRequestId, human(), "APPROVED")).ok,
       ).toBe(true);
       const stolen = await h.gateway.execute(caller("agent-2"), merge);
-      expect(stolen).toEqual({
+      expect(stolen).toMatchObject({
         kind: "failed",
-        toolExecutionId: undefined,
         failureClass: "IDEMPOTENCY_CONFLICT",
         retryable: false,
         message: "idempotencyKey already used by another requester",
-        auditReferences: [],
       });
+      // Nothing about agent-1's execution leaks: no id, only the denial's own audit entry.
+      expect(stolen.toolExecutionId).toBeUndefined();
+      expect(stolen.auditReferences).toHaveLength(1);
+      expect(stolen.auditReferences).not.toContain(first.auditReferences[0]);
       expect(h.connector.effectCount()).toBe(0);
       const own = await h.gateway.execute(caller("agent-1"), merge);
       expect(own.kind).toBe("succeeded");
@@ -430,14 +436,12 @@ export function defineGatewayProofs(
       // Without the grant any more, even the requester gets no replay.
       await h.gateway.setGrant(
         human("admin-1", ["admin"]),
-        { tenantId: TENANT_A, agentId: "agent-1", toolId: "repo", action: "MERGE" },
+        { tenantId: TENANT_A, agentId: "agent-1", toolId: "repo", action: "MERGE", reason: "test" },
         "revoke",
       );
-      expect(await h.gateway.execute(caller("agent-1"), merge)).toMatchObject({
-        kind: "failed",
-        failureClass: "PERMISSION_DENIED",
-        auditReferences: [],
-      });
+      const revoked = await h.gateway.execute(caller("agent-1"), merge);
+      expect(revoked).toMatchObject({ kind: "failed", failureClass: "PERMISSION_DENIED" });
+      expect(revoked.toolExecutionId).toBeUndefined();
     });
 
     it("R2 — the approver sees exactly what will run", async () => {
@@ -483,16 +487,322 @@ export function defineGatewayProofs(
       ).toBe(true);
     });
 
+    it("S1 — input is validated against the declared schema before anything else runs", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      for (const [key, input] of [
+        ["schema-key-01", { to: 42 }],
+        ["schema-key-02", { subject: "no recipient" }],
+        ["schema-key-03", { to: "x@example.com", bcc: "hidden@example.com" }],
+      ] as const) {
+        const r = await h.gateway.execute(caller(), mail("SEND", key, input as never));
+        expect(r).toMatchObject({ kind: "failed", failureClass: "INVALID_INPUT" });
+        const row = (await h.executions.getByKey(TENANT_A, key))!;
+        expect(row).toMatchObject({ status: "DENIED", failureClass: "INVALID_INPUT" });
+        expect(row.approvalRequestId).toBeUndefined();
+        const audit = await readAudit(h);
+        expect(
+          audit.some(
+            (a) =>
+              a.details.toolExecutionId === row.toolExecutionId && a.details.status === "DENIED",
+          ),
+        ).toBe(true);
+      }
+      expect(await h.approvals.listPending(TENANT_A)).toHaveLength(0);
+      expect(h.connector.effectCount()).toBe(0);
+    });
+
+    it("S2 — every refusal before execution leaves audit evidence and no side effect", async () => {
+      await h.grant("agent-1", "mail", "CREATE");
+      await h.grant("agent-2", "mail", "CREATE");
+      const MARKER = "PII-MARKER-jane.doe@example.com";
+      const cases: [string, unknown, string][] = [
+        [
+          "INVALID_INTENT",
+          { ...mail("CREATE", "den-key-0001", { to: MARKER }), approval: "approved" },
+          "agent-1",
+        ],
+        [
+          "UNKNOWN_CONNECTOR_INSTANCE",
+          { ...mail("CREATE", "den-key-0002", { to: MARKER }), connectorInstanceId: "nope-1" },
+          "agent-1",
+        ],
+        [
+          "FOREIGN_CONNECTOR_INSTANCE",
+          { ...mail("CREATE", "den-key-0003", { to: MARKER }), connectorInstanceId: "inst-b" },
+          "agent-1",
+        ],
+        [
+          "UNKNOWN_TOOL",
+          { ...mail("CREATE", "den-key-0004", { to: MARKER }), toolId: "nothing" },
+          "agent-1",
+        ],
+        ["MISSING_IDEMPOTENCY_KEY", mail("CREATE", undefined, { to: MARKER }), "agent-1"],
+      ];
+      for (const [reason, intent, who] of cases) {
+        const r = await h.gateway.execute(caller(who), intent);
+        expect(r.kind).toBe("failed");
+        expect(r.auditReferences).toHaveLength(1);
+        const audit = await readAudit(h);
+        const entry = audit.find((a) => a.id === r.auditReferences[0])!;
+        expect(entry).toMatchObject({
+          eventType: "tool.request.denied",
+          actor: { kind: "agent", id: who },
+        });
+        expect(entry.details.reason).toBe(reason);
+      }
+      // Keys used by someone else, or reused for another payload, are audited refusals too.
+      expect(
+        (await h.gateway.execute(caller("agent-1"), mail("CREATE", "den-key-0010", { to: MARKER })))
+          .kind,
+      ).toBe("succeeded");
+      const other = await h.gateway.execute(
+        caller("agent-2"),
+        mail("CREATE", "den-key-0010", { to: MARKER }),
+      );
+      const changed = await h.gateway.execute(
+        caller("agent-1"),
+        mail("CREATE", "den-key-0010", { to: "changed@example.com" }),
+      );
+      const audit = await readAudit(h);
+      const reasonOf = (r: { auditReferences: string[] }) =>
+        audit.find((a) => a.id === r.auditReferences[0])?.details.reason;
+      expect(reasonOf(other)).toBe("IDEMPOTENCY_KEY_OF_ANOTHER_REQUESTER");
+      expect(reasonOf(changed)).toBe("IDEMPOTENCY_KEY_PAYLOAD_MISMATCH");
+      // Post-claim denials (no grant, approval required) are recorded on their execution row.
+      const noGrant = await h.gateway.execute(caller("agent-1"), mail("SEND", "den-key-0011"));
+      expect(noGrant).toMatchObject({ kind: "failed", failureClass: "PERMISSION_DENIED" });
+      expect((await h.executions.getByKey(TENANT_A, "den-key-0011"))!.status).toBe("DENIED");
+      // Only the one legitimate CREATE ran; no audit entry carries the input.
+      expect(h.connector.effectCount()).toBe(1);
+      const denials = audit.filter((a) => a.eventType === "tool.request.denied");
+      expect(denials.length).toBeGreaterThanOrEqual(7);
+      expect(JSON.stringify(denials)).not.toContain(MARKER);
+    });
+
+    it("S3 — the same high-risk operation under a new key is stopped unless knowingly repeated", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      await h.grant("agent-2", "mail", "SEND");
+      await h.grant("agent-1", "mail", "CREATE");
+      const input = { to: "client@example.com", subject: "Invoice 42" };
+      const first = await approveSend("dupop-key-01", input);
+      expect((await h.gateway.execute(caller(), mail("SEND", "dupop-key-01", input))).kind).toBe(
+        "succeeded",
+      );
+      // New key, same meaningful operation — by the same agent or another one.
+      for (const [who, key] of [
+        ["agent-1", "dupop-key-02"],
+        ["agent-2", "dupop-key-03"],
+      ] as const) {
+        const again = await h.gateway.execute(caller(who), mail("SEND", key, input));
+        expect(again).toMatchObject({
+          kind: "failed",
+          failureClass: "DUPLICATE_OPERATION",
+          retryable: false,
+        });
+      }
+      expect(await h.approvals.listPending(TENANT_A)).toHaveLength(0); // no approval even requested
+      // An override must name the execution it repeats.
+      const wrong = await h.gateway.execute(caller(), {
+        ...mail("SEND", "dupop-key-04", input),
+        duplicateOverride: { ofExecutionId: "toolexec-nope", reason: "resend" },
+      });
+      expect(wrong).toMatchObject({ kind: "failed", failureClass: "DUPLICATE_OPERATION" });
+      const repeat = await h.gateway.execute(caller(), {
+        ...mail("SEND", "dupop-key-05", input),
+        duplicateOverride: {
+          ofExecutionId: first.toolExecutionId,
+          reason: "client asked for a resend",
+        },
+      });
+      if (repeat.kind !== "approval_required") throw new Error(repeat.kind);
+      // The approver sees that this is a knowing repeat.
+      expect((await h.approvals.get(TENANT_A, repeat.approvalRequestId))!.duplicateOf).toBe(
+        first.toolExecutionId,
+      );
+      await h.gateway.decideApproval(TENANT_A, repeat.approvalRequestId, human(), "APPROVED");
+      const done = await h.gateway.execute(caller(), {
+        ...mail("SEND", "dupop-key-05", input),
+        duplicateOverride: {
+          ofExecutionId: first.toolExecutionId,
+          reason: "client asked for a resend",
+        },
+      });
+      expect(done.kind).toBe("succeeded");
+      expect((await h.executions.getByKey(TENANT_A, "dupop-key-05"))!.duplicateOf).toBe(
+        first.toolExecutionId,
+      );
+      expect(h.connector.effectCount()).toBe(2);
+      // Ordinary repeats stay possible: drafts, and the same send after the window.
+      expect((await h.gateway.execute(caller(), mail("CREATE", "draft-dup-01", input))).kind).toBe(
+        "succeeded",
+      );
+      expect((await h.gateway.execute(caller(), mail("CREATE", "draft-dup-02", input))).kind).toBe(
+        "succeeded",
+      );
+      h.clock.advance(24 * 3600_000 + 1_000);
+      await h.gateway.probeHealth(TENANT_A);
+      expect((await h.gateway.execute(caller(), mail("SEND", "dupop-key-06", input))).kind).toBe(
+        "approval_required",
+      );
+    });
+
+    it("S4 — an approval is single-use", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      const first = await approveSend("once-key-001");
+      h.connector.mode = "ratelimit"; // provider refuses; nothing applied
+      expect(await h.gateway.execute(caller(), mail("SEND", "once-key-001"))).toMatchObject({
+        failureClass: "RATE_LIMIT",
+        retryable: true,
+      });
+      expect((await h.approvals.get(TENANT_A, first.approvalRequestId))!.consumedAt).toBeDefined();
+      h.connector.mode = "ok";
+      h.clock.advance(31_000);
+      // The retry needs a NEW approval: the first one was spent on the first dispatch.
+      const retry = await h.gateway.execute(caller(), mail("SEND", "once-key-001"));
+      expect(retry.kind).toBe("approval_required");
+      if (retry.kind !== "approval_required") throw new Error("unreachable");
+      expect(retry.approvalRequestId).not.toBe(first.approvalRequestId);
+      expect(h.connector.effectCount()).toBe(0);
+    });
+
+    it("S5 — health is dated evidence: none or stale reads UNKNOWN, never an assumed HEALTHY", async () => {
+      await h.grant("agent-1", "mail", "READ");
+      h.clock.advance(HARNESS_HEALTH_TTL_MS + 1_000); // evidence expired, as after a long outage/restart
+      const view = (await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth.find(
+        (c) => c.instanceId === "inst-a",
+      )!;
+      expect(view.status).toBe("UNKNOWN");
+      expect(await h.gateway.execute(caller(), mail("READ"))).toMatchObject({
+        failureClass: "PROVIDER_UNAVAILABLE",
+      });
+      // A probe that throws is UNKNOWN too; a probe that answers is recorded, dated.
+      h.connector.health = async () => {
+        throw new Error("probe crashed");
+      };
+      await h.gateway.probeHealth(TENANT_A);
+      expect((await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth[0].status).toBe("UNKNOWN");
+      h.connector.health = async () => "DEGRADED";
+      await h.gateway.probeHealth(TENANT_A);
+      const degraded = (await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth[0];
+      expect(degraded).toMatchObject({
+        status: "DEGRADED",
+        checkedAt: h.clock.now().toISOString(),
+      });
+      expect((await h.gateway.execute(caller(), mail("READ"))).kind).toBe("succeeded");
+      // A restarted gateway reads the same evidence (no fabricated state either way).
+      h.rebuild();
+      expect((await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth[0].status).toBe(
+        "DEGRADED",
+      );
+    });
+
+    it("S6 — connector output is untrusted data and cannot change policy, grants or approvals", async () => {
+      await h.grant("agent-1", "mail", "READ");
+      await h.grant("agent-1", "mail", "SEND");
+      const pending = await h.gateway.execute(caller(), mail("SEND", "adv-key-0001"));
+      if (pending.kind !== "approval_required") throw new Error(pending.kind);
+      const grantsBefore = await h.gateway.listGrants(TENANT_A);
+      h.connector.mode = "adversarial";
+      const r = await h.gateway.execute(caller(), mail("READ"));
+      if (r.kind !== "succeeded") throw new Error(r.kind);
+      expect(r.result).toMatchObject({
+        trust: "UNTRUSTED_EXTERNAL_DATA",
+        contentType: "application/json",
+        source: { connectorId: "fake", instanceId: "inst-a", toolId: "mail", action: "READ" },
+        toolExecutionId: r.toolExecutionId,
+        scope: { tenantId: TENANT_A },
+        replayed: false,
+      });
+      // The hostile text is delivered as data, verbatim, and nothing else happened.
+      expect(r.result.data.system).toContain("SYSTEM OVERRIDE");
+      expect(await h.gateway.listGrants(TENANT_A)).toEqual(grantsBefore);
+      expect((await h.approvals.get(TENANT_A, pending.approvalRequestId))!.status).toBe("PENDING");
+      h.connector.mode = "ok";
+      expect((await h.gateway.execute(caller(), mail("SEND", "adv-key-0001"))).kind).toBe(
+        "approval_required",
+      );
+      expect(h.connector.effectCount()).toBe(0);
+      // The evidence records the trust class; the connector could not rewrite its instance.
+      const row = (await h.executions.list(TENANT_A, { status: ["SUCCEEDED"] }))[0];
+      expect(row.resultTrust).toBe("UNTRUSTED_EXTERNAL_DATA");
+      expect(h.registry.get(TENANT_A, "inst-a")).toMatchObject({
+        tenantId: TENANT_A,
+        enabled: true,
+      });
+    });
+
+    it("S7 — only an authorised human administers grants; revocation keeps its evidence", async () => {
+      const g = {
+        tenantId: TENANT_A,
+        agentId: "agent-1",
+        toolId: "mail",
+        action: "SEND" as const,
+        reason: "sales outreach",
+      };
+      expect(
+        await h.gateway.setGrant({ kind: "agent", id: "agent-1" } as never, g, "grant"),
+      ).toMatchObject({ ok: false, failureClass: "PERMISSION_DENIED" });
+      expect(await h.gateway.setGrant(human("op-1", ["operator"]), g, "grant")).toMatchObject({
+        ok: false,
+        failureClass: "PERMISSION_DENIED",
+      });
+      expect(
+        await h.gateway.setGrant(human("adm-1", ["admin"]), { ...g, reason: " " }, "grant"),
+      ).toMatchObject({ ok: false, failureClass: "INVALID_INPUT" });
+      expect(
+        await h.gateway.setGrant(human("adm-1", ["admin"]), { ...g, agentId: "ghost" }, "grant"),
+      ).toMatchObject({ ok: false, failureClass: "NOT_FOUND" });
+      expect((await h.gateway.setGrant(human("adm-1", ["admin"]), g, "grant")).ok).toBe(true);
+      const [active] = await h.gateway.listGrants(TENANT_A, "agent-1");
+      expect(active).toMatchObject({ grantedBy: "adm-1", reason: "sales outreach" });
+      expect(active.revokedAt).toBeUndefined();
+      expect(
+        (
+          await h.gateway.setGrant(
+            human("adm-2", ["admin"]),
+            { ...g, reason: "campaign over" },
+            "revoke",
+          )
+        ).ok,
+      ).toBe(true);
+      const [revoked] = await h.gateway.listGrants(TENANT_A, "agent-1");
+      expect(revoked).toMatchObject({
+        grantedBy: "adm-1",
+        revokedBy: "adm-2",
+        revokeReason: "campaign over",
+      });
+      expect(revoked.revokedAt).toBeDefined();
+      expect(
+        await h.gateway.checkCapabilities(caller(), [{ toolId: "mail", action: "SEND" }]),
+      ).toEqual({
+        granted: [],
+        missing: [{ toolId: "mail", action: "SEND" }],
+      });
+      const audit = await readAudit(h);
+      expect(audit.filter((a) => a.eventType === "tool.grant.changed").map((a) => a.actor)).toEqual(
+        [
+          { kind: "human", id: "adm-1" },
+          { kind: "human", id: "adm-2" },
+        ],
+      );
+    });
+
     it("P15 — UNKNOWN safety state fails closed", async () => {
       await h.grant("agent-1", "mail", "CREATE");
       await h.grant("agent-1", "mail", "READ");
       // Unknown connector health → no dispatch.
-      h.registry.setStatus("inst-a", "UNKNOWN");
+      await h.health.put({
+        tenantId: TENANT_A,
+        instanceId: "inst-a",
+        status: "UNKNOWN",
+        checkedAt: h.clock.now().toISOString(),
+        expiresAt: new Date(h.clock.now().getTime() + 60_000).toISOString(),
+      });
       expect(await h.gateway.execute(caller(), mail("READ"))).toMatchObject({
         kind: "failed",
         failureClass: "PROVIDER_UNAVAILABLE",
       });
-      h.registry.setStatus("inst-a", "HEALTHY");
+      await h.gateway.probeHealth(TENANT_A);
       // Unknown requester → deny.
       expect(await h.gateway.execute(caller("ghost"), mail("READ"))).toMatchObject({
         kind: "failed",

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { z } from "zod";
+
 import type { Agent, AuditEntry, JsonValue } from "@/core/contracts";
 import { hasPermission, type Role } from "@/core/identity";
 import { containsSecret } from "@/core/memory/rules";
@@ -9,8 +11,10 @@ import {
   toolIntentSchema,
   type ActionClass,
   type ConnectorDefinition,
+  type ConnectorHealthRecord,
   type ConnectorInstance,
   type ConnectorStatus,
+  type DuplicatePolicy,
   type RiskClass,
   type ToolActionDefinition,
   type ToolApprovalRequest,
@@ -19,13 +23,17 @@ import {
   type ToolExecution,
   type ToolFailureClass,
   type ToolGrant,
+  type ToolIntent,
 } from "@/core/tool-gateway/model";
 import {
   approvalState,
   canDecideApproval,
   decideToolRequest,
   effectiveApproval,
+  effectiveConnectorStatus,
+  effectiveDuplicatePolicy,
   grantCovers,
+  operationFingerprint,
   requestFingerprint,
 } from "@/core/tool-gateway/policy";
 import type { AgentLookup } from "@/server/repositories/ports";
@@ -34,15 +42,36 @@ import type { ConnectorRegistry } from "./in-memory";
 import type {
   Connector,
   ConnectorContext,
+  ConnectorHealthStore,
   ConnectorOutcome,
   CredentialResolver,
   SecretValue,
   ToolApprovalStore,
+  ToolAuditPort,
   ToolExecutionStore,
   ToolGrantStore,
 } from "./ports";
 
-// ── Cognitive Runtime port (Phase 11) ─────────────────────────────────────────
+// ── Connector output trust boundary ──────────────────────────────────────────
+
+/**
+ * Everything a connector returns is DATA from outside ICOS. It is delivered
+ * inside this envelope, never merged into instructions, and nothing in it is
+ * ever read back by the gateway as policy, grant, approval or intent: the only
+ * instruction channel is a new `ToolIntent` from a caller, decided afresh.
+ */
+export interface UntrustedToolResult {
+  trust: "UNTRUSTED_EXTERNAL_DATA";
+  contentType: "application/json";
+  source: { connectorId: string; instanceId: string; toolId: string; action: ActionClass };
+  toolExecutionId: string;
+  scope: { tenantId: string };
+  /** Live output on first execution; the persisted digest on an idempotent replay. */
+  data: Record<string, JsonValue>;
+  replayed: boolean;
+}
+
+// ── Cognitive Runtime port ───────────────────────────────────────────────────
 
 export type ToolProgressEvent =
   | { type: "accepted"; toolExecutionId: string }
@@ -54,9 +83,7 @@ export type ToolOutcome =
   | {
       kind: "succeeded";
       toolExecutionId: string;
-      /** Live output on first execution; absent on an idempotent replay (never persisted). */
-      output?: Record<string, JsonValue>;
-      resultSummary?: Record<string, JsonValue>;
+      result: UntrustedToolResult;
       replayed: boolean;
       auditReferences: string[];
     }
@@ -77,7 +104,10 @@ export type ToolOutcome =
       auditReferences: string[];
     };
 
-/** What the Cognitive Runtime depends on. It never sees credentials, grants or approvals internals. */
+/**
+ * The ONLY contract the Cognitive Runtime needs: request a governed action,
+ * discover what exists. It never sees credentials, grants internals or approvals.
+ */
 export interface ToolGatewayPort {
   execute(
     caller: ToolCaller,
@@ -87,7 +117,7 @@ export interface ToolGatewayPort {
   inventory(caller: ToolCaller): Promise<ToolInventory>;
 }
 
-// ── Discovery (Phase 8) ───────────────────────────────────────────────────────
+// ── Discovery ────────────────────────────────────────────────────────────────
 
 export interface ToolInventory {
   tenantId: string;
@@ -96,12 +126,7 @@ export interface ToolInventory {
     category: ConnectorDefinition["category"];
     availability: ConnectorDefinition["availability"];
     /** `credentialRef` is the opaque handle only; the secret never leaves the resolver. */
-    instances: {
-      instanceId: string;
-      status: ConnectorStatus;
-      rateLimitedUntil?: string;
-      credentialRef?: string;
-    }[];
+    instances: InstanceHealthView[];
     tools: {
       toolId: string;
       version: string;
@@ -115,7 +140,8 @@ export interface ToolInventory {
         sideEffects: ToolActionDefinition["sideEffects"];
         idempotency: ToolActionDefinition["idempotency"];
         requiresApproval: boolean;
-        /** The caller holds an explicit grant for exactly this action. */
+        duplicatePolicy: DuplicatePolicy;
+        /** The caller holds an explicit, active grant for exactly this action. */
         permitted: boolean;
         inputSchema: Record<string, JsonValue>;
       }[];
@@ -123,15 +149,24 @@ export interface ToolInventory {
   }[];
 }
 
-// ── Cockpit read contract (Phase 13) ─────────────────────────────────────────
+export interface InstanceHealthView {
+  instanceId: string;
+  connectorId: string;
+  /** Effective status from dated evidence; UNKNOWN when there is none or it is stale. */
+  status: ConnectorStatus;
+  checkedAt?: string;
+  evidenceExpiresAt?: string;
+  rateLimitedUntil?: string;
+  credentialRef?: string;
+}
+
+// ── Cockpit read contract (read-only; mutations go through governed endpoints) ──
 
 export interface ToolCockpitSnapshot {
-  connectorHealth: {
-    instanceId: string;
-    connectorId: string;
-    status: ConnectorStatus;
-    rateLimitedUntil?: string;
-  }[];
+  tenantId: string;
+  generatedAt: string;
+  connectorHealth: InstanceHealthView[];
+  rateLimited: InstanceHealthView[];
   pendingApprovals: ToolApprovalRequest[];
   recentExecutions: ToolExecution[];
   failures: ToolExecution[];
@@ -140,7 +175,7 @@ export interface ToolCockpitSnapshot {
   unsettled: ToolExecution[];
 }
 
-// ── Digital Workforce port (Phase 12) ────────────────────────────────────────
+// ── Digital Workforce port ───────────────────────────────────────────────────
 
 export interface ToolRequirement {
   toolId: string;
@@ -151,20 +186,43 @@ export interface CapabilityCoverage {
   granted: ToolRequirement[];
   missing: ToolRequirement[];
 }
+export interface ToolCapabilityPort {
+  checkCapabilities(
+    caller: ToolCaller,
+    requirements: readonly ToolRequirement[],
+  ): Promise<CapabilityCoverage>;
+}
 
-// ── Principals deciding approvals / grants (resolved by the caller from a session) ──
+// ── Principals (resolved by the application boundary from a session, never from a body) ──
 
 export type HumanPrincipal = { kind: "human"; id: string; roles: readonly Role[] };
 export type AgentPrincipal = { kind: "agent"; id: string };
 
+/** Why a request was refused before any execution row existed (audit `details.reason`). */
+export type PreClaimDenial =
+  | "INVALID_INTENT"
+  | "UNKNOWN_CONNECTOR_INSTANCE"
+  | "FOREIGN_CONNECTOR_INSTANCE"
+  | "UNKNOWN_TOOL"
+  | "MISSING_IDEMPOTENCY_KEY"
+  | "IDEMPOTENCY_KEY_OF_ANOTHER_REQUESTER"
+  | "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH"
+  | "PERMISSION_DENIED";
+
 export interface ToolGatewayDeps {
   connectors: readonly Connector[];
   registry: ConnectorRegistry;
+  health: ConnectorHealthStore;
   agents: AgentLookup;
   grants: ToolGrantStore;
   executions: ToolExecutionStore;
   approvals: ToolApprovalStore;
   credentials: CredentialResolver;
+  audit: ToolAuditPort;
+  /** Deployment overrides of duplicate policies, keyed `toolId:ACTION`. */
+  duplicatePolicies?: Readonly<Record<string, DuplicatePolicy>>;
+  /** How long a probe (or an observed auth failure) stays valid evidence. */
+  healthTtlMs?: number;
   now?: () => Date;
   newId?: (prefix: string) => string;
   /** Extra wait beyond a tool's timeout before an EXECUTING row is considered orphaned. */
@@ -173,9 +231,11 @@ export interface ToolGatewayDeps {
 
 const MAX_SUMMARY_BYTES = 4096;
 const MAX_PREVIEW_BYTES = 8192;
+const DEFAULT_HEALTH_TTL_MS = 15 * 60_000;
 
-export class ToolGateway implements ToolGatewayPort {
+export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
   private readonly connectors: ReadonlyMap<string, Connector>;
+  private readonly inputValidators = new Map<string, z.ZodType>();
   private readonly now: () => Date;
   private readonly newId: (prefix: string) => string;
 
@@ -183,6 +243,15 @@ export class ToolGateway implements ToolGatewayPort {
     this.connectors = new Map(d.connectors.map((c) => [c.definition.connectorId, c]));
     this.now = d.now ?? (() => new Date());
     this.newId = d.newId ?? ((p) => `${p}-${randomUUID()}`);
+    // Declared input schemas are compiled once; an uncompilable schema is a
+    // definition defect and must fail at composition, not at the first call.
+    for (const c of d.connectors) {
+      for (const t of c.definition.tools) {
+        for (const a of t.actions) {
+          this.inputValidators.set(`${t.toolId}:${a.action}`, z.fromJSONSchema(a.inputSchema));
+        }
+      }
+    }
   }
 
   // ── execute ────────────────────────────────────────────────────────────────
@@ -194,21 +263,46 @@ export class ToolGateway implements ToolGatewayPort {
   ): Promise<ToolOutcome> {
     const progress = opts.onProgress ?? (() => {});
     const parsed = toolIntentSchema.safeParse(rawIntent);
-    if (!parsed.success) return fail("INVALID_INPUT", "invalid tool intent");
+    if (!parsed.success) {
+      return this.denyPreClaim(caller, "INVALID_INTENT", "INVALID_INPUT", "invalid tool intent");
+    }
     const intent = parsed.data;
     const now = this.now();
+    const ref = {
+      toolId: intent.toolId,
+      action: intent.action,
+      connectorInstanceId: intent.connectorInstanceId,
+    };
 
-    this.d.registry.rateLimitedUntilOf(intent.connectorInstanceId, now); // expire a lapsed provider limit
     const instance = this.d.registry.get(caller.tenantId, intent.connectorInstanceId);
-    // Unknown and foreign instances look the same: no cross-tenant existence oracle.
-    if (!instance) return fail("POLICY_DENIED", "connector instance not available to this tenant");
+    if (!instance) {
+      // Same answer for unknown and foreign (no existence oracle); the audit tells them apart.
+      const foreign = this.d.registry.existsInAnotherTenant(
+        caller.tenantId,
+        intent.connectorInstanceId,
+      );
+      return this.denyPreClaim(
+        caller,
+        foreign ? "FOREIGN_CONNECTOR_INSTANCE" : "UNKNOWN_CONNECTOR_INSTANCE",
+        "POLICY_DENIED",
+        "connector instance not available to this tenant",
+        ref,
+      );
+    }
     const connector = this.connectors.get(instance.connectorId);
     const tool = connector?.definition.tools.find((t) => t.toolId === intent.toolId);
     const actionDef = tool && findAction(tool, intent.action);
-    if (!connector || !tool || !actionDef) return fail("NOT_FOUND", "unknown tool or action");
-
+    if (!connector || !tool || !actionDef) {
+      return this.denyPreClaim(caller, "UNKNOWN_TOOL", "NOT_FOUND", "unknown tool or action", ref);
+    }
     if (actionDef.idempotency === "key_required" && !intent.idempotencyKey) {
-      return fail("INVALID_INPUT", "idempotencyKey is required for this side-effecting action");
+      return this.denyPreClaim(
+        caller,
+        "MISSING_IDEMPOTENCY_KEY",
+        "INVALID_INPUT",
+        "idempotencyKey is required for this side-effecting action",
+        ref,
+      );
     }
     const idempotencyKey = intent.idempotencyKey ?? `auto:${this.newId("k")}`;
     const fingerprint = requestFingerprint(caller, intent);
@@ -222,6 +316,7 @@ export class ToolGateway implements ToolGatewayPort {
         tool.toolId,
         actionDef,
         now,
+        ref,
       );
       if (refused) return refused;
       const settled = await this.resumeExisting(exec, connector, tool, actionDef, instance);
@@ -233,6 +328,7 @@ export class ToolGateway implements ToolGatewayPort {
         tenantId: caller.tenantId,
         idempotencyKey,
         requestFingerprint: fingerprint,
+        operationFingerprint: operationFingerprint(caller.tenantId, intent),
         toolId: tool.toolId,
         toolVersion: tool.version,
         action: actionDef.action,
@@ -265,6 +361,7 @@ export class ToolGateway implements ToolGatewayPort {
           tool.toolId,
           actionDef,
           now,
+          ref,
         );
         if (refused) return refused;
         const settled = await this.resumeExisting(exec, connector, tool, actionDef, instance);
@@ -274,12 +371,23 @@ export class ToolGateway implements ToolGatewayPort {
       progress({ type: "accepted", toolExecutionId: exec.toolExecutionId });
     }
 
-    // Credential-shaped input is refused before any decision (Phase 6).
+    // ── gateway-level input checks: evidence is the DENIED row, no connector call ──
     if (containsSecret(intent.input)) {
       return this.settleDenied(
         exec,
         "INVALID_INPUT",
         "credential-shaped content is not accepted in tool input",
+      );
+    }
+    const validator = this.inputValidators.get(`${tool.toolId}:${actionDef.action}`);
+    const valid = validator?.safeParse(intent.input);
+    if (!valid?.success) {
+      // Paths only, never values: the input may be personal data.
+      const paths = valid?.error.issues.map((i) => i.path.join(".") || "(root)").slice(0, 10) ?? [];
+      return this.settleDenied(
+        exec,
+        "INVALID_INPUT",
+        `input does not match the declared schema at: ${paths.join(", ")}`,
       );
     }
 
@@ -293,6 +401,7 @@ export class ToolGateway implements ToolGatewayPort {
       agent: await this.resolveAgent(caller.agentId),
       connector: connector.definition,
       instance,
+      status: await this.statusOf(instance, now),
       toolId: tool.toolId,
       action: actionDef,
       grants: await this.d.grants.listForAgent(caller.tenantId, caller.agentId),
@@ -314,6 +423,12 @@ export class ToolGateway implements ToolGatewayPort {
       return this.settleDenied(exec, decision.failureClass, decision.reason, clear);
     }
 
+    // ── duplicate operation (different key, same meaningful operation) ──
+    const dup = await this.checkDuplicate(exec, tool, actionDef, intent, now);
+    if (!dup.ok) return this.settleDenied(exec, "DUPLICATE_OPERATION", dup.message);
+    if (dup.duplicateOf && exec.duplicateOf !== dup.duplicateOf)
+      exec = { ...exec, duplicateOf: dup.duplicateOf };
+
     if (decision.outcome === "approval_required") {
       let req = approvalReq && apState === "pending" ? approvalReq : null;
       // The approver must see exactly what will run: no preview, no approval request.
@@ -332,6 +447,7 @@ export class ToolGateway implements ToolGatewayPort {
           action: actionDef.action,
           riskClass: actionDef.risk,
           inputPreview: intent.input,
+          duplicateOf: exec.duplicateOf,
           status: "PENDING",
           requestedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + ttl * 1000).toISOString(),
@@ -364,19 +480,16 @@ export class ToolGateway implements ToolGatewayPort {
       return out;
     }
 
-    // ── allowed: local quota, credential, then dispatch exactly once ──
-    const limited = this.d.registry.rateLimitedUntilOf(instance.instanceId, now);
-    if (
-      limited ||
-      !this.d.registry.take(`${instance.instanceId}:${tool.toolId}`, tool.rateLimit, now)
-    ) {
-      return this.settleFailure(exec, "RATE_LIMIT", "NOT_APPLIED", "rate limit reached");
+    // ── allowed: local quota, credential, re-check, then dispatch exactly once ──
+    if (!this.d.registry.take(`${instance.instanceId}:${tool.toolId}`, tool.rateLimit, now)) {
+      return this.settleFailure(exec, "RATE_LIMIT", "NOT_APPLIED", "local rate limit reached");
     }
     const credential = await this.resolveCredential(tool, instance, caller.tenantId);
-    if (!credential.ok)
+    if (!credential.ok) {
       return this.settleFailure(exec, credential.failureClass, "NOT_APPLIED", credential.message);
+    }
 
-    // Re-check what can change while we resolved the credential (revoked grant, lapsing approval).
+    // Re-check what can change while we resolved the credential.
     const at = this.now();
     const stillGranted = grantCovers(
       await this.d.grants.listForAgent(caller.tenantId, caller.agentId),
@@ -385,16 +498,17 @@ export class ToolGateway implements ToolGatewayPort {
       actionDef.action,
       at,
     );
-    if (!stillGranted)
+    if (!stillGranted) {
       return this.settleDenied(exec, "PERMISSION_DENIED", "grant revoked before dispatch");
-    if (
-      effectiveApproval(actionDef).mode !== "none" &&
-      approvalState(approvalReq ?? undefined, fingerprint, at) !== "approved"
-    ) {
+    }
+    const needsApproval = effectiveApproval(actionDef).mode !== "none";
+    if (needsApproval && approvalState(approvalReq ?? undefined, fingerprint, at) !== "approved") {
       return this.settleDenied(exec, "APPROVAL_EXPIRED", "approval lapsed before dispatch", {
         approvalRequestId: undefined,
       });
     }
+    const dupAgain = await this.checkDuplicate(exec, tool, actionDef, intent, at);
+    if (!dupAgain.ok) return this.settleDenied(exec, "DUPLICATE_OPERATION", dupAgain.message);
 
     return this.dispatch(
       exec,
@@ -404,6 +518,7 @@ export class ToolGateway implements ToolGatewayPort {
       instance,
       intent.input,
       credential.secret,
+      needsApproval ? approvalReq!.approvalRequestId : undefined,
       progress,
     );
   }
@@ -411,7 +526,7 @@ export class ToolGateway implements ToolGatewayPort {
   /**
    * Only the original requester, still allowed to use this action, may replay,
    * resume or trigger reconciliation of an execution. Another agent reusing the
-   * key learns nothing about it (no id, no audit references).
+   * key learns nothing about it (no id, no audit references). Audited.
    */
   private async refuseResume(
     exec: ToolExecution,
@@ -420,19 +535,39 @@ export class ToolGateway implements ToolGatewayPort {
     toolId: string,
     action: ToolActionDefinition,
     now: Date,
+    ref: Record<string, JsonValue>,
   ): Promise<ToolOutcome | null> {
     if (exec.requesterAgentId !== caller.agentId) {
-      return fail("IDEMPOTENCY_CONFLICT", "idempotencyKey already used by another requester");
+      return this.denyPreClaim(
+        caller,
+        "IDEMPOTENCY_KEY_OF_ANOTHER_REQUESTER",
+        "IDEMPOTENCY_CONFLICT",
+        "idempotencyKey already used by another requester",
+        ref,
+      );
     }
     if (exec.requestFingerprint !== fingerprint) {
-      return fail("IDEMPOTENCY_CONFLICT", "idempotencyKey reused for a different request", exec);
+      const out = await this.denyPreClaim(
+        caller,
+        "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH",
+        "IDEMPOTENCY_CONFLICT",
+        "idempotencyKey reused for a different request",
+        { ...ref, toolExecutionId: exec.toolExecutionId },
+      );
+      return { ...out, toolExecutionId: exec.toolExecutionId } as ToolOutcome;
     }
     const grants = await this.d.grants.listForAgent(caller.tenantId, caller.agentId);
     if (
       !(await this.resolveAgent(caller.agentId)) ||
       !grantCovers(grants, caller, toolId, action.action, now)
     ) {
-      return fail("PERMISSION_DENIED", `no grant for ${toolId}:${action.action}`);
+      return this.denyPreClaim(
+        caller,
+        "PERMISSION_DENIED",
+        "PERMISSION_DENIED",
+        `no grant for ${toolId}:${action.action}`,
+        ref,
+      );
     }
     return null;
   }
@@ -445,16 +580,9 @@ export class ToolGateway implements ToolGatewayPort {
     action: ToolActionDefinition,
     instance: ConnectorInstance,
   ): Promise<ToolOutcome | null> {
-    const refs = exec.auditReferences;
     switch (exec.status) {
       case "SUCCEEDED":
-        return {
-          kind: "succeeded",
-          toolExecutionId: exec.toolExecutionId,
-          resultSummary: exec.resultSummary,
-          replayed: true,
-          auditReferences: refs,
-        };
+        return this.outcomeOf(exec);
       case "REJECTED":
         return fail(
           "APPROVAL_REJECTED",
@@ -462,14 +590,11 @@ export class ToolGateway implements ToolGatewayPort {
           exec,
         );
       case "EXECUTING": {
-        if (!this.isOrphaned(exec, tool))
-          return {
-            kind: "in_progress",
-            toolExecutionId: exec.toolExecutionId,
-            auditReferences: refs,
-          };
+        if (!this.isOrphaned(exec, tool)) return this.outcomeOf(exec);
         const r = await this.reconcileOne(exec, connector, action, instance);
-        return r.status === "FAILED" && r.settlementState === "NOT_APPLIED" ? null : outcomeOf(r);
+        return r.status === "FAILED" && r.settlementState === "NOT_APPLIED"
+          ? null
+          : this.outcomeOf(r);
       }
       case "FAILED": {
         if (exec.settlementState === "UNKNOWN") {
@@ -479,9 +604,9 @@ export class ToolGateway implements ToolGatewayPort {
             r.settlementState === "NOT_APPLIED" &&
             TOOL_FAILURE_RETRYABLE[r.failureClass ?? "UNKNOWN"]
             ? null
-            : outcomeOf(r);
+            : this.outcomeOf(r);
         }
-        return TOOL_FAILURE_RETRYABLE[exec.failureClass ?? "UNKNOWN"] ? null : outcomeOf(exec);
+        return TOOL_FAILURE_RETRYABLE[exec.failureClass ?? "UNKNOWN"] ? null : this.outcomeOf(exec);
       }
       case "REQUESTED":
       case "DENIED":
@@ -492,6 +617,38 @@ export class ToolGateway implements ToolGatewayPort {
     }
   }
 
+  /**
+   * Same operation (tenant, tool, action, instance, input) under another key,
+   * inside the policy window, that applied / may have applied / is pending.
+   */
+  private async checkDuplicate(
+    exec: ToolExecution,
+    tool: ToolDefinition,
+    action: ToolActionDefinition,
+    intent: ToolIntent,
+    now: Date,
+  ): Promise<{ ok: true; duplicateOf?: string } | { ok: false; message: string }> {
+    const policy = effectiveDuplicatePolicy(tool.toolId, action, this.d.duplicatePolicies);
+    if (policy.mode === "allow") return { ok: true };
+    const since = new Date(now.getTime() - policy.windowSeconds * 1000);
+    const others = (
+      await this.d.executions.findLiveByOperation(exec.tenantId, exec.operationFingerprint, since)
+    ).filter((e) => e.toolExecutionId !== exec.toolExecutionId);
+    if (others.length === 0) return { ok: true };
+    const ids = others.map((e) => e.toolExecutionId);
+    const override = intent.duplicateOverride;
+    if (policy.mode === "require_override" && override && ids.includes(override.ofExecutionId)) {
+      return { ok: true, duplicateOf: override.ofExecutionId };
+    }
+    return {
+      ok: false,
+      message:
+        policy.mode === "block"
+          ? `duplicate of ${ids[0]} within ${policy.windowSeconds}s`
+          : `possible duplicate of ${ids[0]} within ${policy.windowSeconds}s; repeat only with duplicateOverride.ofExecutionId`,
+    };
+  }
+
   private async dispatch(
     exec: ToolExecution,
     connector: Connector,
@@ -500,6 +657,7 @@ export class ToolGateway implements ToolGatewayPort {
     instance: ConnectorInstance,
     input: Record<string, JsonValue>,
     credential: SecretValue | undefined,
+    approvalRequestId: string | undefined,
     progress: (e: ToolProgressEvent) => void,
   ): Promise<ToolOutcome> {
     const attempt = exec.attemptCount + 1;
@@ -507,6 +665,7 @@ export class ToolGateway implements ToolGatewayPort {
     const dispatchAudit = this.audit(exec, "tool.execution.recorded", {
       phase: "dispatched",
       attempt,
+      duplicateOf: exec.duplicateOf ?? null,
     });
     const dispatched = await this.d.executions.update(
       {
@@ -530,17 +689,36 @@ export class ToolGateway implements ToolGatewayPort {
         auditReferences: exec.auditReferences,
       };
     }
+    // Only the CAS winner consumes the approval; an approval never covers two dispatches.
+    if (approvalRequestId) {
+      const at = this.now().toISOString();
+      const consumed = await this.d.approvals.consume(
+        exec.tenantId,
+        approvalRequestId,
+        at,
+        this.audit(dispatched, "tool.approval.consumed", { approvalRequestId }),
+      );
+      if (!consumed) {
+        return this.settleFailure(
+          dispatched,
+          "APPROVAL_REQUIRED",
+          "NOT_APPLIED",
+          "approval already used",
+        );
+      }
+    }
     progress({ type: "dispatched", toolExecutionId: exec.toolExecutionId, attempt });
 
     const ctx: ConnectorContext = {
-      instance,
+      // A copy: nothing the connector does to it reaches the registry.
+      instance: structuredClone(instance),
       credential,
       signal: AbortSignal.timeout(tool.timeoutMs),
       idempotencyKey: exec.idempotencyKey,
       toolExecutionId: exec.toolExecutionId,
     };
     const result = await runWithTimeout(
-      () => connector.execute(tool.toolId, action.action, input, ctx),
+      () => connector.execute(tool.toolId, action.action, structuredClone(input), ctx),
       tool.timeoutMs,
     );
     const now = this.now();
@@ -557,15 +735,21 @@ export class ToolGateway implements ToolGatewayPort {
           tool.auditPolicy.persistResult === "summary"
             ? safeSummary(result.summary, credential)
             : undefined,
+        resultTrust: "UNTRUSTED_EXTERNAL_DATA",
         finishedAt: now.toISOString(),
       });
-      if (out.kind === "succeeded") out = { ...out, output, replayed: false };
+      if (out.kind === "succeeded") {
+        out = {
+          ...out,
+          replayed: false,
+          result: { ...out.result, data: toJsonRecord(output), replayed: false },
+        };
+      }
     } else {
       if (result.failureClass === "AUTH_FAILURE")
-        this.d.registry.setStatus(instance.instanceId, "AUTH_FAILED");
-      if (result.failureClass === "RATE_LIMIT") {
-        this.d.registry.markRateLimited(instance.instanceId, now, result.retryAfterSeconds ?? 60);
-      }
+        await this.markHealth(instance, "AUTH_FAILED", "provider refused the credential");
+      if (result.failureClass === "RATE_LIMIT")
+        await this.markRateLimited(instance, now, result.retryAfterSeconds ?? 60);
       // A failure of an effect-free action cannot have applied anything.
       const settlement = action.sideEffects === "none" ? "NOT_APPLIED" : result.settlement;
       const message = credential
@@ -586,9 +770,48 @@ export class ToolGateway implements ToolGatewayPort {
     return out;
   }
 
-  // ── reconciliation (restart / timeout) ─────────────────────────────────────
+  // ── health & reconciliation (boot, scheduler, after ambiguity) ──────────────
 
-  /** Settle orphaned or unknown side effects of a tenant. Safe to run at boot and periodically. */
+  /**
+   * Probe every instance of a tenant and record dated evidence. A disabled or
+   * contract-only connector is DISABLED; a probe that throws or times out is
+   * UNKNOWN. Nothing is ever assumed HEALTHY.
+   */
+  async probeHealth(tenantId: string): Promise<InstanceHealthView[]> {
+    for (const instance of this.d.registry.list(tenantId)) {
+      const connector = this.connectors.get(instance.connectorId);
+      let status: ConnectorStatus;
+      let detail: string | undefined;
+      if (!instance.enabled) status = "DISABLED";
+      else if (!connector || connector.definition.availability !== "CONNECTED") status = "DISABLED";
+      else {
+        const needsCred = connector.definition.tools.some((t) => t.credential?.required);
+        const cred = needsCred
+          ? await this.resolveCredentialFor(instance, tenantId)
+          : { ok: true as const, secret: undefined };
+        if (!cred.ok) {
+          status = cred.reason === "tenant_mismatch" ? "DISABLED" : "AUTH_FAILED";
+          detail = `credential ${cred.reason}`;
+        } else {
+          const probe = await Promise.race([
+            connector
+              .health({
+                instance: structuredClone(instance),
+                credential: cred.secret,
+                signal: AbortSignal.timeout(10_000),
+              })
+              .catch(() => "UNKNOWN" as const),
+            new Promise<"UNKNOWN">((r) => setTimeout(() => r("UNKNOWN"), 10_000).unref()),
+          ]);
+          status = probe;
+        }
+      }
+      await this.markHealth(instance, status, detail);
+    }
+    return this.healthViews(tenantId, this.now());
+  }
+
+  /** Settle orphaned or unknown side effects of a tenant. Safe at boot and periodically. */
   async reconcile(tenantId: string): Promise<ToolExecution[]> {
     const rows = await this.d.executions.list(tenantId, {
       status: ["EXECUTING", "FAILED"],
@@ -637,7 +860,7 @@ export class ToolGateway implements ToolGatewayPort {
           exec.action,
           { idempotencyKey: exec.idempotencyKey, providerOperationId: exec.providerOperationId },
           {
-            instance,
+            instance: structuredClone(instance),
             credential: cred.ok ? cred.secret : undefined,
             signal: AbortSignal.timeout(tool.timeoutMs),
             idempotencyKey: exec.idempotencyKey,
@@ -654,8 +877,10 @@ export class ToolGateway implements ToolGatewayPort {
         ? {
             status: "SUCCEEDED",
             settlementState: "APPLIED",
-            providerOperationId: outcome.providerOperationId ?? exec.providerOperationId,
+            providerOperationId:
+              safeRef(outcome.providerOperationId, undefined) ?? exec.providerOperationId,
             resultSummary: safeSummary(outcome.summary, undefined),
+            resultTrust: "UNTRUSTED_EXTERNAL_DATA",
             failureClass: undefined,
             failureMessage: undefined,
             finishedAt: now,
@@ -694,6 +919,17 @@ export class ToolGateway implements ToolGatewayPort {
 
   // ── approvals ──────────────────────────────────────────────────────────────
 
+  async listPendingApprovals(tenantId: string): Promise<ToolApprovalRequest[]> {
+    return this.d.approvals.listPending(tenantId);
+  }
+
+  async getApproval(
+    tenantId: string,
+    approvalRequestId: string,
+  ): Promise<ToolApprovalRequest | null> {
+    return this.d.approvals.get(tenantId, approvalRequestId);
+  }
+
   async decideApproval(
     tenantId: string,
     approvalRequestId: string,
@@ -710,8 +946,9 @@ export class ToolGateway implements ToolGatewayPort {
     if (req.status !== "PENDING")
       return { ok: false, failureClass: "CONFLICT", message: "already decided" };
     const now = this.now();
-    if (new Date(req.expiresAt) <= now)
+    if (new Date(req.expiresAt) <= now) {
       return { ok: false, failureClass: "APPROVAL_EXPIRED", message: "approval request expired" };
+    }
     if (decision === "REJECTED" && !reason?.trim()) {
       return {
         ok: false,
@@ -769,39 +1006,89 @@ export class ToolGateway implements ToolGatewayPort {
       : { ok: false, failureClass: "CONFLICT", message: "already decided" };
   }
 
-  // ── grants (admin) & Digital Workforce coverage ─────────────────────────────
+  // ── grant administration & Digital Workforce coverage ──────────────────────
 
+  /**
+   * Grant or revoke one exact action of one tool to one agent. Only a HUMAN
+   * with `agentCapabilities.write` (the authority that assigns capabilities to
+   * agents, Lot C1) can: no agent — requester or not — can grant anything.
+   */
   async setGrant(
     admin: HumanPrincipal,
-    grant: Omit<ToolGrant, "grantedBy" | "grantedAt">,
+    input: {
+      tenantId: string;
+      agentId: string;
+      toolId: string;
+      action: ActionClass;
+      reason: string;
+      expiresAt?: string;
+    },
     op: "grant" | "revoke",
-  ): Promise<{ ok: boolean; message: string }> {
-    // Same authority that assigns capabilities to agents (Lot C1): admin and above.
-    if (!hasPermission(admin.roles, "agentCapabilities.write"))
-      return { ok: false, message: "agentCapabilities.write required" };
-    if (!this.actionOf(grant.toolId, grant.action))
-      return { ok: false, message: "unknown tool action" };
+  ): Promise<
+    { ok: true; grant?: ToolGrant } | { ok: false; failureClass: ToolFailureClass; message: string }
+  > {
+    if (admin?.kind !== "human") {
+      return {
+        ok: false,
+        failureClass: "PERMISSION_DENIED",
+        message: "only a human may change grants",
+      };
+    }
+    if (!hasPermission(admin.roles, "agentCapabilities.write")) {
+      return {
+        ok: false,
+        failureClass: "PERMISSION_DENIED",
+        message: "agentCapabilities.write required",
+      };
+    }
+    if (!input.reason?.trim())
+      return { ok: false, failureClass: "INVALID_INPUT", message: "a reason is required" };
+    if (!this.actionOf(input.toolId, input.action)) {
+      return { ok: false, failureClass: "NOT_FOUND", message: "unknown tool action" };
+    }
+    const at = this.now().toISOString();
+    const key = {
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      toolId: input.toolId,
+      action: input.action,
+    };
     const audit = {
       ...this.baseAudit(
-        grant.tenantId,
+        input.tenantId,
         { kind: "human" as const, id: admin.id },
         "tool.grant.changed",
       ),
-      details: {
-        tenantId: grant.tenantId,
-        agentId: grant.agentId,
-        toolId: grant.toolId,
-        action: grant.action,
-        op,
-        expiresAt: grant.expiresAt ?? null,
-      },
+      details: { ...key, op, reason: input.reason, expiresAt: input.expiresAt ?? null },
     };
-    if (op === "revoke") return { ok: await this.d.grants.revoke(grant, audit), message: op };
-    await this.d.grants.put(
-      { ...grant, grantedBy: admin.id, grantedAt: this.now().toISOString() },
-      audit,
-    );
-    return { ok: true, message: op };
+    if (op === "revoke") {
+      const ok = await this.d.grants.revoke(
+        key,
+        { revokedAt: at, revokedBy: admin.id, revokeReason: input.reason },
+        audit,
+      );
+      return ok
+        ? { ok: true }
+        : { ok: false, failureClass: "NOT_FOUND", message: "no active grant" };
+    }
+    if (!(await this.resolveAgent(input.agentId))) {
+      return { ok: false, failureClass: "NOT_FOUND", message: "unknown agent" };
+    }
+    const grant: ToolGrant = {
+      ...key,
+      grantedBy: admin.id,
+      grantedAt: at,
+      reason: input.reason,
+      expiresAt: input.expiresAt,
+    };
+    await this.d.grants.put(grant, audit);
+    return { ok: true, grant };
+  }
+
+  async listGrants(tenantId: string, agentId?: string): Promise<ToolGrant[]> {
+    return agentId
+      ? this.d.grants.listForAgent(tenantId, agentId)
+      : this.d.grants.listForTenant(tenantId);
   }
 
   /** Report which role requirements are covered by explicit grants. Grants nothing. */
@@ -816,7 +1103,10 @@ export class ToolGateway implements ToolGatewayPort {
       (grantCovers(grants, caller, r.toolId, r.action, now)
         ? coverage.granted
         : coverage.missing
-      ).push({ ...r });
+      ).push({
+        toolId: r.toolId,
+        action: r.action,
+      });
     }
     return coverage;
   }
@@ -826,23 +1116,14 @@ export class ToolGateway implements ToolGatewayPort {
   async inventory(caller: ToolCaller): Promise<ToolInventory> {
     const now = this.now();
     const grants = await this.d.grants.listForAgent(caller.tenantId, caller.agentId);
-    const instances = this.d.registry.list(caller.tenantId);
+    const health = await this.healthViews(caller.tenantId, now);
     return {
       tenantId: caller.tenantId,
       connectors: [...this.connectors.values()].map(({ definition: c }) => ({
         connectorId: c.connectorId,
         category: c.category,
         availability: c.availability,
-        instances: instances
-          .filter((i) => i.connectorId === c.connectorId)
-          .map((i) => ({
-            instanceId: i.instanceId,
-            status: this.d.registry.rateLimitedUntilOf(i.instanceId, now)
-              ? "RATE_LIMITED"
-              : i.status,
-            rateLimitedUntil: this.d.registry.rateLimitedUntilOf(i.instanceId, now)?.toISOString(),
-            credentialRef: i.credential?.ref,
-          })),
+        instances: health.filter((h) => h.connectorId === c.connectorId),
         tools: c.tools.map((t) => ({
           toolId: t.toolId,
           version: t.version,
@@ -856,6 +1137,7 @@ export class ToolGateway implements ToolGatewayPort {
             sideEffects: a.sideEffects,
             idempotency: a.idempotency,
             requiresApproval: effectiveApproval(a).mode !== "none",
+            duplicatePolicy: effectiveDuplicatePolicy(t.toolId, a, this.d.duplicatePolicies),
             permitted: grantCovers(grants, caller, t.toolId, a.action, now),
             inputSchema: a.inputSchema,
           })),
@@ -866,29 +1148,90 @@ export class ToolGateway implements ToolGatewayPort {
 
   async cockpitSnapshot(tenantId: string, limit = 50): Promise<ToolCockpitSnapshot> {
     const now = this.now();
-    const recent = await this.d.executions.list(tenantId, { limit });
+    const health = await this.healthViews(tenantId, now);
+    const list = (q: Parameters<ToolExecutionStore["list"]>[1]) =>
+      this.d.executions.list(tenantId, q);
     return {
-      connectorHealth: this.d.registry.list(tenantId).map((i) => ({
-        instanceId: i.instanceId,
-        connectorId: i.connectorId,
-        status: i.status,
-        rateLimitedUntil: this.d.registry.rateLimitedUntilOf(i.instanceId, now)?.toISOString(),
-      })),
+      tenantId,
+      generatedAt: now.toISOString(),
+      connectorHealth: health,
+      rateLimited: health.filter((h) => h.status === "RATE_LIMITED"),
       pendingApprovals: await this.d.approvals.listPending(tenantId),
-      recentExecutions: recent,
-      failures: await this.d.executions.list(tenantId, { status: ["FAILED"], limit }),
-      blocked: await this.d.executions.list(tenantId, { status: ["DENIED", "REJECTED"], limit }),
-      recentSideEffects: (
-        await this.d.executions.list(tenantId, { settlement: ["APPLIED"], limit })
-      ).filter((e) => e.sideEffects !== "none"),
-      unsettled: await this.d.executions.list(tenantId, {
-        settlement: ["DISPATCHED", "UNKNOWN"],
-        limit,
-      }),
+      recentExecutions: await list({ limit }),
+      failures: await list({ status: ["FAILED"], limit }),
+      blocked: await list({ status: ["DENIED", "REJECTED"], limit }),
+      recentSideEffects: (await list({ settlement: ["APPLIED"], limit })).filter(
+        (e) => e.sideEffects !== "none",
+      ),
+      unsettled: await list({ settlement: ["DISPATCHED", "UNKNOWN"], limit }),
     };
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
+
+  private async healthViews(tenantId: string, now: Date): Promise<InstanceHealthView[]> {
+    const views: InstanceHealthView[] = [];
+    for (const i of this.d.registry.list(tenantId)) {
+      const rec = await this.d.health.get(tenantId, i.instanceId);
+      const status = effectiveConnectorStatus(i, rec, now);
+      views.push({
+        instanceId: i.instanceId,
+        connectorId: i.connectorId,
+        status,
+        checkedAt: rec?.checkedAt,
+        evidenceExpiresAt: rec?.expiresAt,
+        rateLimitedUntil: status === "RATE_LIMITED" ? rec?.rateLimitedUntil : undefined,
+        credentialRef: i.credential?.ref,
+      });
+    }
+    return views;
+  }
+
+  private async statusOf(instance: ConnectorInstance, now: Date): Promise<ConnectorStatus> {
+    return effectiveConnectorStatus(
+      instance,
+      await this.d.health.get(instance.tenantId, instance.instanceId),
+      now,
+    );
+  }
+
+  private async markHealth(instance: ConnectorInstance, status: ConnectorStatus, detail?: string) {
+    const now = this.now();
+    const prev = await this.d.health.get(instance.tenantId, instance.instanceId);
+    const throttled =
+      prev?.rateLimitedUntil && new Date(prev.rateLimitedUntil) > now
+        ? prev.rateLimitedUntil
+        : undefined;
+    const record: ConnectorHealthRecord = {
+      tenantId: instance.tenantId,
+      instanceId: instance.instanceId,
+      status,
+      checkedAt: now.toISOString(),
+      expiresAt: new Date(
+        now.getTime() + (this.d.healthTtlMs ?? DEFAULT_HEALTH_TTL_MS),
+      ).toISOString(),
+      rateLimitedUntil: throttled,
+      detail,
+    };
+    await this.d.health.put(record);
+  }
+
+  private async markRateLimited(instance: ConnectorInstance, now: Date, seconds: number) {
+    const until = new Date(now.getTime() + seconds * 1000);
+    const prev = await this.d.health.get(instance.tenantId, instance.instanceId);
+    await this.d.health.put({
+      tenantId: instance.tenantId,
+      instanceId: instance.instanceId,
+      // No probe evidence yet → the throttle is all we know; it reads UNKNOWN once lapsed.
+      status: prev?.status ?? "RATE_LIMITED",
+      checkedAt: prev?.checkedAt ?? now.toISOString(),
+      expiresAt: new Date(
+        Math.max(until.getTime(), prev ? new Date(prev.expiresAt).getTime() : 0),
+      ).toISOString(),
+      rateLimitedUntil: until.toISOString(),
+      detail: "provider rate limit",
+    });
+  }
 
   private actionOf(toolId: string, action: ActionClass): ToolActionDefinition | undefined {
     for (const c of this.connectors.values()) {
@@ -902,6 +1245,11 @@ export class ToolGateway implements ToolGatewayPort {
     return this.d.agents.getById(id);
   }
 
+  private async resolveCredentialFor(instance: ConnectorInstance, tenantId: string) {
+    if (!instance.credential) return { ok: false as const, reason: "not_found" as const };
+    return this.d.credentials.resolve(instance.credential, tenantId);
+  }
+
   private async resolveCredential(
     tool: ToolDefinition,
     instance: ConnectorInstance,
@@ -911,16 +1259,14 @@ export class ToolGateway implements ToolGatewayPort {
     | { ok: false; failureClass: ToolFailureClass; message: string }
   > {
     if (!tool.credential?.required) return { ok: true };
-    if (!instance.credential)
-      return { ok: false, failureClass: "AUTH_FAILURE", message: "no credential configured" };
-    const r = await this.d.credentials.resolve(instance.credential, tenantId);
+    const r = await this.resolveCredentialFor(instance, tenantId);
     if (r.ok) return { ok: true, secret: r.secret };
     if (r.reason !== "tenant_mismatch")
-      this.d.registry.setStatus(instance.instanceId, "AUTH_FAILED");
+      await this.markHealth(instance, "AUTH_FAILED", `credential ${r.reason}`);
     return {
       ok: false,
       failureClass: r.reason === "tenant_mismatch" ? "POLICY_DENIED" : "AUTH_FAILURE",
-      message: `credential ${instance.credential.ref}: ${r.reason}`,
+      message: `credential ${instance.credential?.ref ?? "(none)"}: ${r.reason}`,
     };
   }
 
@@ -960,6 +1306,29 @@ export class ToolGateway implements ToolGatewayPort {
     };
   }
 
+  /**
+   * A refusal before any execution row exists is still evidence. Only closed,
+   * validated identifiers are recorded — never the input, never a secret.
+   */
+  private async denyPreClaim(
+    caller: ToolCaller,
+    reason: PreClaimDenial,
+    failureClass: ToolFailureClass,
+    message: string,
+    ref: Record<string, JsonValue> = {},
+  ): Promise<ToolOutcome> {
+    const entry: AuditEntry = {
+      ...this.baseAudit(
+        caller.tenantId,
+        { kind: "agent", id: caller.agentId },
+        "tool.request.denied",
+      ),
+      details: { tenantId: caller.tenantId, reason, failureClass, ...ref },
+    };
+    await this.d.audit.append(entry);
+    return { ...fail(failureClass, message), auditReferences: [entry.id] };
+  }
+
   private async transition(
     exec: ToolExecution,
     patch: Partial<ToolExecution>,
@@ -972,6 +1341,7 @@ export class ToolGateway implements ToolGatewayPort {
       failureClass: next.failureClass ?? null,
       attempt: next.attemptCount,
       providerOperationId: next.providerOperationId ?? null,
+      duplicateOf: next.duplicateOf ?? null,
     });
     next.auditReferences = [...exec.auditReferences, audit.id];
     const saved = await this.d.executions.update(next, exec.version, audit);
@@ -985,7 +1355,7 @@ export class ToolGateway implements ToolGatewayPort {
           }
         : fail("CONFLICT", "concurrent update of this execution", current ?? exec);
     }
-    return outcomeOf(saved);
+    return this.outcomeOf(saved);
   }
 
   private settleDenied(
@@ -1019,6 +1389,53 @@ export class ToolGateway implements ToolGatewayPort {
       finishedAt: this.now().toISOString(),
     });
   }
+
+  private outcomeOf(e: ToolExecution): ToolOutcome {
+    switch (e.status) {
+      case "SUCCEEDED": {
+        const instance = this.d.registry.get(e.tenantId, e.connectorInstanceId);
+        return {
+          kind: "succeeded",
+          toolExecutionId: e.toolExecutionId,
+          replayed: true,
+          auditReferences: e.auditReferences,
+          result: {
+            trust: "UNTRUSTED_EXTERNAL_DATA",
+            contentType: "application/json",
+            source: {
+              connectorId: instance?.connectorId ?? "unknown",
+              instanceId: e.connectorInstanceId,
+              toolId: e.toolId,
+              action: e.action,
+            },
+            toolExecutionId: e.toolExecutionId,
+            scope: { tenantId: e.tenantId },
+            data: e.resultSummary ?? {},
+            replayed: true,
+          },
+        };
+      }
+      case "EXECUTING":
+        return {
+          kind: "in_progress",
+          toolExecutionId: e.toolExecutionId,
+          auditReferences: e.auditReferences,
+        };
+      default: {
+        const cls = e.failureClass ?? "UNKNOWN";
+        // Unknown settlement is never "retry it": the caller must wait for reconciliation.
+        const retryable = e.settlementState !== "UNKNOWN" && TOOL_FAILURE_RETRYABLE[cls];
+        return {
+          kind: "failed",
+          toolExecutionId: e.toolExecutionId,
+          failureClass: cls,
+          retryable,
+          message: e.failureMessage ?? cls,
+          auditReferences: e.auditReferences,
+        };
+      }
+    }
+  }
 }
 
 // ── pure helpers ─────────────────────────────────────────────────────────────
@@ -1032,38 +1449,6 @@ function fail(failureClass: ToolFailureClass, message: string, exec?: ToolExecut
     message,
     auditReferences: exec?.auditReferences ?? [],
   };
-}
-
-function outcomeOf(e: ToolExecution): ToolOutcome {
-  switch (e.status) {
-    case "SUCCEEDED":
-      return {
-        kind: "succeeded",
-        toolExecutionId: e.toolExecutionId,
-        resultSummary: e.resultSummary,
-        replayed: true,
-        auditReferences: e.auditReferences,
-      };
-    case "EXECUTING":
-      return {
-        kind: "in_progress",
-        toolExecutionId: e.toolExecutionId,
-        auditReferences: e.auditReferences,
-      };
-    default: {
-      const cls = e.failureClass ?? "UNKNOWN";
-      // Unknown settlement is never "retry it": the caller must wait for reconciliation.
-      const retryable = e.settlementState !== "UNKNOWN" && TOOL_FAILURE_RETRYABLE[cls];
-      return {
-        kind: "failed",
-        toolExecutionId: e.toolExecutionId,
-        failureClass: cls,
-        retryable,
-        message: e.failureMessage ?? cls,
-        auditReferences: e.auditReferences,
-      };
-    }
-  }
 }
 
 async function runWithTimeout(
@@ -1098,6 +1483,16 @@ async function runWithTimeout(
   }
 }
 
+/** Connector output must be plain JSON data: anything else (functions, classes) is dropped. */
+function toJsonRecord(value: unknown): Record<string, JsonValue> {
+  try {
+    const v = JSON.parse(JSON.stringify(value ?? {}));
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? v : { value: v };
+  } catch {
+    return {};
+  }
+}
+
 /** Replace every occurrence of the secret in a JSON value (a connector echoing it must not leak it). */
 function scrub<T extends JsonValue | Record<string, JsonValue>>(value: T, secret: string): T {
   if (!secret) return value;
@@ -1121,7 +1516,7 @@ function safeSummary(
   credential: SecretValue | undefined,
 ): Record<string, JsonValue> | undefined {
   if (!summary) return undefined;
-  const s = credential ? scrub(summary, credential.reveal()) : summary;
+  const s = credential ? scrub(toJsonRecord(summary), credential.reveal()) : toJsonRecord(summary);
   if (containsSecret(s) || JSON.stringify(s).length > MAX_SUMMARY_BYTES) return { redacted: true };
   return s;
 }

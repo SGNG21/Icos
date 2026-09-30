@@ -48,6 +48,8 @@ export const auditEventTypeSchema = z.enum([
   "tool.approval.requested",
   "tool.approval.decided",
   "tool.grant.changed",
+  "tool.request.denied",
+  "tool.approval.consumed",
 ]);
 
 export const auditActorSchema = z.object({

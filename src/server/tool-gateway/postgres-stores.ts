@@ -1,10 +1,12 @@
-import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or, type SQL } from "drizzle-orm";
 
 import { auditEntrySchema, type AuditEntry } from "@/core/contracts";
 import {
+  connectorHealthRecordSchema,
   toolApprovalRequestSchema,
   toolExecutionSchema,
   toolGrantSchema,
+  type ConnectorHealthRecord,
   type ToolApprovalRequest,
   type ToolExecution,
   type ToolGrant,
@@ -14,12 +16,15 @@ import { auditToRow } from "@/server/database/mappers";
 import { auditEntries } from "@/server/database/schema";
 import {
   toolApprovalRequests,
+  toolConnectorHealth,
   toolExecutions,
   toolGrants,
 } from "@/server/database/tool-gateway-schema";
 
 import type {
+  ConnectorHealthStore,
   ExecutionQuery,
+  GrantKey,
   ToolApprovalStore,
   ToolExecutionStore,
   ToolGrantStore,
@@ -47,6 +52,8 @@ function execToRow(e: ToolExecution) {
     tenantId: v.tenantId,
     idempotencyKey: v.idempotencyKey,
     requestFingerprint: v.requestFingerprint,
+    operationFingerprint: v.operationFingerprint,
+    duplicateOf: v.duplicateOf ?? null,
     toolId: v.toolId,
     toolVersion: v.toolVersion,
     action: v.action,
@@ -65,6 +72,7 @@ function execToRow(e: ToolExecution) {
     failureMessage: v.failureMessage ?? null,
     resultSummary: v.resultSummary ?? null,
     resultReference: v.resultReference ?? null,
+    resultTrust: v.resultTrust ?? null,
     auditReferences: v.auditReferences,
     version: v.version,
     createdAt: new Date(v.createdAt),
@@ -80,6 +88,8 @@ function rowToExec(r: typeof toolExecutions.$inferSelect): ToolExecution {
     tenantId: r.tenantId,
     idempotencyKey: r.idempotencyKey,
     requestFingerprint: r.requestFingerprint,
+    operationFingerprint: r.operationFingerprint,
+    duplicateOf: u(r.duplicateOf),
     toolId: r.toolId,
     toolVersion: r.toolVersion,
     action: r.action,
@@ -98,6 +108,7 @@ function rowToExec(r: typeof toolExecutions.$inferSelect): ToolExecution {
     failureMessage: u(r.failureMessage),
     resultSummary: u(r.resultSummary),
     resultReference: u(r.resultReference),
+    resultTrust: u(r.resultTrust),
     auditReferences: r.auditReferences,
     version: r.version,
     createdAt: r.createdAt.toISOString(),
@@ -136,9 +147,20 @@ export class PostgresToolExecutionStore implements ToolExecutionStore {
 
   async update(next: ToolExecution, expectedVersion: number, audit: AuditEntry) {
     return this.db.transaction(async (tx) => {
-      const { id, tenantId, idempotencyKey, createdAt, ...row } = execToRow(next);
+      // Identity columns are never rewritten by an update.
+      const {
+        id,
+        tenantId,
+        idempotencyKey,
+        createdAt,
+        requestFingerprint,
+        operationFingerprint,
+        ...row
+      } = execToRow(next);
       void idempotencyKey;
       void createdAt;
+      void requestFingerprint;
+      void operationFingerprint;
       const updated = await tx
         .update(toolExecutions)
         .set({ ...row, version: expectedVersion + 1 })
@@ -181,6 +203,29 @@ export class PostgresToolExecutionStore implements ToolExecutionStore {
       .limit(Math.min(q.limit ?? 100, 500));
     return rows.map(rowToExec);
   }
+
+  async findLiveByOperation(tenantId: string, operationFingerprint: string, since: Date) {
+    const rows = await this.db
+      .select()
+      .from(toolExecutions)
+      .where(
+        and(
+          eq(toolExecutions.tenantId, tenantId),
+          eq(toolExecutions.operationFingerprint, operationFingerprint),
+          gte(toolExecutions.createdAt, since),
+          or(
+            inArray(toolExecutions.status, ["AWAITING_APPROVAL", "EXECUTING", "SUCCEEDED"]),
+            and(
+              eq(toolExecutions.status, "FAILED"),
+              inArray(toolExecutions.settlementState, ["UNKNOWN", "DISPATCHED"]),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(toolExecutions.createdAt))
+      .limit(50);
+    return rows.map(rowToExec);
+  }
 }
 
 function approvalToRow(a: ToolApprovalRequest) {
@@ -199,6 +244,8 @@ function approvalToRow(a: ToolApprovalRequest) {
     decidedByKind: v.decidedBy?.kind ?? null,
     decidedById: v.decidedBy?.id ?? null,
     reason: v.reason ?? null,
+    duplicateOf: v.duplicateOf ?? null,
+    consumedAt: d(v.consumedAt),
     requestedAt: new Date(v.requestedAt),
     decidedAt: d(v.decidedAt),
     expiresAt: new Date(v.expiresAt),
@@ -219,6 +266,8 @@ function rowToApproval(r: typeof toolApprovalRequests.$inferSelect): ToolApprova
     status: r.status,
     decidedBy: r.decidedById ? { kind: r.decidedByKind, id: r.decidedById } : undefined,
     reason: u(r.reason),
+    duplicateOf: u(r.duplicateOf),
+    consumedAt: iso(r.consumedAt),
     requestedAt: r.requestedAt.toISOString(),
     decidedAt: iso(r.decidedAt),
     expiresAt: r.expiresAt.toISOString(),
@@ -270,6 +319,26 @@ export class PostgresToolApprovalStore implements ToolApprovalStore {
     });
   }
 
+  async consume(tenantId: string, id: string, at: string, audit: AuditEntry) {
+    return this.db.transaction(async (tx) => {
+      const updated = await tx
+        .update(toolApprovalRequests)
+        .set({ consumedAt: new Date(at) })
+        .where(
+          and(
+            eq(toolApprovalRequests.id, id),
+            eq(toolApprovalRequests.tenantId, tenantId),
+            eq(toolApprovalRequests.status, "APPROVED"),
+            isNull(toolApprovalRequests.consumedAt),
+          ),
+        )
+        .returning({ id: toolApprovalRequests.id });
+      if (updated.length !== 1) return false;
+      await appendAudit(tx, audit);
+      return true;
+    });
+  }
+
   async listPending(tenantId: string) {
     const rows = await this.db
       .select()
@@ -286,6 +355,30 @@ export class PostgresToolApprovalStore implements ToolApprovalStore {
   }
 }
 
+const grantWhere = (g: GrantKey) =>
+  and(
+    eq(toolGrants.tenantId, g.tenantId),
+    eq(toolGrants.agentId, g.agentId),
+    eq(toolGrants.toolId, g.toolId),
+    eq(toolGrants.action, g.action),
+  );
+
+function rowToGrant(r: typeof toolGrants.$inferSelect): ToolGrant {
+  return toolGrantSchema.parse({
+    tenantId: r.tenantId,
+    agentId: r.agentId,
+    toolId: r.toolId,
+    action: r.action,
+    grantedBy: r.grantedBy,
+    grantedAt: r.grantedAt.toISOString(),
+    expiresAt: iso(r.expiresAt),
+    reason: r.reason,
+    revokedAt: iso(r.revokedAt),
+    revokedBy: u(r.revokedBy),
+    revokeReason: u(r.revokeReason),
+  });
+}
+
 export class PostgresToolGrantStore implements ToolGrantStore {
   constructor(private readonly db: Database) {}
 
@@ -294,53 +387,130 @@ export class PostgresToolGrantStore implements ToolGrantStore {
       .select()
       .from(toolGrants)
       .where(and(eq(toolGrants.tenantId, tenantId), eq(toolGrants.agentId, agentId)));
-    return rows.map((r) =>
-      toolGrantSchema.parse({
-        tenantId: r.tenantId,
-        agentId: r.agentId,
-        toolId: r.toolId,
-        action: r.action,
-        grantedBy: r.grantedBy,
-        grantedAt: r.grantedAt.toISOString(),
-        expiresAt: iso(r.expiresAt),
-      }),
-    );
+    return rows.map(rowToGrant);
+  }
+
+  async listForTenant(tenantId: string): Promise<ToolGrant[]> {
+    const rows = await this.db.select().from(toolGrants).where(eq(toolGrants.tenantId, tenantId));
+    return rows.map(rowToGrant);
   }
 
   async put(grant: ToolGrant, audit: AuditEntry) {
     const g = toolGrantSchema.parse(grant);
-    const row = { ...g, grantedAt: new Date(g.grantedAt), expiresAt: d(g.expiresAt) };
+    const row = {
+      tenantId: g.tenantId,
+      agentId: g.agentId,
+      toolId: g.toolId,
+      action: g.action,
+      grantedBy: g.grantedBy,
+      grantedAt: new Date(g.grantedAt),
+      expiresAt: d(g.expiresAt),
+      reason: g.reason,
+      revokedAt: null,
+      revokedBy: null,
+      revokeReason: null,
+    };
     await this.db.transaction(async (tx) => {
       await tx
         .insert(toolGrants)
         .values(row)
         .onConflictDoUpdate({
           target: [toolGrants.tenantId, toolGrants.agentId, toolGrants.toolId, toolGrants.action],
-          set: { grantedBy: row.grantedBy, grantedAt: row.grantedAt, expiresAt: row.expiresAt },
+          set: {
+            grantedBy: row.grantedBy,
+            grantedAt: row.grantedAt,
+            expiresAt: row.expiresAt,
+            reason: row.reason,
+            revokedAt: null,
+            revokedBy: null,
+            revokeReason: null,
+          },
         });
       await appendAudit(tx, audit);
     });
   }
 
   async revoke(
-    g: Pick<ToolGrant, "tenantId" | "agentId" | "toolId" | "action">,
+    key: GrantKey,
+    r: { revokedAt: string; revokedBy: string; revokeReason: string },
     audit: AuditEntry,
   ) {
     return this.db.transaction(async (tx) => {
-      const deleted = await tx
-        .delete(toolGrants)
-        .where(
-          and(
-            eq(toolGrants.tenantId, g.tenantId),
-            eq(toolGrants.agentId, g.agentId),
-            eq(toolGrants.toolId, g.toolId),
-            eq(toolGrants.action, g.action),
-          ),
-        )
-        .returning();
-      if (deleted.length === 0) return false;
+      const updated = await tx
+        .update(toolGrants)
+        .set({
+          revokedAt: new Date(r.revokedAt),
+          revokedBy: r.revokedBy,
+          revokeReason: r.revokeReason,
+        })
+        .where(and(grantWhere(key), isNull(toolGrants.revokedAt)))
+        .returning({ agentId: toolGrants.agentId });
+      if (updated.length === 0) return false;
       await appendAudit(tx, audit);
       return true;
     });
+  }
+}
+
+export class PostgresConnectorHealthStore implements ConnectorHealthStore {
+  constructor(private readonly db: Database) {}
+
+  private static toRecord(r: typeof toolConnectorHealth.$inferSelect): ConnectorHealthRecord {
+    return connectorHealthRecordSchema.parse({
+      tenantId: r.tenantId,
+      instanceId: r.instanceId,
+      status: r.status,
+      checkedAt: r.checkedAt.toISOString(),
+      expiresAt: r.expiresAt.toISOString(),
+      rateLimitedUntil: iso(r.rateLimitedUntil),
+      detail: u(r.detail),
+    });
+  }
+
+  async get(tenantId: string, instanceId: string) {
+    const [r] = await this.db
+      .select()
+      .from(toolConnectorHealth)
+      .where(
+        and(
+          eq(toolConnectorHealth.tenantId, tenantId),
+          eq(toolConnectorHealth.instanceId, instanceId),
+        ),
+      );
+    return r ? PostgresConnectorHealthStore.toRecord(r) : null;
+  }
+
+  async put(record: ConnectorHealthRecord) {
+    const v = connectorHealthRecordSchema.parse(record);
+    const row = {
+      tenantId: v.tenantId,
+      instanceId: v.instanceId,
+      status: v.status,
+      checkedAt: new Date(v.checkedAt),
+      expiresAt: new Date(v.expiresAt),
+      rateLimitedUntil: d(v.rateLimitedUntil),
+      detail: v.detail ?? null,
+    };
+    await this.db
+      .insert(toolConnectorHealth)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [toolConnectorHealth.tenantId, toolConnectorHealth.instanceId],
+        set: {
+          status: row.status,
+          checkedAt: row.checkedAt,
+          expiresAt: row.expiresAt,
+          rateLimitedUntil: row.rateLimitedUntil,
+          detail: row.detail,
+        },
+      });
+  }
+
+  async list(tenantId: string) {
+    const rows = await this.db
+      .select()
+      .from(toolConnectorHealth)
+      .where(eq(toolConnectorHealth.tenantId, tenantId));
+    return rows.map((r) => PostgresConnectorHealthStore.toRecord(r));
   }
 }

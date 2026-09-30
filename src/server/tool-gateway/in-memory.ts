@@ -1,24 +1,36 @@
 import type { AuditEntry } from "@/core/contracts";
 import {
+  connectorHealthRecordSchema,
+  connectorInstanceSchema,
   toolApprovalRequestSchema,
   toolExecutionSchema,
   toolGrantSchema,
+  type ConnectorHealthRecord,
   type ConnectorInstance,
-  type ConnectorStatus,
   type ToolApprovalRequest,
   type ToolExecution,
   type ToolGrant,
 } from "@/core/tool-gateway/model";
 
 import type {
+  ConnectorHealthStore,
   CredentialResolution,
   CredentialResolver,
   ExecutionQuery,
+  GrantKey,
   ToolApprovalStore,
   ToolExecutionStore,
   ToolGrantStore,
 } from "./ports";
 import { SecretValue } from "./ports";
+
+/** Statuses that mean "this operation applied, may have applied, or is on its way to". */
+export const LIVE_OPERATION = (e: ToolExecution): boolean =>
+  e.status === "AWAITING_APPROVAL" ||
+  e.status === "EXECUTING" ||
+  e.status === "SUCCEEDED" ||
+  (e.status === "FAILED" &&
+    (e.settlementState === "UNKNOWN" || e.settlementState === "DISPATCHED"));
 
 /** In-memory evidence store (dev/test). Same contract as the Postgres store. */
 export class InMemoryToolExecutionStore implements ToolExecutionStore {
@@ -65,6 +77,18 @@ export class InMemoryToolExecutionStore implements ToolExecutionStore {
       .slice(0, q.limit ?? 100)
       .map((r) => structuredClone(r));
   }
+
+  async findLiveByOperation(tenantId: string, operationFingerprint: string, since: Date) {
+    return [...this.rows.values()]
+      .filter(
+        (r) =>
+          r.tenantId === tenantId &&
+          r.operationFingerprint === operationFingerprint &&
+          new Date(r.createdAt) >= since &&
+          LIVE_OPERATION(r),
+      )
+      .map((r) => structuredClone(r));
+  }
 }
 
 export class InMemoryToolApprovalStore implements ToolApprovalStore {
@@ -89,87 +113,112 @@ export class InMemoryToolApprovalStore implements ToolApprovalStore {
     this.audit.push(audit);
     return structuredClone(next);
   }
+  async consume(tenantId: string, id: string, at: string, audit: AuditEntry) {
+    const cur = this.rows.get(id);
+    if (!cur || cur.tenantId !== tenantId || cur.status !== "APPROVED" || cur.consumedAt) {
+      return false;
+    }
+    this.rows.set(id, { ...cur, consumedAt: at });
+    this.audit.push(audit);
+    return true;
+  }
   async listPending(tenantId: string) {
-    return [...this.rows.values()].filter((r) => r.tenantId === tenantId && r.status === "PENDING");
+    return [...this.rows.values()]
+      .filter((r) => r.tenantId === tenantId && r.status === "PENDING")
+      .map((r) => structuredClone(r));
   }
 }
+
+const sameGrant = (a: GrantKey, b: GrantKey) =>
+  a.tenantId === b.tenantId &&
+  a.agentId === b.agentId &&
+  a.toolId === b.toolId &&
+  a.action === b.action;
 
 export class InMemoryToolGrantStore implements ToolGrantStore {
   readonly rows: ToolGrant[] = [];
   readonly audit: AuditEntry[] = [];
-  private same = (a: Pick<ToolGrant, "tenantId" | "agentId" | "toolId" | "action">, b: typeof a) =>
-    a.tenantId === b.tenantId &&
-    a.agentId === b.agentId &&
-    a.toolId === b.toolId &&
-    a.action === b.action;
 
   async listForAgent(tenantId: string, agentId: string) {
-    return this.rows.filter((g) => g.tenantId === tenantId && g.agentId === agentId);
+    return this.rows
+      .filter((g) => g.tenantId === tenantId && g.agentId === agentId)
+      .map((g) => structuredClone(g));
+  }
+  async listForTenant(tenantId: string) {
+    return this.rows.filter((g) => g.tenantId === tenantId).map((g) => structuredClone(g));
   }
   async put(grant: ToolGrant, audit: AuditEntry) {
     const g = toolGrantSchema.parse(grant);
-    const i = this.rows.findIndex((r) => this.same(r, g));
+    const i = this.rows.findIndex((r) => sameGrant(r, g));
     if (i >= 0) this.rows[i] = g;
     else this.rows.push(g);
     this.audit.push(audit);
   }
   async revoke(
-    grant: Pick<ToolGrant, "tenantId" | "agentId" | "toolId" | "action">,
+    key: GrantKey,
+    r: { revokedAt: string; revokedBy: string; revokeReason: string },
     audit: AuditEntry,
   ) {
-    const i = this.rows.findIndex((r) => this.same(r, grant));
+    const i = this.rows.findIndex((g) => sameGrant(g, key) && g.revokedAt === undefined);
     if (i < 0) return false;
-    this.rows.splice(i, 1);
+    this.rows[i] = toolGrantSchema.parse({ ...this.rows[i], ...r });
     this.audit.push(audit);
     return true;
   }
 }
 
+export class InMemoryConnectorHealthStore implements ConnectorHealthStore {
+  readonly rows = new Map<string, ConnectorHealthRecord>();
+  private readonly k = (t: string, i: string) => `${t}\u0000${i}`;
+  async get(tenantId: string, instanceId: string) {
+    const r = this.rows.get(this.k(tenantId, instanceId));
+    return r ? structuredClone(r) : null;
+  }
+  async put(record: ConnectorHealthRecord) {
+    const r = connectorHealthRecordSchema.parse(record);
+    this.rows.set(this.k(r.tenantId, r.instanceId), r);
+  }
+  async list(tenantId: string) {
+    return [...this.rows.values()].filter((r) => r.tenantId === tenantId);
+  }
+}
+
 /**
- * Connector instances of every tenant, with live health and rate-limit state.
- * Lookups are tenant-scoped: another tenant's instance is simply not found.
+ * Connector instances (configuration only) of every tenant. Lookups are
+ * tenant-scoped: another tenant's instance is simply not found. Live health is
+ * NOT kept here — it is dated evidence in the `ConnectorHealthStore`.
  *
- * ponytail: per-process state (health, rate-limit windows); move to a shared
- * store when the gateway runs on more than one process.
+ * ponytail: the local sliding-window quota is per process; the provider's own
+ * 429 (persisted in health evidence) is the cross-process limit.
  */
 export class ConnectorRegistry {
   private readonly instances = new Map<string, ConnectorInstance>();
-  private readonly rateLimitedUntil = new Map<string, number>();
   private readonly windows = new Map<string, number[]>();
 
   register(instance: ConnectorInstance): void {
-    const existing = this.instances.get(instance.instanceId);
-    if (existing && existing.tenantId !== instance.tenantId) {
-      throw new Error(`connector instance ${instance.instanceId} belongs to another tenant`);
+    const i = connectorInstanceSchema.parse(instance);
+    const existing = this.instances.get(i.instanceId);
+    if (existing && existing.tenantId !== i.tenantId) {
+      throw new Error(`connector instance ${i.instanceId} belongs to another tenant`);
     }
-    this.instances.set(instance.instanceId, structuredClone(instance));
+    this.instances.set(i.instanceId, structuredClone(i));
   }
   get(tenantId: string, instanceId: string): ConnectorInstance | null {
     const i = this.instances.get(instanceId);
     return i && i.tenantId === tenantId ? structuredClone(i) : null;
+  }
+  /** Audit-only: whether an id exists at all, so a foreign-instance attempt is recorded as such. */
+  existsInAnotherTenant(tenantId: string, instanceId: string): boolean {
+    const i = this.instances.get(instanceId);
+    return i !== undefined && i.tenantId !== tenantId;
   }
   list(tenantId: string): ConnectorInstance[] {
     return [...this.instances.values()]
       .filter((i) => i.tenantId === tenantId)
       .map((i) => structuredClone(i));
   }
-  setStatus(instanceId: string, status: ConnectorStatus): void {
-    const i = this.instances.get(instanceId);
-    if (i) i.status = status;
-  }
-  /** Provider said 429: block the instance until `now + seconds`. */
-  markRateLimited(instanceId: string, now: Date, seconds: number): void {
-    this.rateLimitedUntil.set(instanceId, now.getTime() + seconds * 1000);
-    this.setStatus(instanceId, "RATE_LIMITED");
-  }
-  rateLimitedUntilOf(instanceId: string, now: Date): Date | undefined {
-    const until = this.rateLimitedUntil.get(instanceId);
-    if (until === undefined) return undefined;
-    if (until > now.getTime()) return new Date(until);
-    this.rateLimitedUntil.delete(instanceId);
-    if (this.instances.get(instanceId)?.status === "RATE_LIMITED")
-      this.setStatus(instanceId, "HEALTHY");
-    return undefined;
+  tenants(): string[] {
+    return [...new Set([...this.instances.values()].map((i) => i.tenantId))];
   }
   /** Sliding-window local quota. False = over quota, nothing dispatched. */
   take(
