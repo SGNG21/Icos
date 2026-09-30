@@ -4,7 +4,10 @@ import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { toScheduledJobDto } from "@/server/scheduler/scheduled-job-dto";
-import { SchedulerValidationError } from "@/server/scheduler/scheduler-service";
+import {
+  RESERVED_KEY_PREFIX,
+  SchedulerValidationError,
+} from "@/server/scheduler/scheduler-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +32,11 @@ export async function POST(request: Request): Promise<Response> {
 
     const body = await readJson(request);
     if (!body.ok) return apiError("invalid_input", "corps JSON invalide");
+
+    const key = (body.value as { idempotencyKey?: unknown } | null)?.idempotencyKey;
+    if (typeof key === "string" && key.startsWith(RESERVED_KEY_PREFIX)) {
+      return apiError("invalid_input", "clé d'idempotence réservée");
+    }
 
     try {
       const { job, created } = await container.scheduler.enqueue(body.value);

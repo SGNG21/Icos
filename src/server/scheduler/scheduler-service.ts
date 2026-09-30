@@ -22,6 +22,8 @@ export const enqueueScheduledJobSchema = z
           .object({
             title: z.string().trim().min(1).max(200),
             objective: z.string().trim().min(1).max(4000),
+            /* Optional, as the start_mission handler and igniteAutonomousMission accept it. */
+            goalId: z.string().trim().min(1).max(200).optional(),
           })
           .strict(),
         ...common,
@@ -39,6 +41,12 @@ export const enqueueScheduledJobSchema = z
     message: "deadlineAt must not be before runAt",
     path: ["deadlineAt"],
   });
+
+/**
+ * Keys under this prefix belong to POST /api/missions/autonomous (scoped per user). The generic
+ * scheduler endpoint refuses them, so no caller can pre-claim another user's launch key.
+ */
+export const RESERVED_KEY_PREFIX = "api.missions.autonomous:";
 
 export class SchedulerValidationError extends Error {
   constructor(readonly zodError: z.ZodError) {

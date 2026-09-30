@@ -164,13 +164,14 @@ describe("POST /api/internal/executions/completed", () => {
       {
         tasks: mockContainer.tasks,
         executionResults: mockContainer.executionResults,
-        supervisor: expect.any(Object),
         missions: mockContainer.mission,
         durableMemory: mockContainer.durableMemory,
         dispatchAttempts: mockContainer.dispatchAttempts,
       },
       mockParse.data,
     );
+    /* P0 2026-09-30: the HTTP layer constructs NO supervisor — not even an unused one. */
+    expect(SupervisorService).not.toHaveBeenCalled();
     // We do not expect recordMissionTaskExecution to be called in the callback anymore.
     // Instead, we expect the quality control registration to be attempted (fire-and-forget).
     // Since we mocked the qualityControlJobs.register, we can check that it was called.
