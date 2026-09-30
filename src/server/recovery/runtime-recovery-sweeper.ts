@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 
 import type {
   RecoveryDispatchRef,
@@ -75,6 +76,8 @@ export class RuntimeRecoverySweeper {
     private readonly actions: RuntimeRecoveryActions,
     private readonly probe?: WorkflowProbe,
     options: Partial<RuntimeRecoveryOptions> = {},
+    /** Runtime control (decision 0055): a held redispatch is deferred, never failed. */
+    private readonly control?: Pick<RuntimeControlGuard, "dispatch">,
   ) {
     this.options = { ...DEFAULT_RUNTIME_RECOVERY_OPTIONS, ...options };
   }
@@ -191,6 +194,14 @@ export class RuntimeRecoverySweeper {
     const status = this.probe ? await this.probe.status(attempt.workflowId) : "unknown";
     switch (status) {
       case "not_found":
+        if (this.control && !(await this.control.dispatch(attempt.missionId)).allowed) {
+          // Held: re-examined after the cooldown, dispatched once released.
+          return {
+            outcome: "deferred",
+            reason: "CONTROL_HELD",
+            cooldownMs: this.options.orphanAfterMs,
+          };
+        }
         await this.actions.redispatch(attempt);
         // Re-examined later: if the restarted workflow vanishes again it is still covered.
         return {

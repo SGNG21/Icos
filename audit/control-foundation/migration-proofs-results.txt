@@ -1,0 +1,34 @@
+PASS | no duplicate migration number | 46 files, last 0048_control_plane
+PASS | journal ↔ files bijection
+PASS | journal idx contiguous | idx 0..45
+PASS | journal when strictly increasing
+PASS | order: 0047_audit_goal_events then 0048_control_plane
+PASS | A: all migrations applied on empty DB | 46/46
+PASS | A: CHECK has 45 values incl. goal.* and control.* | 45 values
+PASS | A: goal.created audit insert succeeds
+PASS | A: goal.status_updated audit insert succeeds
+PASS | A: goal.converted audit insert succeeds
+PASS | A: goal.idempotency_key_set audit insert succeeds
+PASS | A: control.command.executed audit insert succeeds
+PASS | A: unknown event type still rejected (allow-list intact)
+PASS | A: 5 control tables exist | control_commands,control_reauth_proofs,control_state_versions,mission_control_holds,runtime_control_flags
+PASS | A: flags row seeded to normal operation
+PASS | B1: applied through 0047 only | 45 applied
+PASS | B1: after 0047, goal.* allowed and control.* not yet | 41 values
+PASS | B1: pre-0048 goal.created row written
+PASS | B1: pre-0048 goal.status_updated row written
+PASS | B1: pre-0048 goal.converted row written
+PASS | B1: pre-0048 goal.idempotency_key_set row written
+PASS | B1: control tables absent before 0048
+PASS | B2: upgrade applied exactly one more migration (0048) | 45 -> 46
+PASS | B2: CHECK after upgrade = 45-value union
+PASS | B2: goal.* rows written before 0048 survive | 4/4
+PASS | B2: goal.created still insertable after 0048
+PASS | B2: goal.status_updated still insertable after 0048
+PASS | B2: goal.converted still insertable after 0048
+PASS | B2: goal.idempotency_key_set still insertable after 0048
+PASS | B2: control.command.* insertable after 0048
+PASS | B2: flags row seeded
+PASS | B3: re-running migrate is a no-op
+
+MIGRATION PROOFS: 32/32 PASS

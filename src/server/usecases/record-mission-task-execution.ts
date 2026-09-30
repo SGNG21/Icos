@@ -8,6 +8,7 @@ import type { ReviewDecisionRepository } from "@/server/review/review-decision-r
 import type { ReviewerService } from "@/server/review/ports";
 import type { SupervisorService } from "@/server/supervisor/supervisor-service";
 import type { QualityControlService } from "@/server/usecases/quality-control-service";
+import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 
 import { reviewExecution } from "./review-execution";
 import { saveMissionCheckpoint } from "./save-mission-checkpoint";
@@ -48,6 +49,8 @@ export interface RecordMissionTaskExecutionDeps {
   durableMemory?: DurableMemory;
   dispatchAttempts?: DispatchAttemptRepository;
   qualityControl?: QualityControlService;
+  /** Runtime control (decision 0055): a held correction stays PREPARED for reconciliation. */
+  control?: Pick<RuntimeControlGuard, "dispatch">;
 }
 
 /** Two correction dispatches after the original execution. */
@@ -222,6 +225,9 @@ export async function recordMissionTaskExecution(
         capability: missionTask.capability ?? undefined,
       });
       if (!prepared.acquired) return;
+      // Held (paused mission, safe mode, dispatch disabled): leave the attempt PREPARED;
+      // reconcilePreparedDispatches dispatches it once control releases it.
+      if (deps.control && !(await deps.control.dispatch(input.missionId)).allowed) return;
       try {
         if (!deps.taskExecution) {
           throw new Error("Correction dispatcher unavailable");

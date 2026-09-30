@@ -150,6 +150,31 @@ export class WorkerRegistrationService {
     });
   }
 
+  /**
+   * Re-activates a worker (control command ENABLE_WORKER, decision 0055).
+   *
+   * Like registration, re-activation is NOT a health claim: evidence is reset to
+   * "never probed", so the canonical matcher routes nothing to this worker until
+   * a real probe succeeds again. Old evidence from before the disable is never
+   * trusted.
+   */
+  async reactivate(workerId: string): Promise<WorkerRegistryEntry | null> {
+    const existing = await this.workers.get(workerId);
+    if (!existing) {
+      return null;
+    }
+
+    return this.workers.upsert({
+      ...existing,
+      status: "active",
+      health: "unknown",
+      availability: "unknown",
+      lastProbeAt: null,
+      lastProbeOutcome: "never",
+      updatedAt: this.now().toISOString(),
+    });
+  }
+
   /** Forgets a worker entirely. Returns true if a row was removed. */
   async deregister(workerId: string): Promise<boolean> {
     return this.workers.remove(workerId);

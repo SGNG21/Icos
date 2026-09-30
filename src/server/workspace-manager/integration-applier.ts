@@ -1,6 +1,7 @@
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
 import { WorkspaceError, type Workspace } from "./types";
+import { assertExternalActionAllowed, type RuntimeControlGuard } from "@/server/control/runtime-control";
 
 /**
  * APPLIES an accepted worker result to the integration target (M8, defect 19).
@@ -50,18 +51,28 @@ export interface ApplyOptions {
 interface ApplierDeps {
   git: Git;
   manager: WorkspaceManager;
+  /**
+   * Runtime control (decision 0055): moving the canonical target is an
+   * irreversible side effect, refused while external actions are not allowed.
+   */
+  control?: Pick<RuntimeControlGuard, "externalAction">;
 }
 
 export class IntegrationApplier {
   private readonly git: Git;
   private readonly manager: WorkspaceManager;
 
+  private readonly control?: Pick<RuntimeControlGuard, "externalAction">;
+
   constructor(deps: ApplierDeps) {
     this.git = deps.git;
     this.manager = deps.manager;
+    this.control = deps.control;
   }
 
   async apply(workspaceId: string, options: ApplyOptions): Promise<IntegrationApplyOutcome> {
+    // The one canonical external-action guard, before anything is read or moved.
+    if (this.control) await assertExternalActionAllowed(this.control, `integration apply of ${workspaceId}`);
     const ws = await this.manager.get(workspaceId);
     this.assertIntegrable(ws);
 

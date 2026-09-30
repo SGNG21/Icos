@@ -14,6 +14,7 @@ import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/w
 import type { CapabilityRouter } from "@/server/routing/capability-router";
 import { complexityFromRisk } from "@/core/workers/compute-routing";
 
+import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
@@ -57,7 +58,19 @@ export class SupervisorService {
      * routes nothing.
      */
     private readonly capabilityRouter?: CapabilityRouter,
+    /**
+     * Runtime control (decision 0055). When composed, no NEW work is admitted
+     * while dispatch is not allowed or the mission is held: ready tasks stay
+     * ready and prepared attempts stay PREPARED — held, never failed. Wired at
+     * every production composition site.
+     */
+    private readonly controlGuard?: Pick<RuntimeControlGuard, "dispatch">,
   ) {}
+
+  private async admissionHeld(missionId: string): Promise<boolean> {
+    if (!this.controlGuard) return false;
+    return !(await this.controlGuard.dispatch(missionId)).allowed;
+  }
 
   /**
    * Resolves the routing decision for one ready MissionTask.
@@ -197,6 +210,11 @@ export class SupervisorService {
     for (const attempt of prepared) {
       signal?.throwIfAborted();
 
+      // Held attempts stay PREPARED; a later reconciliation dispatches them once released.
+      if (await this.admissionHeld(attempt.missionId)) {
+        continue;
+      }
+
       /*
        * GOVERNED INTENTS ARE NOT REPLAYED HERE (decision 0052). This replay dispatches straight
        * to the dispatcher with no workspace. For a writer that is ungoverned execution: a
@@ -292,12 +310,16 @@ export class SupervisorService {
         ? (await this.dispatchAttempts.listPrepared(missionId)).map((a) => [a.missionTaskId, a])
         : [],
     );
-    const ready = computeReadyTasks(mission, tasks);
+    // A held mission (or ICOS in safe mode / dispatch disabled) admits nothing new — neither
+    // ready draft tasks nor pending intents; the status bookkeeping below still runs.
+    const held = await this.admissionHeld(mission.id);
+    const ready = held ? [] : computeReadyTasks(mission, tasks);
     const readyIds = new Set(ready.map((t) => t.id));
     const readyTasks = [
       ...ready,
       ...tasks.filter(
         (t) =>
+          !held &&
           preparedByTask.has(t.id) &&
           !readyIds.has(t.id) &&
           !TERMINAL_TASK_STATUSES.has(t.status),

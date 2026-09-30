@@ -496,6 +496,8 @@ export class InMemoryMissionRepository implements MissionRepository {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    // `cancelled` is terminal and sticky (decision 0055): a late writer cannot undo a cancel.
+    if (mission.status === "cancelled") return;
     // Create a new mission object with updated status
     const updatedMission: Mission = {
       ...mission,
@@ -503,6 +505,17 @@ export class InMemoryMissionRepository implements MissionRepository {
       updatedAt: new Date(),
     };
     this.missions.set(missionId, updatedMission);
+  }
+
+  async transitionMissionStatusIf(
+    missionId: string,
+    from: Mission["status"],
+    to: Mission["status"],
+  ): Promise<boolean> {
+    const mission = this.missions.get(missionId);
+    if (!mission || mission.status !== from) return false;
+    this.missions.set(missionId, { ...mission, status: to, updatedAt: new Date() });
+    return true;
   }
 
   async deleteMission(missionId: string): Promise<void> {

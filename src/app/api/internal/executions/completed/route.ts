@@ -64,6 +64,7 @@ export async function POST(request: Request): Promise<Response> {
       container.dispatchAttempts,
       undefined,
       container.capabilityRouter,
+      container.control?.guard,
     );
 
     const result = await recordTaskExecution(
