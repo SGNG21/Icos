@@ -15,6 +15,8 @@ export function LoginForm({ nextPath }: LoginFormProps) {
   const [error, setError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const submitRef = useRef<ReturnType<typeof createLoginSubmission> | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -83,20 +85,6 @@ export function LoginForm({ nextPath }: LoginFormProps) {
     setPasswordError(err || "");
   };
 
-  const handleEmailChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (emailError) {
-      const err = validateEmail(event.currentTarget.value);
-      setEmailError(err || "");
-    }
-  };
-
-  const handlePasswordChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (passwordError) {
-      const err = validatePassword(event.currentTarget.value);
-      setPasswordError(err || "");
-    }
-  };
-
   return (
     <form className="login-form" onSubmit={handleSubmit} noValidate={false}>
       <div className="form-field">
@@ -110,9 +98,9 @@ export function LoginForm({ nextPath }: LoginFormProps) {
           inputMode="email"
           required
           disabled={pending}
-          value=""
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
           onBlur={handleEmailBlur}
-          onChange={handleEmailChange}
           aria-invalid={!!emailError}
           aria-describedby={emailError ? "email-error" : undefined}
           autoFocus
@@ -135,9 +123,9 @@ export function LoginForm({ nextPath }: LoginFormProps) {
           minLength={12}
           required
           disabled={pending}
-          value=""
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
           onBlur={handlePasswordBlur}
-          onChange={handlePasswordChange}
           aria-invalid={!!passwordError}
           aria-describedby={passwordError ? "password-error" : "password-hint"}
         />
