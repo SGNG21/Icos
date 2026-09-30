@@ -35,6 +35,18 @@ const PHASE_TEXT: Record<SubmitPhase, string> = {
   rejected: "Rejected — nothing was created",
 };
 
+const PHASE_STYLE: Record<SubmitPhase, string> = {
+  submitting: "REQUESTED",
+  processing: "REQUESTED",
+  accepted: "SUCCEEDED",
+  replayed: "SUCCEEDED",
+  unknown: "UNKNOWN",
+  busy: "REJECTED",
+  rejected: "REJECTED",
+  failed: "FAILED",
+  cancelled: "REQUESTED",
+};
+
 const PROGRESS_TEXT: Record<string, string> = {
   "turn.received": "received",
   "turn.processing": "processing",
@@ -243,7 +255,8 @@ export function AskIcos() {
           <select
             value={selected ?? ""}
             onChange={(e) => setSelected(e.target.value || null)}
-            disabled={busy}
+            // An UNKNOWN submission keeps its key only while its conversation stays selected.
+            disabled={busy || state.pending?.phase === "unknown"}
           >
             <option value="">New conversation</option>
             {state.conversations.map((c) => (
@@ -333,7 +346,7 @@ export function AskIcos() {
       {state.pending && (
         <p
           className="cx-outcome"
-          data-status={state.pending.phase === "unknown" ? "UNKNOWN" : "REQUESTED"}
+          data-status={PHASE_STYLE[state.pending.phase]}
           role="status"
           aria-live="polite"
         >

@@ -52,7 +52,10 @@ export default async function ExecutivePage() {
         />
         <MetricTile label="Human actions 24h" truth={v.humanActions24h} />
         <MetricTile label="ICOS proposals" truth={v.proposals} tone="autonomy" />
-        <MetricTile label="Digital workforce agents" truth={mapTruth(wf, (w) => w.agents.total)} />
+        <MetricTile
+          label="Digital workforce agents (all registered)"
+          truth={mapTruth(wf, (w) => w.agents.total)}
+        />
         <MetricTile
           label="Workforce needing attention"
           truth={mapTruth(wf, (w) => w.attention.length)}
