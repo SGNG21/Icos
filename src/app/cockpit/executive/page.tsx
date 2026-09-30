@@ -2,15 +2,21 @@ import Link from "next/link";
 
 import { MetricTile, Panel, ToneBadge, TruthValue } from "@/components/cockpit/primitives";
 import { buildExecutiveView } from "@/features/cockpit/executive";
-import { loadSnapshot, loadSources } from "@/features/cockpit/load";
+import { loadReadModels, loadSnapshot, loadSources } from "@/features/cockpit/load";
 import { mapTruth } from "@/features/cockpit/truth";
 
 export const metadata = { title: "Executive" };
 
 export default async function ExecutivePage() {
-  const [snapshot, sources] = await Promise.all([loadSnapshot(), loadSources()]);
-  if (!snapshot || !sources) return null;
-  const v = buildExecutiveView(snapshot, sources.audit);
+  const [snapshot, sources, models] = await Promise.all([
+    loadSnapshot(),
+    loadSources(),
+    loadReadModels(),
+  ]);
+  if (!snapshot || !sources || !models) return null;
+  const v = buildExecutiveView(snapshot, sources.audit, models.workforce, models.business);
+  const wf = v.digitalWorkforce;
+  const biz = v.business;
 
   return (
     <>
@@ -45,9 +51,30 @@ export default async function ExecutivePage() {
         />
         <MetricTile label="Human actions 24h" truth={v.humanActions24h} />
         <MetricTile label="ICOS proposals" truth={v.proposals} tone="autonomy" />
-        <MetricTile label="Digital workforce" truth={v.digitalWorkforce} />
-        <MetricTile label="Clients / projects" truth={v.clients} />
-        <MetricTile label="Business KPIs" truth={v.kpis} />
+        <MetricTile label="Digital workforce agents" truth={mapTruth(wf, (w) => w.agents.total)} />
+        <MetricTile
+          label="Workforce needing attention"
+          truth={mapTruth(wf, (w) => w.attention.length)}
+          tone={wf.kind === "real" && wf.value.attention.length > 0 ? "critical" : "ok"}
+        />
+        <MetricTile
+          label="Assignments awaiting approval"
+          truth={mapTruth(wf, (w) => w.assignments.awaitingApproval)}
+        />
+        <MetricTile
+          label="Clients (at risk)"
+          truth={mapTruth(biz, (b) => `${b.clients.rows.length} (${b.atRiskClients})`)}
+        />
+        <MetricTile label="Leads" truth={mapTruth(biz, (b) => b.leads.rows.length)} />
+        <MetricTile
+          label="Sales pipeline"
+          truth={mapTruth(biz, (b) => b.pipeline.rows.reduce((n, s) => n + s.count, 0))}
+        />
+        <MetricTile
+          label="Marketing · SEO · Ads channels"
+          truth={mapTruth(biz, (b) => Object.keys(b.marketingByChannel).length)}
+        />
+        <MetricTile label="Business KPIs" truth={mapTruth(biz, (b) => b.kpis.rows.length)} />
       </div>
 
       <div className="cx-grid2">

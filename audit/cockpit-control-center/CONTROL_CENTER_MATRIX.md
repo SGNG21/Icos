@@ -32,10 +32,11 @@ Nothing is STATIC or MOCK on `/cockpit/**`: every missing value renders its gap 
 | Audit trail | append-only log | `audit.list` (permission `audit.read.full`, scoped) | REAL | audit repo | cursor BR-01 | audit page |
 | Governed controls | 7 commands | `POST /api/control/commands` etc. | NOT_CONNECTED here (route absent) | control-foundation (0044) | merge | `commands.ts` + `CommandButton` |
 | Runtime flags / safe mode | stored + effective flags | `GET /api/control/state` | NOT_CONNECTED here | control-foundation | merge | `ControlStatePanel` |
-| Ask ICOS | streamed turn | `/api/ask/turns` (proposed) | NOT_CONNECTED | Cognitive Runtime (lane C) | BR-28 | `ask.ts` + `AskIcos` |
+| Ask ICOS | durable conversation, turns, event log, proposals | `/api/cognitive/*` (lane C, committed, not merged) | NOT_CONNECTED here | Cognitive Runtime (lane C, 0056) | merge | `ask.ts` + `AskIcos` |
 | Executive: objectives, milestones, blockers, workforce | missions, alerts, workers | snapshot | DERIVED | CORE3 | — | `executive.ts` |
 | Executive: autonomous vs human actions 24h | audit actor kinds | full `audit.list` (not capped timeline) | DERIVED | audit | — | `executive.ts` |
-| Executive: digital workforce / clients / KPIs | business data | — | NOT_CONNECTED | lane D / business OS | contracts | explicit tiles |
+| Executive: digital workforce | agents, assignments, budgets, autonomy, grants, memory scopes, KPIs, performance, attention | `WorkforceReadPort` (lane D service, no HTTP) | NOT_CONNECTED | lane D (0056) | wire `loadReadModels()` | `workforce.ts` |
+| Executive: clients / leads / pipeline / marketing / KPIs | business facts with provenance | `BusinessReadPort` | NOT_CONNECTED | none yet | owner needed | `business.ts` (REAL-only display) |
 | Settings / devices | sessions | — | NOT_AVAILABLE | auth | BR-21 | settings page |
 | PWA / offline | shell only | SW caches `/_next/static` + `offline.html`; navigations network-only | REAL (no data cached) | — | — | `public/sw.js` |
 | Mobile | 390px usable | — | verified | — | — | headless Chrome sweep, 0 overflow, 0 console errors |

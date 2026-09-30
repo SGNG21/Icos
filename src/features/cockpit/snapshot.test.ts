@@ -184,10 +184,18 @@ describe("workers", () => {
     expect(snap.metrics.activeWorkers).toMatchObject({ kind: "real", value: 1 });
   });
 
-  it("filters credential-looking metadata keys", () => {
-    expect(
-      safeMetadata({ region: "eu", token: "x", DB_PASSWORD: "y", privateKeyPath: "z" }),
-    ).toEqual({ region: "eu" });
+  it("displays allowlisted metadata only and counts the rest", async () => {
+    const { hiddenMetadataCount } = await import("./snapshot");
+    const meta = {
+      region: "eu",
+      token: "x",
+      DB_PASSWORD: "y",
+      privateKeyPath: "z",
+      note: "free text",
+      modelFamily: "NEMOTRON_120B",
+    };
+    expect(safeMetadata(meta)).toEqual({ region: "eu", modelFamily: "NEMOTRON_120B" });
+    expect(hiddenMetadataCount(meta)).toBe(4);
   });
 
   it("handles 100 workers without degrading", () => {
@@ -289,9 +297,9 @@ describe("metadata secret filter", () => {
     const { safeMetadata } = await import("./snapshot");
     expect(
       safeMetadata({
-        endpoint: "https://user:pw@host/v1",
-        note: "Bearer abc.def",
-        hint: "sk-abcdef1234567890",
+        provider: "https://user:pw@host/v1",
+        region: "Bearer abc.def",
+        account: "sk-abcdef1234567890",
         model: "nvidia/nemotron-3-super-120b-a12b",
         apiKey: "x",
       }),

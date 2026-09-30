@@ -45,6 +45,7 @@ export const routingEvidenceSchema = z
       .object({
         workerId: z.string(),
         family: z.string().optional(),
+        model: z.string().optional(),
         score: z.number().optional(),
         modelSteered: z.boolean().optional(),
       })
@@ -84,6 +85,10 @@ export interface ComputeRow {
   rateLimit: Truth<string>;
   credentialHealth: Truth<string>;
   modelSteered: Truth<boolean>;
+  /** The model that actually ran, only when the runtime passed {{model}} (0054 modelSteered). */
+  effectiveModel: Truth<string>;
+  /** Cockpit-side rates over FINISHED attempts: no cross-mission terminal-attempt read yet. */
+  finishedAttemptRates: Truth<number>;
   fallbackEvents: Truth<number>;
   routingReason: Truth<string>;
   tone: Tone;
@@ -173,6 +178,20 @@ export function buildCompute(
           ? real(lastSelected.selected.modelSteered, "recorded when selected")
           : NO_EVIDENCE("Model steering"),
       // Only in-flight decisions are loaded: a count over that window, not a history.
+      effectiveModel:
+        lastSelected?.selected?.modelSteered === true && lastSelected.selected.model
+          ? real(lastSelected.selected.model, `steered at decision ${lastSelected.decidedAt}`)
+          : lastSelected?.selected?.modelSteered === false
+            ? missing(
+                "unknown",
+                "The runtime does not pass {{model}}: its CLI default ran; the registered model is a label.",
+              )
+            : NO_EVIDENCE("Effective model"),
+      finishedAttemptRates: missing(
+        "not_available",
+        "Rates over finished attempts need a cross-mission terminal-attempt read.",
+        "BR-16",
+      ),
       fallbackEvents: seen.length
         ? real(
             seen.filter((x) => x.c?.fallback && x.e.selected?.workerId === w.id).length,

@@ -11,6 +11,7 @@ import { resolveCockpitAccess } from "@/server/auth/cockpit-access";
 import { getContainer, type Container } from "@/server/container";
 import type { AgentScope } from "@/server/repositories/ports";
 
+import { notConnectedBusiness } from "./business";
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
 import type { QualityFact, WorkspaceFact } from "./pipeline";
 import {
@@ -20,6 +21,7 @@ import {
   type MissionWithTasks,
 } from "./snapshot";
 import { isReal, missing, real, type Truth } from "./truth";
+import { notConnectedWorkforce } from "./workforce";
 
 /**
  * Server-side loader of the cockpit. The ONLY place the cockpit touches ICOS:
@@ -304,3 +306,18 @@ export async function loadSystemFacts(): Promise<SystemFacts | null> {
     ],
   };
 }
+
+/**
+ * Integration seam for read models owned by other lanes (see INTEGRATION_MANIFEST.md).
+ * Replace a port here — server side, with the caller's session — to connect it; the UI
+ * already renders REAL / UNKNOWN / NOT_CONNECTED from whatever it returns.
+ */
+export const loadReadModels = cache(async () => {
+  const ctx = await getCockpitContext();
+  if (!ctx) return null;
+  const [workforce, business] = await Promise.all([
+    notConnectedWorkforce.read(),
+    notConnectedBusiness.read(),
+  ]);
+  return { workforce, business };
+});

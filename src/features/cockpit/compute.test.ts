@@ -25,6 +25,7 @@ const worker = (id: string, metadata: Record<string, string>): WorkerView => ({
   features: [],
   tags: [],
   metadata,
+  metadataHidden: 0,
   assignments: [],
   leases: real([]),
   tone: "ok",
@@ -56,7 +57,12 @@ const evidence = {
       history: { executions: 0, infraFailures: 0, timeouts: 0, reviewed: 0 },
     },
   ],
-  selected: { workerId: W550, score: 0.71, modelSteered: true },
+  selected: {
+    workerId: W550,
+    model: "nvidia/nemotron-3-ultra-550b-a55b",
+    score: 0.71,
+    modelSteered: true,
+  },
   futureField: "tolerated",
 };
 const attempt = (routingDecision?: unknown) =>
@@ -171,5 +177,32 @@ describe("compute view", () => {
     expect((g.rows[0].family as { derivation: string }).derivation).toContain(
       "inferred by the router",
     );
+  });
+});
+
+describe("compute view after CORE3 integration", () => {
+  it("effective model is known only when steered; finished-attempt rates stay BR-16", () => {
+    const rows = buildCompute(fleet, real([attempt(evidence)])).flatMap((g) => g.rows);
+    const r550 = rows.find((r) => r.workerId === W550)!;
+    expect(r550.effectiveModel).toMatchObject({
+      kind: "real",
+      value: "nvidia/nemotron-3-ultra-550b-a55b",
+    });
+    const unsteered = { ...evidence, selected: { ...evidence.selected, modelSteered: false } };
+    const u = buildCompute(fleet, real([attempt(unsteered)]))
+      .flatMap((g) => g.rows)
+      .find((r) => r.workerId === W550)!;
+    expect(u.effectiveModel.kind).toBe("unknown");
+    for (const r of rows)
+      expect(r.finishedAttemptRates).toMatchObject({ kind: "not_available", requirement: "BR-16" });
+  });
+
+  it("families from CORE3 d110f96 (e.g. CLAUDE_FABLE) need no code change", () => {
+    const fable = worker("f", {
+      model: "anthropic/claude-fable-5-1",
+      provider: "anthropic",
+      modelFamily: "CLAUDE_FABLE",
+    });
+    expect(buildCompute([fable], real([])).map((g) => g.family)).toEqual(["CLAUDE_FABLE"]);
   });
 });

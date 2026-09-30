@@ -33,6 +33,7 @@ function view(
     features: [],
     tags: [],
     metadata: {},
+    metadataHidden: 0,
     assignments: [],
     leases: real([]),
     tone: "ok",

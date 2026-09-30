@@ -1203,21 +1203,34 @@ html[data-cx-stale] .cx-top__health {
   gap: 3px;
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid rgb(167 139 250 / 45%);
+  /* Neutral by default: violet is reserved for ICOS proposals. */
+  border: 1px solid var(--line-2);
   border-radius: 10px;
   background: rgb(167 139 250 / 10%);
   font-size: 13px;
 }
 
-.cx-outcome[data-status="unknown_execution_state"] {
+/* Control / Ask lifecycle phases (commands.ts ControlPhase, ask-icos.tsx). */
+.cx-outcome[data-status="UNKNOWN"],
+.cx-outcome[data-status="AUTH_REQUIRED"] {
   border-color: rgb(251 146 60 / 55%);
   background: rgb(251 146 60 / 10%);
 }
 
-.cx-outcome[data-status="accepted"],
-.cx-outcome[data-status="executed"] {
+.cx-outcome[data-status="SUCCEEDED"] {
   border-color: rgb(52 211 153 / 45%);
   background: rgb(52 211 153 / 10%);
+}
+
+.cx-outcome[data-status="REJECTED"],
+.cx-outcome[data-status="FAILED"] {
+  border-color: rgb(251 77 109 / 50%);
+  background: rgb(251 77 109 / 8%);
+}
+
+.cx-outcome[data-status="NOT_CONNECTED"],
+.cx-outcome[data-status="UNAVAILABLE"] {
+  border-style: dotted;
 }
 
 .cx-warn-text {

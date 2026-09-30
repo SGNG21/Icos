@@ -126,6 +126,8 @@ export interface WorkerView {
   tags: string[];
   /** Registry metadata minus anything that looks like a credential. */
   metadata: Record<string, string>;
+  /** Registry metadata keys withheld from display (not allowlisted or credential-like). */
+  metadataHidden: number;
   assignments: WorkerAssignment[];
   /** Workspace leases held by this worker (workspace registry). */
   leases: Truth<
@@ -215,13 +217,35 @@ export function redactError(text: string | undefined, global: boolean): string |
   return global && text ? text.slice(0, 200) : undefined;
 }
 
+/**
+ * Display ALLOWLIST: registration keys the cockpit knows (decision 0054 compute fleet + BR-03
+ * identity). Anything else stays hidden (counted, never shown): a free-form key can carry
+ * anything. Allowed values are still dropped when they look like credentials.
+ */
+export const METADATA_DISPLAY_KEYS = [
+  "model",
+  "provider",
+  "modelFamily",
+  "tierHint",
+  "account",
+  "region",
+  "contextWindow",
+  "executionBudgetMs",
+  "maxExecutionBudgetMs",
+  "version",
+] as const;
+const DISPLAYABLE = new Set<string>(METADATA_DISPLAY_KEYS);
+
 export function safeMetadata(metadata: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(metadata).filter(
-      ([key, value]) => !SECRET_KEY.test(key) && !SECRET_VALUE.test(value),
+      ([key, value]) => DISPLAYABLE.has(key) && !SECRET_KEY.test(key) && !SECRET_VALUE.test(value),
     ),
   );
 }
+
+export const hiddenMetadataCount = (metadata: Record<string, string>) =>
+  Object.keys(metadata).length - Object.keys(safeMetadata(metadata)).length;
 
 function declared(
   metadata: Record<string, string>,
@@ -302,6 +326,7 @@ export function buildWorkerViews(
       features: [...w.features],
       tags: [...w.tags],
       metadata: safeMetadata(w.metadata),
+      metadataHidden: hiddenMetadataCount(w.metadata),
       assignments: byWorker.get(w.id) ?? [],
       leases: isReal(workspaces)
         ? real(

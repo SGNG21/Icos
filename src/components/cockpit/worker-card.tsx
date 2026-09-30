@@ -152,6 +152,11 @@ export function WorkerCard({ worker: w }: { worker: WorkerView }) {
           </dl>
         </details>
       )}
+      {w.metadataHidden > 0 && (
+        <p className="cx-dim">
+          {w.metadataHidden} other metadata key(s) withheld (not on the display allowlist).
+        </p>
+      )}
 
       <div className="cx-actions" aria-label={`Controls for ${w.name}`}>
         {w.status === "active" ? (

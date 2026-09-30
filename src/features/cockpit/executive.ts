@@ -1,7 +1,9 @@
 import type { AuditEntry } from "@/core/contracts";
 
+import { businessView, type BusinessReadModel, type BusinessView } from "./business";
 import type { Alert, CockpitSnapshot, MissionSummary } from "./snapshot";
 import { isReal, mapTruth, missing, real, type Truth } from "./truth";
+import { workforceView, type WorkforceProjection, type WorkforceView } from "./workforce";
 
 /**
  * Executive / business read model. Objectives, milestones, blockers, workforce
@@ -28,11 +30,10 @@ export interface ExecutiveView {
   workforce: Truth<{ total: number; routable: number; busy: number }>;
   autonomousActions24h: Truth<number>;
   humanActions24h: Truth<number>;
-  /** Owned by other lanes / backends; the cockpit only declares the slot. */
+  /** Owned by other lanes / backends: rendered only from their read models, never guessed. */
   proposals: Truth<number>;
-  digitalWorkforce: Truth<number>;
-  clients: Truth<number>;
-  kpis: Truth<number>;
+  digitalWorkforce: Truth<WorkforceView>;
+  business: Truth<BusinessView>;
 }
 
 const ACTIVE = new Set(["planning", "ready", "running", "blocked", "awaiting_approval"]);
@@ -41,6 +42,8 @@ const DAY_MS = 86_400_000;
 export function buildExecutiveView(
   snapshot: CockpitSnapshot,
   audit: Truth<AuditEntry[]>,
+  workforceModel: Truth<WorkforceProjection>,
+  businessModel: Truth<BusinessReadModel>,
 ): ExecutiveView {
   const objectives = mapTruth(snapshot.missions, (ms) =>
     ms
@@ -115,20 +118,7 @@ export function buildExecutiveView(
       "Improvement proposals are persisted by the durable backlog on the CORE3/control branches, not integrated here.",
       "BR-08",
     ),
-    digitalWorkforce: missing(
-      "not_connected",
-      "Digital Workforce / Mini-ICOS is another lane; no committed read contract yet.",
-      "lane D",
-    ),
-    clients: missing(
-      "not_connected",
-      "ICOS holds no client/project records the cockpit can read.",
-      "business OS",
-    ),
-    kpis: missing(
-      "not_connected",
-      "No business KPI source exists; none is estimated.",
-      "business OS",
-    ),
+    digitalWorkforce: workforceView(workforceModel, new Date(snapshot.generatedAt)),
+    business: businessView(businessModel),
   };
 }

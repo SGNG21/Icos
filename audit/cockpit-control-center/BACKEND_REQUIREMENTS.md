@@ -231,10 +231,18 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - RISK: high
 - BLOCKING_OR_NOT: no (policy hook `secondFactor` exists, `not_enforced`)
 
-### BR-28 — Cognitive Runtime turn stream (ASK ICOS)
-- UI_FEATURE: Ask ICOS conversation (streaming text, tool/action events, mission-created, approval request, memory/context indicator, cancel, interrupt, resume/reconnect)
-- NEEDED_DATA_OR_COMMAND: `POST /api/ask/turns { turnId, conversationId?, text }` (`turnId` client-generated = idempotency key: a re-POST replays that turn from seq 0, never a second turn) → `text/event-stream` of `AskEvent` (SSE `id` = seq); `GET /api/ask/turns/:turnId/events?afterSeq=N` (resume); `POST /api/ask/turns/:turnId/cancel|interrupt`. Event schema: `src/features/cockpit/ask.ts` (`askEventSchema`). Stream rules: seq starts at 0 with `turn.started`, increments by exactly 1 (a gap triggers resume), nothing after a terminal event; a 404 with the ICOS error envelope = unknown turn, without it = runtime not deployed.
-- EXPECTED_CANONICAL_SOURCE: Cognitive Runtime (lane C). The cockpit renders only what it streams; approvals go through the governed approval path, never granted from chat.
-- RISK: high (prompt injection → actions): the runtime must route every action through BR-10 / approvals.
-- BLOCKING_OR_NOT: yes for Ask ICOS (renders NOT CONNECTED today)
-- SUPERSEDES: BR-17's browser-visible intent pipeline (compilation to a command is runtime work).
+### BR-28 — Cognitive Runtime conversation API (ASK ICOS)
+- STATUS: **PROVIDED by lane C** on `feat/cognitive-runtime` @ `3ea6f49` (decision 0056, `/api/cognitive/*`), not merged here. The cockpit client (`src/features/cockpit/ask.ts`) was aligned to that committed contract (the earlier cockpit proposal `/api/ask/turns` is withdrawn). Details, fallbacks and post-merge tests: `INTEGRATION_MANIFEST.md` › COGNITIVE_BR28_REQUIRED.
+- REMAINING ASKS TO LANE C (non-blocking): token/partial streaming, interrupt distinct from cancel.
+
+### BR-29 — Workforce read projection (lane D)
+- UI_FEATURE: Executive › digital workforce tiles (agents, attention, assignments awaiting approval, budgets, autonomy, grants, memory scopes, KPIs, performance)
+- NEEDED_DATA_OR_COMMAND: server-side projection from `WorkforceService` with the caller's principal, shaped as `workforceProjectionSchema` (`src/features/cockpit/workforce.ts`); read-only
+- EXPECTED_CANONICAL_SOURCE: `WorkforceService` (feat/digital-workforce, decision 0056)
+- BLOCKING_OR_NOT: no (NOT_CONNECTED). Wiring point: `loadReadModels()` in `src/features/cockpit/load.ts`
+
+### BR-30 — Business read model
+- UI_FEATURE: Executive › clients, leads, sales pipeline, marketing/SEO/ads, business KPIs
+- NEEDED_DATA_OR_COMMAND: `businessReadModelSchema` (`src/features/cockpit/business.ts`), every row with `source` REAL/SIMULATED/NOT_CONNECTED and `asOf`
+- EXPECTED_CANONICAL_SOURCE: none yet (business OS / CRM integration)
+- BLOCKING_OR_NOT: no (NOT_CONNECTED; non-REAL rows are never displayed as values)

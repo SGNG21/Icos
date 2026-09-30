@@ -63,12 +63,14 @@ export default async function ProvidersPage() {
                 <table className="cx-table">
                   <thead>
                     <tr>
-                      <th>Model</th>
+                      <th>Model (registered)</th>
                       <th>Provider · capacity pool</th>
                       <th>Health</th>
                       <th>Load</th>
-                      <th>Timeouts</th>
-                      <th>Infra failures (incl. timeouts)</th>
+                      <th>Effective model</th>
+                      <th>Router history: timeouts</th>
+                      <th>Router history: infra failures (incl. timeouts)</th>
+                      <th>Finished-attempt rates</th>
                       <th>Rate limit</th>
                       <th>Latency</th>
                       <th>Steered</th>
@@ -101,10 +103,16 @@ export default async function ProvidersPage() {
                           <TruthValue truth={r.load.used} />/{r.load.max}
                         </td>
                         <td>
+                          <TruthValue truth={r.effectiveModel} />
+                        </td>
+                        <td>
                           <TruthValue truth={r.timeoutRate} format={pct} />
                         </td>
                         <td>
                           <TruthValue truth={r.infraFailureRate} format={pct} />
+                        </td>
+                        <td>
+                          <TruthValue truth={r.finishedAttemptRates} />
                         </td>
                         <td>
                           <TruthValue truth={r.rateLimit} />
