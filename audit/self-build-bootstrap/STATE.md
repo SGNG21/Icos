@@ -32,6 +32,12 @@ exec requireStructuredResult); fake health removed from the harness (canonical p
   CLAUDE_FABLE: NOT_CONFIGURED (OmniRoute lists no Fable id; not reached any other way).
 Integration note: full-suite failures (core3-dag-settlement GATE_NO_DECISION / timeouts) occurred
 ONLY while other worktrees' suites ran concurrently; isolated and quiet full runs are green.
+P0 (2026-09-30): POST /api/missions/autonomous built its own UNGOVERNED SupervisorService (no
+workspace coordinator) and ran the runner inside the request. It now only enqueues a durable
+`start_mission` job (per-user hashed idempotency key); the Durable Scheduler runs it with the
+canonical governed supervisor (composeAutonomyRuntime). The internal completion callback's unused
+ungoverned supervisor was removed. No src/app or src/server/http file constructs an execution
+authority (source-scan test). Runs only where the scheduler runs (production + postgres).
 RUN 6 NOT STARTED — requires a separate owner decision.
 
 ## CURRENT_MILESTONE

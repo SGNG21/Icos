@@ -18,8 +18,10 @@ const TERMINAL_RUNTIME_STATES = ["succeeded", "failed", "cancelled", "escalated"
 
 /**
  * Creates a Mission with an empty graph (idempotent when `id` is imposed) and starts
- * the canonical AutonomousMissionRunner. Shared by POST /api/missions/autonomous and
- * the Durable Scheduler's `start_mission` job, so both stay replay-safe:
+ * the canonical AutonomousMissionRunner. Called ONLY by the Durable Scheduler's
+ * `start_mission` job, with the governed supervisor of the canonical runtime composition;
+ * POST /api/missions/autonomous enqueues that job and never calls this (P0, 2026-09-30).
+ * Replay-safe:
  *
  * - the Mission id can be fixed up front, so a replay after a crash never creates a
  *   second Mission;

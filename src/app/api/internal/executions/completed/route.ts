@@ -6,7 +6,6 @@ import { toErrorResponse } from "@/server/http/map-error";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { recordTaskExecution } from "@/server/usecases/record-task-execution";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
-import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { loadEnv } from "@/config/env";
 
 /**
@@ -56,17 +55,12 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "workflow d'exécution non corrélé");
     }
 
-    const supervisor = new SupervisorService(
-      container.mission,
-      container.tasks,
-      container.taskExecution,
-      container.durableMemory,
-      container.dispatchAttempts,
-      undefined,
-      container.capabilityRouter,
-      container.control?.guard,
-    );
-
+    /*
+     * No supervisor is built here (P0, 2026-09-30). This route used to construct an ungoverned
+     * `SupervisorService` (no workspace coordinator) and hand it to `recordTaskExecution`, which
+     * never reads it. The HTTP layer constructs no execution authority: continuation is the
+     * durable wake-up / scheduler path's job.
+     */
     const result = await recordTaskExecution(
       {
         tasks: container.tasks,
@@ -74,7 +68,6 @@ export async function POST(request: Request): Promise<Response> {
         missions: container.mission,
         durableMemory: container.durableMemory,
         dispatchAttempts: container.dispatchAttempts,
-        supervisor,
       },
       parsed.data,
     );
