@@ -52,6 +52,49 @@ const TURN_LABEL: Record<string, string> = {
 /** Answers are plain text on a phone: drop markdown emphasis markers. */
 const plain = (text: string) => text.replace(/\*\*|__|`/g, "");
 
+/** Derive the high-level UI state for the central microphone button. */
+type MicState =
+  | "idle"
+  | "listening"
+  | "transcribing"
+  | "thinking"
+  | "speaking"
+  | "error";
+
+function deriveMicState(state: VoiceUiState, speaking: boolean): MicState {
+  if (state.error) return "error";
+  if (state.link !== "ready") return "idle";
+  const talkingTurnId = state.talkingTurnId;
+  if (talkingTurnId) {
+    const turn = state.turns.find((t) => t.id === talkingTurnId);
+    if (turn?.youFinal) return "transcribing";
+    return "listening";
+  }
+  if (speaking) return "speaking";
+  const active = activeTurn(state);
+  if (active?.state === "thinking") return "thinking";
+  if (active?.state === "answering") return "speaking";
+  return "idle";
+}
+
+const MIC_LABEL: Record<MicState, string> = {
+  idle: "Appuyez pour parler",
+  listening: "Écoute… Relâchez pour envoyer",
+  transcribing: "Transcription…",
+  thinking: "ICOS réfléchit…",
+  speaking: "ICOS parle…",
+  error: "Erreur",
+};
+
+const MIC_ARIA_LABEL: Record<MicState, string> = {
+  idle: "Commencer l'enregistrement vocal",
+  listening: "Arrêter l'enregistrement et envoyer",
+  transcribing: "Transcription en cours",
+  thinking: "ICOS est en train de réfléchir",
+  speaking: "ICOS est en train de parler, appuyez pour interrompre",
+  error: "Erreur de connexion vocale",
+};
+
 export function VoiceClient() {
   const [state, dispatch] = useReducer(voiceReducer, initialVoiceState);
   const stateRef = useRef(state);
@@ -377,47 +420,145 @@ export function VoiceClient() {
   const talking = state.talkingTurnId !== null;
   const busy = activeTurn(state);
   const canTalk = state.link === "ready";
+  const micState = deriveMicState(state, speaking);
 
-  return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <h1 className={styles.title}>ICOS</h1>
-        <span className={styles.link} data-link={state.link} role="status" aria-live="polite">
-          {LINK_LABEL[state.link]}
-        </span>
-      </header>
-
-      <section className={styles.turns} aria-live="polite">
-        {state.turns.length === 0 && (
-          <p className={styles.hint}>
-            Touchez le micro, parlez, puis touchez à nouveau pour envoyer.
+  // Render helpers
+  const renderTranscript = () => {
+    if (state.turns.length === 0) {
+      return (
+        <p className={styles.hint} aria-live="polite">
+          Appuyez sur le micro, parlez, puis relâchez pour envoyer.
+        </p>
+      );
+    }
+    return state.turns.map((turn) => (
+      <article key={turn.id} className={styles.turn}>
+        {turn.you && (
+          <p className={styles.you} data-final={turn.youFinal} aria-label="Vous">
+            {turn.you}
           </p>
         )}
-        {state.turns.map((turn) => (
-          <article key={turn.id} className={styles.turn}>
-            {turn.you && (
-              <p className={styles.you} data-final={turn.youFinal}>
-                {turn.you}
-              </p>
+        {turn.icos && (
+          <p className={styles.icos} aria-label="ICOS">
+            {plain(turn.icos)}
+          </p>
+        )}
+        {TURN_LABEL[turn.state] && (
+          <span className={styles.badge} data-state={turn.state} aria-label={`État : ${TURN_LABEL[turn.state]}`}>
+            {TURN_LABEL[turn.state]}
+          </span>
+        )}
+        {turn.state === "failed" && (
+          <button
+            type="button"
+            className={styles.resend}
+            onClick={() => resend(turn.id)}
+            aria-label="Renvoyer ce message"
+          >
+            Renvoyer
+          </button>
+        )}
+      </article>
+    ));
+  };
+
+  const renderMissionCard = () => {
+    // Future: Cognitive/CORE3 data will populate this
+    // Show connection state and session info for now
+    if (state.link === "connecting" || state.link === "reconnecting") {
+      return (
+        <div className={styles.missionCard} aria-live="polite">
+          <div className={styles.missionCardHeader}>
+            <span className={styles.missionCardTitle}>Session vocale</span>
+            <span className={`${styles.missionCardStatus} ${styles[`status-${state.link}`]}`}>
+              {LINK_LABEL[state.link]}
+            </span>
+          </div>
+          <p className={styles.missionCardSubtitle}>
+            Connexion au runtime cognitif en cours…
+          </p>
+        </div>
+      );
+    }
+    if (state.link === "ready" && state.sessionId) {
+      return (
+        <div className={styles.missionCard} aria-live="polite">
+          <div className={styles.missionCardHeader}>
+            <span className={styles.missionCardTitle}>Session active</span>
+            <span className={`${styles.missionCardStatus} ${styles["status-ready"]}`}>
+              {LINK_LABEL.ready}
+            </span>
+          </div>
+          <p className={styles.missionCardSubtitle}>
+            Session: <code>{state.sessionId.slice(0, 8)}…</code>
+            {state.conversationId && (
+              <>
+                {" | "}
+                Conversation: <code>{state.conversationId.slice(0, 8)}…</code>
+              </>
             )}
-            {turn.icos && <p className={styles.icos}>{plain(turn.icos)}</p>}
-            {TURN_LABEL[turn.state] && (
-              <span className={styles.badge}>{TURN_LABEL[turn.state]}</span>
-            )}
-            {turn.state === "failed" && (
-              <button type="button" className={styles.resend} onClick={() => resend(turn.id)}>
-                Renvoyer
-              </button>
-            )}
-          </article>
-        ))}
+          </p>
+        </div>
+      );
+    }
+    if (state.link === "offline" || state.link === "unavailable") {
+      return (
+        <div className={styles.missionCard} aria-live="polite">
+          <div className={styles.missionCardHeader}>
+            <span className={styles.missionCardTitle}>Voix indisponible</span>
+            <span className={`${styles.missionCardStatus} ${styles[`status-${state.link}`]}`}>
+              {LINK_LABEL[state.link]}
+            </span>
+          </div>
+          <p className={styles.missionCardSubtitle}>
+            {state.link === "offline"
+              ? "Vous êtes hors ligne. La voix nécessite une connexion internet."
+              : "Le service vocal n'est pas configuré sur ce serveur."}
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <main className={styles.page} role="main">
+      <header className={styles.header}>
+        <h1 className={styles.title}>ICOS</h1>
+        <div className={styles.headerRight}>
+          <span
+            className={styles.link}
+            data-link={state.link}
+            role="status"
+            aria-live="polite"
+            aria-label={`État de connexion : ${LINK_LABEL[state.link]}`}
+          >
+            {LINK_LABEL[state.link]}
+          </span>
+        </div>
+      </header>
+
+      {renderMissionCard()}
+
+      <section className={styles.turns} aria-live="polite" aria-label="Historique de la conversation">
+        {renderTranscript()}
         <div ref={turnsEnd} />
       </section>
 
       {state.error && (
-        <p className={styles.error} role="alert">
+        <div className={styles.errorBanner} role="alert" aria-live="assertive">
           <strong>{state.error.code}</strong> — {state.error.message}
-        </p>
+          {state.error.code === "MICROPHONE" && (
+            <button
+              type="button"
+              className={styles.errorAction}
+              onClick={() => dispatch({ type: "local_error", code: "", message: "" })}
+              aria-label="Fermer l'erreur"
+            >
+              Fermer
+            </button>
+          )}
+        </div>
       )}
 
       <footer className={styles.controls}>
@@ -427,22 +568,39 @@ export function VoiceClient() {
           onClick={interrupt}
           disabled={!speaking && !busy}
           aria-label="Interrompre ICOS"
+          aria-pressed={speaking || !!busy}
         >
-          Stop
+          <svg className={styles.stopIcon} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+          <span className={styles.interruptLabel}>Stop</span>
         </button>
         <button
           type="button"
-          className={styles.mic}
-          data-talking={talking}
-          data-speaking={speaking}
+          className={`${styles.mic} ${styles[`mic-${micState}`]}`}
+          data-state={micState}
           disabled={!canTalk}
           onClick={talking ? stopTalking : startTalking}
           aria-pressed={talking}
-          aria-label={talking ? "Envoyer" : "Parler"}
+          aria-label={MIC_ARIA_LABEL[micState]}
+          aria-describedby="mic-hint"
         >
-          {talking ? "Envoyer" : speaking ? "Parler (interrompt)" : "Parler"}
+          <svg className={styles.micIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="22" />
+          </svg>
+          <span className={styles.micLabel}>{MIC_LABEL[micState]}</span>
         </button>
       </footer>
+      <p id="mic-hint" className={styles.srOnly}>
+        {micState === "idle" && "Appuyez pour commencer à parler"}
+        {micState === "listening" && "Relâchez pour envoyer votre message"}
+        {micState === "transcribing" && "Votre message est en cours de transcription"}
+        {micState === "thinking" && "ICOS prépare sa réponse"}
+        {micState === "speaking" && "ICOS parle, appuyez pour l'interrompre"}
+        {micState === "error" && "Une erreur est survenue, réessayez"}
+      </p>
     </main>
   );
 }
