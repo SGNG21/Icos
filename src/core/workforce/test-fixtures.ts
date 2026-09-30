@@ -34,6 +34,7 @@ export const asAgent = (id: string, tenantId = TENANT): Principal => ({
 export const grant = (toolId: string, over: Partial<ToolGrant> = {}): ToolGrant => ({
   toolId,
   grantedBy: { kind: "human", id: "owner-1" },
+  actions: ["*"],
   grantedAt: NOW,
   ...over,
 });
@@ -88,7 +89,7 @@ export const agent = (over: Partial<WorkforceAgent> = {}): WorkforceAgent =>
     parentAgentId: null,
     depth: 0,
     scope: { clientIds: ["*"], projectIds: ["*"] },
-    memoryScope: { read: ["*"], write: ["*"] },
+    memoryScope: { read: ["*"], write: ["*"], maxVisibility: "tenant" },
     policy: policy({ autonomyLevel: 3, toolGrants: [grant("repo_read"), grant("scanners")] }),
     status: "active",
     createdBy: { kind: "human", id: "owner-1" },
@@ -109,7 +110,11 @@ export const child = (parent: WorkforceAgent, over: Partial<WorkforceAgent> = {}
     missionId: "mission-1",
     expiresAt: LATER,
     scope: { clientIds: ["belle-intendance"], projectIds: [] },
-    memoryScope: { read: ["tenant/default/client/belle-intendance"], write: [] },
+    memoryScope: {
+      read: ["tenant/default/client/belle-intendance"],
+      write: [],
+      maxVisibility: "private",
+    },
     policy: policy({ toolGrants: [grant("repo_read", { delegatedBy: parent.agentId })] }),
     createdBy: { kind: "agent", id: parent.agentId },
     ...over,

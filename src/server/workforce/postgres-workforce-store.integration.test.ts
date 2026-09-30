@@ -10,7 +10,18 @@ import {
 } from "@/server/database/testing/pg-support";
 
 import { PostgresWorkforceStore } from "./postgres-workforce-store";
-import { as, buildOrg, execute, head, makeService, owner, req, specialist } from "./test-support";
+import { UntrustedPrincipalError } from "./principals";
+import {
+  as,
+  buildOrg,
+  execute,
+  head,
+  makeService,
+  owner,
+  req,
+  specialist,
+  system,
+} from "./test-support";
 import { WorkforceDeniedError } from "./workforce-service";
 
 /**
@@ -91,7 +102,7 @@ describe.skipIf(!dockerAvailable)("PostgresWorkforceStore (Testcontainers)", () 
       ["appsec", "accepted", top.assignments[0].assignmentId],
     ]);
     expect(assignments[1]).toMatchObject({
-      execution: { workerId: "hermes-appsec-1", source: "SIMULATED" },
+      execution: { workerId: "worker-appsec-1", source: "SIMULATED" },
       review: { reviewerAgentId: "security-lead", outcome: "APPROVE" },
     });
     const events = await restarted.listEvents(owner);
@@ -147,10 +158,14 @@ describe.skipIf(!dockerAvailable)("PostgresWorkforceStore (Testcontainers)", () 
 
   it("tenants are isolated: another tenant sees nothing, and composite keys forbid cross-tenant references", async () => {
     await securityOrg();
-    const other: Principal = { ...owner, tenantId: "tenant-b" };
-    const service = newService();
-    expect(await service.listAgents(other)).toEqual([]);
-    expect(await service.listEvents(other)).toEqual([]);
+    // Single-tenant shim: no principal can carry another tenant; a forged one is refused.
+    const forged: Principal = { ...owner, tenantId: "tenant-b" };
+    await expect(newService().listAgents(forged)).rejects.toBeInstanceOf(UntrustedPrincipalError);
+    // Store level: every query carries the tenant predicate.
+    const store = new PostgresWorkforceStore(ctx.handle.db);
+    expect(await store.listAgents("tenant-b")).toEqual([]);
+    expect(await store.listEvents("tenant-b")).toEqual([]);
+    expect((await store.listAgents("default")).length).toBeGreaterThan(0);
     // A tenant-b agent cannot point at a tenant-a supervisor, whatever the application does.
     expect(
       await pgCode(
@@ -232,6 +247,69 @@ describe.skipIf(!dockerAvailable)("PostgresWorkforceStore (Testcontainers)", () 
       async () => "ran",
     );
     await expect(otherTenant).resolves.toBe("ran");
+  });
+
+  it("integration ports on durable state: CORE3 evidence, tool revocation and the cockpit read model survive a new runtime", async () => {
+    const service = await securityOrg();
+    await specialist(
+      service,
+      "security-lead",
+      "appsec-1",
+      "APPSEC_SPECIALIST",
+      ["repo_read", "scanners"],
+      ["icos"],
+    );
+    const top = await service.delegate(as("icos-central"), {
+      requests: [req("m-sec", "audit", ["threat_modeling"], "icos")],
+      parentAssignmentId: null,
+    });
+    await service.start(as("security-lead"), top.assignments[0].assignmentId);
+    const sub = await service.delegate(as("security-lead"), {
+      requests: [req("m-sec", "appsec", ["appsec"], "icos")],
+      parentAssignmentId: top.assignments[0].assignmentId,
+    });
+    await service.start(as("appsec-1"), sub.assignments[0].assignmentId);
+
+    const pg = () => makeService(new PostgresWorkforceStore(ctx.handle.db)).runtime;
+    await pg().compute.recordExecution(system, sub.assignments[0].assignmentId, {
+      workerId: "w-1",
+      selected: { modelKey: "gw/selected" },
+      effective: { modelKey: "gw/effective" },
+      modelSteered: true,
+      result: "succeeded",
+      source: "REAL",
+      startedAt: "2026-09-29T10:00:00.000Z",
+      finishedAt: "2026-09-29T10:00:10.000Z",
+      evidence: ["git://sha"],
+      review: { reviewerWorkerId: "w-2", outcome: "APPROVE" },
+    });
+    const grantCheck = {
+      agentId: "appsec-1",
+      toolId: "scanners",
+      action: "run",
+      clientId: "icos",
+      missionId: "mission-x",
+    };
+    expect((await pg().authority.checkToolGrant(system, grantCheck)).granted).toBe(true);
+    const lead = (await service.listAgents(owner)).find((a) => a.agentId === "security-lead")!;
+    await service.changePolicy(owner, "security-lead", {
+      ...lead.policy,
+      toolGrants: lead.policy.toolGrants.filter((g) => g.toolId !== "scanners"),
+    });
+    expect(await pg().authority.checkToolGrant(system, grantCheck)).toMatchObject({
+      granted: false,
+      reasons: ["TOOL_NOT_HELD_BY_PARENT"],
+    });
+
+    const snap = await pg().readModel.snapshot(owner);
+    const appsec = snap.agents.find((a) => a.agentId === "appsec-1")!;
+    expect(appsec).toMatchObject({ health: "degraded", performance: { count: 1, successRate: 1 } });
+    expect(snap.performance).toMatchObject({ count: 1, successRate: 1 });
+    const stored = (await pg().service.listAssignments(owner)).find((a) => a.taskId === "appsec")!;
+    expect(stored.execution).toMatchObject({
+      selected: { modelKey: "gw/selected" },
+      effective: { modelKey: "gw/effective" },
+    });
   });
 
   it("stale writers lose: compare-and-set on the agent version", async () => {

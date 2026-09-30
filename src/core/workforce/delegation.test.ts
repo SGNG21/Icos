@@ -33,8 +33,9 @@ const org = {
 };
 const execution = {
   workerId: "worker-hermes-1",
-  modelKey: "local/some-model",
-  provider: "local",
+  requestedCapabilities: ["appsec"],
+  selected: { modelKey: "local/some-model", provider: "local" },
+  result: "succeeded" as const,
   source: "SIMULATED" as const,
   startedAt: NOW,
   finishedAt: "2026-09-29T10:05:00.000Z",
@@ -113,7 +114,7 @@ describe("governed delegation", () => {
     ).toThrow();
     expect(next.execution).toMatchObject({
       workerId: "worker-hermes-1",
-      modelKey: "local/some-model",
+      selected: { modelKey: "local/some-model" },
       source: "SIMULATED",
     });
   });
@@ -238,7 +239,7 @@ describe("governed delegation", () => {
         success: true,
         correctionCount: 0,
         latencyMs: 300_000,
-        modelKey: "local/some-model",
+        selectedModelKey: "local/some-model",
         source: "SIMULATED",
       });
       expect(summarizePerformance([obs])).toMatchObject({

@@ -246,8 +246,41 @@ export function recordExecution(
   execution: NonNullable<WorkAssignment["execution"]>,
   now: string,
 ): Step<WorkAssignment> {
-  if (!isAssignmentTransitionAllowed(a.status, "in_review")) return fail("INVALID_TRANSITION");
-  return { ok: true, value: move(a, "in_review", now, { execution }) };
+  const to = execution.result === "succeeded" ? "in_review" : "assigned";
+  if (!isAssignmentTransitionAllowed(a.status, to)) return fail("INVALID_TRANSITION");
+  return { ok: true, value: move(a, to, now, { execution }) };
+}
+
+/**
+ * A review reported by a CORE3 reviewer WORKER (not a workforce agent). Independence at this
+ * boundary: the reviewing worker is not the worker that executed.
+ */
+export function recordWorkerReview(input: {
+  assignment: WorkAssignment;
+  reviewerWorkerId: string;
+  outcome: ReviewOutcome;
+  notes?: string;
+  now: string;
+}): Step<WorkAssignment> {
+  const { assignment: a, reviewerWorkerId, outcome, notes, now } = input;
+  if (a.status !== "in_review") return fail("INVALID_TRANSITION");
+  if (reviewerWorkerId === a.execution?.workerId) return fail("REVIEWER_NOT_INDEPENDENT");
+  const review = { reviewerWorkerId, outcome, reviewedAt: now, ...(notes ? { notes } : {}) };
+  return applyReview(a, review, outcome, now);
+}
+
+function applyReview(
+  a: WorkAssignment,
+  review: NonNullable<WorkAssignment["review"]>,
+  outcome: ReviewOutcome,
+  now: string,
+): Step<WorkAssignment> {
+  if (outcome === "APPROVE") return { ok: true, value: move(a, "accepted", now, { review }) };
+  if (outcome === "BLOCK") return { ok: true, value: move(a, "blocked", now, { review }) };
+  return {
+    ok: true,
+    value: move(a, "changes_requested", now, { review, correctionCount: a.correctionCount + 1 }),
+  };
 }
 
 /**
@@ -285,12 +318,7 @@ export function recordReview(input: {
     reviewedAt: now,
     ...(notes ? { notes } : {}),
   };
-  if (outcome === "APPROVE") return { ok: true, value: move(a, "accepted", now, { review }) };
-  if (outcome === "BLOCK") return { ok: true, value: move(a, "blocked", now, { review }) };
-  return {
-    ok: true,
-    value: move(a, "changes_requested", now, { review, correctionCount: a.correctionCount + 1 }),
-  };
+  return applyReview(a, review, outcome, now);
 }
 
 /**
@@ -327,7 +355,7 @@ export function synthesize(input: {
   };
 }
 
-/** The empirical fact a review produces. Facts only; no score. */
+/** The empirical fact a review — or a failed execution — produces. Facts only; no score. */
 export function observationFromReview(input: {
   observationId: string;
   assignment: WorkAssignment;
@@ -348,13 +376,19 @@ export function observationFromReview(input: {
     skillId: a.skillId,
     taskType,
     assignmentId: a.assignmentId,
-    success: a.review?.outcome === "APPROVE",
-    reviewOutcome: a.review!.outcome,
+    success: ex?.result === "succeeded" && a.review?.outcome === "APPROVE",
+    ...(a.review ? { reviewOutcome: a.review.outcome } : {}),
     correctionCount: a.correctionCount,
     ...(latencyMs !== undefined ? { latencyMs } : {}),
     ...(ex?.costCents !== undefined ? { costCents: ex.costCents } : {}),
-    ...(ex?.modelKey ? { modelKey: ex.modelKey } : {}),
-    ...(a.review?.outcome === "BLOCK" ? { failureClass: "REVIEW_BLOCKED" } : {}),
+    ...(ex?.selected?.modelKey ? { selectedModelKey: ex.selected.modelKey } : {}),
+    // Never inferred from the selection: unknown effective compute stays absent.
+    ...(ex?.effective?.modelKey ? { effectiveModelKey: ex.effective.modelKey } : {}),
+    ...(ex?.result === "failed"
+      ? { failureClass: ex.failureClass }
+      : a.review?.outcome === "BLOCK"
+        ? { failureClass: "REVIEW_BLOCKED" }
+        : {}),
     source: ex?.source ?? "NOT_CONNECTED",
     observedAt: now,
   };

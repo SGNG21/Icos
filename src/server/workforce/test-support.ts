@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import type { Role } from "@/core/identity";
 import { loadWorkforceBootstrap } from "@/core/workforce/bootstrap";
 import type {
   AgentKind,
@@ -12,7 +13,9 @@ import { requiredRoleTests } from "@/core/workforce/role-composer";
 
 import { InMemoryWorkforceStore } from "./in-memory-workforce-store";
 import type { WorkforceStore } from "./ports";
-import { WorkforceService, type AgentSpec } from "./workforce-service";
+import { createWorkforceRuntime } from "./composition";
+import { createPrincipalAuthority } from "./principals";
+import type { WorkforceService, AgentSpec } from "./workforce-service";
 
 /**
  * Shared scenario helpers for the workforce service tests (unit and PostgreSQL). Test-only.
@@ -22,48 +25,38 @@ import { WorkforceService, type AgentSpec } from "./workforce-service";
 export const T0 = Date.parse("2026-09-29T10:00:00.000Z");
 export const bootstrap = loadWorkforceBootstrap();
 export const TENANT = "default";
-export const owner: Principal = {
-  kind: "human",
-  id: "owner-1",
-  tenantId: TENANT,
-  permissions: ["agents.manage", "approvals.decide", "cockpit.read"],
-};
-export const certifier: Principal = {
-  kind: "human",
-  id: "reviewer-1",
-  tenantId: TENANT,
-  permissions: [],
-};
-export const system: Principal = {
-  kind: "system",
-  id: "execution-fabric",
-  tenantId: TENANT,
-  permissions: [],
-};
-export const as = (id: string): Principal => ({
-  kind: "agent",
-  id,
-  tenantId: TENANT,
-  permissions: [],
-});
+/** One authority for the whole test process: principals are ISSUED, never literals. */
+export const authority = createPrincipalAuthority();
+export const sessionOf = (id: string, roles: Role[]) =>
+  authority.sessions.fromSession({
+    user: { id, email: `${id}@icos.test`, status: "active" },
+    roles,
+  });
+export const owner: Principal = sessionOf("owner-1", ["owner"]);
+/** A human with no role: may certify (independent of the creator) but holds no permission. */
+export const certifier: Principal = sessionOf("reviewer-1", []);
+export const system: Principal = authority.runtime.system("core3-dispatch");
+export const as = (id: string): Principal => authority.runtime.actAsAgent(system, id);
 export const ALL_TOOLS = [...new Set(bootstrap.skills.flatMap((s) => s.requiredTools))].sort();
 
 export function makeService(store: WorkforceStore = new InMemoryWorkforceStore()) {
   let tick = 0;
-  const service = new WorkforceService({
+  const runtime = createWorkforceRuntime({
     store,
+    authority,
     bounds: bootstrap.bounds,
     now: () => new Date(T0 + tick++ * 1000).toISOString(),
     // Unique across service instances: two instances share one database in the PG proofs.
     newId: (prefix) => `${prefix}-${randomUUID()}`,
   });
-  return { service, store };
+  return { service: runtime.service, store, runtime };
 }
 
 export const grants = (tools: string[], delegatedBy?: string) =>
   tools.map((toolId) => ({
     toolId,
     grantedBy: { kind: "human" as const, id: "owner-1" },
+    actions: ["*"],
     grantedAt: "2026-09-29T09:00:00.000Z",
     ...(delegatedBy ? { delegatedBy } : {}),
   }));
@@ -208,8 +201,8 @@ export async function execute(
 ) {
   await service.start(as(a.assigneeAgentId), a.assignmentId);
   await service.recordExecution(system, a.assignmentId, {
-    workerId: `hermes-${a.assigneeAgentId}`,
-    modelKey: "NOT_CONNECTED/omniroute",
+    workerId: `worker-${a.assigneeAgentId}`,
+    result: "succeeded",
     source: "SIMULATED",
     startedAt: "2026-09-29T10:00:00.000Z",
     finishedAt: "2026-09-29T10:02:00.000Z",

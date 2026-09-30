@@ -1,9 +1,13 @@
+import type { z } from "zod";
+
 import type { JsonValue } from "@/core/contracts/common";
 import type { OrganizationBounds, WorkforceBootstrap } from "@/core/workforce/bootstrap";
 import {
   agentPolicySchema,
+  memoryScopeSchema,
   agentRoleSchema,
   departmentSchema,
+  executionRecordSchema,
   skillDefinitionSchema,
   workAssignmentSchema,
   workforceAgentSchema,
@@ -13,7 +17,6 @@ import {
   type AgentRole,
   type ComputeNeed,
   type Department,
-  type MemoryScope,
   type ReviewOutcome,
   type SkillDefinition,
   type WorkAssignment,
@@ -31,6 +34,7 @@ import {
   planDelegation,
   recordExecution,
   recordReview,
+  recordWorkerReview,
   startExecution,
   synthesize,
   type DelegationGap,
@@ -56,6 +60,7 @@ import {
 } from "@/core/workforce/role-composer";
 
 import type { WorkforceStore } from "./ports";
+import { UntrustedPrincipalError, type PrincipalAuthority } from "./principals";
 
 /**
  * THE governed entry point of the digital workforce (decision 0056). Every write:
@@ -85,6 +90,8 @@ export class WorkforceConflictError extends Error {
 
 export interface WorkforceServiceDeps {
   store: WorkforceStore;
+  /** Only principals issued by this authority are accepted (see principals.ts). */
+  principals: Pick<PrincipalAuthority, "isIssued">;
   bounds: OrganizationBounds;
   now: () => string;
   newId: (prefix: string) => string;
@@ -99,7 +106,7 @@ export interface AgentSpec {
   departmentId?: string | null;
   supervisorAgentId: string | null;
   scope: WorkScope;
-  memoryScope: MemoryScope;
+  memoryScope: z.input<typeof memoryScopeSchema>;
   policy: AgentPolicy;
   compute?: ComputeNeed;
   objectives?: string[];
@@ -114,6 +121,11 @@ const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as Record<string, Jso
 
 export class WorkforceService {
   constructor(private readonly deps: WorkforceServiceDeps) {}
+
+  /** No forged principal reaches governance. No event is written: its tenant is untrusted. */
+  private trust(principal: Principal): void {
+    if (!this.deps.principals.isIssued(principal)) throw new UntrustedPrincipalError("non émis");
+  }
 
   private event(
     tenantId: string,
@@ -184,6 +196,7 @@ export class WorkforceService {
 
   /** Loads templates: skills active, roles DRAFT (they still need certification). Idempotent. */
   async seedBootstrap(principal: Principal, bootstrap: WorkforceBootstrap): Promise<void> {
+    this.trust(principal);
     await this.requireAdmin(principal, "bootstrap", "seed");
     const tenantId = principal.tenantId;
     await this.deps.store.transaction(tenantId, async (tx) => {
@@ -209,6 +222,7 @@ export class WorkforceService {
   }
 
   async registerSkill(principal: Principal, input: SkillDefinition): Promise<SkillDefinition> {
+    this.trust(principal);
     await this.requireAdmin(principal, input.skillId, "skill.register");
     const skill = skillDefinitionSchema.parse(input);
     await this.deps.store.transaction(principal.tenantId, async (tx) => {
@@ -223,6 +237,7 @@ export class WorkforceService {
   }
 
   async createDepartment(principal: Principal, input: Department): Promise<Department> {
+    this.trust(principal);
     await this.requireAdmin(principal, input.departmentId, "department.create");
     const department = departmentSchema.parse(input);
     await this.deps.store.transaction(principal.tenantId, async (tx) => {
@@ -256,6 +271,7 @@ export class WorkforceService {
       agentKinds: AgentKind[];
     },
   ): Promise<CompositionResult> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     return this.deps.store.transaction(tenantId, async (tx) => {
       const result = composeRole({
@@ -283,6 +299,7 @@ export class WorkforceService {
     version: string,
     testsPassed: string[],
   ): Promise<AgentRole> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const role = await this.deps.store.getRole(tenantId, roleId, version);
     if (!role) throw new WorkforceNotFoundError(`role ${roleId}@${version}`);
@@ -306,6 +323,7 @@ export class WorkforceService {
   }
 
   async activateRole(principal: Principal, roleId: string, version: string): Promise<AgentRole> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const role = await this.deps.store.getRole(tenantId, roleId, version);
     if (!role) throw new WorkforceNotFoundError(`role ${roleId}@${version}`);
@@ -323,6 +341,7 @@ export class WorkforceService {
 
   /** Root, durable Mini-ICOS (human) and ephemeral/worker spawn (human or the parent agent). */
   async createAgent(principal: Principal, spec: AgentSpec): Promise<WorkforceAgent> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const now = this.deps.now();
     const outcome = await this.deps.store.transaction(tenantId, async (tx) => {
@@ -383,6 +402,7 @@ export class WorkforceService {
     agentId: string,
     next: AgentPolicy,
   ): Promise<WorkforceAgent> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const policy = agentPolicySchema.parse(next);
     const now = this.deps.now();
@@ -422,6 +442,7 @@ export class WorkforceService {
     agentId: string,
     to: WorkforceAgentStatus,
   ): Promise<WorkforceAgent> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const now = this.deps.now();
     const outcome = await this.deps.store.transaction(tenantId, async (tx) => {
@@ -452,6 +473,7 @@ export class WorkforceService {
     principal: Principal,
     input: { requests: WorkRequest[]; parentAssignmentId: string | null },
   ): Promise<{ assignments: WorkAssignment[]; gaps: DelegationGap[] }> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const now = this.deps.now();
     const outcome = await this.deps.store.transaction(tenantId, async (tx) => {
@@ -565,6 +587,7 @@ export class WorkforceService {
   }
 
   async approve(principal: Principal, assignmentId: string): Promise<WorkAssignment> {
+    this.trust(principal);
     return this.advance(
       principal,
       assignmentId,
@@ -576,6 +599,7 @@ export class WorkforceService {
 
   /** Only the assignee starts its own work. */
   async start(principal: Principal, assignmentId: string): Promise<WorkAssignment> {
+    this.trust(principal);
     return this.advance(
       principal,
       assignmentId,
@@ -618,18 +642,79 @@ export class WorkforceService {
   async recordExecution(
     principal: Principal,
     assignmentId: string,
-    execution: NonNullable<WorkAssignment["execution"]>,
+    input: z.input<typeof executionRecordSchema>,
   ): Promise<WorkAssignment> {
+    this.trust(principal);
+    const execution = executionRecordSchema.parse(input);
     return this.advance(
       principal,
       assignmentId,
       "assignment.execute",
       "assignment.executed",
-      async (a) =>
-        (principal.kind === "agent" && principal.id === a.assigneeAgentId) ||
-        principal.kind === "system"
-          ? recordExecution(a, execution, this.deps.now())
-          : { denied: ["ACTOR_NOT_AUTHORIZED"] },
+      async (a, tx) => {
+        const allowed =
+          (principal.kind === "agent" && principal.id === a.assigneeAgentId) ||
+          principal.kind === "system";
+        if (!allowed) return { denied: ["ACTOR_NOT_AUTHORIZED"] };
+        // An execution worker agent stands for ONE registered worker: evidence must name it.
+        const assignee = await tx.getAgent(a.tenantId, a.assigneeAgentId);
+        if (assignee?.kind === "EXECUTION_WORKER" && assignee.workerId !== execution.workerId) {
+          return { denied: ["WORKER_MISMATCH"] };
+        }
+        const step = recordExecution(a, execution, this.deps.now());
+        // A failed execution is a performance fact on its own (no review will follow it).
+        if (step.ok && execution.result === "failed") await this.observe(tx, principal, step.value);
+        return step;
+      },
+    );
+  }
+
+  /**
+   * A review made by a CORE3 reviewer worker, reported by the trusted runtime. The workforce
+   * records it (and its observation); it does not re-run CORE3's review.
+   */
+  async recordWorkerReview(
+    principal: Principal,
+    assignmentId: string,
+    input: { reviewerWorkerId: string; outcome: ReviewOutcome; notes?: string },
+  ): Promise<WorkAssignment> {
+    this.trust(principal);
+    return this.advance(
+      principal,
+      assignmentId,
+      "assignment.review",
+      "assignment.reviewed",
+      async (a, tx) => {
+        if (principal.kind !== "system") return { denied: ["ACTOR_NOT_AUTHORIZED"] };
+        const step = recordWorkerReview({ assignment: a, ...input, now: this.deps.now() });
+        if (step.ok) await this.observe(tx, principal, step.value);
+        return step;
+      },
+    );
+  }
+
+  private async observe(
+    tx: WorkforceStore,
+    principal: Principal,
+    a: WorkAssignment,
+  ): Promise<void> {
+    const assignee = await tx.getAgent(a.tenantId, a.assigneeAgentId);
+    const observation = observationFromReview({
+      observationId: this.deps.newId("wfo"),
+      assignment: a,
+      roleId: assignee?.roleId ?? "UNKNOWN_ROLE",
+      taskType: a.skillId,
+      now: this.deps.now(),
+    });
+    await tx.appendObservation(observation);
+    await tx.appendEvent(
+      this.event(
+        a.tenantId,
+        "observation.recorded",
+        principal,
+        observation.observationId,
+        observation,
+      ),
     );
   }
 
@@ -640,6 +725,7 @@ export class WorkforceService {
     outcome: ReviewOutcome,
     notes?: string,
   ): Promise<WorkAssignment> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     return this.advance(
       principal,
@@ -666,26 +752,7 @@ export class WorkforceService {
           notes,
           now: this.deps.now(),
         });
-        if (step.ok) {
-          const assignee = await tx.getAgent(tenantId, a.assigneeAgentId);
-          const observation = observationFromReview({
-            observationId: this.deps.newId("wfo"),
-            assignment: step.value,
-            roleId: assignee?.roleId ?? "UNKNOWN_ROLE",
-            taskType: a.skillId,
-            now: this.deps.now(),
-          });
-          await tx.appendObservation(observation);
-          await tx.appendEvent(
-            this.event(
-              tenantId,
-              "observation.recorded",
-              principal,
-              observation.observationId,
-              observation,
-            ),
-          );
-        }
+        if (step.ok) await this.observe(tx, principal, step.value);
         return step;
       },
     );
@@ -696,6 +763,7 @@ export class WorkforceService {
     principal: Principal,
     input: { missionId: string; parentAssignmentId: string | null; summary: string },
   ): Promise<{ parent: WorkAssignment | null; blockedChildIds: string[] }> {
+    this.trust(principal);
     const tenantId = principal.tenantId;
     const now = this.deps.now();
     const outcome = await this.deps.store.transaction(tenantId, async (tx) => {
@@ -769,18 +837,22 @@ export class WorkforceService {
     }
   }
   async listAgents(principal: Principal): Promise<WorkforceAgent[]> {
+    this.trust(principal);
     await this.requireRead(principal);
     return this.deps.store.listAgents(principal.tenantId);
   }
   async listAssignments(principal: Principal): Promise<WorkAssignment[]> {
+    this.trust(principal);
     await this.requireRead(principal);
     return this.deps.store.listAssignments(principal.tenantId);
   }
   async listEvents(principal: Principal): Promise<WorkforceEvent[]> {
+    this.trust(principal);
     await this.requireRead(principal);
     return this.deps.store.listEvents(principal.tenantId);
   }
   async performance(principal: Principal, filter: PerformanceFilter = {}) {
+    this.trust(principal);
     await this.requireRead(principal);
     return summarizePerformance(await this.deps.store.listObservations(principal.tenantId), filter);
   }

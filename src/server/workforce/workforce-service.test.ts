@@ -12,6 +12,7 @@ import {
   owner,
   policyOf,
   req,
+  sessionOf,
   specialist,
 } from "./test-support";
 
@@ -92,6 +93,7 @@ describe("digital workforce — business examples (Phase 10)", () => {
     });
     await service.recordExecution(as("security-lead"), leadTask.assignmentId, {
       workerId: "hermes-security-lead",
+      result: "succeeded",
       source: "SIMULATED",
       startedAt: "2026-09-29T10:00:00.000Z",
       finishedAt: "2026-09-29T10:10:00.000Z",
@@ -462,6 +464,7 @@ describe("digital workforce — governance through the service (Phase 11)", () =
     const forged = {
       toolId: "logs",
       grantedBy: { kind: "human" as const, id: "someone-else" },
+      actions: ["*"],
       grantedAt: "2026-09-29T09:00:00.000Z",
     };
     await denial(
@@ -562,7 +565,7 @@ describe("digital workforce — governance through the service (Phase 11)", () =
   });
 
   it("a human without cockpit.read cannot read the workforce", async () => {
-    await denial(service.listAgents({ ...owner, permissions: [] }));
+    await denial(service.listAgents(sessionOf("no-role-user", [])));
   });
 
   it("the event journal records every accepted change with its actor", async () => {

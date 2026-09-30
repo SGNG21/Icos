@@ -155,6 +155,11 @@ export const toolGrantSchema = z
       "un grant d'outil vient d'un humain",
     ),
     delegatedBy: z.string().min(1).optional(),
+    /**
+     * Tool Gateway actions this grant covers (`read`, `write`, `delete`…). Explicit and
+     * non-empty: holding a tool is not holding every action on it. `*` = every action.
+     */
+    actions: z.array(z.string().min(1)).min(1),
     grantedAt: isoDateTimeSchema,
     expiresAt: isoDateTimeSchema.optional(),
   })
@@ -194,11 +199,19 @@ export const workScopeSchema = z
   .strict();
 export type WorkScope = z.infer<typeof workScopeSchema>;
 
+/** Same vocabulary as core/memory `visibilityKindSchema`, narrowest first. */
+export const memoryVisibilitySchema = z.enum(["private", "restricted", "tenant"]);
+export type MemoryVisibility = z.infer<typeof memoryVisibilitySchema>;
+
 /** Memory namespaces; enforcement belongs to the memory layer (lane C). */
 export const memoryScopeSchema = z
   .object({
     read: z.array(z.string().min(1)).default([]),
     write: z.array(z.string().min(1)).default([]),
+    /** Broadest visibility the agent may WRITE with (memory layer vocabulary). */
+    maxVisibility: memoryVisibilitySchema.default("private"),
+    /** Longest retention, in days, the agent may request. Absent = no workforce limit. */
+    retentionDays: z.number().int().positive().optional(),
   })
   .strict();
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
@@ -270,6 +283,44 @@ export const TERMINAL_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = ["block
 export const reviewOutcomeSchema = z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]);
 export type ReviewOutcome = z.infer<typeof reviewOutcomeSchema>;
 
+/** Compute as known: `selected` is what the router chose, `effective` what actually ran. */
+const computeFactSchema = z
+  .object({ modelKey: z.string().min(1).optional(), provider: z.string().min(1).optional() })
+  .strict();
+
+/**
+ * A factual execution record. The router's SELECTION and the EFFECTIVE compute are kept apart:
+ * when the runtime does not steer the model (`modelSteered: false`, decision 0054) or does not
+ * report it, `effective` stays empty — never copied from `selected`.
+ */
+export const executionRecordSchema = z
+  .object({
+    /** Who actually executed. Mandatory: no anonymous work. */
+    workerId: z.string().min(1),
+    requestedCapabilities: z.array(capabilityKeySchema).default([]),
+    selected: computeFactSchema.optional(),
+    effective: computeFactSchema.optional(),
+    modelSteered: z.boolean().optional(),
+    result: z.enum(["succeeded", "failed"]),
+    failureClass: z.string().min(1).optional(),
+    source: factSourceSchema,
+    startedAt: isoDateTimeSchema,
+    finishedAt: isoDateTimeSchema,
+    evidence: z.array(z.string().min(1)).min(1),
+    costCents: z.number().int().nonnegative().optional(),
+    tokens: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .refine(
+    (e) => e.result === "succeeded" || e.failureClass !== undefined,
+    "échec sans failureClass",
+  )
+  .refine(
+    (e) => e.modelSteered !== false || !e.effective?.modelKey,
+    "modèle effectif inconnu si non piloté",
+  );
+export type ExecutionRecord = z.infer<typeof executionRecordSchema>;
+
 export const workAssignmentSchema = z
   .object({
     assignmentId: idSchema,
@@ -297,28 +348,22 @@ export const workAssignmentSchema = z
         approvedAt: isoDateTimeSchema.optional(),
       })
       .strict(),
-    execution: z
-      .object({
-        /** Who actually executed. Mandatory: no anonymous work. */
-        workerId: z.string().min(1),
-        modelKey: z.string().min(1).optional(),
-        provider: z.string().min(1).optional(),
-        source: factSourceSchema,
-        startedAt: isoDateTimeSchema,
-        finishedAt: isoDateTimeSchema,
-        evidence: z.array(z.string().min(1)).min(1),
-        costCents: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
+    execution: executionRecordSchema.optional(),
     review: z
       .object({
-        reviewerAgentId: idSchema,
+        /** A workforce agent reviewed, or… */
+        reviewerAgentId: idSchema.optional(),
+        /** …a CORE3 reviewer worker did (reported through the compute port). */
+        reviewerWorkerId: z.string().min(1).optional(),
         outcome: reviewOutcomeSchema,
         reviewedAt: isoDateTimeSchema,
         notes: z.string().optional(),
       })
       .strict()
+      .refine(
+        (r) => Boolean(r.reviewerAgentId) !== Boolean(r.reviewerWorkerId),
+        "un seul relecteur identifié",
+      )
       .optional(),
     correctionCount: z.number().int().nonnegative(),
     synthesis: z
@@ -342,14 +387,16 @@ export const performanceObservationSchema = z
     taskType: z.string().min(1),
     assignmentId: idSchema,
     success: z.boolean(),
-    reviewOutcome: reviewOutcomeSchema,
+    /** Absent when the execution failed before any review. */
+    reviewOutcome: reviewOutcomeSchema.optional(),
     correctionCount: z.number().int().nonnegative(),
     latencyMs: z.number().int().nonnegative().optional(),
     costCents: z.number().int().nonnegative().optional(),
     failureClass: z.string().min(1).optional(),
     quality: z.number().min(0).max(1).optional(),
     businessOutcome: z.string().min(1).optional(),
-    modelKey: z.string().min(1).optional(),
+    selectedModelKey: z.string().min(1).optional(),
+    effectiveModelKey: z.string().min(1).optional(),
     source: factSourceSchema,
     observedAt: isoDateTimeSchema,
   })

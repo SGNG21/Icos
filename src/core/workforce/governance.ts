@@ -144,8 +144,31 @@ function namespacesWithin(child: readonly string[], parent: readonly string[]): 
   return child.every((c) => c !== ALL && parent.some((p) => c === p || c.startsWith(`${p}/`)));
 }
 
+const VISIBILITY_RANK = { private: 0, restricted: 1, tenant: 2 } as const;
+
+/** Namespaces ⊆, visibility no broader, retention no longer (absent = unbounded). */
 export function memoryScopeWithin(child: MemoryScope, parent: MemoryScope): boolean {
-  return namespacesWithin(child.read, parent.read) && namespacesWithin(child.write, parent.write);
+  const retentionOk =
+    parent.retentionDays === undefined ||
+    (child.retentionDays !== undefined && child.retentionDays <= parent.retentionDays);
+  return (
+    namespacesWithin(child.read, parent.read) &&
+    namespacesWithin(child.write, parent.write) &&
+    VISIBILITY_RANK[child.maxVisibility] <= VISIBILITY_RANK[parent.maxVisibility] &&
+    retentionOk
+  );
+}
+
+/** Does this namespace fall inside the allowed list (`a/b` inside `a`, `*` holds all)? */
+export function namespaceAllowed(namespace: string, allowed: readonly string[]): boolean {
+  return namespacesWithin([namespace], allowed);
+}
+
+/** Actions ⊆ the union of the parent's live grants for that tool (`*` only under `*`). */
+function actionsWithin(child: readonly string[], held: readonly ToolGrant[]): boolean {
+  const union = new Set(held.flatMap((g) => g.actions));
+  if (union.has("*")) return true;
+  return !child.includes("*") && child.every((a) => union.has(a));
 }
 
 export function isGrantLive(grant: ToolGrant, now: string): boolean {
@@ -176,7 +199,12 @@ export function policyWithin(
       ? Infinity
       : Math.max(-Infinity, ...held.map((p) => Date.parse(p.expiresAt!)));
     const childExpiry = g.expiresAt ? Date.parse(g.expiresAt) : Infinity;
-    if (held.length === 0 || !provenanceOk || childExpiry > lastExpiry)
+    if (
+      held.length === 0 ||
+      !provenanceOk ||
+      childExpiry > lastExpiry ||
+      !actionsWithin(g.actions, held)
+    )
       v.push("TOOL_NOT_HELD_BY_PARENT");
   }
   if (
@@ -429,7 +457,8 @@ export function evaluateAgentStatusChange(input: {
 
 const ASSIGNMENT_TRANSITIONS: Readonly<Record<AssignmentStatus, readonly AssignmentStatus[]>> = {
   assigned: ["executing", "blocked"],
-  executing: ["in_review", "blocked"],
+  // A FAILED execution returns the work for another attempt; a succeeded one goes to review.
+  executing: ["in_review", "assigned", "blocked"],
   in_review: ["accepted", "changes_requested", "blocked"],
   changes_requested: ["executing", "blocked"],
   accepted: ["synthesized"],

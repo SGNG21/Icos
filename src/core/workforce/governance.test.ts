@@ -8,6 +8,7 @@ import {
   evaluatePolicyChange,
   isAgentTransitionAllowed,
   isAssignmentTransitionAllowed,
+  memoryScopeWithin,
   policyWithin,
   type Verdict,
 } from "./governance";
@@ -199,6 +200,16 @@ describe("workforce governance — Phase 11 proofs", () => {
       expect(policyWithin(forged, root.policy, NOW)).toContain("TOOL_NOT_HELD_BY_PARENT");
     });
 
+    it("a delegated grant cannot carry actions the parent does not hold", () => {
+      const parent = policy({ toolGrants: [grant("repo_read", { actions: ["read"] })] });
+      const wider = (actions: string[]) =>
+        policy({ toolGrants: [grant("repo_read", { delegatedBy: "agent-root", actions })] });
+      expect(policyWithin(wider(["read", "write"]), parent, NOW)).toContain(
+        "TOOL_NOT_HELD_BY_PARENT",
+      );
+      expect(policyWithin(wider(["*"]), parent, NOW)).toContain("TOOL_NOT_HELD_BY_PARENT");
+      expect(policyWithin(wider(["read"]), parent, NOW)).toEqual([]);
+    });
     it("a delegated grant cannot outlive the parent's grant", () => {
       const parent = policy({ toolGrants: [grant("repo_read", { expiresAt: LATER })] });
       const longer = policy({
@@ -276,14 +287,32 @@ describe("workforce governance — Phase 11 proofs", () => {
       );
     });
     it("a child reading memory outside the parent's namespaces is refused", () => {
-      const narrow = agent({ memoryScope: { read: ["tenant/default/client/a"], write: [] } });
+      const narrow = agent({
+        memoryScope: { read: ["tenant/default/client/a"], write: [], maxVisibility: "private" },
+      });
       const escaping = child(narrow, {
-        memoryScope: { read: ["tenant/default/client/b"], write: [] },
+        memoryScope: { read: ["tenant/default/client/b"], write: [], maxVisibility: "private" },
         scope: narrow.scope,
       });
       expect(violations(spawn(escaping, { supervisor: narrow, org: [narrow] }))).toContain(
         "MEMORY_SCOPE_ESCAPE",
       );
+    });
+    it("memory: broader visibility or longer (or unbounded) retention than the parent is refused", () => {
+      const parent = {
+        read: ["a"],
+        write: ["a"],
+        maxVisibility: "restricted" as const,
+        retentionDays: 30,
+      };
+      expect(memoryScopeWithin({ ...parent, maxVisibility: "tenant" }, parent)).toBe(false);
+      expect(memoryScopeWithin({ ...parent, retentionDays: 31 }, parent)).toBe(false);
+      expect(
+        memoryScopeWithin({ read: ["a"], write: ["a"], maxVisibility: "private" }, parent),
+      ).toBe(false);
+      expect(
+        memoryScopeWithin({ ...parent, maxVisibility: "private", retentionDays: 7 }, parent),
+      ).toBe(true);
     });
     it("work for another client is refused", () => {
       const v = authorizeAssignment({
