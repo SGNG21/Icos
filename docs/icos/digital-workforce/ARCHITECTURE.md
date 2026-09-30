@@ -45,7 +45,7 @@ Human owner ─(agents.manage)─▶ ICOS Central (DURABLE_AGENT, depth 0, root)
 ## 3. Governance invariants (pure, `core/workforce/governance.ts`)
 
 - Only a human principal with `agents.manage` changes structure or policy. An agent never changes its own (or anyone's) autonomy or grants.
-- A child is within its supervisor at creation: autonomy ≤, grants ⊆ (unexpired), budget ≤, bounds ≤, client/project scope ⊆, memory namespaces ⊆. The **policy** part (autonomy, grants, budget, bounds) is re-checked at every assignment, so narrowing a parent's policy narrows its subtree; scope and memory narrowing do not yet cascade (known gap).
+- A child is within its supervisor at creation: autonomy ≤, grants ⊆ (unexpired), budget ≤, bounds ≤, client/project scope ⊆, memory namespaces ⊆. The **policy** part (autonomy, grants, budget, bounds) is re-checked at every assignment, so narrowing a parent's policy narrows its subtree; scope and memory narrowing cascade through the tool-grant and memory ports (evaluated over the whole chain), but assignment checks only the assignee's own scope.
 - Autonomy ≤ role `autonomyCeiling`. Role and skill never imply a grant: assignment is refused `MISSING_TOOL_GRANT` if the skill needs a tool the assignee was not granted.
 - Spawning: DURABLE → EPHEMERAL/EXECUTION; EPHEMERAL → EXECUTION; EXECUTION → nothing. An agent can never spawn a DURABLE agent. Bounded by depth, descendants, org max agents; ephemeral needs `missionId` + `expiresAt` not after its parent's.
 - Assignment: active assignee under an active supervisor, capability covered, kind compatible, tools granted, scope held, concurrency and compute budget (derived from assignments, never a counter).
@@ -65,4 +65,5 @@ Tenant key `tenant_id` on every table, part of every PK/FK, predicate on every q
 ## 6. Status
 
 REAL: domain, governance, composer, delegation, performance, in-memory + PostgreSQL stores, governed service, bootstrap templates.
+Integration layer (principals, composition, CORE3 compute port, tool-grant and memory ports, cockpit read model): see [INTEGRATION.md](INTEGRATION.md).
 NOT_CONNECTED: container/HTTP wiring, OmniRoute dispatch (lane A), memory enforcement (lane C), cockpit views (lane B), LLM capability decomposer, tool gateway invocation.

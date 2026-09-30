@@ -32,7 +32,7 @@ append-only journal technique.
    Only a human with `agents.manage` changes policy; no agent changes its own or anyone's.
 4. **Containment**: a child's policy, client/project scope and memory namespaces are within
    its supervisor's at creation; the policy part is re-checked at every assignment, so narrowing a
-   parent's policy narrows its subtree (scope/memory narrowing does not cascade yet). Spawning is DURABLE → EPHEMERAL/EXECUTION, EPHEMERAL → EXECUTION, EXECUTION → none;
+   parent's policy narrows its subtree (scope/memory narrowing cascades through the tool-grant and memory ports, see addendum). Spawning is DURABLE → EPHEMERAL/EXECUTION, EPHEMERAL → EXECUTION, EXECUTION → none;
    agents never create durable agents. Bounded by absolute depth, active descendants,
    organisation max agents, concurrent assignments and compute budget — the last two derived
    from assignments, never counters.
@@ -79,3 +79,22 @@ append-only journal technique.
 ## Rollback
 
 Revert the code; migration 0050's header carries the DROP statements (workforce data only).
+
+## Integration addendum (2026-09-30)
+
+- **Principals** are issued by one `PrincipalAuthority` (frozen, WeakSet-registered). Humans come
+  from `AuthenticatedSession` through the existing `AuthorizationService`, the system from a
+  closed list of runtime components, agents only via a system principal. Nothing else is
+  accepted. Tenant = explicit single-tenant shim.
+- **Effective authority** (`core/workforce/authority.ts`) is evaluated over the whole supervision
+  chain as it is now. Tool grants and memory scopes narrowed, revoked or suspended anywhere
+  above an agent take effect at the next check (tool-grant and memory ports). Assignment still
+  checks the assignee's own scope plus policy containment against its direct supervisor.
+- **Tool grants** carry explicit `actions`. The Tool Gateway authorises only on the conjunction of
+  its own exact grant and the workforce answer (see INTEGRATION.md §4).
+- **Execution evidence** separates `selected` from `effective` compute. It refuses an effective
+  model for an unsteered run. A failed execution is recorded (failure class, observation) and
+  returns the work for another attempt.
+- **Composition**: `createWorkforceRuntime` builds service, read model, compute port and
+  authority port on one store and one authority. See `docs/icos/digital-workforce/INTEGRATION.md`,
+  including the migration and decision collision manifest.
