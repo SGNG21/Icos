@@ -102,3 +102,15 @@ Tailscale, no public exposure, secure context for `getUserMedia`). Owner actions
 
 Voice adds a WebSocket endpoint (`scripts/voice-server.ts`, lane `feat/voice-realtime`); Tailscale Serve
 proxies WebSockets on the same hostname with a second path mapping once that port is known.
+
+## Certification log (appended)
+
+| Checkpoint | HEAD | typecheck | unit | integration (PostgreSQL, `icos_integration_test`) | build | notes |
+|---|---|---|---|---|---|---|
+| I2a control | `beb4afa` | PASS | 1932/1932 | 506 passed / 4 skipped / 0 failed (opt-in E2Es skipped) | — | ledger 47 |
+| P0 + I1 cognitive | `44bc234` | PASS | 2006/2006 | cognitive suites 34/34 on `icos_i1_test` (L1–L4, V1–V3, M1) | PASS | ledger 48 |
+| I2b cockpit | `5c14ef7` | PASS | 2172/2172 | **540 passed / 4 skipped / 0 failed** | PASS | lint 0 errors |
+| Phone/text proof | `09be125`+ | — | — | `PHONE_TEXT_PROOF.md` (real server, real worker) | — | mission `d48b3347…` succeeded |
+
+Trunk suites were run one at a time (other lanes were running their own suites concurrently; no
+resource-starvation failure occurred, nothing was retried).

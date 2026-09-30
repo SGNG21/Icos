@@ -1,0 +1,10 @@
+dispatch_attempt|completed|1|cc/claude-haiku-4-5-20251001|1
+qc|action_applied|ACCEPT
+review|APPROVE|nvidia/nvidia/nemotron-3-super-120b-a12b
+mission|succeeded|t
+runtime|succeeded
+job|succeeded|start_mission
+turn_ref|launched|d48b3347-5dfe-464f-996c-80bacaaf9ed7
+goal|pending
+nonterminal_attempts|0
+execution_result|success|1142
