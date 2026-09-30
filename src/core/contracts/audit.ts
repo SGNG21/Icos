@@ -43,11 +43,18 @@ export const auditEventTypeSchema = z.enum([
   "goal.status_updated",
   "goal.converted",
   "goal.idempotency_key_set",
-  // Control plane (decision 0055): every authenticated control attempt.
+  // Control plane (decision 0058): every authenticated control attempt.
   "control.command.rejected",
   "control.command.admitted",
   "control.command.executed",
   "control.command.failed",
+  // Tool Gateway (decision 0058). `details.tenantId` scopes every entry.
+  "tool.execution.recorded",
+  "tool.approval.requested",
+  "tool.approval.decided",
+  "tool.grant.changed",
+  "tool.request.denied",
+  "tool.approval.consumed",
 ]);
 
 export const auditActorSchema = z.object({

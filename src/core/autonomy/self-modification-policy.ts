@@ -1,11 +1,7 @@
 /**
  * Classification of a self-modification action.
  */
-export const selfModificationClassificationSchema = [
-  "allowed",
-  "protected",
-  "unknown",
-] as const;
+export const selfModificationClassificationSchema = ["allowed", "protected", "unknown"] as const;
 
 export type SelfModificationClassification = (typeof selfModificationClassificationSchema)[number];
 
@@ -84,7 +80,25 @@ export const PROTECTED_PATHS: Record<ProtectedDomain, string[]> = {
     "src/core/mission/contracts.ts",
     "src/core/contracts/scheduler.ts",
     "src/core/contracts/tool-gateway.ts",
+    // Tool Gateway authority (decision 0058): policy, grants, approvals, credentials.
+    "src/core/tool-gateway/",
+    "src/server/tool-gateway/",
+    "src/server/database/tool-gateway-schema.ts",
+    "drizzle/0052_tool_gateway.sql",
     "src/server/usecases/start-autonomous-mission.ts",
+    // Central integration (ICOS_SYSTEM_INTEGRATION CCD-16): every lane's governance files.
+    // Control bus (decision 0055): commands, admission holds, re-auth, safe mode.
+    "src/core/control/",
+    "src/server/control/",
+    // Cognitive runtime (decision 0056): what a conversation may turn into, what memory may claim.
+    "src/core/cognitive/turn-policy.ts",
+    "src/core/cognitive/writeback-rules.ts",
+    "src/server/cognitive/mission-gateway.ts",
+    // Digital workforce (decision 0057): structural/policy governance and principal authority.
+    "src/core/workforce/governance.ts",
+    "src/core/workforce/authority.ts",
+    "src/server/workforce/principals.ts",
+    "src/server/workforce/authority-port.ts",
   ],
   "completion-certification-authority": [
     "src/server/autonomy/autonomy-recovery-scheduler.ts",
@@ -285,8 +299,7 @@ export function classifySelfModification(
   }
 
   // Check if explicitly in allowed improvement domains, directly or by backlog category.
-  const domain =
-    BACKLOG_CATEGORY_DOMAINS[input.improvementCategory] ?? input.improvementCategory;
+  const domain = BACKLOG_CATEGORY_DOMAINS[input.improvementCategory] ?? input.improvementCategory;
   const isAllowedDomain = ALLOWED_IMPROVEMENT_DOMAINS.includes(domain as AllowedImprovementDomain);
 
   if (isAllowedDomain) {
