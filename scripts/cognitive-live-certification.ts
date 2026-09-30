@@ -1,5 +1,5 @@
 /**
- * Live certification of Conversation → CORE3 (decision 0057). Two separate processes:
+ * Live certification of Conversation → CORE3 (decision 0056 — authored as 0057 on the lane). Two separate processes:
  *
  *   initiate  — the "request": real cognitive runtime (cognitiveRuntimeFor(container), real
  *               OmniRoute engine from env) submits ONE text turn; if and only if the REAL model

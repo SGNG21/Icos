@@ -1,6 +1,6 @@
 # Cognitive → CORE3 live certification — 2026-09-30
 
-Branch `feat/cognitive-runtime`, code at `44eaac7` (decision 0057). Harness:
+Branch `feat/cognitive-runtime`, code at `44eaac7` (decision 0056 — authored as 0057 on the lane). Harness:
 `scripts/cognitive-live-certification.ts` (two separate processes). Evidence rows kept in
 the test database `icos_cognitive_test`.
 
