@@ -1,0 +1,1158 @@
+[
+  {
+    "skillId": "CENTRAL_ORCHESTRATION",
+    "name": "Central orchestration",
+    "version": "1.0.0",
+    "description": "Decomposes an owner objective into capabilities, delegates through the hierarchy and synthesises results.",
+    "capabilities": ["orchestration", "capability_decomposition", "synthesis"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": [],
+    "risk": "LOW",
+    "requiredPermissions": [],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["central_orchestration.evidence_bundle"],
+    "tests": ["skill.central_orchestration.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "CYBER_SECURITY_AUDIT",
+    "name": "Cyber security audit",
+    "version": "1.0.0",
+    "description": "Audits a system's security posture end to end and produces evidenced findings.",
+    "capabilities": [
+      "threat_modeling",
+      "appsec",
+      "secrets_audit",
+      "iam_review",
+      "dependency_review"
+    ],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read", "scanners", "logs"],
+    "risk": "HIGH",
+    "requiredPermissions": ["repo.read", "logs.read"],
+    "approvalRequiredFor": ["destructive_remediation"],
+    "evidenceRequirements": ["cyber_security_audit.evidence_bundle"],
+    "tests": ["skill.cyber_security_audit.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "APPSEC_REVIEW",
+    "name": "Application security review",
+    "version": "1.0.0",
+    "description": "Reviews application code and dependencies for exploitable weaknesses.",
+    "capabilities": ["appsec", "code_security", "dependency_review"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read", "scanners"],
+    "risk": "HIGH",
+    "requiredPermissions": ["repo.read"],
+    "approvalRequiredFor": ["destructive_remediation"],
+    "evidenceRequirements": ["appsec_review.evidence_bundle"],
+    "tests": ["skill.appsec_review.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SECRETS_IAM_AUDIT",
+    "name": "Secrets and IAM audit",
+    "version": "1.0.0",
+    "description": "Finds exposed secrets and excessive identity permissions without ever printing a secret.",
+    "capabilities": ["secrets_audit", "iam_review"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read", "logs"],
+    "risk": "HIGH",
+    "requiredPermissions": ["repo.read", "logs.read"],
+    "approvalRequiredFor": ["credential_rotation"],
+    "evidenceRequirements": ["secrets_iam_audit.evidence_bundle"],
+    "tests": ["skill.secrets_iam_audit.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "INFRASTRUCTURE_SECURITY",
+    "name": "Infrastructure security",
+    "version": "1.0.0",
+    "description": "Reviews infrastructure and network configuration for security gaps.",
+    "capabilities": ["infra_security", "network_review"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["infra_read", "logs"],
+    "risk": "HIGH",
+    "requiredPermissions": ["infra.read", "logs.read"],
+    "approvalRequiredFor": ["destructive_remediation"],
+    "evidenceRequirements": ["infrastructure_security.evidence_bundle"],
+    "tests": ["skill.infrastructure_security.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "INDEPENDENT_REVIEW",
+    "name": "Independent review",
+    "version": "1.0.0",
+    "description": "Verifies another agent's result against its evidence; never reviews its own work.",
+    "capabilities": ["independent_review", "evidence_verification"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["repo.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["independent_review.evidence_bundle"],
+    "tests": ["skill.independent_review.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "BRAND_DIRECTION",
+    "name": "Brand direction",
+    "version": "1.0.0",
+    "description": "Sets and guards the visual and verbal identity of a brand.",
+    "capabilities": ["art_direction", "brand_identity"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["design_read"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["design.read"],
+    "approvalRequiredFor": ["external_publication"],
+    "evidenceRequirements": ["brand_direction.evidence_bundle"],
+    "tests": ["skill.brand_direction.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "BRAND_STRATEGY",
+    "name": "Brand strategy",
+    "version": "1.0.0",
+    "description": "Defines positioning, audience and promise of a brand.",
+    "capabilities": ["brand_strategy", "market_positioning"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["web_research"],
+    "risk": "LOW",
+    "requiredPermissions": ["web.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["brand_strategy.evidence_bundle"],
+    "tests": ["skill.brand_strategy.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "UX_DESIGN",
+    "name": "UI/UX design",
+    "version": "1.0.0",
+    "description": "Designs interfaces and user journeys.",
+    "capabilities": ["ui_design", "ux_design"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["design_write"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["design.write"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["ux_design.evidence_bundle"],
+    "tests": ["skill.ux_design.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "VISUAL_DESIGN",
+    "name": "Visual design",
+    "version": "1.0.0",
+    "description": "Produces visual assets consistent with the brand identity.",
+    "capabilities": ["visual_design", "image_generation"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["image_generation"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["media.generate"],
+    "approvalRequiredFor": ["external_publication"],
+    "evidenceRequirements": ["visual_design.evidence_bundle"],
+    "tests": ["skill.visual_design.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "COPYWRITING",
+    "name": "Copywriting",
+    "version": "1.0.0",
+    "description": "Writes copy in the brand's tone of voice.",
+    "capabilities": ["copywriting", "tone_of_voice"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["docs_write"],
+    "risk": "LOW",
+    "requiredPermissions": ["docs.write"],
+    "approvalRequiredFor": ["external_publication"],
+    "evidenceRequirements": ["copywriting.evidence_bundle"],
+    "tests": ["skill.copywriting.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SALES_LEADERSHIP",
+    "name": "Sales leadership",
+    "version": "1.0.0",
+    "description": "Sets sales targets, allocates prospecting work and reviews the pipeline.",
+    "capabilities": ["sales_strategy", "pipeline_management"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["crm_read"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["crm.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["sales_leadership.evidence_bundle"],
+    "tests": ["skill.sales_leadership.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "MARKET_RESEARCH",
+    "name": "Market research",
+    "version": "1.0.0",
+    "description": "Researches markets and candidate accounts from public sources.",
+    "capabilities": ["market_research", "lead_research"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["web_research"],
+    "risk": "LOW",
+    "requiredPermissions": ["web.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["market_research.evidence_bundle"],
+    "tests": ["skill.market_research.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SALES_PROSPECTING",
+    "name": "Sales prospecting",
+    "version": "1.0.0",
+    "description": "Qualifies leads and drafts outreach; sending requires approval.",
+    "capabilities": ["lead_qualification", "outreach"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["crm_read", "email_draft"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["crm.read", "email.draft"],
+    "approvalRequiredFor": ["external_outreach"],
+    "evidenceRequirements": ["sales_prospecting.evidence_bundle"],
+    "tests": ["skill.sales_prospecting.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "CRM_OPERATIONS",
+    "name": "CRM operations",
+    "version": "1.0.0",
+    "description": "Records and cleans CRM data.",
+    "capabilities": ["crm_data_entry", "crm_hygiene"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["crm_write"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["crm.write"],
+    "approvalRequiredFor": ["bulk_crm_update"],
+    "evidenceRequirements": ["crm_operations.evidence_bundle"],
+    "tests": ["skill.crm_operations.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SALES_ANALYTICS",
+    "name": "Sales analytics",
+    "version": "1.0.0",
+    "description": "Measures pipeline quality and verifies lead qualification data.",
+    "capabilities": ["sales_analytics", "data_quality_review"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["crm_read", "analytics_read"],
+    "risk": "LOW",
+    "requiredPermissions": ["crm.read", "analytics.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["sales_analytics.evidence_bundle"],
+    "tests": ["skill.sales_analytics.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SEO_OPTIMIZATION",
+    "name": "SEO optimisation",
+    "version": "1.0.0",
+    "description": "Audits search visibility and proposes keyword and content improvements.",
+    "capabilities": ["seo_audit", "keyword_research"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["web_research", "analytics_read"],
+    "risk": "LOW",
+    "requiredPermissions": ["web.read", "analytics.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["seo_optimization.evidence_bundle"],
+    "tests": ["skill.seo_optimization.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SOFTWARE_ENGINEERING",
+    "name": "Software engineering",
+    "version": "1.0.0",
+    "description": "Implements and tests software changes in a governed workspace.",
+    "capabilities": ["code_write", "code_review", "testing"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read", "repo_write"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["repo.read", "repo.write"],
+    "approvalRequiredFor": ["production_deploy"],
+    "evidenceRequirements": ["software_engineering.evidence_bundle"],
+    "tests": ["skill.software_engineering.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "SOFTWARE_ARCHITECTURE",
+    "name": "Software architecture",
+    "version": "1.0.0",
+    "description": "Designs system structure and reviews changes for architectural fit.",
+    "capabilities": ["architecture_design", "code_review"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["repo.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["software_architecture.evidence_bundle"],
+    "tests": ["skill.software_architecture.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "DEVOPS_OPERATIONS",
+    "name": "DevOps operations",
+    "version": "1.0.0",
+    "description": "Operates CI/CD and infrastructure changes under release policy.",
+    "capabilities": ["ci_cd", "infrastructure_ops"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["repo_read", "infra_write"],
+    "risk": "HIGH",
+    "requiredPermissions": ["repo.read", "infra.write"],
+    "approvalRequiredFor": ["production_deploy", "destructive_remediation"],
+    "evidenceRequirements": ["devops_operations.evidence_bundle"],
+    "tests": ["skill.devops_operations.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "FINANCIAL_ANALYSIS",
+    "name": "Financial analysis",
+    "version": "1.0.0",
+    "description": "Analyses financial data and budgets; never moves money.",
+    "capabilities": ["financial_analysis", "budgeting"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["finance_read"],
+    "risk": "HIGH",
+    "requiredPermissions": ["finance.read"],
+    "approvalRequiredFor": ["payment"],
+    "evidenceRequirements": ["financial_analysis.evidence_bundle"],
+    "tests": ["skill.financial_analysis.fixture"],
+    "qualityGates": ["independent_review", "security_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "OPERATIONS_MANAGEMENT",
+    "name": "Operations management",
+    "version": "1.0.0",
+    "description": "Plans and runs operational processes.",
+    "capabilities": ["process_management", "planning"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["docs_write"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["docs.write"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["operations_management.evidence_bundle"],
+    "tests": ["skill.operations_management.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "RESEARCH",
+    "name": "Research",
+    "version": "1.0.0",
+    "description": "Researches a question and synthesises sourced findings.",
+    "capabilities": ["research", "synthesis"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["web_research"],
+    "risk": "LOW",
+    "requiredPermissions": ["web.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["research.evidence_bundle"],
+    "tests": ["skill.research.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "CUSTOMER_SUPPORT",
+    "name": "Customer support",
+    "version": "1.0.0",
+    "description": "Triages tickets and drafts customer responses.",
+    "capabilities": ["ticket_triage", "customer_response"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["support_read", "email_draft"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["support.read", "email.draft"],
+    "approvalRequiredFor": ["external_outreach"],
+    "evidenceRequirements": ["customer_support.evidence_bundle"],
+    "tests": ["skill.customer_support.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  },
+  {
+    "skillId": "ACCOUNT_MANAGEMENT",
+    "name": "Account management",
+    "version": "1.0.0",
+    "description": "Manages an existing customer relationship.",
+    "capabilities": ["account_management", "customer_success"],
+    "inputs": [
+      {
+        "name": "objective",
+        "description": "What must be achieved, with scope",
+        "required": true
+      },
+      {
+        "name": "context",
+        "description": "Governed context references",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "description": "The produced result",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence supporting the result",
+        "required": true
+      }
+    ],
+    "requiredTools": ["crm_read"],
+    "risk": "MEDIUM",
+    "requiredPermissions": ["crm.read"],
+    "approvalRequiredFor": [],
+    "evidenceRequirements": ["account_management.evidence_bundle"],
+    "tests": ["skill.account_management.fixture"],
+    "qualityGates": ["independent_review"],
+    "compatibleAgentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": []
+    },
+    "implementedBy": [],
+    "status": "active"
+  }
+]

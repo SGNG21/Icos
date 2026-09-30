@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import type { AuthenticatedSession } from "@/core/identity";
+import type { WorkforceRuntime } from "@/server/workforce/composition";
+
 import { isReal, missing, real, type Truth } from "./truth";
 
 /**
@@ -211,3 +214,37 @@ export function buildWorkforceView(p: WorkforceProjection, now: Date): Workforce
 
 export const workforceView = (t: Truth<WorkforceProjection>, now: Date): Truth<WorkforceView> =>
   isReal(t) ? real(buildWorkforceView(t.value, now)) : (t as Truth<WorkforceView>);
+
+/**
+ * Digital Workforce read port (decision 0057, BR-29): the projection is built server side from the
+ * governed service with the CALLER's session principal — never a literal principal — and parsed
+ * against the read contract above. `performance()` is called without `includeNonReal`, so
+ * SIMULATED / NOT_CONNECTED observations never count. A projection that does not parse renders
+ * UNKNOWN (never a measured 0); a build without the runtime keeps `notConnectedWorkforce`.
+ */
+export function workforceReadPort(
+  workforce: WorkforceRuntime,
+  session: AuthenticatedSession,
+): WorkforceReadPort {
+  return {
+    read: async () => {
+      const principal = workforce.sessions.fromSession(session);
+      const [agents, assignments, performance, snapshot] = await Promise.all([
+        workforce.service.listAgents(principal),
+        workforce.service.listAssignments(principal),
+        workforce.service.performance(principal),
+        /* Departments, roles and skills have no service listing; the read model's snapshot is the
+           governed way to read them for this principal (same store, same tenant predicate). */
+        workforce.readModel.snapshot(principal),
+      ]);
+      return parseWorkforce({
+        agents,
+        assignments,
+        performance,
+        departments: snapshot.departments,
+        roles: snapshot.roles,
+        skills: snapshot.skills,
+      });
+    },
+  };
+}

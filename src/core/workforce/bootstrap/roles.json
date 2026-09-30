@@ -1,0 +1,582 @@
+[
+  {
+    "roleId": "ICOS_CENTRAL",
+    "name": "ICOS Central",
+    "version": "1.0.0",
+    "description": "Root orchestrator: turns owner objectives into governed delegated work.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT"],
+    "skills": ["CENTRAL_ORCHESTRATION"],
+    "responsibilities": [
+      "Decompose owner objectives",
+      "Delegate to departments",
+      "Synthesise results for the owner"
+    ],
+    "kpis": [
+      {
+        "kpiId": "objectives_delivered",
+        "description": "Owner objectives delivered with evidence"
+      }
+    ],
+    "autonomyCeiling": 3,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "CYBER_SECURITY_LEAD",
+    "name": "Cyber security lead",
+    "version": "1.0.0",
+    "description": "Owns security posture and security audits.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT"],
+    "skills": ["CYBER_SECURITY_AUDIT", "INDEPENDENT_REVIEW"],
+    "responsibilities": ["Plan security audits", "Consolidate findings", "Escalate critical risks"],
+    "kpis": [
+      {
+        "kpiId": "critical_findings_closed",
+        "description": "Critical findings closed"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "APPSEC_SPECIALIST",
+    "name": "AppSec specialist",
+    "version": "1.0.0",
+    "description": "Reviews application code for vulnerabilities.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["APPSEC_REVIEW"],
+    "responsibilities": ["Review code and dependencies", "Report evidenced findings"],
+    "kpis": [
+      {
+        "kpiId": "findings_confirmed",
+        "description": "Findings confirmed by review"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "SECRETS_IAM_AUDITOR",
+    "name": "Secrets & IAM auditor",
+    "version": "1.0.0",
+    "description": "Audits secret exposure and identity permissions.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["SECRETS_IAM_AUDIT"],
+    "responsibilities": ["Detect exposed secrets", "Review IAM grants"],
+    "kpis": [
+      {
+        "kpiId": "exposures_found",
+        "description": "Exposures found and evidenced"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "INFRASTRUCTURE_SECURITY_SPECIALIST",
+    "name": "Infrastructure security specialist",
+    "version": "1.0.0",
+    "description": "Reviews infrastructure security.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST"],
+    "skills": ["INFRASTRUCTURE_SECURITY"],
+    "responsibilities": ["Review infrastructure configuration", "Report network exposure"],
+    "kpis": [
+      {
+        "kpiId": "misconfigurations_found",
+        "description": "Misconfigurations found"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "INDEPENDENT_REVIEWER",
+    "name": "Independent reviewer",
+    "version": "1.0.0",
+    "description": "Independently verifies results against evidence.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["INDEPENDENT_REVIEW"],
+    "responsibilities": ["Verify evidence", "Approve, request changes or block"],
+    "kpis": [
+      {
+        "kpiId": "review_accuracy",
+        "description": "Reviews upheld on audit"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "ART_DIRECTOR",
+    "name": "Art director",
+    "version": "1.0.0",
+    "description": "Owns brand identity and creative quality.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT"],
+    "skills": ["BRAND_DIRECTION", "INDEPENDENT_REVIEW"],
+    "responsibilities": ["Direct identity work", "Review creative output"],
+    "kpis": [
+      {
+        "kpiId": "identity_approved",
+        "description": "Identity approved by the client"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "BRAND_STRATEGIST",
+    "name": "Brand strategist",
+    "version": "1.0.0",
+    "description": "Defines brand positioning.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST"],
+    "skills": ["BRAND_STRATEGY"],
+    "responsibilities": ["Define positioning", "Define audience"],
+    "kpis": [
+      {
+        "kpiId": "positioning_accepted",
+        "description": "Positioning accepted"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "UX_DESIGNER",
+    "name": "UI/UX designer",
+    "version": "1.0.0",
+    "description": "Designs interfaces.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["UX_DESIGN"],
+    "responsibilities": ["Design screens", "Design journeys"],
+    "kpis": [
+      {
+        "kpiId": "usability",
+        "description": "Usability review passed"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "VISUAL_DESIGNER",
+    "name": "Visual designer",
+    "version": "1.0.0",
+    "description": "Produces visual assets.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["VISUAL_DESIGN"],
+    "responsibilities": ["Produce visual assets", "Respect the identity"],
+    "kpis": [
+      {
+        "kpiId": "assets_accepted",
+        "description": "Assets accepted first pass"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "COPYWRITER",
+    "name": "Copywriter",
+    "version": "1.0.0",
+    "description": "Writes brand copy.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["COPYWRITING"],
+    "responsibilities": ["Write copy", "Respect tone of voice"],
+    "kpis": [
+      {
+        "kpiId": "copy_accepted",
+        "description": "Copy accepted first pass"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "SALES_DIRECTOR",
+    "name": "Sales director",
+    "version": "1.0.0",
+    "description": "Owns sales targets and pipeline.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT"],
+    "skills": ["SALES_LEADERSHIP", "INDEPENDENT_REVIEW"],
+    "responsibilities": ["Set targets", "Allocate prospecting", "Review pipeline quality"],
+    "kpis": [
+      {
+        "kpiId": "qualified_opportunities",
+        "description": "Qualified opportunities generated"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "SDR",
+    "name": "Sales development representative",
+    "version": "1.0.0",
+    "description": "Qualifies leads and prepares outreach.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["SALES_PROSPECTING"],
+    "responsibilities": ["Qualify leads", "Draft outreach"],
+    "kpis": [
+      {
+        "kpiId": "leads_qualified",
+        "description": "Leads qualified"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "ACCOUNT_SPECIALIST",
+    "name": "Account specialist",
+    "version": "1.0.0",
+    "description": "Manages customer accounts.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["ACCOUNT_MANAGEMENT"],
+    "responsibilities": ["Manage accounts", "Detect expansion"],
+    "kpis": [
+      {
+        "kpiId": "retention",
+        "description": "Account retention"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "CRM_OPERATOR",
+    "name": "CRM operator",
+    "version": "1.0.0",
+    "description": "Keeps CRM data accurate.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["CRM_OPERATIONS"],
+    "responsibilities": ["Record opportunities", "Clean CRM data"],
+    "kpis": [
+      {
+        "kpiId": "crm_accuracy",
+        "description": "CRM records complete"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "ANALYTICS_REVIEWER",
+    "name": "Analytics reviewer",
+    "version": "1.0.0",
+    "description": "Independently verifies sales data quality.",
+    "status": "draft",
+    "agentKinds": ["EPHEMERAL_SPECIALIST"],
+    "skills": ["SALES_ANALYTICS", "INDEPENDENT_REVIEW"],
+    "responsibilities": ["Verify qualification data", "Report pipeline metrics"],
+    "kpis": [
+      {
+        "kpiId": "data_quality",
+        "description": "Qualified-lead data verified"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "RESEARCHER",
+    "name": "Researcher",
+    "version": "1.0.0",
+    "description": "Researches questions and markets.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["RESEARCH", "MARKET_RESEARCH"],
+    "responsibilities": ["Research", "Synthesise sources"],
+    "kpis": [
+      {
+        "kpiId": "sourced_findings",
+        "description": "Findings with sources"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "SEO_SPECIALIST",
+    "name": "SEO specialist",
+    "version": "1.0.0",
+    "description": "Improves search visibility.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["SEO_OPTIMIZATION"],
+    "responsibilities": ["Audit SEO", "Propose keywords"],
+    "kpis": [
+      {
+        "kpiId": "organic_visibility",
+        "description": "Organic visibility trend"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "FULLSTACK_ENGINEER",
+    "name": "Full-stack engineer",
+    "version": "1.0.0",
+    "description": "Implements software changes.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST", "EXECUTION_WORKER"],
+    "skills": ["SOFTWARE_ENGINEERING"],
+    "responsibilities": ["Implement changes", "Write tests"],
+    "kpis": [
+      {
+        "kpiId": "changes_integrated",
+        "description": "Changes integrated after review"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "SOFTWARE_ARCHITECT",
+    "name": "Software architect",
+    "version": "1.0.0",
+    "description": "Designs system architecture.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["SOFTWARE_ARCHITECTURE"],
+    "responsibilities": ["Design architecture", "Review structural changes"],
+    "kpis": [
+      {
+        "kpiId": "adr_quality",
+        "description": "Decisions accepted"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "DEVOPS_ENGINEER",
+    "name": "DevOps engineer",
+    "version": "1.0.0",
+    "description": "Runs CI/CD and infrastructure.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["DEVOPS_OPERATIONS"],
+    "responsibilities": ["Operate CI/CD", "Change infrastructure under release policy"],
+    "kpis": [
+      {
+        "kpiId": "pipeline_health",
+        "description": "Pipeline green rate"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "FINANCE_ANALYST",
+    "name": "Finance analyst",
+    "version": "1.0.0",
+    "description": "Analyses finances; never moves money.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["FINANCIAL_ANALYSIS"],
+    "responsibilities": ["Analyse finances", "Prepare budgets"],
+    "kpis": [
+      {
+        "kpiId": "forecast_accuracy",
+        "description": "Forecast accuracy"
+      }
+    ],
+    "autonomyCeiling": 1,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "OPERATIONS_MANAGER",
+    "name": "Operations manager",
+    "version": "1.0.0",
+    "description": "Runs operations.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT"],
+    "skills": ["OPERATIONS_MANAGEMENT"],
+    "responsibilities": ["Plan operations", "Improve processes"],
+    "kpis": [
+      {
+        "kpiId": "on_time_delivery",
+        "description": "On-time delivery"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  },
+  {
+    "roleId": "CUSTOMER_SUPPORT",
+    "name": "Customer support",
+    "version": "1.0.0",
+    "description": "Handles customer requests.",
+    "status": "draft",
+    "agentKinds": ["DURABLE_AGENT", "EPHEMERAL_SPECIALIST"],
+    "skills": ["CUSTOMER_SUPPORT"],
+    "responsibilities": ["Triage tickets", "Draft responses"],
+    "kpis": [
+      {
+        "kpiId": "resolution_time",
+        "description": "Median resolution time"
+      }
+    ],
+    "autonomyCeiling": 2,
+    "provenance": {
+      "source": "bootstrap_template",
+      "createdBy": {
+        "kind": "system",
+        "id": "workforce-bootstrap"
+      }
+    }
+  }
+]

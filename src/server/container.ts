@@ -1,4 +1,9 @@
 import { composeControlPlane, type ControlPlane } from "@/server/control/compose";
+import {
+  createWorkforceRuntime,
+  createWorkforceStore,
+  type WorkforceRuntime,
+} from "@/server/workforce/composition";
 import { InMemoryControlStore } from "@/server/control/in-memory-control-store";
 import { PostgresControlStore } from "@/server/control/postgres-control-store";
 import { installDispatchBackstop, RuntimeControlGuard } from "@/server/control/runtime-control";
@@ -313,6 +318,12 @@ export interface Container {
    * refuse to act without it.
    */
   control?: ControlPlane;
+  /**
+   * Digital workforce (decision 0057): roles, skills, Mini-ICOS, governed delegation. Composed
+   * from the lane's own entry point; routes only ever receive `workforce.sessions.fromSession`.
+   * Optional only so hand-built test containers compile.
+   */
+  workforce?: WorkforceRuntime;
   /** Workspace Execution Coordinator (Phase 8D) */
   workspaceExecutionCoordinator?: WorkspaceExecutionCoordinator;
   /** Libère les ressources (pool PostgreSQL). No-op pour le backend mémoire. */
@@ -458,6 +469,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       guard: controlGuard,
       effects: { missions: mission, tasks: tasksRepository, workers: workerRegistryStore, registration: workerRegistration },
     }),
+    workforce: createWorkforceRuntime({ store: createWorkforceStore({ kind: "memory" }) }),
     executionCallbackSecret: undefined,
     executionResults,
     durableMemory: new InMemoryDurableMemory(),
@@ -889,6 +901,7 @@ export async function buildPostgresContainer(
       },
       auth: authentication?.auth,
     }),
+    workforce: createWorkforceRuntime({ store: createWorkforceStore({ kind: "postgres", db: handle.db }) }),
   };
 }
 

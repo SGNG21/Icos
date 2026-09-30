@@ -21,7 +21,7 @@ import {
   type MissionWithTasks,
 } from "./snapshot";
 import { isReal, missing, real, type Truth } from "./truth";
-import { notConnectedWorkforce } from "./workforce";
+import { notConnectedWorkforce, workforceReadPort } from "./workforce";
 
 /**
  * Server-side loader of the cockpit. The ONLY place the cockpit touches ICOS:
@@ -316,7 +316,10 @@ export const loadReadModels = cache(async () => {
   const ctx = await getCockpitContext();
   if (!ctx) return null;
   const [workforce, business] = await Promise.all([
-    notConnectedWorkforce.read(),
+    (ctx.container.workforce
+      ? workforceReadPort(ctx.container.workforce, ctx.session)
+      : notConnectedWorkforce
+    ).read(),
     notConnectedBusiness.read(),
   ]);
   return { workforce, business };
