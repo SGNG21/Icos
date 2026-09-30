@@ -39,6 +39,7 @@ import {
 import {
   PHASE,
   isBlocking,
+  latestMissionEvents,
   operationalEvent,
   plainText,
   relativeTime,
@@ -222,6 +223,19 @@ export function VoiceClient() {
     setSpeaking(false);
   }, []);
 
+  /** Close the mic now: link lost, offline, or cancelled. Never keeps recording unseen. */
+  const releaseMic = useCallback(() => {
+    const turnId = talkingTurn.current;
+    talkingTurn.current = null;
+    const c = capture.current;
+    if (c) {
+      c.source.disconnect();
+      c.stream.getTracks().forEach((track) => track.stop());
+    }
+    capture.current = null;
+    if (turnId) dispatch({ type: "discard_turn", turnId });
+  }, []);
+
   const play = useCallback((turnId: string, data: string) => {
     const ctx = audio.current?.ctx;
     if (!ctx || silenced.current.has(turnId)) return;
@@ -316,6 +330,7 @@ export function VoiceClient() {
         clearInterval(beat);
         if (ws.current === socket) ws.current = null;
         stopPlayback();
+        releaseMic(); // an utterance cannot survive a lost link
         if (closed) return;
         if (event.code === 1011 && event.reason === "PROVIDER_NOT_CONFIGURED") {
           return dispatch({ type: "link", link: "unavailable" });
@@ -340,12 +355,16 @@ export function VoiceClient() {
       };
     };
 
-    const onOffline = () => dispatch({ type: "link", link: "offline" });
+    const onOffline = () => {
+      releaseMic();
+      dispatch({ type: "link", link: "offline" });
+    };
     const onOnline = () => {
-      if (!ws.current) {
-        clearTimeout(retry);
-        connect();
-      }
+      const socket = ws.current;
+      if (socket?.readyState === WebSocket.OPEN) return dispatch({ type: "link", link: "ready" });
+      if (socket?.readyState === WebSocket.CONNECTING) return;
+      clearTimeout(retry);
+      connect();
     };
     window.addEventListener("offline", onOffline);
     window.addEventListener("online", onOnline);
@@ -360,7 +379,7 @@ export function VoiceClient() {
       capture.current?.stream.getTracks().forEach((track) => track.stop());
       void audio.current?.ctx.close();
     };
-  }, [play, send, stopPlayback]);
+  }, [play, send, stopPlayback, releaseMic]);
 
   // --- microphone --------------------------------------------------------------
   /** Must start synchronously inside the tap: iOS only unlocks audio there. */
@@ -430,10 +449,9 @@ export function VoiceClient() {
         throw new Error("Micro indisponible : ouvrez ICOS en HTTPS (origine sécurisée).");
       }
       const turnId = newTurnId();
-      silenceCurrent(); // barge-in
+      silenceCurrent(); // barge-in: local silence is immediate
       talkingTurn.current = turnId;
       dispatch({ type: "talk", turnId });
-      send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_START" });
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -449,9 +467,12 @@ export function VoiceClient() {
       const source = ctx.createMediaStreamSource(stream);
       source.connect(await tap);
       capture.current = { turnId, stream, source, pending: [], buffered: 0, seq: 0 };
+      // The server hears about the turn only once the mic is really open.
+      send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_START" });
     } catch (error) {
+      const turnId = talkingTurn.current;
       talkingTurn.current = null;
-      dispatch({ type: "stop_talking" });
+      if (turnId) dispatch({ type: "discard_turn", turnId });
       dispatch({
         type: "local_error",
         code: window.isSecureContext ? "MICROPHONE" : "INSECURE_CONTEXT",
@@ -485,14 +506,7 @@ export function VoiceClient() {
   };
 
   const cancelTalking = () => {
-    talkingTurn.current = null;
-    const c = capture.current;
-    if (c) {
-      c.source.disconnect();
-      c.stream.getTracks().forEach((track) => track.stop());
-    }
-    capture.current = null;
-    dispatch({ type: "stop_talking" });
+    releaseMic();
     send({ type: "cancel" }); // the server drops the uncommitted utterance
   };
 
@@ -502,8 +516,21 @@ export function VoiceClient() {
   const canTalk = state.link === "ready";
   const canInterrupt = speaking || !!activeTurn(state);
   const [diagnostics, setDiagnostics] = useState(false);
+  const diagnosticsButton = useRef<HTMLButtonElement>(null);
+  const diagnosticsClose = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (diagnostics) diagnosticsClose.current?.focus();
+  }, [diagnostics]);
+  const closeDiagnostics = () => {
+    setDiagnostics(false);
+    diagnosticsButton.current?.focus();
+  };
   const blocking = state.error && isBlocking(state.error.code) ? state.error : null;
-  const hint = phase === "ERROR" && state.error ? userMessage(state.error.code) : meta.hint || " ";
+  // Any current, non-blocking problem is said in the dock, whatever the phase.
+  const notice = state.error && !blocking ? userMessage(state.error.code) : null;
+  const hint = notice ?? (meta.hint || " ");
+  const shownMissions = latestMissionEvents(state.turns);
+  const lastAnswer = state.turns.findLast((t) => t.state === "done" && t.icos)?.icos;
 
   const micLabel = talking
     ? "Envoyer le message"
@@ -525,13 +552,14 @@ export function VoiceClient() {
             </span>
           </span>
         </div>
-        <span className={styles.chip} data-tone={meta.tone} role="status" aria-live="polite">
+        <span className={styles.chip} data-tone={meta.tone} aria-hidden="true">
           {PHASE_ICON[phase]}
           {meta.label}
         </span>
         <button
           type="button"
           className={styles.iconButton}
+          ref={diagnosticsButton}
           onClick={() => setDiagnostics((d) => !d)}
           aria-expanded={diagnostics}
           aria-controls="voice-diagnostics"
@@ -541,7 +569,7 @@ export function VoiceClient() {
         </button>
       </header>
 
-      <div className={styles.feed} aria-label="Conversation avec ICOS" role="log">
+      <section className={styles.feed} aria-label="Conversation avec ICOS">
         {blocking && (
           <p className={styles.banner} data-tone="critical" role="alert">
             <ShieldAlert aria-hidden />
@@ -562,7 +590,12 @@ export function VoiceClient() {
         )}
         {state.turns.map((turn) => {
           const status = TURN_STATUS[turn.state];
-          const events = turn.events.map(operationalEvent).filter((e) => e !== null);
+          const events = turn.events.flatMap((raw, i) => {
+            const event = operationalEvent(raw);
+            const key = `${turn.id}:${i}`;
+            if (!event || (event.kind === "mission" && !shownMissions.has(key))) return [];
+            return [{ event, key }];
+          });
           return (
             <article key={turn.id} className={styles.turn}>
               {turn.you && (
@@ -601,11 +634,16 @@ export function VoiceClient() {
                   {plainText(turn.icos)}
                 </p>
               )}
-              {events.map((event, i) =>
+              {events.map(({ event, key }) =>
                 event.kind === "mission" ? (
-                  <Mission key={i} mission={event.mission} label={event.label} tone={event.tone} />
+                  <Mission
+                    key={key}
+                    mission={event.mission}
+                    label={event.label}
+                    tone={event.tone}
+                  />
                 ) : (
-                  <p key={i} className={styles.event} data-tone={event.tone}>
+                  <p key={key} className={styles.event} data-tone={event.tone}>
                     {TONE_ICON[event.tone]}
                     {event.label}
                   </p>
@@ -615,15 +653,20 @@ export function VoiceClient() {
           );
         })}
         <div ref={turnsEnd} />
-      </div>
+      </section>
+      <p className={styles.srOnly} aria-live="polite">
+        {lastAnswer ? `ICOS : ${plainText(lastAnswer)}` : ""}
+      </p>
 
       <footer className={styles.dock} data-tone={meta.tone}>
-        <div className={styles.phase} aria-live="polite">
+        <div className={styles.phase} role="status" aria-live="polite">
           <span className={styles.phaseLabel}>
             {PHASE_ICON[phase]}
             {meta.label}
           </span>
-          <span className={styles.phaseHint}>{hint}</span>
+          <span className={styles.phaseHint} data-notice={notice !== null}>
+            {hint}
+          </span>
         </div>
         <div className={styles.side}>
           <button
@@ -643,7 +686,6 @@ export function VoiceClient() {
           data-phase={phase}
           disabled={!canTalk}
           onClick={talking ? stopTalking : startTalking}
-          aria-pressed={talking}
           aria-label={micLabel}
         >
           {talking ? (
@@ -678,13 +720,17 @@ export function VoiceClient() {
           id="voice-diagnostics"
           className={styles.diagnostics}
           aria-label="Diagnostics techniques"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") closeDiagnostics();
+          }}
         >
           <div className={styles.missionHead}>
             <h2>Diagnostics</h2>
             <button
               type="button"
               className={styles.iconButton}
-              onClick={() => setDiagnostics(false)}
+              ref={diagnosticsClose}
+              onClick={closeDiagnostics}
               aria-label="Fermer les diagnostics"
             >
               <X aria-hidden />

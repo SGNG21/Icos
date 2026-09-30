@@ -57,11 +57,17 @@ export function VoiceLogin({ nextPath }: { nextPath: string }) {
     const result = await submitRef.current({ email, password }, nextPath);
     if (result.status === "rejected") {
       setPending(false);
-      setError(online ? result.message : "Pas de connexion réseau. Réessayez une fois en ligne.");
-      passwordRef.current?.focus();
+      setError(
+        navigator.onLine ? result.message : "Pas de connexion réseau. Réessayez une fois en ligne.",
+      );
     }
     // succeeded: keep the pending state while the voice screen loads.
   }
+
+  // Focus once the field is enabled again (after the re-render), not before.
+  useEffect(() => {
+    if (error && !pending) passwordRef.current?.focus();
+  }, [error, pending]);
 
   const canSubmit = email.length > 0 && password.length > 0 && !pending && online;
 

@@ -15,7 +15,7 @@
   --line-2: rgb(122 162 255 / 22%);
   --text: #e7edf9;
   --muted: #94a0ba;
-  --dim: #6c7894;
+  --dim: #8792ad; /* ≥4.5:1 on the glass surfaces */
   --flow: #38bdf8;
   --ok: #34d399;
   --critical: #fb4d6d;
@@ -30,6 +30,8 @@
   position: fixed;
   inset: 0;
   display: grid;
+  /* minmax(0, …): the header truncates instead of widening the page at 320px. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100dvh;
   overflow: hidden;
@@ -299,7 +301,7 @@
 }
 
 .textButton {
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid var(--line-2);
@@ -440,6 +442,10 @@
 .phaseHint {
   font-size: 13px;
   color: var(--muted);
+}
+
+.phaseHint[data-notice="true"] {
+  color: color-mix(in srgb, var(--warn) 75%, white);
 }
 
 .side {
@@ -645,8 +651,9 @@
 }
 
 .diagnostics {
+  /* Anchored under the header: the mic, Stop and Annuler stay reachable. */
   position: absolute;
-  inset: auto 12px calc(12px + env(safe-area-inset-bottom)) 12px;
+  inset: calc(max(12px, env(safe-area-inset-top)) + 58px) 12px auto 12px;
   z-index: 10;
   max-height: 60dvh;
   overflow: auto;
@@ -728,6 +735,9 @@
 }
 
 .badges {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;

@@ -40,7 +40,9 @@ export type VoiceAction =
   | { type: "stop_talking" }
   | { type: "interrupt" }
   | { type: "local_error"; code: string; message: string }
-  | { type: "clear_error" };
+  | { type: "clear_error" }
+  /** A local utterance that never reached ICOS (mic refused, user cancelled). */
+  | { type: "discard_turn"; turnId: string };
 
 const MAX_TURNS = 20;
 
@@ -118,6 +120,15 @@ export function voiceReducer(state: VoiceUiState, action: VoiceAction): VoiceUiS
       return { ...state, error: { code: action.code, message: action.message } };
     case "clear_error":
       return { ...state, error: null };
+    case "discard_turn": {
+      const turn = state.turns.find((t) => t.id === action.turnId);
+      if (!turn || turn.youFinal || turn.icos) return state; // it reached ICOS: keep it
+      return {
+        ...state,
+        talkingTurnId: state.talkingTurnId === action.turnId ? null : state.talkingTurnId,
+        turns: state.turns.filter((t) => t.id !== action.turnId),
+      };
+    }
     case "server":
       return onServer(state, action.message);
   }
@@ -166,14 +177,17 @@ function onServer(state: VoiceUiState, m: ServerMessage): VoiceUiState {
       if (m.turnId) {
         if (m.code === "TURN_DROPPED" || m.code.startsWith("STT_")) {
           next = upsert(next, m.turnId, { state: "dropped" });
-        } else if (
-          m.code === "COGNITIVE_UNAVAILABLE" ||
-          (m.code === "COGNITIVE_TIMEOUT" && m.text)
-        ) {
+        } else if (m.code.startsWith("COGNITIVE_") && m.text !== undefined) {
+          // Only the submission path carries the text: the turn was not accepted.
           next = upsert(next, m.turnId, { state: "failed" });
+          if (m.code === "COGNITIVE_ERROR") {
+            next = { ...next, error: { code: "COGNITIVE_REJECTED", message: m.message } };
+          }
         }
       }
-      if (m.code === "PROVIDER_NOT_CONFIGURED") next = { ...next, link: "unavailable" };
+      if (m.code === "PROVIDER_NOT_CONFIGURED" || m.code === "SESSION_FORBIDDEN") {
+        next = { ...next, link: "unavailable" };
+      }
       if (m.code === "SESSION_EXPIRED") next = { ...next, sessionId: null };
       return next;
     }

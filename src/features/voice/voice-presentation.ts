@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { MissionEventPayloadSchema, type MissionEventPayload } from "@/core/voice/contracts";
+
 import type { VoiceTurnView, VoiceUiState } from "./voice-client";
 
 /**
@@ -61,7 +63,8 @@ export function voicePhase(state: VoiceUiState, speaking: boolean): VoicePhase {
       return "INTERRUPTED";
     case "dropped":
     case "failed":
-      return "ERROR";
+      // Only while the problem is current; the turn itself keeps its badge.
+      return state.error ? "ERROR" : "IDLE";
     case "done":
       return "IDLE";
   }
@@ -87,6 +90,8 @@ export function userMessage(code: string): string {
       return "ICOS met trop de temps à répondre. Vous pouvez renvoyer votre message.";
     case "COGNITIVE_ERROR":
       return "ICOS n'a pas pu terminer sa réponse. Votre message est bien enregistré.";
+    case "COGNITIVE_REJECTED":
+      return "ICOS n'a pas confirmé votre message. Vous pouvez le renvoyer.";
     case "PROVIDER_NOT_CONFIGURED":
       return "La voix n'est pas activée sur ce serveur ICOS.";
     case "SESSION_EXPIRED":
@@ -116,21 +121,7 @@ export function isBlocking(code: string): boolean {
 
 const Text = z.string().trim().min(1).max(200);
 
-/** Only fields the runtime actually sends are shown; nothing is inferred. */
-const MissionPayload = z.object({
-  missionId: Text.optional(),
-  title: Text,
-  status: z.enum(["created", "running", "blocked", "completed", "failed"]).optional(),
-  /** 0–100 when the runtime knows it. */
-  progress: z.number().min(0).max(100).optional(),
-  workersActive: z.number().int().min(0).optional(),
-  startedAt: z.string().datetime({ offset: true }).optional(),
-  currentStep: Text.optional(),
-  resultAvailable: z.boolean().optional(),
-  needsAttention: z.boolean().optional(),
-});
-
-export type MissionCard = z.infer<typeof MissionPayload>;
+export type MissionCard = MissionEventPayload;
 
 const SummaryPayload = z.object({ summary: Text });
 
@@ -153,7 +144,7 @@ export function missionStatusLabel(status: MissionCard["status"]): { label: stri
 /** Turns a runtime event into something worth showing — or null. Never raw JSON. */
 export function operationalEvent(event: VoiceTurnView["events"][number]): OperationalEvent | null {
   if (event.kind === "MISSION_EVENT") {
-    const mission = MissionPayload.safeParse(event.payload);
+    const mission = MissionEventPayloadSchema.safeParse(event.payload);
     if (!mission.success) return null;
     const { label, tone } = missionStatusLabel(mission.data.status);
     return { kind: "mission", label, tone, mission: mission.data };
@@ -182,5 +173,26 @@ export function relativeTime(iso: string, now: number): string {
 
 /** Answers are plain text on a phone: drop markdown emphasis markers. */
 export function plainText(text: string): string {
-  return text.replace(/\*\*|__|`/g, "");
+  // Paired markers only: `__init__`-like text inside a sentence stays intact.
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/(^|\s)__(\S(?:.*?\S)?)__(?=\s|$|[.,;:!?])/g, "$1$2");
+}
+
+/**
+ * Mission events that should be drawn: one card per mission (its latest
+ * update), so a stale "en cours" never sits next to "terminée".
+ */
+export function latestMissionEvents(turns: VoiceTurnView[]): Set<string> {
+  const latest = new Map<string, string>();
+  for (const turn of turns) {
+    turn.events.forEach((event, i) => {
+      const parsed = operationalEvent(event);
+      if (parsed?.kind === "mission") {
+        latest.set(parsed.mission.missionId ?? `${turn.id}:${i}`, `${turn.id}:${i}`);
+      }
+    });
+  }
+  return new Set(latest.values());
 }

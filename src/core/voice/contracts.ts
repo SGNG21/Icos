@@ -204,6 +204,26 @@ export type CognitiveEvent =
   | { type: "FINAL_RESPONSE"; text: string }
   | { type: "ERROR"; message: string };
 
+/**
+ * PROPOSED payload of a MISSION_EVENT (decision 0056) — the shape the phone
+ * mission card renders. No runtime emits it yet; the Cognitive Runtime / CORE3
+ * adapter should produce exactly this. Unknown shapes are dropped, never shown.
+ */
+const MissionText = z.string().trim().min(1).max(200);
+export const MissionEventPayloadSchema = z.object({
+  missionId: MissionText.optional(),
+  title: MissionText,
+  status: z.enum(["created", "running", "blocked", "completed", "failed"]).optional(),
+  /** 0–100, only when the runtime knows it. */
+  progress: z.number().min(0).max(100).optional(),
+  workersActive: z.number().int().min(0).optional(),
+  startedAt: z.string().datetime({ offset: true }).optional(),
+  currentStep: MissionText.optional(),
+  resultAvailable: z.boolean().optional(),
+  needsAttention: z.boolean().optional(),
+});
+export type MissionEventPayload = z.infer<typeof MissionEventPayloadSchema>;
+
 export type CognitiveInterruptReason = "BARGE_IN" | "USER_CANCEL" | "SESSION_CLOSED" | "TIMEOUT";
 
 export interface CognitiveRuntimePort {

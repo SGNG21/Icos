@@ -121,6 +121,22 @@ Audit of committed code at `e652469`:
   (`public/icos-voice-tap.js`), not a `blob:` URL; a refused upgrade is diagnosed over HTTP
   (401 → login, 403 → voice unavailable) instead of retrying forever; failed turns can be resent.
 
+## Phone UI (third increment)
+
+- `/voice` and its own sign-in screen (`/login?next=/voice…` renders `VoiceLogin`; same
+  `createLoginSubmission`, endpoint and `safeNextPath` as the shared form, which is untouched).
+- Every visual state is derived from protocol/reducer state (`voice-presentation.ts`):
+  CONNECTING, IDLE, LISTENING, TRANSCRIBING, THINKING, SPEAKING (only while audio really
+  plays), INTERRUPTED, RECONNECTING, ERROR, OFFLINE. User-facing French errors; codes,
+  session ids and latencies only in the diagnostics panel.
+- **Proposed MISSION_EVENT payload** (`MissionEventPayloadSchema` in
+  `src/core/voice/contracts.ts`): `title` required; `missionId`, `status`
+  (created|running|blocked|completed|failed), `progress` 0–100, `workersActive`, `startedAt`
+  (ISO), `currentStep`, `resultAvailable`, `needsAttention` optional. No runtime emits it yet;
+  the Cognitive Runtime / CORE3 adapter should produce exactly this. The phone shows one card
+  per `missionId` (latest update) and drops any payload that does not parse — nothing is
+  inferred. APPROVAL_EVENT / ACTION_EVENT show `summary` only.
+
 ## Gaps (not done here)
 
 - **Phone reachability**: a phone grants the microphone only to a secure origin. The host
