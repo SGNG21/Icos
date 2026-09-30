@@ -22,8 +22,13 @@ export const enqueueScheduledJobSchema = z
           .object({
             title: z.string().trim().min(1).max(200),
             objective: z.string().trim().min(1).max(4000),
-            /* Optional, as the start_mission handler and igniteAutonomousMission accept it. */
-            goalId: z.string().trim().min(1).max(200).optional(),
+            /*
+             * Optional goal lineage, honoured by the start_mission handler and
+             * igniteAutonomousMission (decision 0056: a conversation launches its approved goal
+             * through here). 5000, not 200: a goal id is derived from title + objective with no
+             * cap (GoalNormalizer), so a real launch would otherwise be refused.
+             */
+            goalId: z.string().trim().min(1).max(5000).optional(),
           })
           .strict(),
         ...common,
