@@ -79,6 +79,15 @@ describe("scheduler handlers", () => {
     ).rejects.toBeInstanceOf(PermanentJobError);
   });
 
+  it("supervisor_observe without a composed supervisor fails permanently, never silently", async () => {
+    const f = setup();
+    await expect(
+      f.handlers.supervisor_observe(jobOf("supervisor_observe", { observationKey: "x", tenantId: "t", intervalMs: 60_000 }), {
+        signal,
+      }),
+    ).rejects.toThrow("SCHEDULER_SUPERVISOR_UNAVAILABLE");
+  });
+
   it("rejects a malformed payload permanently", async () => {
     const f = setup();
     await expect(f.handlers.start_mission(jobOf("start_mission", { title: "T" }), { signal })).rejects.toBeInstanceOf(

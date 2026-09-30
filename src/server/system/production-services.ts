@@ -15,6 +15,8 @@ import { loadEnv } from "@/config/env";
 import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
+import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
+import { seedObservation } from "@/server/proactive/observations";
 import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
@@ -271,6 +273,7 @@ function createRecoveryScheduler(
   // Durable Scheduler (ADR-0025): the same timer only triggers a consultation of the
   // durable job table; PostgreSQL stays the source of truth.
   const planner = container.autonomousPlanner;
+  const proactive = composeProactiveSupervisor(container);
   const handlers = createSchedulerHandlers({
     ignite: {
       missions: container.mission,
@@ -296,6 +299,14 @@ function createRecoveryScheduler(
       jobs: container.scheduledJobs,
       intervalMs: loadEnv().ICOS_WORKER_PROBE_INTERVAL_MS,
     },
+    // Proactive Supervisor (decision 0060): observations ride this same durable scheduler.
+    supervisorObservation: proactive
+      ? {
+          supervisor: proactive.supervisor,
+          sources: proactive.sources,
+          jobs: container.scheduledJobs,
+        }
+      : undefined,
   });
   const durableScheduler = new DurableScheduler(container.scheduledJobs, handlers, {
     leaseMs: loadEnv().SCHEDULER_LEASE_MS,
@@ -371,6 +382,13 @@ export async function startProductionServices(
       await seedWorkerProbeSweep(container.scheduledJobs, {
         intervalMs: options.env.ICOS_WORKER_PROBE_INTERVAL_MS,
       });
+
+      /*
+       * Proactive Supervisor (decision 0060): ignite the compute-health observation,
+       * same grid-aligned idempotent ignition as probing. Default policy for that domain
+       * is NOTIFY and compute routing owns remediation, so this observes; it never acts.
+       */
+      if (container.db) await seedObservation(container.scheduledJobs, COMPUTE_HEALTH_OBSERVATION);
     }
   } catch (error) {
     await container.close();

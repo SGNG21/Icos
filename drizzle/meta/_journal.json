@@ -351,6 +351,13 @@
       "when": 1791232004287,
       "tag": "0052_tool_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1791232005287,
+      "tag": "0053_proactive_supervisor",
+      "breakpoints": true
     }
   ]
 }
