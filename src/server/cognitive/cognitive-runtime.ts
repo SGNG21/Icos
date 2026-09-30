@@ -71,7 +71,7 @@ const scopeOf = (
 const textOf = (t: Turn) => t.content.parts.map((p) => p.text).join("\n");
 
 /**
- * Cognitive turn engine (decision 0056):
+ * Cognitive turn engine (decision 0057):
  * USER TURN → DURABLE CONVERSATION → CONTEXT ASSEMBLY → COGNITION → POLICY
  * → RESPONSE / PROPOSAL → RESULT → MEMORY WRITEBACK.
  *
@@ -80,6 +80,7 @@ const textOf = (t: Turn) => t.content.parts.map((p) => p.text).join("\n");
  */
 export class CognitiveRuntime {
   private readonly inflight = new Map<string, AbortController>();
+  private readonly background = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly deps: {
@@ -105,7 +106,7 @@ export class CognitiveRuntime {
     return this.deps.conversations.list(owner(actor));
   }
 
-  /** Resume after restart: close interrupted turns, finish approved-but-unsettled proposals. */
+  /** Resume after restart: close interrupted turns, finish approved-but-unlaunched proposals. */
   async resume(actor: CognitiveActor, conversationId: string): Promise<ConversationState> {
     const conversation = await this.requireConversation(actor, conversationId);
     const { conversations } = this.deps;
@@ -114,7 +115,8 @@ export class CognitiveRuntime {
       this.deps.staleTurnMs ?? 5 * 60_000,
     );
     for (const ref of await conversations.listRefs(conversationId)) {
-      if (ref.status === "approved") await this.settle(actor, conversation, ref);
+      if (ref.status === "approved" || ref.status === "launching")
+        await this.launch(conversation, ref);
     }
     return {
       conversation,
@@ -125,21 +127,77 @@ export class CognitiveRuntime {
     };
   }
 
+  /**
+   * Blocking submit: resolves when the turn is terminal (completed/failed/cancelled).
+   * Idempotent on `idempotencyKey`; a replay returns the original outcome.
+   */
   async submitTurn(
     actor: CognitiveActor,
     conversationId: string,
     input: SubmitTurnInput,
   ): Promise<TurnResult> {
+    const accepted = await this.begin(actor, conversationId, input);
+    if (accepted.replayed) {
+      return { ...(await this.turnOutcome(conversationId, accepted.turn)), replayed: true };
+    }
+    return {
+      ...(await this.process(actor, accepted.conversation, accepted.turn)),
+      replayed: false,
+    };
+  }
+
+  /**
+   * Acceptance semantics (Voice / phone): resolves as soon as the user turn is DURABLY
+   * recorded, with its identity; processing continues in the background and is observed
+   * through the event log (`events` / SSE). Idempotent on `idempotencyKey`. A dropped HTTP
+   * connection does not cancel an accepted turn; only `cancelTurn` does. A process crash
+   * leaves it in-flight, and `resume` closes it as `interrupted`.
+   */
+  async acceptTurn(
+    actor: CognitiveActor,
+    conversationId: string,
+    input: SubmitTurnInput,
+  ): Promise<{ turn: Turn; replayed: boolean }> {
+    const accepted = await this.begin(actor, conversationId, input);
+    if (!accepted.replayed) {
+      const id = accepted.turn.id;
+      this.background.set(
+        id,
+        this.process(actor, accepted.conversation, accepted.turn)
+          .catch(() => undefined) // failures are durable (turn.failed), never thrown here
+          .finally(() => this.background.delete(id)),
+      );
+    }
+    return { turn: accepted.turn, replayed: accepted.replayed };
+  }
+
+  /** Resolves when every background turn of this process has finished (tests, shutdown). */
+  async drain(): Promise<void> {
+    await Promise.allSettled([...this.background.values()]);
+  }
+
+  private async begin(
+    actor: CognitiveActor,
+    conversationId: string,
+    input: SubmitTurnInput,
+  ): Promise<{ conversation: Conversation; turn: Turn; replayed: boolean }> {
     const { conversations } = this.deps;
     const begun = await conversations.beginUserTurn(owner(actor), conversationId, input);
     if (!begun) throw new ConversationNotFoundError();
-    if (!begun.created)
-      return { ...(await this.turnOutcome(conversationId, begun.turn)), replayed: true };
-
     const conversation = (await conversations.get(owner(actor), conversationId))!;
-    let turn = begun.turn;
+    return { conversation, turn: begun.turn, replayed: !begun.created };
+  }
+
+  private async process(
+    actor: CognitiveActor,
+    conversation: Conversation,
+    begun: Turn,
+  ): Promise<Omit<TurnResult, "replayed">> {
+    const { conversations } = this.deps;
+    const conversationId = conversation.id;
+    let turn = begun;
     if (!(await conversations.markProcessing(actor.tenantId, turn))) {
-      return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+      return this.turnOutcome(conversationId, turn);
     }
     const abort = new AbortController();
     this.inflight.set(turn.id, abort);
@@ -172,7 +230,7 @@ export class CognitiveRuntime {
         intent: thought.intent,
         proposal: governed.proposal,
       });
-      if (!done) return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+      if (!done) return this.turnOutcome(conversationId, turn);
 
       await this.writeback(
         scope,
@@ -185,14 +243,13 @@ export class CognitiveRuntime {
         turn: (await conversations.getTurn(conversationId, turn.id))!,
         reply: done.assistant,
         proposal: done.ref,
-        replayed: false,
       };
     } catch (error) {
       const reason = abort.signal.aborted
         ? "cancelled_by_user"
         : `${error instanceof Error ? error.name : "Error"}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`;
       await conversations.failTurn(actor.tenantId, turn, reason);
-      return { ...(await this.turnOutcome(conversationId, turn)), replayed: false };
+      return this.turnOutcome(conversationId, turn);
     } finally {
       this.inflight.delete(turn.id);
     }
@@ -222,6 +279,8 @@ export class CognitiveRuntime {
     { ok: true; proposal: TurnReference } | { ok: false; reason: "not_found" | "already_decided" }
   > {
     const conversation = await this.requireConversation(actor, conversationId);
+    // The decision is committed first: from here on the launch is durable work that a
+    // dropped connection or a crash cannot lose (resume / recoverLaunches finish it).
     const decided = await this.deps.conversations.decideRef(
       owner(actor),
       conversationId,
@@ -230,7 +289,7 @@ export class CognitiveRuntime {
     );
     if (!decided.ok) return decided;
     if (decision === "reject") return { ok: true, proposal: decided.ref };
-    return { ok: true, proposal: await this.settle(actor, conversation, decided.ref) };
+    return { ok: true, proposal: await this.launch(conversation, decided.ref) };
   }
 
   async getContext(
@@ -308,6 +367,35 @@ export class CognitiveRuntime {
     );
   }
 
+  /** Memory candidates awaiting a human decision in this scope. */
+  memoryCandidates(
+    actor: CognitiveActor,
+    scope: Omit<CognitiveScope, "tenantId" | "userId">,
+  ): Promise<MemoryRecord[]> {
+    return this.deps.memory.candidates({
+      tenantId: owner(actor).tenantId,
+      userId: actor.userId,
+      ...scope,
+    });
+  }
+
+  /**
+   * MODEL_INFERRED → candidate → HUMAN REVIEW → active. The reviewer is the authenticated
+   * human; the record keeps its epistemic status and gains `reviewedBy`.
+   */
+  reviewMemory(
+    actor: CognitiveActor,
+    scope: Omit<CognitiveScope, "tenantId" | "userId">,
+    id: string,
+    decision: "accept" | "reject",
+  ): Promise<MemoryRecord | null> {
+    return this.deps.memory.review(
+      { tenantId: owner(actor).tenantId, userId: actor.userId, ...scope },
+      id,
+      decision,
+    );
+  }
+
   /** Right to erasure: tombstone (content erased, provenance kept). */
   forgetMemory(
     actor: CognitiveActor,
@@ -340,37 +428,64 @@ export class CognitiveRuntime {
     return { turn: current, reply, proposal };
   }
 
-  private async settle(
-    actor: CognitiveActor,
-    conversation: Conversation,
-    ref: TurnReference,
-  ): Promise<TurnReference> {
+  /**
+   * APPROVED → LAUNCHING → LAUNCHED | FAILED through the canonical gateway. Safe to call
+   * again at any point (recovery): the store only moves forward, and the gateway is
+   * idempotent on the proposal, so a relaunch returns the same goal/job/mission.
+   */
+  private async launch(conversation: Conversation, ref: TurnReference): Promise<TurnReference> {
     const { conversations, missions } = this.deps;
-    if (ref.kind !== "goal_proposal" || !missions) {
-      return conversations.settleRef(
-        actor.tenantId,
-        ref,
-        "not_connected",
-        null,
-        `${ref.kind}: no canonical backend connected`,
-      );
+    const tenantId = conversation.tenantId;
+    const launching = await conversations.beginLaunch(tenantId, ref);
+    if (!launching)
+      return (await conversations.listRefs(conversation.id)).find((r) => r.id === ref.id) ?? ref;
+    if (launching.kind !== "goal_proposal" || !missions) {
+      return conversations.finishLaunch(tenantId, launching, {
+        status: "not_connected",
+        reason: `${launching.kind}: no canonical backend connected`,
+      });
     }
     try {
-      const res = await missions.submitGoal(ref.payload as GoalProposal, {
-        refId: ref.id,
+      const result = await missions.launch(launching.payload as GoalProposal, {
+        refId: launching.id,
         conversationId: conversation.id,
-        turnId: ref.turnId,
-        approvedBy: ref.decidedBy ?? actor.userId,
+        turnId: launching.turnId,
+        approvedBy: launching.decidedBy ?? conversation.ownerUserId,
         clientId: conversation.clientId,
         projectId: conversation.projectId,
       });
-      return res.status === "submitted"
-        ? conversations.settleRef(actor.tenantId, ref, "submitted", res.externalId, null)
-        : conversations.settleRef(actor.tenantId, ref, res.status, null, res.detail);
+      return conversations.finishLaunch(tenantId, launching, result);
     } catch (error) {
-      const detail = error instanceof Error ? error.message.slice(0, 300) : "submission failed";
-      return conversations.settleRef(actor.tenantId, ref, "failed", null, detail);
+      // Left LAUNCHING on purpose when the failure may be transient (e.g. database down):
+      // recovery retries idempotently. Only a deterministic refusal is recorded as FAILED.
+      if (error instanceof Error && error.name === "ZodError") {
+        return conversations.finishLaunch(tenantId, launching, {
+          status: "failed",
+          reason: "invalid_goal",
+        });
+      }
+      throw error;
     }
+  }
+
+  /**
+   * Restart recovery for launches (no HTTP caller needed): every APPROVED or LAUNCHING
+   * proposal of the tenant is launched idempotently. Called when the runtime is composed.
+   */
+  async recoverLaunches(tenantId: string): Promise<{ recovered: number; failed: number }> {
+    let recovered = 0;
+    let failed = 0;
+    for (const ref of await this.deps.conversations.pendingLaunches(tenantId)) {
+      const conversation = await this.deps.conversations.conversationOf(ref.conversationId);
+      if (!conversation) continue;
+      try {
+        const settled = await this.launch(conversation, ref);
+        if (settled.status === "launched") recovered++;
+      } catch {
+        failed++;
+      }
+    }
+    return { recovered, failed };
   }
 
   /**

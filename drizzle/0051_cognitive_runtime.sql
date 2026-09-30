@@ -1,4 +1,4 @@
--- Cognitive Runtime + Memory V1 (decision 0056). ADDITIVE: no existing table is modified.
+-- Cognitive Runtime + Memory V1 (decision 0057). ADDITIVE: no existing table is modified.
 -- Hand-written (drizzle-kit snapshots are stale, see docs/icos/database-migrations.md);
 -- Drizzle mirror: src/server/cognitive/schema.ts; checked by cognitive-schema.integration.test.ts.
 --
@@ -12,9 +12,11 @@
 --     cognitive_turns, cognitive_participants, cognitive_conversations,
 --     memory_relations, memory_records, memory_entities CASCADE;
 --   DROP FUNCTION icos_cognitive_turn_guard(), icos_memory_record_guard();
---   then remove the 0050 entry from drizzle/meta/_journal.json.
--- Numbering: 0049 is taken by feat/tool-gateway-connectors (0049_tool_gateway); this file's
--- journal `when` is deliberately later than that one so both apply in order after a merge.
+--   then remove the 0051 entry from drizzle/meta/_journal.json.
+-- Numbering (checked 2026-09-30 across all local branches): 0049 is taken by
+-- feat/tool-gateway-connectors and feat/proactive-supervisor, 0050 by feat/digital-workforce.
+-- This file's journal `when` (0048 + 3 days) sorts after all of them; the integrator only has
+-- to re-sequence `idx` (see decision 0057, "Integration / migration reconciliation").
 -- Reuses icos_forbid_memory_mutation() from 0031 for append-only tables.
 
 CREATE TABLE "cognitive_conversations" (
@@ -87,16 +89,28 @@ CREATE TABLE "cognitive_turn_refs" (
 	"kind" text NOT NULL,
 	"status" text NOT NULL,
 	"payload" jsonb NOT NULL,
-	"external_id" text,
+	"policy_reason" text NOT NULL,
 	"decided_by" text,
 	"decided_at" timestamp with time zone,
+	-- Canonical launch identity (goal intake + scheduler start_mission), set once LAUNCHED.
+	"goal_id" text,
+	"mission_id" text,
+	"launch_job_id" text,
+	"failure_reason" text,
 	"created_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "cognitive_turn_refs_turn_kind_unique" UNIQUE("turn_id","kind"),
 	CONSTRAINT "cognitive_turn_refs_kind_check" CHECK ("kind" in ('goal_proposal','action_request')),
-	CONSTRAINT "cognitive_turn_refs_status_check" CHECK ("status" in ('awaiting_approval','approved','rejected','submitted','not_connected','failed')),
-	CONSTRAINT "cognitive_turn_refs_decision_check" CHECK ("status" = 'awaiting_approval' or "decided_by" is not null)
+	-- PROPOSED → APPROVAL_REQUIRED → APPROVED → LAUNCHING → LAUNCHED | FAILED ; or REJECTED.
+	-- LAUNCHED means the mission is durably accepted by CORE3 (fixed missionId), not that it succeeded.
+	CONSTRAINT "cognitive_turn_refs_status_check" CHECK ("status" in ('proposed','approval_required','approved','launching','launched','rejected','failed','not_connected')),
+	CONSTRAINT "cognitive_turn_refs_decision_check" CHECK ("status" in ('proposed','approval_required') or "decided_by" is not null),
+	CONSTRAINT "cognitive_turn_refs_launched_check" CHECK ("status" <> 'launched' or ("goal_id" is not null and "mission_id" is not null and "launch_job_id" is not null))
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX "cognitive_turn_refs_mission_unique" ON "cognitive_turn_refs" ("mission_id") WHERE "mission_id" is not null;
+--> statement-breakpoint
+CREATE INDEX "cognitive_turn_refs_pending_launch_idx" ON "cognitive_turn_refs" ("tenant_id","status") WHERE "status" in ('approved','launching');
 --> statement-breakpoint
 CREATE TABLE "cognitive_context_snapshots" (
 	"id" text PRIMARY KEY NOT NULL,
@@ -192,6 +206,9 @@ CREATE TABLE "memory_records" (
 	"supersedes_id" text REFERENCES "memory_records"("id") ON DELETE RESTRICT,
 	"contradicts_id" text REFERENCES "memory_records"("id") ON DELETE RESTRICT,
 	"recorded_by" text NOT NULL,
+	-- Human review of a candidate (MODEL_INFERRED or untrusted origin) before it may be used.
+	"reviewed_by" text,
+	"reviewed_at" timestamp with time zone,
 	"created_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "memory_records_tenant_check" CHECK (length("tenant_id") > 0),
@@ -208,6 +225,8 @@ CREATE TABLE "memory_records" (
 	CONSTRAINT "memory_records_model_not_fact_check" CHECK ("epistemic" <> 'MODEL_INFERRED' or "statement_kind" in ('inference','suggestion')),
 	-- Untrusted (retrieved/tool) text is never stored as an instruction.
 	CONSTRAINT "memory_records_untrusted_instruction_check" CHECK ("origin_trust" <> 'untrusted' or "statement_kind" <> 'instruction'),
+	-- A model inference or untrusted text is never active without a recorded human review.
+	CONSTRAINT "memory_records_reviewed_promotion_check" CHECK ("status" <> 'active' or ("epistemic" <> 'MODEL_INFERRED' and "origin_trust" <> 'untrusted') or ("reviewed_by" is not null and "reviewed_at" is not null)),
 	CONSTRAINT "memory_records_project_client_check" CHECK ("project_id" is null or "client_id" is not null)
 );
 --> statement-breakpoint
@@ -266,6 +285,9 @@ BEGIN
 	END IF;
 	IF NEW.content IS DISTINCT FROM OLD.content AND NOT (NEW.status = 'deleted' AND NEW.content = '[deleted]') THEN
 		RAISE EXCEPTION 'memory_records: content is immutable except for deletion tombstones';
+	END IF;
+	IF OLD.reviewed_by IS NOT NULL AND (NEW.reviewed_by IS DISTINCT FROM OLD.reviewed_by OR NEW.reviewed_at IS DISTINCT FROM OLD.reviewed_at) THEN
+		RAISE EXCEPTION 'memory_records: a recorded review is immutable';
 	END IF;
 	IF OLD.status = 'deleted' AND NEW IS DISTINCT FROM OLD THEN
 		RAISE EXCEPTION 'memory_records: deleted is terminal';

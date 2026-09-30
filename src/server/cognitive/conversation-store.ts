@@ -15,7 +15,7 @@ import type {
   TurnOutcome,
   TurnReference,
 } from "@/core/cognitive/contracts";
-import type { GovernedOutcome } from "@/core/cognitive/turn-policy";
+import { launchPolicy, type GovernedOutcome } from "@/core/cognitive/turn-policy";
 import type { Database } from "@/server/database/client";
 import { uniqueConstraintName } from "@/server/database/errors";
 
@@ -90,9 +90,13 @@ const toRef = (r: RefRow): TurnReference => ({
   kind: r.kind as TurnReference["kind"],
   status: r.status as RefStatus,
   payload: r.payload as TurnReference["payload"],
-  externalId: r.externalId,
+  policyReason: r.policyReason,
   decidedBy: r.decidedBy,
   decidedAt: iso(r.decidedAt),
+  goalId: r.goalId,
+  missionId: r.missionId,
+  launchJobId: r.launchJobId,
+  failureReason: r.failureReason,
   createdAt: r.createdAt.toISOString(),
 });
 
@@ -103,7 +107,7 @@ export interface ConversationOwner {
 }
 
 /**
- * Durable conversation store (decision 0056). PostgreSQL is the only authority:
+ * Durable conversation store (decision 0057). PostgreSQL is the only authority:
  * no model/session id, every turn and event is ordered by a per-conversation sequence,
  * and a conversation resumes from these rows after any restart.
  */
@@ -368,6 +372,7 @@ export class PostgresConversationStore {
       });
       let ref: TurnReference | null = null;
       if (result.proposal) {
+        const policy = launchPolicy(result.proposal.kind);
         const [row] = await tx
           .insert(cognitiveTurnRefs)
           .values({
@@ -376,7 +381,8 @@ export class PostgresConversationStore {
             conversationId: turn.conversationId,
             turnId: turn.id,
             kind: result.proposal.kind,
-            status: "awaiting_approval",
+            status: policy.status,
+            policyReason: policy.reason,
             payload: result.proposal.payload,
             createdAt: now,
             updatedAt: now,
@@ -387,6 +393,7 @@ export class PostgresConversationStore {
           refId: ref.id,
           kind: ref.kind,
           status: ref.status,
+          policyReason: ref.policyReason,
         });
       }
       await this.appendEvent(tx, turn.conversationId, tenantId, "turn.completed", turn.id, {
@@ -512,7 +519,7 @@ export class PostgresConversationStore {
   }
 
   /**
-   * awaiting_approval → approved | rejected. Exactly one decision wins (conditional
+   * approval_required → approved | rejected. Exactly one decision wins (conditional
    * update); a second decision returns `already_decided`.
    */
   async decideRef(
@@ -540,7 +547,7 @@ export class PostgresConversationStore {
           and(
             eq(cognitiveTurnRefs.id, refId),
             eq(cognitiveTurnRefs.conversationId, conversationId),
-            eq(cognitiveTurnRefs.status, "awaiting_approval"),
+            eq(cognitiveTurnRefs.status, "approval_required"),
           ),
         )
         .returning();
@@ -569,30 +576,112 @@ export class PostgresConversationStore {
     });
   }
 
-  /** approved → submitted | not_connected | failed, recording the canonical id. */
-  async settleRef(
+  /**
+   * approved → launching (or already launching: a recovery re-entry). Returns null for
+   * any other state, so a rejected/launched/failed proposal is never launched again.
+   */
+  async beginLaunch(tenantId: string, ref: TurnReference): Promise<TurnReference | null> {
+    return await this.db.transaction(async (tx) => {
+      await this.lockConversation(tx, ref.conversationId);
+      const [row] = await tx
+        .select()
+        .from(cognitiveTurnRefs)
+        .where(eq(cognitiveTurnRefs.id, ref.id));
+      if (!row || (row.status !== "approved" && row.status !== "launching")) return null;
+      if (row.status === "launching") return toRef(row);
+      const [updated] = await tx
+        .update(cognitiveTurnRefs)
+        .set({ status: "launching", updatedAt: this.clock.now() })
+        .where(and(eq(cognitiveTurnRefs.id, ref.id), eq(cognitiveTurnRefs.status, "approved")))
+        .returning();
+      await this.appendEvent(tx, ref.conversationId, tenantId, "proposal.launching", ref.turnId, {
+        refId: ref.id,
+      });
+      return toRef(updated);
+    });
+  }
+
+  /**
+   * launching → launched | failed | not_connected, exactly once (conditional update).
+   * A concurrent finisher gets the already-settled row back and appends no event.
+   */
+  async finishLaunch(
     tenantId: string,
     ref: TurnReference,
-    status: Extract<RefStatus, "submitted" | "not_connected" | "failed">,
-    externalId: string | null,
-    detail: string | null,
+    outcome:
+      | { status: "launched"; goalId: string; missionId: string; launchJobId: string }
+      | { status: "failed" | "not_connected"; reason: string },
   ): Promise<TurnReference> {
     return await this.db.transaction(async (tx) => {
       await this.lockConversation(tx, ref.conversationId);
       const [row] = await tx
         .update(cognitiveTurnRefs)
-        .set({ status, externalId, updatedAt: this.clock.now() })
-        .where(and(eq(cognitiveTurnRefs.id, ref.id), eq(cognitiveTurnRefs.status, "approved")))
+        .set(
+          outcome.status === "launched"
+            ? {
+                status: "launched",
+                goalId: outcome.goalId,
+                missionId: outcome.missionId,
+                launchJobId: outcome.launchJobId,
+                updatedAt: this.clock.now(),
+              }
+            : {
+                status: outcome.status,
+                failureReason: outcome.reason.slice(0, 500),
+                updatedAt: this.clock.now(),
+              },
+        )
+        .where(and(eq(cognitiveTurnRefs.id, ref.id), eq(cognitiveTurnRefs.status, "launching")))
         .returning();
-      if (!row) return ref; // already settled by a concurrent resume: no second event
-      await this.appendEvent(tx, ref.conversationId, tenantId, "proposal.submitted", ref.turnId, {
-        refId: ref.id,
-        status,
-        externalId,
-        detail,
-      });
+      if (!row) {
+        const [current] = await tx
+          .select()
+          .from(cognitiveTurnRefs)
+          .where(eq(cognitiveTurnRefs.id, ref.id));
+        return toRef(current);
+      }
+      await this.appendEvent(
+        tx,
+        ref.conversationId,
+        tenantId,
+        outcome.status === "launched" ? "proposal.launched" : "proposal.failed",
+        ref.turnId,
+        outcome.status === "launched"
+          ? {
+              refId: ref.id,
+              goalId: outcome.goalId,
+              missionId: outcome.missionId,
+              launchJobId: outcome.launchJobId,
+            }
+          : { refId: ref.id, status: outcome.status, reason: outcome.reason.slice(0, 500) },
+      );
       return toRef(row);
     });
+  }
+
+  /** Approved-but-not-launched proposals of a tenant (restart recovery of launches). */
+  async pendingLaunches(tenantId: string, limit = 100): Promise<TurnReference[]> {
+    const rows = await this.db
+      .select()
+      .from(cognitiveTurnRefs)
+      .where(
+        and(
+          eq(cognitiveTurnRefs.tenantId, tenantId),
+          inArray(cognitiveTurnRefs.status, ["approved", "launching"]),
+        ),
+      )
+      .orderBy(asc(cognitiveTurnRefs.updatedAt), asc(cognitiveTurnRefs.id))
+      .limit(limit);
+    return rows.map(toRef);
+  }
+
+  /** The conversation a ref belongs to (for recovery, which has no HTTP caller). */
+  async conversationOf(conversationId: string): Promise<Conversation | null> {
+    const [row] = await this.db
+      .select()
+      .from(cognitiveConversations)
+      .where(eq(cognitiveConversations.id, conversationId));
+    return row ? toConversation(row) : null;
   }
 
   async recordEvent(

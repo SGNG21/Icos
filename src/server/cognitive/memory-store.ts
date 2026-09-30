@@ -14,7 +14,11 @@ import type {
   Sensitivity,
   WritebackOutcome,
 } from "@/core/cognitive/contracts";
-import { classifyCandidate, decideAgainstExisting } from "@/core/cognitive/writeback-rules";
+import {
+  classifyCandidate,
+  decideAgainstExisting,
+  SINGLE_VALUED_TYPES,
+} from "@/core/cognitive/writeback-rules";
 import { MemoryPolicyError } from "@/core/memory";
 import type { Database } from "@/server/database/client";
 
@@ -53,6 +57,8 @@ const toRecord = (r: RecordRow): MemoryRecord => ({
   supersedesId: r.supersedesId,
   contradictsId: r.contradictsId,
   recordedBy: r.recordedBy,
+  reviewedBy: r.reviewedBy,
+  reviewedAt: iso(r.reviewedAt),
   createdAt: r.createdAt.toISOString(),
   updatedAt: r.updatedAt.toISOString(),
 });
@@ -71,7 +77,7 @@ const toEntity = (r: EntityRow): Entity => ({
 });
 
 /**
- * Isolation predicate, applied in SQL BEFORE any limit (decision 0056): same tenant, and
+ * Isolation predicate, applied in SQL BEFORE any limit (decision 0057): same tenant, and
  * a row bound to a client/project/user is only visible inside that client/project/user.
  * An unscoped conversation (clientId null) sees only unscoped rows.
  */
@@ -121,7 +127,7 @@ export interface EntityInput {
 }
 
 /**
- * Cognitive memory + entity graph store (decision 0056). One normalized table for the
+ * Cognitive memory + entity graph store (decision 0057). One normalized table for the
  * eight memory types; PostgreSQL relations for the graph (no graph database).
  * All writes go through `write` (governed writeback) — there is no raw insert path.
  */
@@ -353,6 +359,84 @@ export class PostgresCognitiveMemoryStore {
         default:
           return status === "active" ? { kind: "accepted", record } : { kind: "candidate", record };
       }
+    });
+  }
+
+  /** Candidates awaiting human review (model inferences, untrusted text, conflicts). */
+  async candidates(scope: CognitiveScope, limit = 100): Promise<MemoryRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(memoryRecords)
+      .where(and(recordScope(scope), eq(memoryRecords.status, "candidate")))
+      .orderBy(asc(memoryRecords.createdAt), asc(memoryRecords.id))
+      .limit(limit);
+    return rows.map(toRecord);
+  }
+
+  /**
+   * Human review: candidate → active (accept) | rejected. The ONLY way a MODEL_INFERRED or
+   * untrusted-origin record becomes usable. Its epistemic status is never rewritten: an
+   * accepted inference stays MODEL_INFERRED/"inference", now with `reviewedBy`, so it stays
+   * distinguishable from USER_ASSERTED / TOOL_CONFIRMED / SYSTEM_OBSERVED facts. Accepting
+   * a record that contradicts the current truth supersedes that truth (a human decided).
+   */
+  async review(
+    scope: CognitiveScope,
+    id: string,
+    decision: "accept" | "reject",
+  ): Promise<MemoryRecord | null> {
+    const candidate = await this.get(scope, id);
+    if (!candidate || candidate.status !== "candidate") return null;
+    const now = this.clock.now();
+    return await this.db.transaction(async (tx) => {
+      const lock = [
+        candidate.tenantId,
+        candidate.type,
+        candidate.subjectKey,
+        candidate.clientId ?? "",
+        candidate.projectId ?? "",
+        candidate.ownerUserId ?? "",
+      ].join("|");
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lock}))`);
+      if (decision === "reject") {
+        const [row] = await tx
+          .update(memoryRecords)
+          .set({ status: "rejected", reviewedBy: scope.userId, reviewedAt: now, updatedAt: now })
+          .where(and(eq(memoryRecords.id, id), eq(memoryRecords.status, "candidate")))
+          .returning();
+        return row ? toRecord(row) : null;
+      }
+      let supersedesId: string | null = candidate.supersedesId;
+      if (SINGLE_VALUED_TYPES.has(candidate.type)) {
+        const [active] = await tx
+          .update(memoryRecords)
+          .set({ status: "superseded", validUntil: now, updatedAt: now })
+          .where(
+            and(
+              eq(memoryRecords.tenantId, candidate.tenantId),
+              eq(memoryRecords.type, candidate.type),
+              eq(memoryRecords.subjectKey, candidate.subjectKey),
+              sql`coalesce(${memoryRecords.clientId}, '') = ${candidate.clientId ?? ""}`,
+              sql`coalesce(${memoryRecords.projectId}, '') = ${candidate.projectId ?? ""}`,
+              sql`coalesce(${memoryRecords.ownerUserId}, '') = ${candidate.ownerUserId ?? ""}`,
+              eq(memoryRecords.status, "active"),
+            ),
+          )
+          .returning({ id: memoryRecords.id });
+        if (active) supersedesId = active.id;
+      }
+      const [row] = await tx
+        .update(memoryRecords)
+        .set({
+          status: "active",
+          reviewedBy: scope.userId,
+          reviewedAt: now,
+          supersedesId,
+          updatedAt: now,
+        })
+        .where(and(eq(memoryRecords.id, id), eq(memoryRecords.status, "candidate")))
+        .returning();
+      return row ? toRecord(row) : null;
     });
   }
 

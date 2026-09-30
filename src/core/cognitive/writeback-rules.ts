@@ -10,7 +10,7 @@ import type {
 } from "./contracts";
 
 /**
- * Governed memory writeback — pure decision rules (decision 0056).
+ * Governed memory writeback — pure decision rules (decision 0057).
  *
  * candidate → classify → provenance → confidence → deduplicate → contradiction check
  * → accept / reject / update(supersede) / hold as conflict.

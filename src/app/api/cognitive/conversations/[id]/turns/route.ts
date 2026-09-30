@@ -4,9 +4,12 @@ import { json } from "@/server/http/respond";
 import { parseBody, withCognitive } from "@/server/cognitive/http";
 
 /**
- * Submit a user turn. Idempotent on `idempotencyKey` (a replay returns the original turn,
- * 200 + `replayed: true`); a second concurrent turn is refused with 409. Progress is also
- * observable on GET …/events (SSE).
+ * Submit a user turn. Idempotent on `idempotencyKey`; a second concurrent turn → 409.
+ *
+ * - default: blocks until the turn is terminal (201, or 200 + `replayed: true`);
+ * - `?mode=accept` or `Prefer: respond-async` (Voice / phone): 202 as soon as the turn is
+ *   durable, with its id and the event stream to follow. Processing continues server-side
+ *   and is never cancelled by a dropped connection — only by POST …/cancel.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +32,16 @@ export async function POST(
     async (rt, actor) => {
       const body = await parseBody(request, submitTurnSchema);
       if (!body.ok) return body.response;
+      const accept =
+        new URL(request.url).searchParams.get("mode") === "accept" ||
+        /\brespond-async\b/i.test(request.headers.get("prefer") ?? "");
+      if (accept) {
+        const accepted = await rt.acceptTurn(actor, id, body.value);
+        return json(
+          { ...accepted, events: `/api/cognitive/conversations/${id}/events?after=0` },
+          { status: 202 },
+        );
+      }
       const result = await rt.submitTurn(actor, id, body.value);
       return json(result, { status: result.replayed ? 200 : 201 });
     },

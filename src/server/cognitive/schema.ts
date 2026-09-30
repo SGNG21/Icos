@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * Drizzle mirror of drizzle/0050_cognitive_runtime.sql (decision 0056). Constraints,
+ * Drizzle mirror of drizzle/0051_cognitive_runtime.sql (decision 0057). Constraints,
  * partial unique indexes and guard triggers live in the SQL migration; this file only
  * types the columns for queries (same approach as memory-schema.ts).
  */
@@ -71,9 +71,13 @@ export const cognitiveTurnRefs = pgTable("cognitive_turn_refs", {
   kind: text("kind").notNull(),
   status: text("status").notNull(),
   payload: jsonb("payload").notNull(),
-  externalId: text("external_id"),
+  policyReason: text("policy_reason").notNull(),
   decidedBy: text("decided_by"),
   decidedAt: ts("decided_at"),
+  goalId: text("goal_id"),
+  missionId: text("mission_id"),
+  launchJobId: text("launch_job_id"),
+  failureReason: text("failure_reason"),
   createdAt: ts("created_at").notNull(),
   updatedAt: ts("updated_at").notNull(),
 });
@@ -162,6 +166,8 @@ export const memoryRecords = pgTable("memory_records", {
   supersedesId: text("supersedes_id").references((): AnyPgColumn => memoryRecords.id),
   contradictsId: text("contradicts_id").references((): AnyPgColumn => memoryRecords.id),
   recordedBy: text("recorded_by").notNull(),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: ts("reviewed_at"),
   createdAt: ts("created_at").notNull(),
   updatedAt: ts("updated_at").notNull(),
 });

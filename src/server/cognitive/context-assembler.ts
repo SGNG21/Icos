@@ -53,7 +53,7 @@ const STAGE_OF: Record<MemoryRecord["type"], ContextStage> = {
 };
 
 /**
- * Selective context assembly (decision 0056), deterministic stages:
+ * Selective context assembly (decision 0057), deterministic stages:
  *  1 scope → 2 goals → 3 entities → 4 episodic → 5 semantic facts → 6 decisions/procedures
  *  → 7 policy → 8 rank & trim → 9 snapshot → (10 persisted by the runtime).
  */

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Cognitive Runtime + Memory V1 (decision 0056). Pure contracts: no I/O.
+ * Cognitive Runtime + Memory V1 (decision 0057). Pure contracts: no I/O.
  *
  * Models are replaceable compute; these shapes are the durable authority persisted in
  * PostgreSQL. Nothing here carries a model/session id as identity.
@@ -183,13 +183,22 @@ export type CognitionOutput = z.infer<typeof cognitionOutputSchema>;
 // ── Turn references (actions / missions / approvals) ─────────────────────────
 export const REF_KINDS = ["goal_proposal", "action_request"] as const;
 export type RefKind = (typeof REF_KINDS)[number];
+/**
+ * Proposal lifecycle (decision 0057):
+ *   PROPOSED → APPROVAL_REQUIRED → APPROVED → LAUNCHING → LAUNCHED | FAILED ; or REJECTED.
+ * LAUNCHED = the mission is durably accepted by CORE3 under a fixed missionId. It says
+ * nothing about whether the mission will succeed. Actions without a backend end in
+ * NOT_CONNECTED after approval.
+ */
 export const REF_STATUSES = [
-  "awaiting_approval",
+  "proposed",
+  "approval_required",
   "approved",
+  "launching",
+  "launched",
   "rejected",
-  "submitted",
-  "not_connected",
   "failed",
+  "not_connected",
 ] as const;
 export type RefStatus = (typeof REF_STATUSES)[number];
 
@@ -200,10 +209,15 @@ export interface TurnReference {
   readonly kind: RefKind;
   readonly status: RefStatus;
   readonly payload: GoalProposal | ActionProposal;
-  /** Canonical id in the target system once submitted (e.g. goal id), else null. */
-  readonly externalId: string | null;
+  /** Why the policy put the proposal in its initial state. */
+  readonly policyReason: string;
   readonly decidedBy: string | null;
   readonly decidedAt: string | null;
+  /** Canonical launch identity: goal intake id, CORE3 mission id, scheduler job id. */
+  readonly goalId: string | null;
+  readonly missionId: string | null;
+  readonly launchJobId: string | null;
+  readonly failureReason: string | null;
   readonly createdAt: string;
 }
 
@@ -287,9 +301,14 @@ export interface MemoryRecord {
   readonly supersedesId: string | null;
   readonly contradictsId: string | null;
   readonly recordedBy: string;
+  /** Human who reviewed a candidate (required before a MODEL_INFERRED/untrusted row is active). */
+  readonly reviewedBy: string | null;
+  readonly reviewedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export const memoryReviewSchema = z.object({ decision: z.enum(["accept", "reject"]) }).strict();
 
 /** Input to governed writeback. Scope/epistemic come from the calling channel, never the model. */
 export interface MemoryCandidate {
@@ -452,7 +471,10 @@ export const CONVERSATION_EVENT_TYPES = [
   "turn.cancelled",
   "proposal.created",
   "proposal.decided",
-  "proposal.submitted",
+  "proposal.launching",
+  "proposal.launched",
+  "proposal.failed",
+  "memory.reviewed",
   "memory.written",
 ] as const;
 export type ConversationEventType = (typeof CONVERSATION_EVENT_TYPES)[number];

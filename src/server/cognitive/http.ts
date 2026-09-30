@@ -16,7 +16,7 @@ import {
 } from "./index";
 
 /**
- * Shared guard for /api/cognitive/* (decision 0056). Authorization FIRST (fail closed),
+ * Shared guard for /api/cognitive/* (decision 0057). Authorization FIRST (fail closed),
  * then the PostgreSQL-only runtime (503 in memory mode), then the handler. The tenant is
  * the single-tenant shim until COMPLIANCE-1 provides a TenantContext.
  */

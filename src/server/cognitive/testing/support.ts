@@ -37,6 +37,6 @@ export async function resetCognitive(handle: DatabaseHandle): Promise<void> {
   await handle.db.execute(
     sql`TRUNCATE TABLE cognitive_events, cognitive_context_snapshots, cognitive_turn_refs, cognitive_turns,
         cognitive_participants, cognitive_conversations, memory_records, memory_relations, memory_entities,
-        memory_retrieval_log, goal_previews, goals, missions RESTART IDENTITY CASCADE`,
+        memory_retrieval_log, goal_previews, goals, scheduled_jobs, missions RESTART IDENTITY CASCADE`,
   );
 }

@@ -1,5 +1,6 @@
 import type { CognitiveScope } from "@/core/cognitive/contracts";
 import type { ContextCandidate } from "@/core/cognitive/context-selection";
+import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity";
 import type { Container } from "@/server/container";
 import type { Database } from "@/server/database/client";
 import {
@@ -15,7 +16,7 @@ import { CognitiveRuntime } from "./cognitive-runtime";
 import { ContextAssembler, type OperationalMemorySource } from "./context-assembler";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
-import { GoalIntakeMissionGateway, type MissionGateway } from "./mission-gateway";
+import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
 
 export {
   CognitiveRuntime,
@@ -108,20 +109,37 @@ export function buildCognitiveRuntime(
   });
 }
 
-const cache = new WeakMap<Container, CognitiveRuntime>();
+const cache = new WeakMap<Container, { runtime: CognitiveRuntime; lastRecovery: number }>();
+const RECOVERY_INTERVAL_MS = 60_000;
 
 /**
  * The runtime for a container. PostgreSQL only: in memory mode it returns null and the
  * API answers 503 (fail closed — conversations are never kept in RAM).
+ *
+ * Launch recovery: approved proposals whose launch was interrupted (restart) or hit a
+ * transient error are relaunched idempotently when the runtime is composed and then at
+ * most once a minute while the API is in use, without anyone reopening the conversation.
  */
 export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | null {
   if (!container.db) return null;
-  let runtime = cache.get(container);
-  if (!runtime) {
-    runtime = buildCognitiveRuntime(container.db, {
-      missions: new GoalIntakeMissionGateway(container),
-    });
-    cache.set(container, runtime);
+  let entry = cache.get(container);
+  if (!entry) {
+    entry = {
+      runtime: buildCognitiveRuntime(container.db, {
+        missions: new CanonicalGoalLauncher(container),
+      }),
+      lastRecovery: 0,
+    };
+    cache.set(container, entry);
   }
-  return runtime;
+  const now = Date.now();
+  if (now - entry.lastRecovery >= RECOVERY_INTERVAL_MS) {
+    entry.lastRecovery = now;
+    void entry.runtime.recoverLaunches(CURRENT_SINGLE_TENANT_ID).catch((error: unknown) => {
+      console.error(
+        `[cognitive] launch recovery failed: ${error instanceof Error ? error.name : "unknown"}`,
+      );
+    });
+  }
+  return entry.runtime;
 }

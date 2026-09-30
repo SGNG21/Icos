@@ -1,5 +1,5 @@
 /**
- * Real process-restart proof helper (decision 0056). Run as a CHILD process by
+ * Real process-restart proof helper (decision 0057). Run as a CHILD process by
  * cognitive-runtime.integration.test.ts: it creates a conversation, submits a turn whose
  * model call never returns, and hard-exits (no cleanup) once the turn is durably
  * `processing` — exactly what a crashed server leaves behind.

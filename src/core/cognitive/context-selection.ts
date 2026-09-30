@@ -10,7 +10,7 @@ import type {
 } from "./contracts";
 
 /**
- * Deterministic context selection (decision 0056). Pure: same candidates + same scope +
+ * Deterministic context selection (decision 0057). Pure: same candidates + same scope +
  * same policy + same `now` ⇒ same selection, in the same order.
  *
  * Never "dump all memory": an item enters the prompt only if it passes policy AND is

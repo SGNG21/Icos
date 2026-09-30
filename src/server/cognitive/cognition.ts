@@ -1,7 +1,7 @@
 import { cognitionOutputSchema, type CognitionOutput } from "@/core/cognitive/contracts";
 
 /**
- * Model-independent cognition boundary (decision 0056). An engine turns (context, user
+ * Model-independent cognition boundary (decision 0057). An engine turns (context, user
  * text) into a validated CognitionOutput. It has no access to any store or tool: it can
  * only PROPOSE; the runtime governs what happens next. Engines are replaceable compute.
  */

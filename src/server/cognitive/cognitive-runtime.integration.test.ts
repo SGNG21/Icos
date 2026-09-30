@@ -14,11 +14,13 @@ import { buildCognitiveRuntime, TurnInProgressError, type CognitiveActor } from 
 import { ContextAssembler } from "./context-assembler";
 import { PostgresConversationStore } from "./conversation-store";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
-import { GoalIntakeMissionGateway } from "./mission-gateway";
+import { CanonicalGoalLauncher, launchIdempotencyKey } from "./mission-gateway";
+import { PostgresScheduledJobRepository } from "@/server/scheduler/postgres-scheduled-job-repository";
+import { SchedulerService } from "@/server/scheduler/scheduler-service";
 import { answer, openTestDb, resetCognitive, ScriptedCognitionEngine } from "./testing/support";
 
 /**
- * Cognitive Runtime + Memory V1 — REAL PostgreSQL proofs (decision 0056, PHASE 11).
+ * Cognitive Runtime + Memory V1 — REAL PostgreSQL proofs (decision 0057, PHASE 11).
  * Each `it` names the proof number it establishes.
  */
 const TENANT = "default";
@@ -36,13 +38,15 @@ const open = () => {
   return h;
 };
 
+/** The same composition as cognitiveRuntimeFor(container): goal intake + canonical scheduler. */
 function gatewayFor(h: DatabaseHandle) {
   const goalRepository = new PostgresGoalRepository(h.db);
-  return new GoalIntakeMissionGateway({
+  return new CanonicalGoalLauncher({
     goalNormalizer: new GoalNormalizer(),
     goalPlanner: new GoalPlanner(),
     goalPreviewStore: new GoalPreviewStore(goalRepository),
     goalRepository,
+    scheduler: new SchedulerService(new PostgresScheduledJobRepository(h.db)),
   });
 }
 const runtimeWith = (engine: ScriptedCognitionEngine, h = handle) =>
@@ -365,7 +369,7 @@ describe("Cognitive runtime on real PostgreSQL", () => {
     ]);
   });
 
-  it("P8 — a mission proposal waits for a human and stops at a pending goal", async () => {
+  it("P8 — a mission proposal needs human approval, then launches through the canonical scheduler", async () => {
     const goal: CognitionOutput = {
       result: {
         kind: "MISSION_REQUEST",
@@ -375,48 +379,84 @@ describe("Cognitive runtime on real PostgreSQL", () => {
           objective: "Analyser pourquoi LDS Renov perd des leads et corriger ce qui peut l'être",
           successCriteria: ["causes identifiées"],
           constraints: [],
-          riskLevel: "reversible",
+          riskLevel: "read_only", // model-asserted: never enough to skip approval
         },
       },
       memorySuggestions: [],
     };
     const rt = runtimeWith(new ScriptedCognitionEngine(() => goal));
-    const conv = await rt.createConversation(ME, { clientId: "lds-renov" });
+    const conv = await rt.createConversation(ME, { clientId: "lds-renov", projectId: "lds-leads" });
     const res = await rt.submitTurn(ME, conv.id, {
       text: "ICOS, analyse pourquoi LDS Renov perd des leads et corrige ce qui peut l'être.",
       idempotencyKey: k(),
     });
     expect(res.turn.outcome).toBe("MISSION_REQUEST");
-    expect(res.proposal?.status).toBe("awaiting_approval");
-    const count = async (t: "goals" | "missions") =>
+    expect(res.proposal).toMatchObject({
+      status: "approval_required",
+      policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+      missionId: null,
+    });
+    const count = async (t: "goals" | "missions" | "scheduled_jobs") =>
       Number((await handle.sql`select count(*)::int as n from ${handle.sql(t)}`)[0].n);
-    expect(await count("goals")).toBe(0);
+    expect([await count("goals"), await count("scheduled_jobs"), await count("missions")]).toEqual([
+      0, 0, 0,
+    ]);
 
     const approved = await rt.decideProposal(ME, conv.id, res.proposal!.id, "approve");
-    expect(approved.ok && approved.proposal.status).toBe("submitted");
-    const goalId = approved.ok ? approved.proposal.externalId! : "";
-    const [row] =
-      await handle.sql`select status, "humanApprovalPolicy", metadata from goals where id = ${goalId}`;
-    expect(row.status).toBe("pending");
-    expect(row.humanApprovalPolicy).toBe("always");
-    expect(row.metadata).toMatchObject({
+    expect(approved.ok).toBe(true);
+    const launched = approved.ok ? approved.proposal : null;
+    expect(launched).toMatchObject({ status: "launched", decidedBy: ME.userId });
+    expect(launched!.missionId).toMatch(/^[0-9a-f-]{36}$/);
+    const [g] =
+      await handle.sql`select status, "humanApprovalPolicy", metadata from goals where id = ${launched!.goalId}`;
+    expect(g).toMatchObject({ status: "pending", humanApprovalPolicy: "always" });
+    expect(g.metadata).toMatchObject({
       source: "cognitive_conversation",
+      conversationId: conv.id,
+      turnId: res.turn.id,
       proposalRefId: res.proposal!.id,
       clientId: "lds-renov",
+      projectId: "lds-leads",
+      approvedBy: ME.userId,
     });
-    expect(await count("missions")).toBe(0); // no ignition from a conversation
+    const [job] =
+      await handle.sql`select kind, state, idempotency_key, mission_id, payload from scheduled_jobs`;
+    expect(job).toMatchObject({
+      kind: "start_mission",
+      state: "scheduled",
+      idempotency_key: launchIdempotencyKey(res.proposal!.id),
+      mission_id: launched!.missionId,
+    });
+    expect(job.payload).toMatchObject({ goalId: launched!.goalId, missionId: launched!.missionId });
+    // LAUNCHED = durably accepted by CORE3's scheduler, not "mission succeeded".
+    expect(await count("missions")).toBe(0);
+    const types = (await rt.events(ME, conv.id, 0)).map((e) => e.type);
+    expect(types).toEqual(
+      expect.arrayContaining([
+        "proposal.created",
+        "proposal.decided",
+        "proposal.launching",
+        "proposal.launched",
+      ]),
+    );
+
+    // Replays never duplicate: second decision refused, recovery is a no-op.
     expect(await rt.decideProposal(ME, conv.id, res.proposal!.id, "approve")).toEqual({
       ok: false,
       reason: "already_decided",
     });
+    await rt.recoverLaunches(TENANT);
+    expect([await count("goals"), await count("scheduled_jobs")]).toEqual([1, 1]);
 
-    // Rejection never reaches goal intake.
+    // Rejection never reaches goal intake or the scheduler.
     const res2 = await rt.submitTurn(ME, conv.id, {
       text: "autre proposition",
       idempotencyKey: k(),
     });
-    await rt.decideProposal(ME, conv.id, res2.proposal!.id, "reject");
-    expect(await count("goals")).toBe(1);
+    const rejected = await rt.decideProposal(ME, conv.id, res2.proposal!.id, "reject");
+    expect(rejected.ok && rejected.proposal.status).toBe("rejected");
+    expect([await count("goals"), await count("scheduled_jobs")]).toEqual([1, 1]);
+
     // Actions are recorded, never executed: no canonical backend is connected.
     const act = runtimeWith(
       new ScriptedCognitionEngine(() => ({
@@ -440,6 +480,7 @@ describe("Cognitive runtime on real PostgreSQL", () => {
     expect(r3.turn.outcome).toBe("APPROVAL_REQUEST");
     const d3 = await act.decideProposal(ME, c3.id, r3.proposal!.id, "approve");
     expect(d3.ok && d3.proposal.status).toBe("not_connected");
+    expect(await count("scheduled_jobs")).toBe(1);
   });
 
   it("P9 — a turn interrupted by a real process crash is recovered and the conversation resumes", async () => {

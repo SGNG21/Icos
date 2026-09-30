@@ -329,7 +329,7 @@ describe("cognitive schema guards", () => {
         content: "do something",
         epistemic: "USER_ASSERTED",
         statementKind: "instruction",
-        status: "active",
+        status: "candidate", // isolate this guard from the review CHECK
         confidence: 0.8,
         originTrust: "untrusted",
         provenance: JSON.stringify({}),

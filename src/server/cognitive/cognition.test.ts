@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { governOutcome } from "@/core/cognitive/turn-policy";
+import { governOutcome, launchPolicy } from "@/core/cognitive/turn-policy";
+import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
+import { SchedulerService } from "@/server/scheduler/scheduler-service";
 
 import {
   NotConnectedCognitionEngine,
@@ -131,5 +133,36 @@ describe("cognition boundary", () => {
       reply: "Aucune action nécessaire.",
     });
     expect(governOutcome({ kind: "ANSWER_ONLY", text: "a" }).proposal).toBeUndefined();
+  });
+
+  it("launch policy: a model-asserted risk never skips human approval", () => {
+    expect(launchPolicy("goal_proposal")).toEqual({
+      status: "approval_required",
+      reason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+    });
+    expect(launchPolicy("action_request").status).toBe("approval_required");
+  });
+
+  it("canonical scheduler: start_mission carries goal lineage and is idempotent on the key", async () => {
+    const scheduler = new SchedulerService(new InMemoryScheduledJobRepository());
+    const input = {
+      kind: "start_mission",
+      idempotencyKey: "cognitive-proposal:tref-1",
+      payload: { title: "T", objective: "O", goalId: "goal-t-o" },
+    };
+    const first = await scheduler.enqueue(input);
+    const again = await scheduler.enqueue(input);
+    expect(first.created).toBe(true);
+    expect(again.created).toBe(false);
+    expect(again.job.missionId).toBe(first.job.missionId);
+    expect(first.job.payload).toMatchObject({ goalId: "goal-t-o", missionId: first.job.missionId });
+    // Unchanged for existing callers: goalId stays optional.
+    await expect(
+      scheduler.enqueue({
+        kind: "start_mission",
+        idempotencyKey: "k2",
+        payload: { title: "T", objective: "O" },
+      }),
+    ).resolves.toMatchObject({ created: true });
   });
 });

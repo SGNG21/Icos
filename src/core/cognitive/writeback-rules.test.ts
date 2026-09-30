@@ -50,6 +50,8 @@ describe("writeback-rules", () => {
     recordedBy: "system",
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
+    reviewedBy: null,
+    reviewedAt: null,
     ...overrides,
   });
 
