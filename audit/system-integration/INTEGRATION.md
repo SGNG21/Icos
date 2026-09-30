@@ -126,3 +126,9 @@ resource-starvation failure occurred, nothing was retried).
 | I6 voice `3743a37` | canonical `CognitiveRuntimeVoiceAdapter` (acceptance semantics, replay on voice `turnId`, FINAL_RESPONSE from rows, MISSION/APPROVAL events, abort → cancel, ownership refused) wired in `compose.ts`; legacy CEO bridge removed; `ws` dependency added by the lane | real STT/TTS run against OmniRoute not exercised here; the WebSocket host is a separate process (`pnpm voice:serve`) — Tailscale path mapping pending; mobile-UI commits `49379e1..2eb6e95` pending cockpit-lane review |
 
 Certification: I5 trunk (`0db464d`) full unit 2381/2381; full integration — see the log below once complete.
+
+| I5 trunk | `0db464d` | PASS | 2381/2381 | 618 passed / 4 skipped / 0 failed | — | ledger 51 |
+| I6 trunk (+ cockpit `e1305a0`, cognitive `5390a97` follow-ups) | `b804cd1` | PASS | 2444/2444 | **623 passed / 4 skipped / 0 failed** | PASS | lint 0 errors / 277 warnings (< 289 baseline) |
+
+Independent review of the integration merges themselves: none yet (each lane had its own before merging).
+Recommended before any push. `feat/system-integration-architecture` (`51868d6`) is unchanged.
