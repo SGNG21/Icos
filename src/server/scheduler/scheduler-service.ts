@@ -22,6 +22,9 @@ export const enqueueScheduledJobSchema = z
           .object({
             title: z.string().trim().min(1).max(200),
             objective: z.string().trim().min(1).max(4000),
+            // Optional goal lineage, already honoured by the start_mission handler
+            // (decision 0057: a conversation launches its approved goal through here).
+            goalId: z.string().trim().min(1).max(5000).optional(),
           })
           .strict(),
         ...common,
