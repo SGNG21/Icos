@@ -1,9 +1,10 @@
-# 0056: Cognitive Runtime + Memory V1 — durable conversations, governed memory, selective context
+# 0057: Cognitive Runtime + Memory V1 — durable conversations, governed memory, selective context
 
 ## Status
 
-Accepted (lane C, branch `feat/cognitive-runtime`, baseline `e652469`). Numbered 0056 /
-migration 0050 because 0055 and 0049 are already used by the voice and tool-gateway lanes.
+Accepted (lane C, branch `feat/cognitive-runtime`, baseline `e652469`). Numbered 0057 /
+migration 0051 because 0055/0056 and 0049/0050 are used by other lanes (see "Integration /
+migration reconciliation").
 
 ## Context
 
@@ -25,7 +26,7 @@ Audit of the baseline:
 
 ## Decision
 
-1. **Durable conversation** (migration `0050_cognitive_runtime.sql`): `cognitive_conversations`
+1. **Durable conversation** (migration `0051_cognitive_runtime.sql`): `cognitive_conversations`
    (tenant, owner, optional client/project scope), `cognitive_participants`, `cognitive_turns`
    (per-conversation `seq`, structured `content`, lifecycle `received → processing →
 completed|failed|cancelled`, outcome, intent), `cognitive_turn_refs` (proposals awaiting
@@ -70,18 +71,52 @@ completed|failed|cancelled`, outcome, intent), `cognitive_turn_refs` (proposals 
    `OMNIROUTE_BASE_URL`, `OMNIROUTE_API_KEY` and `ICOS_COGNITIVE_MODEL` (or `ICOS_CEO_MODEL`) are
    set; otherwise an explicit `NotConnectedCognitionEngine` says so.
 7. **Policy between cognition and the world** (`turn-policy.ts`): the engine never acts.
-   ACTION_REQUEST becomes an APPROVAL_REQUEST proposal; MISSION_REQUEST becomes a goal proposal.
-   Both wait for a human (`missions.write`). An approved goal goes through `MissionGateway` →
-   `GoalIntakeMissionGateway` → canonical goal intake as a **pending** goal with
-   `humanApprovalPolicy: "always"` and conversation provenance in its metadata. Starting the
-   mission stays the existing operator step: a conversation never ignites workers. Actions have
-   no conversational backend yet: approval records `not_connected`.
+   ACTION_REQUEST becomes an action proposal; MISSION_REQUEST becomes a goal proposal. Proposal
+   lifecycle: `PROPOSED → APPROVAL_REQUIRED → APPROVED → LAUNCHING → LAUNCHED | FAILED`, or
+   `REJECTED`. The goal's risk level is asserted by the model (unverified), so the existing
+   `humanApprovalPolicy` cannot be relaxed on its word: every conversational proposal is
+   APPROVAL_REQUIRED (`launchPolicy`). The approval is given by the conversation's human
+   (`missions.write`); it is a policy step, not an operator stage advancement: launch then
+   happens automatically.
+   **Canonical launch** (`CanonicalGoalLauncher`): goal intake (pending goal,
+   `humanApprovalPolicy: "always"`, metadata `conversationId`/`turnId`/`proposalRefId`/
+   `clientId`/`projectId`/`approvedBy`) → `SchedulerService.enqueue({ kind: "start_mission",
+idempotencyKey: "cognitive-proposal:<refId>", payload: { title, objective, goalId } })`,
+   which fixes the missionId at enqueue time → the production `DurableScheduler`
+   (production-services.ts) runs `igniteAutonomousMission` with the governed supervisor and
+   planner. This lane never constructs a supervisor and never calls
+   `/api/missions/autonomous` (which builds its own). LAUNCHED means durably accepted by CORE3
+   under a fixed missionId, never "mission succeeded"; `missionId`, `goalId` and
+   `launchJobId` are persisted on the proposal. Idempotency: the goal is keyed by its
+   (text-derived) id + `proposalRefId`, the job by its idempotency key, the proposal moves
+   forward only (conditional updates), and `cognitive_turn_refs_mission_unique` forbids two
+   proposals sharing a mission. Actions have no conversational backend yet: approval records
+   `not_connected`.
+   Cross-lane change: `enqueueScheduledJobSchema.start_mission.payload` gains an OPTIONAL
+   `goalId` (3 lines in `scheduler-service.ts`), which the `start_mission` handler already
+   honoured; existing callers are unchanged.
 8. **Ask ICOS API** under `/api/cognitive/*` (create/list, resume, submit turn, cancel, SSE event
    stream from the durable log, context + memory provenance, proposal decision, remember /
-   forget). PostgreSQL only: in memory mode the API answers 503 (fail closed).
-9. **Restart semantics**: every step is committed before the next; `resume` closes turns
-   in-flight for longer than 5 min as `failed: interrupted` (never silently re-run) and finishes
-   approved-but-unsettled proposals idempotently.
+   forget, memory candidates + review). PostgreSQL only: in memory mode the API answers 503.
+   **Acceptance semantics** for Voice/phone: `POST …/turns?mode=accept` (or
+   `Prefer: respond-async`) returns 202 as soon as the turn is durable; progress is the SSE
+   event stream; cancellation is `POST …/cancel`. `CognitiveTurnStream` (voice-adapter.ts) is
+   the in-process equivalent shaped for the Voice lane's `CognitiveRuntimePort`: accept fast,
+   follow this turn's durable events, abort → `cancelTurn` (never un-accepts). The blocking
+   submit is unchanged.
+9. **Restart / disconnect semantics**: every step is committed before the next. No request
+   signal is observed, so a dropped HTTP/SSE connection cancels nothing. `resume` closes turns
+   in-flight for longer than 5 min as `failed: interrupted` (never silently re-run). An
+   approval is committed before its launch; APPROVED/LAUNCHING proposals are relaunched
+   idempotently by `resume` and by `recoverLaunches`, which runs when the runtime is composed
+   after a restart. A transient launch error leaves the proposal LAUNCHING (retried); only a
+   deterministic refusal (invalid goal, goal-id collision) is FAILED.
+10. **Model-inferred memory review**: `MODEL_INFERRED → candidate → human review → active`.
+    Review (`approvals.decide`) records `reviewed_by/at` and never rewrites the epistemic
+    status, so an accepted inference stays distinguishable from USER_ASSERTED,
+    TOOL_CONFIRMED and SYSTEM_OBSERVED facts. The database enforces it:
+    `memory_records_reviewed_promotion_check` forbids an active MODEL_INFERRED or untrusted row
+    without a review, and a recorded review is immutable.
 
 ## Consequences
 
@@ -91,11 +126,9 @@ completed|failed|cancelled`, outcome, intent), `cognitive_turn_refs` (proposals 
   operator may open a conversation scoped to any client. Isolation guarantees are between
   contexts (a client's memory never reaches another client's context), not between users —
   except conversations and `personal` memories, which are owner-only.
-- Model-inferred candidates are stored but never used in context until a review path promotes
-  them (not in V1).
 - Voice and Digital Workforce are separate lanes: `TurnContent` parts and the event stream are
   the extension points.
-- Rollback: see the header of `0050_cognitive_runtime.sql` (additive; no existing table touched).
+- Rollback: see the header of `0051_cognitive_runtime.sql` (additive; no existing table touched).
 
 ## Independent review (Nemotron 550B, M5) — outcome
 
@@ -109,3 +142,31 @@ the PostgreSQL proofs), and the fence break-out (`«»` are neutralised in untru
 Known limits: no purge job for expired session memory; goal ids are text-derived by the
 existing normalizer, so a different proposal with identical text fails closed
 (`goal_id_collision`).
+
+## Integration / migration reconciliation (for the integrator)
+
+State of local branches on 2026-09-30 (all `drizzle/meta/_journal.json` tails are `idx` 46):
+
+| Branch                       | Migration (`when`)                        | Decision |
+| ---------------------------- | ----------------------------------------- | -------- |
+| feat/tool-gateway-connectors | `0049_tool_gateway` (0048 + 1 d)          | 0055     |
+| feat/proactive-supervisor    | `0049_proactive_supervisor` (0048 + 1 d)  | 0055     |
+| feat/digital-workforce       | `0050_digital_workforce` (0048 + 1 d)     | 0056     |
+| feat/voice-realtime          | —                                         | 0056     |
+| **feat/cognitive-runtime**   | **`0051_cognitive_runtime` (0048 + 3 d)** | **0057** |
+
+Required when merging this branch after the others:
+
+1. Keep every SQL file; resolve `_journal.json` by concatenating entries in merge order and
+   renumbering `idx` contiguously (the journal test requires it). Keep this lane's `when`
+   last, or bump it above every earlier entry: drizzle skips a migration whose `when` is not
+   greater than the last applied one.
+2. Resolve the duplicate numeric prefixes (the journal test requires unique prefixes) by
+   renaming the later-merged SQL file and its journal `tag` — never by editing a migration
+   that has already been applied to a shared database.
+3. Decision numbers are prose: renumber duplicate `0055`/`0056` files in merge order.
+4. This migration is additive and independent of the other lanes' tables. It reuses
+   `icos_forbid_memory_mutation()` from 0031 and does not touch `audit_event_type_check`
+   (the tool gateway's 0049 hazard).
+5. `scheduler-service.ts` (CORE3): 3 added lines (optional `goalId`); merge with any CORE3
+   change to that schema.
