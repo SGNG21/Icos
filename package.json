@@ -27,6 +27,7 @@
     "scheduler:enqueue": "tsx scripts/schedule-job.ts",
     "workspace:manager": "tsx scripts/workspace-manager.ts",
     "compute:snapshot": "tsx scripts/compute-snapshot.ts",
+    "compute:register": "tsx scripts/compute-register.ts",
     "compute:probe": "tsx scripts/compute-probe.ts"
   },
   "dependencies": {
