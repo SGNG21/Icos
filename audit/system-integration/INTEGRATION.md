@@ -53,3 +53,52 @@ Conflicts and resolutions: see the merge commit message. Proofs:
 | Tool gateway | **commit** `app.ts`/`composition.ts` and the in-flight fixes. Its edits to `src/core/contracts/audit.ts` and `schema.ts` will be unioned at merge (0052 must re-create `audit_event_type_check` as 0049's 45 values + `tool.*`). |
 | Proactive supervisor | nothing pending. Merge at I5 with `scheduled_jobs_kind_check` = trunk kinds + `supervisor_observe`; namespace rename to `proactive` will be done at merge if the lane has not. |
 | Voice | commit `scripts/voice-server.ts`. `ConversationCognitiveAdapter` is a **temporary bridge onto the legacy CEO conversation** (its own header says so): I6 integrates voice only over the cognitive runtime's `acceptTurn` + `CognitiveTurnStream` (lane C, in flight). The `ws` + `@types/ws` dependency is an owner acceptance item. |
+
+## P0 — CORE3 canonical entry point (merged `1f6bdf4`)
+
+`POST /api/missions/autonomous` → `container.scheduler.enqueue({kind:"start_mission"})` (idempotent per
+caller, 202 with the fixed mission id). `igniteAutonomousMission` is called only by the scheduler's
+`start_mission` handler, composed in `production-services.ts` with the governed supervisor. The
+Temporal callback route builds no supervisor. `new SupervisorService` in non-test code: exactly one
+(`production-services.ts`). AUTONOMOUS_API_P0 = RESOLVED (committed `518fa0b`, merged here).
+
+## I1 — cognitive (merged `44bc234`)
+
+E2E contract on the trunk: conversation → turn accepted durably (`acceptTurn`, idempotent on the client
+key) → context snapshot → `MISSION_REQUEST` → proposal (`cognitive_turn_refs`, states PROPOSED →
+APPROVAL_REQUIRED → APPROVED → LAUNCHING → LAUNCHED | FAILED / REJECTED) → human decision
+(`missions.write`) → `CanonicalGoalLauncher` (goal intake + `scheduler.enqueue start_mission`, launch id
+derived from the proposal) → mission id persisted on the turn ref (`mission_id`, unique partial index)
+→ `/api/missions/:id` for progress. Recovery finishes an approved-but-unlaunched ref exactly once.
+Proven by L1–L4 / V1–V3 / M1 on PostgreSQL (see merge commit). Not yet proven: the same chain through
+`startProductionServices` with a real worker (Phase 8).
+
+## HTTPS / phone access (Phase 13) — procedure, NOT executed
+
+Found: Tailscale installed and signed in on the Mac (`macbook-pro-de-renault.tail2ea2a5.ts.net`,
+100.79.85.76); MagicDNS domain `tail2ea2a5.ts.net`; no `tailscale serve` config; one peer, the owner's
+Android phone (Xiaomi 13T), offline for 40 days; no launchd unit for ICOS; production auth integrity
+requires `BETTER_AUTH_URL` to be https in production (`src/server/auth/integrity.ts:153`).
+
+Simplest secure mechanism: **Tailscale Serve** (tailnet-only, HTTPS with a Let's Encrypt cert issued by
+Tailscale, no public exposure, secure context for `getUserMedia`). Owner actions, in order:
+
+1. Enable HTTPS certificates for the tailnet once (admin console → DNS → "Enable HTTPS"); the first
+   `tailscale serve` prints the link if it is not enabled.
+2. On the Mac, with ICOS listening on 127.0.0.1:3000:
+   `tailscale serve --bg --https=443 http://127.0.0.1:3000` · check: `tailscale serve status`
+3. Run ICOS in production mode with `BETTER_AUTH_URL=https://macbook-pro-de-renault.tail2ea2a5.ts.net`
+   (`NODE_ENV=production PERSISTENCE=postgres … pnpm build && pnpm start`), under launchd so it
+   outlives the terminal, and keep the Mac awake (`sudo pmset -c disablesleep 1` or a `caffeinate -s`
+   wrapper in the same unit).
+4. **Verify the origin guard behind the proxy** before trusting it: from the Mac,
+   `curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H 'Origin: https://macbook-pro-de-renault.tail2ea2a5.ts.net' -H 'Content-Type: application/json' -d '{}' https://macbook-pro-de-renault.tail2ea2a5.ts.net/api/cognitive/conversations`
+   must answer **401** (no session), not **403** with `cross_origin`: `isSameOriginMutation` compares the
+   `Origin` header with `request.url`, so Next must reconstruct `https://` from Tailscale's
+   `X-Forwarded-Proto`. If it answers 403, the fix is a one-line trust of `x-forwarded-proto`/`host` in
+   `src/server/http/origin.ts` (not applied here: unverified).
+5. Sign the phone into Tailscale (it has been offline 40 days), open
+   `https://macbook-pro-de-renault.tail2ea2a5.ts.net/cockpit`, log in as the owner, install the PWA.
+
+Voice adds a WebSocket endpoint (`scripts/voice-server.ts`, lane `feat/voice-realtime`); Tailscale Serve
+proxies WebSockets on the same hostname with a second path mapping once that port is known.
