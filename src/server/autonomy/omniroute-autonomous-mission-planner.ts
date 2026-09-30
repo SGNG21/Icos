@@ -5,6 +5,7 @@ import {
   CanonicalAutonomousMissionPlanner,
   plannerError,
   type PlannerCompletionProvider,
+  PlannerFailureCode,
 } from "./canonical-mission-planner";
 
 /**
@@ -37,7 +38,7 @@ export class OmniRouteCompletionProvider implements PlannerCompletionProvider {
 
   constructor(private readonly options: OmniRouteAutonomousMissionPlannerOptions) {
     if (!options.baseUrl || !options.apiKey || !options.model) {
-      throw plannerError("CONFIGURATION_INCOMPLETE");
+      throw plannerError(PlannerFailureCode.CONFIGURATION_INCOMPLETE);
     }
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -64,19 +65,19 @@ export class OmniRouteCompletionProvider implements PlannerCompletionProvider {
     });
 
     if (!response.ok) {
-      throw plannerError(`PROVIDER_HTTP:${response.status}`);
+      throw plannerError(PlannerFailureCode.PROVIDER_HTTP, `${response.status}`);
     }
 
     let payload: OmniRouteChatResponse;
     try {
       payload = (await response.json()) as OmniRouteChatResponse;
     } catch {
-      throw plannerError("INVALID_RESPONSE");
+      throw plannerError(PlannerFailureCode.INVALID_RESPONSE);
     }
 
     const content = payload.choices?.[0]?.message?.content;
     if (typeof content !== "string" || content.trim().length === 0) {
-      throw plannerError("INVALID_RESPONSE");
+      throw plannerError(PlannerFailureCode.INVALID_RESPONSE);
     }
     return content;
   }
@@ -120,7 +121,7 @@ export function createOmniRouteAutonomousMissionPlanner(
   }
 
   if (!env.OMNIROUTE_BASE_URL || !env.OMNIROUTE_API_KEY || !env.ICOS_PLANNER_MODEL) {
-    throw plannerError("CONFIGURATION_INCOMPLETE");
+    throw plannerError(PlannerFailureCode.CONFIGURATION_INCOMPLETE);
   }
 
   return new OmniRouteAutonomousMissionPlanner({

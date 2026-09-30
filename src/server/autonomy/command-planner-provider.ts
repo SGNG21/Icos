@@ -2,7 +2,11 @@ import {
   runNonInteractive,
   type NonInteractiveRunner,
 } from "@/server/workers/process/run-process";
-import { plannerError, type PlannerCompletionProvider } from "./canonical-mission-planner";
+import {
+  plannerError,
+  type PlannerCompletionProvider,
+  PlannerFailureCode,
+} from "./canonical-mission-planner";
 
 /**
  * A LOCAL-PROCESS provider behind the canonical planner (M12).
@@ -51,9 +55,9 @@ export class CommandPlannerProvider implements PlannerCompletionProvider {
   private readonly run: NonInteractiveRunner;
 
   constructor(private readonly options: CommandPlannerProviderOptions) {
-    if (!options.command) throw plannerError("CONFIGURATION_INCOMPLETE");
+    if (!options.command) throw plannerError(PlannerFailureCode.CONFIGURATION_INCOMPLETE);
     if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
-      throw plannerError("INVALID_TIMEOUT");
+      throw plannerError(PlannerFailureCode.INVALID_TIMEOUT);
     }
     this.name = options.name ?? options.command.split("/").pop() ?? "command";
     this.run = options.run ?? runNonInteractive;
@@ -80,17 +84,17 @@ export class CommandPlannerProvider implements PlannerCompletionProvider {
       maxOutputBytes: 512 * 1024,
     });
 
-    if (result.timedOut) throw plannerError("TIMEOUT");
+    if (result.timedOut) throw plannerError(PlannerFailureCode.TIMEOUT);
     if (result.exitCode !== 0) {
       /*
        * The exit code only — never stderr. A planner failure message is persisted and
        * surfaced, and a CLI's stderr routinely contains paths, endpoints and key fragments.
        */
-      throw plannerError(`PROVIDER_EXIT:${result.exitCode ?? "unknown"}`);
+      throw plannerError(PlannerFailureCode.PROVIDER_EXIT, `${result.exitCode ?? "unknown"}`);
     }
 
     const content = result.stdout.trim();
-    if (content.length === 0) throw plannerError("INVALID_RESPONSE");
+    if (content.length === 0) throw plannerError(PlannerFailureCode.INVALID_RESPONSE);
 
     /*
      * Agent CLIs commonly wrap JSON in a markdown fence even when told not to. Stripping a
@@ -175,24 +179,25 @@ export function parsePlannerCommand(
     parsed = JSON.parse(raw);
   } catch (error) {
     throw plannerError(
-      `COMMAND_INVALID_JSON:${error instanceof Error ? error.message : "unknown"}`,
+      PlannerFailureCode.COMMAND_INVALID_JSON,
+      error instanceof Error ? error.message : "unknown",
     );
   }
 
   const record = parsed as { command?: unknown; args?: unknown };
   if (typeof record.command !== "string" || record.command.length === 0) {
-    throw plannerError(`COMMAND_INVALID:command must be ${plannerCommandShape.command}`);
+    throw plannerError(PlannerFailureCode.COMMAND_INVALID, `command must be ${plannerCommandShape.command}`);
   }
   if (
     !Array.isArray(record.args) ||
     record.args.length === 0 ||
     !record.args.every((a) => typeof a === "string")
   ) {
-    throw plannerError(`COMMAND_INVALID:args must be ${plannerCommandShape.args}`);
+    throw plannerError(PlannerFailureCode.COMMAND_INVALID, `args must be ${plannerCommandShape.args}`);
   }
   if (!record.args.some((a) => (a as string).includes(PLANNER_PLACEHOLDERS.prompt))) {
     /* Without the placeholder the agent would be launched with no prompt at all. */
-    throw plannerError(`COMMAND_INVALID:args must contain ${PLANNER_PLACEHOLDERS.prompt}`);
+    throw plannerError(PlannerFailureCode.COMMAND_INVALID, `args must contain ${PLANNER_PLACEHOLDERS.prompt}`);
   }
 
   return { command: record.command, args: record.args as string[] };

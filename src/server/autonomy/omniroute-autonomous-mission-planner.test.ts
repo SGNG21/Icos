@@ -234,7 +234,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
 
     await expect(
       planner(fetchMock).plan({ mission, tasks: [], reason: "initial" }),
-    ).rejects.toThrow("AUTONOMY_PLANNER_INVALID_OUTPUT");
+    ).rejects.toThrow("AUTONOMY_PLANNER_JSON_PARSE_FAILED");
   });
 
   it("fails closed when structured output violates the planner schema", async () => {
@@ -246,7 +246,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
 
     await expect(
       planner(fetchMock).plan({ mission, tasks: [], reason: "initial" }),
-    ).rejects.toThrow("AUTONOMY_PLANNER_INVALID_OUTPUT");
+    ).rejects.toThrow("AUTONOMY_PLANNER_SCHEMA_VALIDATION_FAILED");
   });
 
   it("fails closed when schema-valid output is not a valid DAG", async () => {
@@ -264,7 +264,7 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
 
     await expect(
       planner(fetchMock).plan({ mission, tasks: [], reason: "initial" }),
-    ).rejects.toThrow("AUTONOMY_PLANNER_INVALID_PLAN:MISSION_PLAN_CYCLE");
+    ).rejects.toThrow("AUTONOMY_PLANNER_SEMANTIC_VALIDATION_FAILED:MISSION_PLAN_CYCLE:A");
   });
 
   it("fails closed on provider HTTP errors", async () => {

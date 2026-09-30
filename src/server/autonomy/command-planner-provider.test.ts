@@ -103,7 +103,7 @@ describe("M12 command planner provider", () => {
      * from the HTTP backend.
      */
     await expect(planner.plan({ mission, tasks: [], reason: "initial" })).rejects.toThrow(
-      "AUTONOMY_PLANNER_INVALID_PLAN:MISSION_PLAN_CYCLE",
+      "AUTONOMY_PLANNER_SEMANTIC_VALIDATION_FAILED:MISSION_PLAN_CYCLE:a",
     );
   });
 
