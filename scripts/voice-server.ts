@@ -28,12 +28,28 @@ for (const file of [".env.local", ".env"]) {
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
-const hostname = process.env.HOST ?? "0.0.0.0";
+// Loopback by default: a phone needs HTTPS anyway, so exposure goes through a TLS proxy.
+const hostname = process.env.HOST ?? "127.0.0.1";
 const cert = process.env.ICOS_VOICE_TLS_CERT;
 const key = process.env.ICOS_VOICE_TLS_KEY;
 
+/**
+ * Behind a TLS proxy (`tailscale serve`), set ICOS_VOICE_PUBLIC_ORIGIN to the
+ * origin the phone uses (e.g. https://<machine>.<tailnet>.ts.net). Next builds
+ * `request.url` from its configured hostname:port, not from the Host header,
+ * so without this every same-origin check (login, voice socket) compares the
+ * browser Origin with http://localhost:<PORT> and refuses.
+ */
+const publicOrigin = process.env.ICOS_VOICE_PUBLIC_ORIGIN
+  ? new URL(process.env.ICOS_VOICE_PUBLIC_ORIGIN)
+  : null;
+const nextHost = publicOrigin?.hostname ?? hostname;
+const nextPort = publicOrigin
+  ? Number(publicOrigin.port || (publicOrigin.protocol === "https:" ? 443 : 80))
+  : port;
+
 async function main(): Promise<void> {
-  const app = next({ dev, hostname, port });
+  const app = next({ dev, hostname: nextHost, port: nextPort });
   await app.prepare();
   const handle = app.getRequestHandler();
   const nextUpgrade = app.getUpgradeHandler();
@@ -63,6 +79,7 @@ async function main(): Promise<void> {
   server.listen(port, hostname, () => {
     console.log(
       `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
+        `${publicOrigin ? `, public ${publicOrigin.origin} ` : ""}` +
         `(STT=${voice.status.stt} TTS=${voice.status.tts} COGNITIVE=${voice.status.cognitive})`,
     );
   });
