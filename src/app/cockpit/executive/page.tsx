@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { MetricTile, Panel, ToneBadge, TruthValue } from "@/components/cockpit/primitives";
+import { sectionTruth } from "@/features/cockpit/business";
 import { buildExecutiveView } from "@/features/cockpit/executive";
 import { loadReadModels, loadSnapshot, loadSources } from "@/features/cockpit/load";
 import { mapTruth } from "@/features/cockpit/truth";
@@ -63,18 +64,44 @@ export default async function ExecutivePage() {
         />
         <MetricTile
           label="Clients (at risk)"
-          truth={mapTruth(biz, (b) => `${b.clients.rows.length} (${b.atRiskClients})`)}
+          truth={sectionTruth(
+            biz,
+            (b) => b.clients,
+            (rows) => `${rows.length} (${rows.filter((c) => c.status === "at_risk").length})`,
+          )}
         />
-        <MetricTile label="Leads" truth={mapTruth(biz, (b) => b.leads.rows.length)} />
         <MetricTile
-          label="Sales pipeline"
-          truth={mapTruth(biz, (b) => b.pipeline.rows.reduce((n, s) => n + s.count, 0))}
+          label="Leads"
+          truth={sectionTruth(
+            biz,
+            (b) => b.leads,
+            (rows) => rows.length,
+          )}
+        />
+        <MetricTile
+          label="Sales pipeline (deals)"
+          truth={sectionTruth(
+            biz,
+            (b) => b.pipeline,
+            (rows) => rows.reduce((n, s) => n + s.count, 0),
+          )}
         />
         <MetricTile
           label="Marketing · SEO · Ads channels"
-          truth={mapTruth(biz, (b) => Object.keys(b.marketingByChannel).length)}
+          truth={sectionTruth(
+            biz,
+            (b) => b.marketing,
+            (rows) => new Set(rows.map((r) => r.channel)).size,
+          )}
         />
-        <MetricTile label="Business KPIs" truth={mapTruth(biz, (b) => b.kpis.rows.length)} />
+        <MetricTile
+          label="Business KPIs reported"
+          truth={sectionTruth(
+            biz,
+            (b) => b.kpis,
+            (rows) => rows.length,
+          )}
+        />
       </div>
 
       <div className="cx-grid2">

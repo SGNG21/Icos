@@ -110,6 +110,7 @@ const count = <T>(xs: readonly T[], key: (x: T) => string) =>
   xs.reduce<Record<string, number>>((m, x) => ({ ...m, [key(x)]: (m[key(x)] ?? 0) + 1 }), {});
 
 const WEEK_MS = 7 * 86_400_000;
+const TERMINAL_AGENT = new Set(["retired", "blocked"]);
 
 export interface WorkforceView {
   agents: { total: number; byStatus: Record<string, number>; byKind: Record<string, number> };
@@ -117,6 +118,7 @@ export interface WorkforceView {
   roles: { total: number; byStatus: Record<string, number> };
   skills: { active: number; total: number };
   assignments: { byStatus: Record<string, number>; awaitingApproval: number };
+  /** Budgets / autonomy / grants / memory scopes cover live (non-terminal) agents only. */
   budgets: { computeUnits: number; financialCents: number };
   autonomy: Record<string, number>;
   toolGrants: { total: number; expiringWithin7d: number; expired: number };
@@ -124,32 +126,34 @@ export interface WorkforceView {
   /** Workforce defines KPI TARGETS; measured values are not part of its contract. */
   kpis: { defined: number; measured: Truth<number> };
   performance: Truth<NonNullable<WorkforceProjection["performance"]>>;
-  /** Needs a human: blocked/suspended agents, blocked or bounced assignments, expired specialists. */
+  /** Needs a human now: suspended agents, bounced assignments, specialists past expiry (terminal states excluded). */
   attention: { id: string; label: string; reason: string }[];
 }
 
 export function buildWorkforceView(p: WorkforceProjection, now: Date): WorkforceView {
   const t = now.getTime();
-  const grants = p.agents.flatMap((a) => a.policy.toolGrants);
+  // Terminal agents (retired, blocked) and terminal assignments (blocked, synthesized) are
+  // history in lane D's contract: no transition leaves them, so they are neither live totals
+  // nor something a human can act on.
+  const live = p.agents.filter((a) => !TERMINAL_AGENT.has(a.status));
+  const grants = live.flatMap((a) => a.policy.toolGrants);
   const exp = (g: (typeof grants)[number]) => (g.expiresAt ? Date.parse(g.expiresAt) : Infinity);
   const attention = [
     ...p.agents
-      .filter((a) => a.status === "blocked" || a.status === "suspended")
-      .map((a) => ({ id: a.agentId, label: a.displayName, reason: `agent ${a.status}` })),
+      .filter((a) => a.status === "suspended")
+      .map((a) => ({ id: a.agentId, label: a.displayName, reason: "agent suspended" })),
     ...p.agents
       .filter((a) => a.status === "active" && a.expiresAt && Date.parse(a.expiresAt) <= t)
       .map((a) => ({ id: a.agentId, label: a.displayName, reason: "specialist past its expiry" })),
     ...p.assignments
-      .filter((x) => x.status === "blocked" || x.status === "changes_requested")
+      .filter((x) => x.status === "changes_requested")
       .map((x) => ({
         id: x.assignmentId,
         label: `assignment ${x.assignmentId.slice(0, 8)}`,
         reason: x.status,
       })),
   ];
-  const namespaces = new Set(
-    p.agents.flatMap((a) => [...a.memoryScope.read, ...a.memoryScope.write]),
-  );
+  const namespaces = new Set(live.flatMap((a) => [...a.memoryScope.read, ...a.memoryScope.write]));
   return {
     agents: {
       total: p.agents.length,
@@ -164,29 +168,31 @@ export function buildWorkforceView(p: WorkforceProjection, now: Date): Workforce
     },
     assignments: {
       byStatus: count(p.assignments, (x) => x.status),
-      awaitingApproval: p.assignments.filter((x) => x.approval.required && !x.approval.approvedAt)
-        .length,
+      // Approval gates only a not-yet-started assignment.
+      awaitingApproval: p.assignments.filter(
+        (x) => x.status === "assigned" && x.approval.required && !x.approval.approvedAt,
+      ).length,
     },
-    budgets: p.agents.reduce(
+    budgets: live.reduce(
       (b, a) => ({
         computeUnits: b.computeUnits + a.policy.budget.computeUnits,
         financialCents: b.financialCents + a.policy.budget.financialCents,
       }),
       { computeUnits: 0, financialCents: 0 },
     ),
-    autonomy: count(p.agents, (a) => `L${a.policy.autonomyLevel}`),
+    autonomy: count(live, (a) => `L${a.policy.autonomyLevel}`),
     toolGrants: {
       total: grants.length,
       expiringWithin7d: grants.filter((g) => exp(g) > t && exp(g) - t <= WEEK_MS).length,
       expired: grants.filter((g) => exp(g) <= t).length,
     },
     memoryScopes: {
-      agentsWithRead: p.agents.filter((a) => a.memoryScope.read.length > 0).length,
-      agentsWithWrite: p.agents.filter((a) => a.memoryScope.write.length > 0).length,
+      agentsWithRead: live.filter((a) => a.memoryScope.read.length > 0).length,
+      agentsWithWrite: live.filter((a) => a.memoryScope.write.length > 0).length,
       namespaces: namespaces.size,
     },
     kpis: {
-      defined: p.agents.reduce((n, a) => n + a.kpis.length, 0),
+      defined: live.reduce((n, a) => n + a.kpis.length, 0),
       measured: missing(
         "not_available",
         "The workforce contract defines KPI targets, not measurements.",
@@ -194,8 +200,11 @@ export function buildWorkforceView(p: WorkforceProjection, now: Date): Workforce
     },
     performance:
       p.performance && p.performance.count > 0
-        ? real(p.performance, "REAL performance observations only")
-        : missing("unknown", "No REAL performance observation recorded yet."),
+        ? real(
+            p.performance,
+            "as reported by WorkforceService.performance() (REAL-only by default)",
+          )
+        : missing("unknown", "No performance observation recorded yet."),
     attention,
   };
 }

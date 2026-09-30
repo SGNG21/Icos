@@ -10,7 +10,7 @@ import { isReal, missing, real, type Truth } from "./truth";
  * and NOT_CONNECTED rows are counted and flagged, never displayed as current business state.
  */
 export const factSourceSchema = z.enum(["REAL", "SIMULATED", "NOT_CONNECTED"]);
-const fact = { source: factSourceSchema, asOf: z.string() };
+const fact = { source: factSourceSchema, asOf: z.string().datetime({ offset: true }) };
 
 export const businessReadModelSchema = z.object({
   clients: z.array(
@@ -112,6 +112,7 @@ export interface BusinessView {
   leads: RealSection<BusinessReadModel["leads"][number]>;
   pipeline: RealSection<BusinessReadModel["pipeline"][number]>;
   marketingByChannel: Record<string, BusinessReadModel["marketing"][number][]>;
+  marketing: RealSection<BusinessReadModel["marketing"][number]>;
   marketingWithheld: number;
   kpis: RealSection<BusinessReadModel["kpis"][number]>;
 }
@@ -127,6 +128,7 @@ export function buildBusinessView(m: BusinessReadModel): BusinessView {
     leads: onlyReal(m.leads),
     pipeline: onlyReal(m.pipeline),
     marketingByChannel: byChannel,
+    marketing,
     marketingWithheld: marketing.withheld,
     kpis: onlyReal(m.kpis),
   };
@@ -134,3 +136,27 @@ export function buildBusinessView(m: BusinessReadModel): BusinessView {
 
 export const businessView = (t: Truth<BusinessReadModel>): Truth<BusinessView> =>
   isReal(t) ? real(buildBusinessView(t.value)) : (t as Truth<BusinessView>);
+
+/**
+ * A tile value from one section. A section whose rows were ALL withheld (non-REAL) is UNKNOWN,
+ * never a measured 0; otherwise the value is computed from REAL rows only.
+ */
+export function sectionTruth<T>(
+  view: Truth<BusinessView>,
+  pick: (b: BusinessView) => RealSection<T>,
+  value: (rows: T[]) => number | string,
+): Truth<number | string> {
+  if (!isReal(view)) return view as Truth<number | string>;
+  const section = pick(view.value);
+  return section.rows.length === 0 && section.withheld > 0
+    ? missing(
+        "unknown",
+        `Only non-REAL rows exist (${section.withheld} withheld); nothing is shown as a value.`,
+      )
+    : real(
+        value(section.rows),
+        section.withheld
+          ? `REAL rows only; ${section.withheld} non-REAL withheld`
+          : "REAL rows only",
+      );
+}

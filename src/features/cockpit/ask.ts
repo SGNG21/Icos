@@ -264,7 +264,16 @@ export function httpCognitiveTransport(doFetch: typeof fetch = fetch): Cognitive
 
 // ------------------------------------------------------------------ view state
 
-export type SubmitPhase = "submitting" | "accepted" | "replayed" | "busy" | "unknown" | "rejected";
+export type SubmitPhase =
+  | "submitting"
+  | "accepted"
+  | "replayed"
+  | "processing"
+  | "failed"
+  | "cancelled"
+  | "busy"
+  | "unknown"
+  | "rejected";
 
 export interface AskState {
   /** Availability of the runtime itself. */
@@ -295,6 +304,8 @@ export const initialAsk: AskState = {
 export type AskAction =
   | { type: "listed"; conversations: AskConversation[]; engine: string }
   | { type: "resumed"; state: ConversationState }
+  /** "New conversation": nothing of the previous one stays on screen. */
+  | { type: "cleared" }
   | { type: "event"; event: ConversationEvent }
   | { type: "submit"; text: string; idempotencyKey: string }
   | { type: "submitted"; phase: SubmitPhase; detail?: string }
@@ -335,6 +346,8 @@ export function askReducer(state: AskState, action: AskAction): AskState {
       const same = state.current?.conversation.id === action.state.conversation.id;
       return { ...state, current: action.state, progress, cursor: same ? state.cursor : 0 };
     }
+    case "cleared":
+      return { ...state, current: null, cursor: 0, progress: {}, pending: null };
     case "event": {
       const e = action.event;
       if (!state.current || e.conversationId !== state.current.conversation.id) return state;
@@ -370,7 +383,15 @@ export function submitPhase(
   reply: Reply<TurnResult>,
 ): { phase: SubmitPhase; detail?: string } | "not_connected" {
   if (reply.kind === "not_connected") return "not_connected";
-  if (reply.kind === "ok") return { phase: reply.value.replayed ? "replayed" : "accepted" };
+  if (reply.kind === "ok") {
+    // The phase follows the stored turn, not the HTTP status: a 201/200 can carry a turn
+    // that failed, was cancelled, or (on replay) is still in flight with no reply yet.
+    const { turn, replayed } = reply.value;
+    if (turn.status === "failed") return { phase: "failed", detail: failureCode(turn) };
+    if (turn.status === "cancelled") return { phase: "cancelled" };
+    if (turn.status === "received" || turn.status === "processing") return { phase: "processing" };
+    return { phase: replayed ? "replayed" : "accepted" };
+  }
   const text = `${reply.code}${reply.message ? `: ${reply.message}` : ""} (HTTP ${reply.status})`;
   if (reply.status >= 500 || !reply.typed) return { phase: "unknown", detail: text };
   if (reply.status === 409)
@@ -379,6 +400,16 @@ export function submitPhase(
 }
 
 export const turnText = (t: AskTurn) => t.content.parts.map((p) => p.text).join("\n");
+
+/**
+ * The runtime stores `Name: message` (provider/HTTP internals possible). The cockpit shows only
+ * the leading code (e.g. `interrupted`, `cancelled_by_user`, `Error`), never the raw message.
+ */
+export function failureCode(t: Pick<AskTurn, "failureReason">): string | undefined {
+  if (!t.failureReason) return undefined;
+  const code = t.failureReason.split(":")[0]!.trim();
+  return /^[A-Za-z_][A-Za-z0-9_.-]{0,40}$/.test(code) ? code : "failed";
+}
 
 export const ASK_EXAMPLES = [
   "Pourquoi CORE3 est bloqué ?",

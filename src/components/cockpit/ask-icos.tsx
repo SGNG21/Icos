@@ -12,6 +12,7 @@ import {
   initialAsk,
   needsRefresh,
   submitPhase,
+  failureCode,
   turnText,
   type AskProposal,
   type AskState,
@@ -24,8 +25,11 @@ const transport = httpCognitiveTransport();
 
 const PHASE_TEXT: Record<SubmitPhase, string> = {
   submitting: "Sent — ICOS is working on this turn",
-  accepted: "Turn settled",
+  accepted: "Turn completed",
   replayed: "Stored result of the same submission (replayed, not re-run)",
+  processing: "Submission found — the turn is still in progress (no reply yet)",
+  failed: "Turn failed — no answer was produced",
+  cancelled: "Turn cancelled",
   busy: "Rejected — a turn is already in progress",
   unknown: "UNKNOWN — the answer did not come back",
   rejected: "Rejected — nothing was created",
@@ -58,7 +62,9 @@ export function AskIcos() {
   const [text, setText] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [ack, setAck] = useState<Record<string, boolean>>({});
+  const [deciding, setDeciding] = useState<string | null>(null);
   const cursor = useRef(0);
+  const selectedRef = useRef<string | null>(null);
   useEffect(() => {
     cursor.current = state.cursor;
   }, [state.cursor]);
@@ -73,6 +79,7 @@ export function AskIcos() {
     async (id: string) => {
       try {
         const r = await transport.resume(id);
+        if (id !== selectedRef.current) return; // a newer selection owns the screen
         if (r.kind === "ok") dispatch({ type: "resumed", state: r.value });
         else failLink(r);
       } catch {
@@ -82,29 +89,39 @@ export function AskIcos() {
     [failLink],
   );
 
-  // Conversations + current engine label; the most recent conversation is resumed.
+  /** Conversations + CURRENT engine label (re-read after create so both stay current). */
+  const relist = useCallback(async () => {
+    try {
+      const r = await transport.list();
+      if (r.kind !== "ok") {
+        failLink(r);
+        return null;
+      }
+      dispatch({ type: "listed", conversations: r.value.conversations, engine: r.value.engine });
+      return r.value.conversations;
+    } catch {
+      dispatch({ type: "link", link: "error" });
+      return null;
+    }
+  }, [failLink]);
+
+  // The most recent conversation is resumed on arrival.
   useEffect(() => {
     let live = true;
-    transport
-      .list()
-      .then((r) => {
-        if (!live) return;
-        if (r.kind !== "ok") return failLink(r);
-        dispatch({ type: "listed", conversations: r.value.conversations, engine: r.value.engine });
-        const latest = [...r.value.conversations].sort((a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt),
-        )[0];
-        if (latest) setSelected(latest.id);
-      })
-      .catch(() => live && dispatch({ type: "link", link: "error" }));
+    void relist().then((list) => {
+      const latest = list && [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      if (live && latest) setSelected(latest.id);
+    });
     return () => {
       live = false;
     };
-  }, [failLink]);
+  }, [relist]);
 
   // Resume + durable event stream (the server closes every ~25 s: reconnect after the cursor).
   useEffect(() => {
-    if (!selected) return;
+    selectedRef.current = selected;
+    cursor.current = 0; // seq is per conversation
+    if (!selected) return dispatch({ type: "cleared" });
     const ac = new AbortController();
     void refresh(selected);
     void (async () => {
@@ -144,7 +161,9 @@ export function AskIcos() {
       if (!c) return dispatch({ type: "message", message: "Could not open a conversation." });
       if (c.kind !== "ok") return failLink(c);
       id = c.value.conversation.id;
+      selectedRef.current = id;
       setSelected(id);
+      void relist();
     }
     let key: string;
     try {
@@ -162,7 +181,7 @@ export function AskIcos() {
     const p = submitPhase(reply);
     if (p === "not_connected") return dispatch({ type: "link", link: "not_connected" });
     dispatch({ type: "submitted", ...p });
-    if (p.phase === "accepted" || p.phase === "replayed") setText("");
+    if (["accepted", "replayed", "processing"].includes(p.phase)) setText("");
     void refresh(id);
   };
 
@@ -175,8 +194,10 @@ export function AskIcos() {
   };
 
   const decide = async (p: AskProposal, decision: "approve" | "reject") => {
-    if (!selected) return;
+    if (!selected || deciding) return;
+    setDeciding(p.id);
     const r = await transport.decide(selected, p.id, decision).catch(() => null);
+    setDeciding(null);
     if (!r) return dispatch({ type: "message", message: "The decision did not reach ICOS." });
     if (r.kind !== "ok") dispatch({ type: "message", message: `Decision refused: ${describe(r)}` });
     void refresh(selected);
@@ -186,7 +207,9 @@ export function AskIcos() {
   const open = current?.turns.find(
     (t) => t.role === "user" && (t.status === "received" || t.status === "processing"),
   );
-  const busy = state.pending?.phase === "submitting" || Boolean(open);
+  // A resume in flight after a switch shows another conversation: never send into a mismatch.
+  const mismatch = selected !== null && current?.conversation.id !== selected;
+  const busy = state.pending?.phase === "submitting" || Boolean(open) || mismatch;
   const ready = state.link === "ready";
 
   return (
@@ -250,7 +273,7 @@ export function AskIcos() {
                   ` · ${PROGRESS_TEXT[state.progress[t.id]] ?? state.progress[t.id]}`}
               </span>
               <div className={t.role === "assistant" ? "cx-answer" : undefined}>{turnText(t)}</div>
-              {t.failureReason && <span className="cx-dim">Failure: {t.failureReason}</span>}
+              {t.failureReason && <span className="cx-dim">Failure: {failureCode(t)}</span>}
             </li>
           ))}
         </ol>
@@ -266,7 +289,7 @@ export function AskIcos() {
             {p.kind === "goal_proposal" ? "Goal proposal" : "Action request"} ·{" "}
             {p.status.replace("_", " ")}
           </strong>
-          <span>{String(p.payload.title ?? p.payload.description ?? "")}</span>
+          <ProposalDetails proposal={p} />
           {p.status === "submitted" && p.externalId && (
             <span>
               Filed as pending goal <code>{p.externalId}</code>. Starting it stays an operator step:
@@ -289,7 +312,7 @@ export function AskIcos() {
               <button
                 type="button"
                 className="cx-btn"
-                disabled={!ack[p.id]}
+                disabled={!ack[p.id] || deciding !== null}
                 onClick={() => void decide(p, "approve")}
               >
                 Approve
@@ -297,7 +320,7 @@ export function AskIcos() {
               <button
                 type="button"
                 className="cx-btn cx-btn--ghost"
-                disabled={!ack[p.id]}
+                disabled={!ack[p.id] || deciding !== null}
                 onClick={() => void decide(p, "reject")}
               >
                 Reject
@@ -383,5 +406,49 @@ export function AskIcos() {
         </p>
       )}
     </div>
+  );
+}
+
+const str = (v: unknown) => (typeof v === "string" ? v : null);
+const strs = (v: unknown) =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
+/** Everything the owner approves, rendered as text: nothing material is hidden behind a title. */
+function ProposalDetails({ proposal }: { proposal: AskProposal }) {
+  const p = proposal.payload;
+  const rows: [string, string | null][] =
+    proposal.kind === "goal_proposal"
+      ? [
+          ["Title", str(p.title)],
+          ["Objective", str(p.objective)],
+          ["Risk", str(p.riskLevel)],
+        ]
+      : [
+          ["Action", str(p.kind)],
+          ["Description", str(p.description)],
+          ["Risk", str(p.riskLevel)],
+        ];
+  const lists: [string, string[]][] =
+    proposal.kind === "goal_proposal"
+      ? [
+          ["Success criteria", strs(p.successCriteria)],
+          ["Constraints", strs(p.constraints)],
+        ]
+      : [];
+  return (
+    <dl className="cx-kv">
+      {rows.map(([k, v]) => (
+        <div key={k} style={{ display: "contents" }}>
+          <dt>{k}</dt>
+          <dd>{v ?? <span className="cx-dim">not provided</span>}</dd>
+        </div>
+      ))}
+      {lists.map(([k, v]) => (
+        <div key={k} style={{ display: "contents" }}>
+          <dt>{k}</dt>
+          <dd>{v.length ? v.join(" · ") : <span className="cx-dim">none</span>}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

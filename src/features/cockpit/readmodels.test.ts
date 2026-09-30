@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBusinessView, notConnectedBusiness, parseBusiness } from "./business";
+import {
+  buildBusinessView,
+  businessView,
+  notConnectedBusiness,
+  parseBusiness,
+  sectionTruth,
+} from "./business";
 import type { Truth } from "./truth";
 import {
   buildWorkforceView,
@@ -55,6 +61,7 @@ const projection = {
   agents: [
     agent("a1"),
     agent("a2", { status: "suspended" }),
+    agent("gone", { status: "retired" }),
     agent("a3", {
       kind: "EPHEMERAL_SPECIALIST",
       expiresAt: "2026-09-30T11:00:00Z",
@@ -72,6 +79,12 @@ const projection = {
       assignmentId: "as-1",
       assigneeAgentId: "a1",
       status: "assigned",
+      approval: { required: true, reasons: [] },
+    },
+    {
+      assignmentId: "as-old",
+      assigneeAgentId: "a1",
+      status: "blocked", // terminal: never "awaiting approval", never attention
       approval: { required: true, reasons: [] },
     },
     {
@@ -93,7 +106,8 @@ describe("workforce read model", () => {
 
   it("summarizes agents, grants, budgets, autonomy, memory scopes and attention without inventing", () => {
     const v = buildWorkforceView(value(parseWorkforce(projection)), NOW);
-    expect(v.agents).toMatchObject({ total: 3, byStatus: { active: 2, suspended: 1 } });
+    expect(v.agents).toMatchObject({ total: 4, byStatus: { active: 2, suspended: 1, retired: 1 } });
+    // live aggregates below exclude the retired agent
     expect(v.budgets).toEqual({ computeUnits: 300, financialCents: 15_000 });
     expect(v.autonomy).toEqual({ L1: 3 });
     expect(v.toolGrants).toEqual({ total: 6, expiringWithin7d: 3, expired: 3 });
@@ -173,5 +187,52 @@ describe("business read model", () => {
     expect(v.leads).toEqual({ rows: [], withheld: 1 });
     expect(Object.keys(v.marketingByChannel).sort()).toEqual(["seo", "tiktok-ads"]); // open channel set
     expect(v.marketingWithheld).toBe(1);
+  });
+});
+
+describe("business tiles never turn 'no REAL data' into a measured zero", () => {
+  it("a section with only non-REAL rows is UNKNOWN; empty REAL section is a real 0", () => {
+    const asOf = "2026-09-30T00:00:00Z";
+    const view = businessView(
+      parseBusiness({
+        clients: [{ clientId: "demo", name: "Demo", status: "active", source: "SIMULATED", asOf }],
+        leads: [],
+        pipeline: [],
+        marketing: [],
+        kpis: [],
+      }),
+    );
+    expect(
+      sectionTruth(
+        view,
+        (b) => b.clients,
+        (r) => r.length,
+      ).kind,
+    ).toBe("unknown");
+    expect(
+      sectionTruth(
+        view,
+        (b) => b.leads,
+        (r) => r.length,
+      ),
+    ).toMatchObject({ kind: "real", value: 0 });
+    expect(
+      sectionTruth(
+        businessView({ kind: "not_connected", reason: "x" }),
+        (b) => b.kpis,
+        (r) => r.length,
+      ).kind,
+    ).toBe("not_connected");
+  });
+
+  it("asOf must be a timestamp", () => {
+    const bad = parseBusiness({
+      clients: [{ clientId: "c", name: "C", status: "active", source: "REAL", asOf: "yesterday" }],
+      leads: [],
+      pipeline: [],
+      marketing: [],
+      kpis: [],
+    });
+    expect(bad.kind).toBe("unknown");
   });
 });

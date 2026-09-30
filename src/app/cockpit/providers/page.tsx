@@ -67,7 +67,7 @@ export default async function ProvidersPage() {
                       <th>Provider · capacity pool</th>
                       <th>Health</th>
                       <th>Load</th>
-                      <th>Effective model</th>
+                      <th>Steered model (requested via {"{{model}}"})</th>
                       <th>Router history: timeouts</th>
                       <th>Router history: infra failures (incl. timeouts)</th>
                       <th>Finished-attempt rates</th>

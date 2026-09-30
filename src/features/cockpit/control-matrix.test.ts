@@ -5,6 +5,8 @@ import {
   CONTROL_COMMAND_TYPES,
   RUNTIME_TARGET_ID,
   confirmationPhrase,
+  controlCommandRequestSchema,
+  controlCommandResultSchema,
   type ControlCommandResult,
   type ControlCommandType,
   type ControlTarget,
@@ -78,6 +80,7 @@ function backend(type: ControlCommandType, over: Partial<ControlCommandResult>) 
     completedAt: "2026-09-30T08:00:00.000Z",
     ...over,
   };
+  controlCommandResultSchema.parse(result); // fixtures must be valid backend results
   return vi.fn(
     async () =>
       new Response(JSON.stringify(result), {
@@ -110,6 +113,7 @@ describe.each(CONTROL_COMMAND_TYPES)("%s lifecycle", (type) => {
 
   it("builds a request the backend schema accepts (risk fixed server-side)", () => {
     const req = requestFor(type);
+    expect(controlCommandRequestSchema.parse(req)).toEqual(req); // strict backend schema
     expect(req.type).toBe(type);
     expect("riskClass" in req).toBe(false);
     expect(Boolean(req.reauthProof)).toBe(needsReauth(type));

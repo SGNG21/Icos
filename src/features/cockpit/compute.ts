@@ -85,7 +85,10 @@ export interface ComputeRow {
   rateLimit: Truth<string>;
   credentialHealth: Truth<string>;
   modelSteered: Truth<boolean>;
-  /** The model that actually ran, only when the runtime passed {{model}} (0054 modelSteered). */
+  /**
+   * The model the router selected AND the runtime was told to run via {{model}} (0054
+   * modelSteered). Inferred from the selection decision, not from an execution record.
+   */
   effectiveModel: Truth<string>;
   /** Cockpit-side rates over FINISHED attempts: no cross-mission terminal-attempt read yet. */
   finishedAttemptRates: Truth<number>;

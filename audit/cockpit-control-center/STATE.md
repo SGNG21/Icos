@@ -112,3 +112,13 @@ See `BACKEND_REQUIREMENTS.md` (BR-01 … BR-20).
 - REVIEW: independent Sonnet security-reviewer + principal-architect (Hermes Nemotron workers were blocked by the permission classifier): both REQUEST_CHANGES, no P0; all P1 and most P2 fixed in 2342e08. Security follow-up verified every P1 RESOLVED and caught one fix claimed but not applied (QC lastError) plus NEW-1 (stale in-flight response after close/reopen) and NEW-2 (error not latched): fixed in the next commit (redactError at the loader for QC + attempt lastError; dialog generation fence; unresolved command session survives close instead of pinning the modal; Ask error latch).
 - OPEN / KNOWN GAPS: audit.list() unbounded (pre-existing; executive counts rely on it → bounded time-window read needed); compute rates are decision-time snapshots from in-flight attempts only (terminal-attempt read = CORE3/BR-16); escalated QC jobs not listable; settlement NOT_CONNECTED (CORE3 defect 36); `.cx-sr` fix is global to cockpit CSS.
 - NEXT_ACTION: after control-foundation merges, run the control dialog against the real API (PAUSE/RESUME/CANCEL, DISABLE/ENABLE, ENTER/EXIT safe mode incl. REAUTH_EXPIRED and replay) — no cockpit code change expected; after CORE3 e652469 merges, drop the structural `routingDecision` cast in `compute.routingEvidenceOf` and add a test typed against `RoutingDecisionEvidence`; lane C implements BR-28.
+
+### IP — Final integration prep (2026-09-30), from 74000f9
+- COMMITS: ae20ff6 control matrix + Ask on lane C API · 3a4ee54 workforce/business read contracts, compute after CORE3, manifest · (next) review corrections
+- CONTROL: 7-command lifecycle matrix vs control-foundation http.ts mapping (schemas parsed with the real contract); client-side proof window; rejection guidance; replay/version/audit trail. No change expected at merge.
+- ASK: `/api/ask/turns` proposal withdrawn; client now targets lane C's committed `/api/cognitive/*` (decision 0056). Durable state is truth, events are signals; engine `not_connected` announced.
+- READ MODELS: `workforce.ts` (BR-29, lane D), `business.ts` (BR-30); single seam `loadReadModels()` in load.ts; both NOT_CONNECTED today.
+- COMPUTE: steered model (inferred from selection), finished-attempt rates BR-16, CLAUDE_FABLE ok.
+- HARDENING: metadata display allowlist. audit.list() bound NOT done here (repository = CORE3) → manifest.
+- MANIFEST: `INTEGRATION_MANIFEST.md` (contract / adapter / fallback / post-merge tests per dependency, merge hazards: lanes C and D both 0056/0050).
+- NEXT_ACTION: integrator follows INTEGRATION_MANIFEST.md; after merge run its per-dependency tests and the live sweep.

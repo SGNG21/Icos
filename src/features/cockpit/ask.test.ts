@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   askReducer,
+  failureCode,
   httpCognitiveTransport,
   initialAsk,
   needsRefresh,
@@ -126,6 +127,37 @@ describe("Ask ICOS state (durable state is truth, events are signals)", () => {
       }),
     ).toMatchObject({ phase: "unknown" });
     expect(submitPhase({ kind: "not_connected" })).toBe("not_connected");
+  });
+});
+
+describe("submit phase follows the stored turn", () => {
+  const ok = (t: Partial<AskTurn>, replayed = false) =>
+    submitPhase({
+      kind: "ok",
+      status: replayed ? 200 : 201,
+      value: { ...result(replayed), turn: turn(t), reply: null },
+    });
+
+  it("failed / cancelled / still-processing replay are never shown as a completed answer", () => {
+    expect(
+      ok({ status: "failed", failureReason: "OmniRouteError: HTTP 401 at https://x" }),
+    ).toEqual({ phase: "failed", detail: "OmniRouteError" });
+    expect(ok({ status: "cancelled" })).toEqual({ phase: "cancelled" });
+    expect(ok({ status: "processing" }, true)).toEqual({ phase: "processing" });
+  });
+
+  it("failure reasons are reduced to their code (no provider internals)", () => {
+    expect(failureCode({ failureReason: "interrupted" })).toBe("interrupted");
+    expect(failureCode({ failureReason: "cancelled_by_user" })).toBe("cancelled_by_user");
+    expect(failureCode({ failureReason: "weird code with spaces: boom" })).toBe("failed");
+    expect(failureCode({ failureReason: null })).toBeUndefined();
+  });
+
+  it("'new conversation' clears everything of the previous one", () => {
+    const s = askReducer(askReducer(initialAsk, { type: "resumed", state: convState() }), {
+      type: "cleared",
+    });
+    expect(s).toMatchObject({ current: null, cursor: 0, progress: {}, pending: null });
   });
 });
 

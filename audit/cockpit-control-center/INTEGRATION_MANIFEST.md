@@ -2,7 +2,7 @@
 
 Lane B, branch `feat/cockpit-control-center`. Partner refs audited (COMMITTED state only):
 `feat/control-foundation` @ `6794e21`, `integration/core3-control-foundation` @ `2156ddd`,
-`feat/autonomy-core3-goal-planner-dag` @ `d110f96`, `feat/cognitive-runtime` @ `3ea6f49`,
+`feat/autonomy-core3-goal-planner-dag` @ `518fa0b` (d110f96..518fa0b re-audited: ignition/scheduler routes only, no contract read by the cockpit changed), `feat/cognitive-runtime` @ `3ea6f49`,
 `feat/digital-workforce` @ `6f344e0`.
 
 Rule for every dependency: when the backend is absent the cockpit renders an explicit
@@ -34,7 +34,7 @@ did not receive. No cockpit code change is expected at merge unless stated.
   - `DispatchAttempt.routingDecision` (ROUTING_DECISION evidence: `decidedAt`, `requiredTier`, `escalationReason`, `candidateSet[].{workerId,family,fallback,excludedBecause,history}`, `selected.{workerId,model,family,score,modelSteered}`, `policyVersion`).
   - Existing reads already used: worker registry, dispatch ledger (`listNonTerminalByMissionTaskId`, `listActiveWorkerAssignments`), `qualityControlJobs.listPending`, `workspaceManager.list`, review decisions, missions.
 - **Current adapter**: `src/features/cockpit/compute.ts` (`routingEvidenceOf` — structural cast, `buildCompute`), `pipeline.ts`, `load.ts`.
-- **Fallback UI state**: attempts without evidence → router facts NOT CONNECTED (never 0); cold start / missing history → UNKNOWN; finished-attempt rates NOT AVAILABLE (BR-16); effective model UNKNOWN when `modelSteered=false` (CLI default ran); latency NOT AVAILABLE (BR-04); settlement NOT CONNECTED (defect-36 branch).
+- **Fallback UI state**: attempts without evidence → router facts NOT CONNECTED (never 0); cold start / missing history → UNKNOWN; finished-attempt rates NOT AVAILABLE (BR-16); steered model (selection + `modelSteered=true`, an inference, not an execution record) UNKNOWN when `modelSteered=false` (CLI default ran); latency NOT AVAILABLE (BR-04); settlement NOT CONNECTED (defect-36 branch).
 - **Tests to run after merge**
   - `pnpm vitest run src/features/cockpit/compute.test.ts src/features/cockpit/pipeline.test.ts`.
   - Drop the structural cast in `routingEvidenceOf` (contract declares `routingDecision`) and add one test typed against `RoutingDecisionEvidence` from `@/server/routing/capability-router`.
@@ -62,14 +62,14 @@ did not receive. No cockpit code change is expected at merge unless stated.
 
 - **Contract expected**: a server-side projection built from `WorkforceService.listAgents/listAssignments/performance` (+ store `listDepartments/listRoles/listSkills`) with the caller's principal (`cockpit.read`), shaped as `workforceProjectionSchema` (`src/features/cockpit/workforce.ts`). Read-only: the cockpit has no workforce mutation.
 - **Current adapter**: `workforce.ts` (`WorkforceReadPort`, `parseWorkforce`, `buildWorkforceView`), seam `loadReadModels()` in `src/features/cockpit/load.ts` (currently `notConnectedWorkforce`); Executive tiles (agents, attention, assignments awaiting approval).
-- **Fallback UI state**: NOT CONNECTED; malformed projection → UNKNOWN; KPI measurements NOT AVAILABLE (contract carries targets only); performance with no REAL observation → UNKNOWN (never 0%).
+- **Fallback UI state**: NOT CONNECTED; malformed projection → UNKNOWN; KPI measurements NOT AVAILABLE (contract carries targets only); performance with no observation → UNKNOWN (never 0%); live aggregates exclude terminal agents (retired/blocked) and terminal assignments (blocked/synthesized); 'awaiting approval' = `assigned` + required + not approved. The integrator must call `performance()` without `includeNonReal`.
 - **Tests to run after merge**: `pnpm vitest run src/features/cockpit/readmodels.test.ts src/server/workforce`; replace `notConnectedWorkforce` in `loadReadModels()` with a port calling the service; add a test feeding the real bootstrap (`src/core/workforce/bootstrap`) through `parseWorkforce`.
 
 ## BUSINESS_READMODEL (BR-30 · no owner yet)
 
 - **Contract expected**: `businessReadModelSchema` (`src/features/cockpit/business.ts`): clients, leads, pipeline, marketing (open channel set: seo, ads, …), KPIs — each row with `source: REAL | SIMULATED | NOT_CONNECTED` and `asOf`.
 - **Current adapter**: `business.ts` (`BusinessReadPort`, `parseBusiness`, `buildBusinessView`), seam `loadReadModels()`; Executive tiles (clients/at risk, leads, pipeline, marketing channels, KPIs).
-- **Fallback UI state**: NOT CONNECTED; non-REAL rows withheld and counted, never displayed as values.
+- **Fallback UI state**: NOT CONNECTED; non-REAL rows withheld and counted, never displayed as values; a section with only non-REAL rows is UNKNOWN (never a measured 0); `asOf` must be a timestamp (no freshness TTL yet — known gap).
 - **Tests to run after merge**: `pnpm vitest run src/features/cockpit/readmodels.test.ts`.
 
 ---
