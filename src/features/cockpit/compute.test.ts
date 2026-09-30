@@ -1,0 +1,208 @@
+import { describe, expect, it } from "vitest";
+
+import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
+
+import { UNDECLARED_FAMILY, buildCompute, routingEvidenceOf } from "./compute";
+import type { WorkerView } from "./snapshot";
+import { missing, real } from "./truth";
+
+const worker = (id: string, metadata: Record<string, string>): WorkerView => ({
+  id,
+  name: `compute:${metadata.model ?? id}`,
+  kind: "agent",
+  runtime: "hermes",
+  runtimeSupport: "SUPPORTED_RUNTIME",
+  status: "active",
+  health: "healthy",
+  availability: "available",
+  probe: { outcome: "ok", at: "2026-09-29T11:59:00Z", ageMs: 60_000 },
+  model: metadata.model ? real(metadata.model) : missing("not_available", "none", "BR-03"),
+  provider: metadata.provider ? real(metadata.provider) : missing("not_available", "none", "BR-03"),
+  account: missing("not_available", "none", "BR-03"),
+  slots: { used: real(1), max: 2 },
+  pool: metadata.provider ? { name: `provider:${metadata.provider}`, limit: 4 } : null,
+  capabilities: [],
+  features: [],
+  tags: [],
+  metadata,
+  metadataHidden: 0,
+  assignments: [],
+  leases: real([]),
+  tone: "ok",
+  routable: true,
+});
+
+const W120 = "11111111-1111-4111-8111-111111111111";
+const W550 = "55555555-5555-4555-8555-555555555555";
+const evidence = {
+  kind: "ROUTING_DECISION",
+  policyVersion: "compute-routing/1",
+  decidedAt: "2026-09-29T11:00:00Z",
+  role: "writer",
+  requirement: { complexity: "high" },
+  requiredTier: 4,
+  escalationReason: ["2nd legitimate rejection"],
+  candidateSet: [
+    {
+      workerId: W120,
+      selectable: false,
+      excludedBecause: ["BELOW_REQUIRED_TIER"],
+      history: { executions: 10, infraFailures: 2, timeouts: 1, reviewed: 8 },
+    },
+    {
+      workerId: W550,
+      selectable: true,
+      fallback: "TIER_FALLBACK",
+      excludedBecause: [],
+      history: { executions: 0, infraFailures: 0, timeouts: 0, reviewed: 0 },
+    },
+  ],
+  selected: {
+    workerId: W550,
+    model: "nvidia/nemotron-3-ultra-550b-a55b",
+    score: 0.71,
+    modelSteered: true,
+  },
+  futureField: "tolerated",
+};
+const attempt = (routingDecision?: unknown) =>
+  ({
+    id: "a1",
+    missionId: "m",
+    missionTaskId: "mt",
+    taskId: "t",
+    attempt: 1,
+    state: "dispatched",
+    routingDecision,
+  }) as unknown as DispatchAttempt;
+
+const fleet = [
+  worker(W120, {
+    model: "nvidia/nemotron-3-super-120b-a12b",
+    provider: "nvidia",
+    modelFamily: "NEMOTRON_120B",
+  }),
+  worker(W550, {
+    model: "nvidia/nemotron-3-ultra-550b-a55b",
+    provider: "nvidia",
+    modelFamily: "NEMOTRON_550B",
+  }),
+  worker("legacy", {}),
+];
+
+describe("compute view", () => {
+  it("groups by declared family as an open set; unknown families are not dropped", () => {
+    const groups = buildCompute(
+      [...fleet, worker("f", { model: "acme/next-gen-9", modelFamily: "ACME_NEXT" })],
+      real([]),
+    );
+    expect(groups.map((g) => g.family)).toEqual([
+      "ACME_NEXT",
+      "NEMOTRON_120B",
+      "NEMOTRON_550B",
+      UNDECLARED_FAMILY,
+    ]);
+    expect(groups.at(-1)!.rows[0].family.kind).toBe("unknown");
+  });
+
+  it("without routing evidence, router facts are NOT_CONNECTED — never zero", () => {
+    const row = buildCompute(fleet, real([attempt()]))[0].rows[0];
+    for (const k of [
+      "timeoutRate",
+      "infraFailureRate",
+      "routingExclusions",
+      "rateLimit",
+      "modelSteered",
+      "fallbackEvents",
+      "routingReason",
+    ] as const)
+      expect(row[k].kind, k).toBe("not_connected");
+    expect(row.latency.kind).toBe("not_available");
+    expect(row.credentialHealth.kind).toBe("not_available");
+  });
+
+  it("reads persisted ROUTING_DECISION evidence without recomputing it", () => {
+    expect(routingEvidenceOf([attempt(evidence), attempt({ kind: "OTHER" })])).toHaveLength(1);
+    const [g120, g550] = buildCompute(fleet, real([attempt(evidence)]));
+    const r120 = g120.rows[0];
+    expect(r120.timeoutRate).toMatchObject({ kind: "real", value: 0.1 });
+    expect(r120.infraFailureRate).toMatchObject({ kind: "real", value: 0.2 });
+    expect(r120.routingExclusions).toMatchObject({ kind: "real", value: ["BELOW_REQUIRED_TIER"] });
+    expect(r120.routingReason.kind).toBe("not_connected"); // never selected
+    const r550 = g550.rows[0];
+    expect(r550.fallbackEvents).toMatchObject({ kind: "real", value: 1 });
+    expect(r550.modelSteered).toMatchObject({ kind: "real", value: true });
+    expect(r550.timeoutRate.kind).toBe("unknown"); // cold start: no history is not a 0% rate
+    expect(r550.routingReason).toMatchObject({ kind: "real" });
+    expect((r550.routingReason as { value: string }).value).toContain("tier ≥ 4");
+  });
+
+  it("capacity pool is the provider quota", () => {
+    const row = buildCompute(fleet, real([]))[1].rows[0];
+    expect(row.capacityPool).toMatchObject({ kind: "real", value: "provider:nvidia" });
+  });
+
+  it("missing history is UNKNOWN (not cold start); rates are dated; fallback is per worker", () => {
+    const noHistory = {
+      ...evidence,
+      candidateSet: [
+        { workerId: W120, selectable: true, excludedBecause: [], family: "NEMOTRON_120B" },
+      ],
+      selected: { workerId: W120 },
+    };
+    const legacy = worker("legacy", { model: "nvidia/nemotron-3-super-120b-a12b" }); // no modelFamily
+    const rows = buildCompute([legacy, fleet[0]], real([attempt(noHistory)])).flatMap(
+      (x) => x.rows,
+    );
+    const r120 = rows.find((r) => r.workerId === W120)!;
+    expect(r120.timeoutRate).toMatchObject({ kind: "unknown" });
+    expect((r120.timeoutRate as { reason: string }).reason).toContain("no history");
+    expect(r120.fallbackEvents).toMatchObject({ kind: "real", value: 0 });
+    const legacyRow = rows.find((r) => r.workerId === "legacy")!;
+    expect(legacyRow.fallbackEvents.kind).toBe("not_connected"); // not in any decision
+    const dated = buildCompute(fleet, real([attempt(evidence)]))[0].rows[0].timeoutRate;
+    expect((dated as { derivation: string }).derivation).toContain("2026-09-29T11:00:00Z");
+  });
+
+  it("an undeclared family falls back to the router-inferred one, labelled as such", () => {
+    const ev = {
+      ...evidence,
+      candidateSet: [{ workerId: "x", excludedBecause: [], family: "CLAUDE_OPUS" }],
+    };
+    const [g] = buildCompute(
+      [worker("x", { model: "anthropic/claude-opus-z" })],
+      real([attempt(ev)]),
+    );
+    expect(g.family).toBe("CLAUDE_OPUS");
+    expect((g.rows[0].family as { derivation: string }).derivation).toContain(
+      "inferred by the router",
+    );
+  });
+});
+
+describe("compute view after CORE3 integration", () => {
+  it("effective model is known only when steered; finished-attempt rates stay BR-16", () => {
+    const rows = buildCompute(fleet, real([attempt(evidence)])).flatMap((g) => g.rows);
+    const r550 = rows.find((r) => r.workerId === W550)!;
+    expect(r550.effectiveModel).toMatchObject({
+      kind: "real",
+      value: "nvidia/nemotron-3-ultra-550b-a55b",
+    });
+    const unsteered = { ...evidence, selected: { ...evidence.selected, modelSteered: false } };
+    const u = buildCompute(fleet, real([attempt(unsteered)]))
+      .flatMap((g) => g.rows)
+      .find((r) => r.workerId === W550)!;
+    expect(u.effectiveModel.kind).toBe("unknown");
+    for (const r of rows)
+      expect(r.finishedAttemptRates).toMatchObject({ kind: "not_available", requirement: "BR-16" });
+  });
+
+  it("families from CORE3 d110f96 (e.g. CLAUDE_FABLE) need no code change", () => {
+    const fable = worker("f", {
+      model: "anthropic/claude-fable-5-1",
+      provider: "anthropic",
+      modelFamily: "CLAUDE_FABLE",
+    });
+    expect(buildCompute([fable], real([])).map((g) => g.family)).toEqual(["CLAUDE_FABLE"]);
+  });
+});

@@ -7,11 +7,19 @@ import { CommandComposer } from "@/components/features/command-composer";
 import { RecentTasks } from "@/components/features/recent-tasks";
 import { Sidebar } from "@/components/layout/sidebar";
 import { resolveCockpitAccess } from "@/server/auth/cockpit-access";
+import { loadSnapshot } from "@/features/cockpit/load";
 import { getContainer } from "@/server/container";
 
 // Le cockpit lit un état mutable en mémoire : rendu dynamique obligatoire, pas
 // de pré-rendu statique ni de cache de rendu.
 export const dynamic = "force-dynamic";
+
+const healthLabel = {
+  healthy: "saine",
+  degraded: "dégradée",
+  critical: "critique",
+  unknown: "inconnue",
+} as const;
 
 export default async function Home() {
   const container = await getContainer();
@@ -35,6 +43,7 @@ export default async function Home() {
       : container.actions.list({ approvalStatus: "pending" }),
   ]);
 
+  const health = (await loadSnapshot())?.health;
   const showAdministration =
     container.humanAdministration !== undefined &&
     access.session.roles.some((r) => r === "admin" || r === "owner");
@@ -48,15 +57,17 @@ export default async function Home() {
             <p className="eyebrow">Cockpit opérationnel</p>
             <h1>ICOS</h1>
           </div>
-          <div className="system-state" aria-label="État du système">
-            <span className="status-dot" />
-            Système nominal · mode observation
-          </div>
+          {/* Derived from canonical state, never hardcoded (defect D-03). */}
+          <a className="system-state" aria-label="État du système" href="/cockpit">
+            Santé ICOS : {health ? healthLabel[health.level] : "inconnue"} · Control Center →
+          </a>
         </header>
 
         <div className="integration-banner" role="status">
-          <span>Intégrations désactivées</span>
-          GitHub, IA, n8n, Dolibarr et PostgreSQL ne sont pas connectés.
+          <span>Persistance</span>
+          {container.db
+            ? "PostgreSQL composé."
+            : "Backend mémoire de démonstration : les données affichées sont des seeds, pas l’état ICOS."}
         </div>
 
         <div className="dashboard-grid">

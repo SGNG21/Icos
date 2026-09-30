@@ -19,6 +19,13 @@ export function proxy(request: NextRequest): NextResponse {
   return NextResponse.redirect(loginUrl);
 }
 
+/**
+ * PWA shell assets are exempt: they carry no ICOS data and must load before a
+ * session exists (install prompt, offline page, service worker). Anchored with
+ * `$` or `/` so no application route can hide behind a look-alike prefix.
+ */
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest$|sw.js$|offline.html$|icon/|apple-icon).*)",
+  ],
 };

@@ -42,13 +42,13 @@ export function BusinessSidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <div className="mini-status">
-          <span className="status-dot" />
+        {/* No hardcoded state claim here: live system state lives in the Control Center. */}
+        <a className="mini-status" href="/cockpit">
           <div>
-            <strong>Environnement local</strong>
-            <small>Exécution verrouillée</small>
+            <strong>Control Center</strong>
+            <small>État système réel →</small>
           </div>
-        </div>
+        </a>
         <LogoutButton />
       </div>
     </aside>

@@ -1,6 +1,8 @@
-import { notFound } from "next/navigation";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { getContainer } from "@/server/container";
-import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
+import { resolveCockpitAccess } from "@/server/auth/cockpit-access";
 import { buildCockpitProjection } from "@/features/cockpit/projection";
 import { readFile } from "fs/promises";
 import path from "path";
@@ -35,28 +37,30 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
 export const dynamic = "force-dynamic";
 
 export default async function ControlRoomPage() {
+  // Defect D-01: authorization used a synthetic Request without the caller's
+  // cookies, so it never saw a session, and the file-based sections below were
+  // read with no authorization at all. Gate the WHOLE page on the real request.
+  const container = await getContainer();
+  const access = await resolveCockpitAccess(container, await headers());
+  if (access.kind === "redirect") redirect("/login?next=%2Fcontrol-room");
+  if (access.kind === "forbidden") {
+    return (
+      <main className="p-6">
+        <h1 className="text-2xl font-bold">Accès refusé</h1>
+      </main>
+    );
+  }
+
   // Fetch global status
   let globalData = null;
   try {
-    const container = await getContainer();
-    const access = await protectRoute({
-      container,
-      request: new Request("http://localhost:3000/api/cockpit"),
-      route: "api.cockpit",
-      permission: "cockpit.read",
-    });
-    if (access.ok) {
-      const scope = container.operationalAccess
-        ? await container.operationalAccess.resolveScope(access.session)
-        : { kind: "global" as const };
-      const [agents, tasks] = await Promise.all([
-        container.agents.listForScope(scope),
-        container.tasks.listForScope(scope),
-      ]);
-      const executions = await container.executionResults.listByTaskIds(tasks.map((t) => t.id));
-      const projection = buildCockpitProjection({ tasks, agents, executions });
-      globalData = projection;
-    }
+    const scope = await resolveOperationalScope(container, access.session);
+    const [agents, tasks] = await Promise.all([
+      container.agents.listForScope(scope),
+      container.tasks.listForScope(scope),
+    ]);
+    const executions = await container.executionResults.listByTaskIds(tasks.map((t) => t.id));
+    globalData = buildCockpitProjection({ tasks, agents, executions });
   } catch (error) {
     console.error("Failed to fetch global status:", error);
   }
@@ -82,6 +86,13 @@ export default async function ControlRoomPage() {
   return (
     <main className="p-6 bg-gray-50 min-h-screen">
       <h1 className="text-2xl font-bold mb-6">ICOS Control Room V1</h1>
+      <p className="mb-6">
+        Legacy file-based view. The canonical, scoped fleet and mission state live in the{" "}
+        <a className="underline" href="/cockpit">
+          Control Center
+        </a>
+        .
+      </p>
 
       {/* A. Global Status */}
       <section className="mb-8">
