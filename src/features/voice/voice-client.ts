@@ -1,4 +1,4 @@
-import type { ServerMessage } from "@/core/voice/contracts";
+import type { ServerMessage, TurnLatency } from "@/core/voice/contracts";
 
 /**
  * Browser-side voice state (decision 0061): a pure reducer over server
@@ -15,6 +15,8 @@ export type VoiceTurnView = {
   rev: number;
   icos: string;
   state: "listening" | "thinking" | "answering" | "done" | "interrupted" | "dropped" | "failed";
+  /** Operational events the runtime attached to this turn (mission, approval, action). */
+  events: { kind: "ACTION_EVENT" | "MISSION_EVENT" | "APPROVAL_EVENT"; payload: unknown }[];
 };
 
 export type VoiceUiState = {
@@ -27,6 +29,8 @@ export type VoiceUiState = {
   /** Audio for these turns must never play again (barge-in / cancel / stop). */
   silenced: string[];
   error: { code: string; message: string } | null;
+  /** Last server-observed latencies, for the diagnostics panel only. */
+  lastMetrics: TurnLatency | null;
 };
 
 export type VoiceAction =
@@ -35,7 +39,8 @@ export type VoiceAction =
   | { type: "talk"; turnId: string }
   | { type: "stop_talking" }
   | { type: "interrupt" }
-  | { type: "local_error"; code: string; message: string };
+  | { type: "local_error"; code: string; message: string }
+  | { type: "clear_error" };
 
 const MAX_TURNS = 20;
 
@@ -47,6 +52,7 @@ export const initialVoiceState: VoiceUiState = {
   turns: [],
   silenced: [],
   error: null,
+  lastMetrics: null,
 };
 
 export function mayPlay(state: VoiceUiState, turnId: string): boolean {
@@ -61,7 +67,15 @@ export function activeTurn(state: VoiceUiState): VoiceTurnView | undefined {
 function upsert(state: VoiceUiState, id: string, patch: Partial<VoiceTurnView>): VoiceUiState {
   const existing = state.turns.find((t) => t.id === id);
   const turn: VoiceTurnView = {
-    ...(existing ?? { id, you: "", youFinal: false, rev: 0, icos: "", state: "listening" }),
+    ...(existing ?? {
+      id,
+      you: "",
+      youFinal: false,
+      rev: 0,
+      icos: "",
+      state: "listening",
+      events: [],
+    }),
     ...patch,
   };
   const turns = existing
@@ -102,6 +116,8 @@ export function voiceReducer(state: VoiceUiState, action: VoiceAction): VoiceUiS
     }
     case "local_error":
       return { ...state, error: { code: action.code, message: action.message } };
+    case "clear_error":
+      return { ...state, error: null };
     case "server":
       return onServer(state, action.message);
   }
@@ -139,10 +155,11 @@ function onServer(state: VoiceUiState, m: ServerMessage): VoiceUiState {
     case "playback_stop":
       return silence(state, m.turnId);
     case "turn_metrics": {
+      const withMetrics = { ...state, lastMetrics: m.metrics };
       const turn = state.turns.find((t) => t.id === m.metrics.turnId);
       return turn?.state === "answering" || turn?.state === "thinking"
-        ? upsert(state, turn.id, { state: "done" })
-        : state;
+        ? upsert(withMetrics, turn.id, { state: "done" })
+        : withMetrics;
     }
     case "error": {
       let next: VoiceUiState = { ...state, error: { code: m.code, message: m.message } };
@@ -160,7 +177,11 @@ function onServer(state: VoiceUiState, m: ServerMessage): VoiceUiState {
       if (m.code === "SESSION_EXPIRED") next = { ...next, sessionId: null };
       return next;
     }
-    case "response_event": // action/mission/approval: none from the temporary adapter yet
+    case "response_event": {
+      const turn = state.turns.find((t) => t.id === m.turnId);
+      const events = [...(turn?.events ?? []), { kind: m.kind, payload: m.payload }].slice(-10);
+      return upsert(state, m.turnId, { events });
+    }
     case "audio":
     case "heartbeat_ack":
       return state;

@@ -1,6 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  Activity,
+  ArrowUp,
+  AudioLines,
+  Brain,
+  CircleAlert,
+  CircleCheck,
+  CirclePause,
+  Clock,
+  Info,
+  LoaderCircle,
+  Mic,
+  RefreshCw,
+  ShieldAlert,
+  Sparkles,
+  Square,
+  TriangleAlert,
+  Users,
+  WifiOff,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 
 import type { ServerMessage } from "@/core/voice/contracts";
 import {
@@ -13,15 +34,28 @@ import {
   reconnectDelay,
   toPcm16,
   voiceReducer,
-  type VoiceUiState,
+  type VoiceTurnView,
 } from "@/features/voice/voice-client";
+import {
+  PHASE,
+  isBlocking,
+  operationalEvent,
+  plainText,
+  relativeTime,
+  userMessage,
+  voicePhase,
+  type MissionCard,
+  type Tone,
+  type VoicePhase,
+} from "@/features/voice/voice-presentation";
 
-import styles from "./voice-client.module.css";
+import styles from "./voice.module.css";
 
 /**
  * Mobile-first voice client (decision 0061). Tap to talk, tap again to send.
  * Talking while ICOS speaks is a barge-in: local playback stops at once and
- * the server interrupts the answer.
+ * the server interrupts the answer. Every state shown is derived from the
+ * protocol (voice-presentation.ts); nothing is simulated.
  */
 
 const SAMPLE_RATE = 16_000;
@@ -31,68 +65,101 @@ const HEARTBEAT_MS = 15_000;
 /** Same-origin static file: iOS Safari is unreliable with blob: worklet modules. */
 const TAP_WORKLET_URL = "/icos-voice-tap.js";
 
-const LINK_LABEL: Record<VoiceUiState["link"], string> = {
-  connecting: "Connexion…",
-  ready: "Connecté",
-  reconnecting: "Reconnexion…",
-  offline: "Hors ligne",
-  unavailable: "Voix indisponible",
+const PHASE_ICON: Record<VoicePhase, ReactNode> = {
+  CONNECTING: <LoaderCircle aria-hidden />,
+  IDLE: <CircleCheck aria-hidden />,
+  LISTENING: <Mic aria-hidden />,
+  TRANSCRIBING: <AudioLines aria-hidden />,
+  THINKING: <Brain aria-hidden />,
+  SPEAKING: <AudioLines aria-hidden />,
+  INTERRUPTED: <CirclePause aria-hidden />,
+  RECONNECTING: <RefreshCw aria-hidden />,
+  ERROR: <TriangleAlert aria-hidden />,
+  OFFLINE: <WifiOff aria-hidden />,
 };
 
-const TURN_LABEL: Record<string, string> = {
-  listening: "écoute",
-  thinking: "réflexion",
-  answering: "réponse",
-  done: "",
-  interrupted: "interrompu",
-  dropped: "non retenu",
-  failed: "non transmis",
+const TONE_ICON: Record<Tone, ReactNode> = {
+  flow: <Activity aria-hidden />,
+  ok: <CircleCheck aria-hidden />,
+  critical: <CircleAlert aria-hidden />,
+  autonomy: <Sparkles aria-hidden />,
+  warn: <TriangleAlert aria-hidden />,
+  unknown: <Info aria-hidden />,
 };
 
-/** Answers are plain text on a phone: drop markdown emphasis markers. */
-const plain = (text: string) => text.replace(/\*\*|__|`/g, "");
-
-/** Derive the high-level UI state for the central microphone button. */
-type MicState =
-  | "idle"
-  | "listening"
-  | "transcribing"
-  | "thinking"
-  | "speaking"
-  | "error";
-
-function deriveMicState(state: VoiceUiState, speaking: boolean): MicState {
-  if (state.error) return "error";
-  if (state.link !== "ready") return "idle";
-  const talkingTurnId = state.talkingTurnId;
-  if (talkingTurnId) {
-    const turn = state.turns.find((t) => t.id === talkingTurnId);
-    if (turn?.youFinal) return "transcribing";
-    return "listening";
+/** Compact mission card: renders only the fields the runtime actually sent. */
+function Mission({ mission, label, tone }: { mission: MissionCard; label: string; tone: Tone }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(tick);
+  }, []);
+  const facts: [string, ReactNode][] = [];
+  if (mission.currentStep) facts.push(["Étape", mission.currentStep]);
+  if (mission.workersActive !== undefined) {
+    facts.push([
+      "Workers",
+      <span key="w" className={styles.status}>
+        <Users aria-hidden /> {mission.workersActive} actif{mission.workersActive > 1 ? "s" : ""}
+      </span>,
+    ]);
   }
-  if (speaking) return "speaking";
-  const active = activeTurn(state);
-  if (active?.state === "thinking") return "thinking";
-  if (active?.state === "answering") return "speaking";
-  return "idle";
+  if (mission.startedAt) {
+    facts.push([
+      "Démarrée",
+      <span key="s" className={styles.status}>
+        <Clock aria-hidden /> {relativeTime(mission.startedAt, now)}
+      </span>,
+    ]);
+  }
+  if (mission.resultAvailable !== undefined) {
+    facts.push(["Résultat", mission.resultAvailable ? "Disponible" : "Pas encore"]);
+  }
+  return (
+    <section className={styles.mission} aria-label={`Mission : ${mission.title}`}>
+      <div className={styles.missionHead}>
+        <h3 className={styles.missionTitle}>{mission.title}</h3>
+        <span className={styles.chip} data-tone={tone}>
+          {TONE_ICON[tone]}
+          {label}
+        </span>
+      </div>
+      {mission.progress !== undefined && (
+        <div
+          className={styles.progress}
+          role="progressbar"
+          aria-label="Avancement"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(mission.progress)}
+        >
+          <span style={{ width: `${mission.progress}%` }} />
+        </div>
+      )}
+      {facts.length > 0 && (
+        <dl className={styles.facts}>
+          {facts.map(([term, value]) => (
+            <div key={term}>
+              <dt>{term}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {mission.needsAttention && (
+        <p className={`${styles.chip} ${styles.attention}`} data-tone="warn">
+          <ShieldAlert aria-hidden />
+          Votre attention est requise
+        </p>
+      )}
+    </section>
+  );
 }
 
-const MIC_LABEL: Record<MicState, string> = {
-  idle: "Appuyez pour parler",
-  listening: "Écoute… Relâchez pour envoyer",
-  transcribing: "Transcription…",
-  thinking: "ICOS réfléchit…",
-  speaking: "ICOS parle…",
-  error: "Erreur",
-};
-
-const MIC_ARIA_LABEL: Record<MicState, string> = {
-  idle: "Commencer l'enregistrement vocal",
-  listening: "Arrêter l'enregistrement et envoyer",
-  transcribing: "Transcription en cours",
-  thinking: "ICOS est en train de réfléchir",
-  speaking: "ICOS est en train de parler, appuyez pour interrompre",
-  error: "Erreur de connexion vocale",
+const TURN_STATUS: Partial<Record<VoiceTurnView["state"], { label: string; tone: Tone }>> = {
+  interrupted: { label: "Interrompu", tone: "warn" },
+  dropped: { label: "Non retenu", tone: "critical" },
+  failed: { label: "Non transmis", tone: "critical" },
 };
 
 export function VoiceClient() {
@@ -387,7 +454,7 @@ export function VoiceClient() {
       dispatch({ type: "stop_talking" });
       dispatch({
         type: "local_error",
-        code: "MICROPHONE",
+        code: window.isSecureContext ? "MICROPHONE" : "INSECURE_CONTEXT",
         message: error instanceof Error ? error.message : "micro refusé",
       });
     }
@@ -417,190 +484,247 @@ export function VoiceClient() {
     send({ type: "interrupt" });
   };
 
+  const cancelTalking = () => {
+    talkingTurn.current = null;
+    const c = capture.current;
+    if (c) {
+      c.source.disconnect();
+      c.stream.getTracks().forEach((track) => track.stop());
+    }
+    capture.current = null;
+    dispatch({ type: "stop_talking" });
+    send({ type: "cancel" }); // the server drops the uncommitted utterance
+  };
+
+  const phase = voicePhase(state, speaking);
+  const meta = PHASE[phase];
   const talking = state.talkingTurnId !== null;
-  const busy = activeTurn(state);
   const canTalk = state.link === "ready";
-  const micState = deriveMicState(state, speaking);
+  const canInterrupt = speaking || !!activeTurn(state);
+  const [diagnostics, setDiagnostics] = useState(false);
+  const blocking = state.error && isBlocking(state.error.code) ? state.error : null;
+  const hint = phase === "ERROR" && state.error ? userMessage(state.error.code) : meta.hint || " ";
 
-  // Render helpers
-  const renderTranscript = () => {
-    if (state.turns.length === 0) {
-      return (
-        <p className={styles.hint} aria-live="polite">
-          Appuyez sur le micro, parlez, puis relâchez pour envoyer.
-        </p>
-      );
-    }
-    return state.turns.map((turn) => (
-      <article key={turn.id} className={styles.turn}>
-        {turn.you && (
-          <p className={styles.you} data-final={turn.youFinal} aria-label="Vous">
-            {turn.you}
-          </p>
-        )}
-        {turn.icos && (
-          <p className={styles.icos} aria-label="ICOS">
-            {plain(turn.icos)}
-          </p>
-        )}
-        {TURN_LABEL[turn.state] && (
-          <span className={styles.badge} data-state={turn.state} aria-label={`État : ${TURN_LABEL[turn.state]}`}>
-            {TURN_LABEL[turn.state]}
-          </span>
-        )}
-        {turn.state === "failed" && (
-          <button
-            type="button"
-            className={styles.resend}
-            onClick={() => resend(turn.id)}
-            aria-label="Renvoyer ce message"
-          >
-            Renvoyer
-          </button>
-        )}
-      </article>
-    ));
-  };
-
-  const renderMissionCard = () => {
-    // Future: Cognitive/CORE3 data will populate this
-    // Show connection state and session info for now
-    if (state.link === "connecting" || state.link === "reconnecting") {
-      return (
-        <div className={styles.missionCard} aria-live="polite">
-          <div className={styles.missionCardHeader}>
-            <span className={styles.missionCardTitle}>Session vocale</span>
-            <span className={`${styles.missionCardStatus} ${styles[`status-${state.link}`]}`}>
-              {LINK_LABEL[state.link]}
-            </span>
-          </div>
-          <p className={styles.missionCardSubtitle}>
-            Connexion au runtime cognitif en cours…
-          </p>
-        </div>
-      );
-    }
-    if (state.link === "ready" && state.sessionId) {
-      return (
-        <div className={styles.missionCard} aria-live="polite">
-          <div className={styles.missionCardHeader}>
-            <span className={styles.missionCardTitle}>Session active</span>
-            <span className={`${styles.missionCardStatus} ${styles["status-ready"]}`}>
-              {LINK_LABEL.ready}
-            </span>
-          </div>
-          <p className={styles.missionCardSubtitle}>
-            Session: <code>{state.sessionId.slice(0, 8)}…</code>
-            {state.conversationId && (
-              <>
-                {" | "}
-                Conversation: <code>{state.conversationId.slice(0, 8)}…</code>
-              </>
-            )}
-          </p>
-        </div>
-      );
-    }
-    if (state.link === "offline" || state.link === "unavailable") {
-      return (
-        <div className={styles.missionCard} aria-live="polite">
-          <div className={styles.missionCardHeader}>
-            <span className={styles.missionCardTitle}>Voix indisponible</span>
-            <span className={`${styles.missionCardStatus} ${styles[`status-${state.link}`]}`}>
-              {LINK_LABEL[state.link]}
-            </span>
-          </div>
-          <p className={styles.missionCardSubtitle}>
-            {state.link === "offline"
-              ? "Vous êtes hors ligne. La voix nécessite une connexion internet."
-              : "Le service vocal n'est pas configuré sur ce serveur."}
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
+  const micLabel = talking
+    ? "Envoyer le message"
+    : phase === "SPEAKING"
+      ? "Interrompre ICOS et parler"
+      : "Parler à ICOS";
 
   return (
-    <main className={styles.page} role="main">
+    <main className={styles.root}>
       <header className={styles.header}>
-        <h1 className={styles.title}>ICOS</h1>
-        <div className={styles.headerRight}>
-          <span
-            className={styles.link}
-            data-link={state.link}
-            role="status"
-            aria-live="polite"
-            aria-label={`État de connexion : ${LINK_LABEL[state.link]}`}
-          >
-            {LINK_LABEL[state.link]}
+        <div className={styles.brand}>
+          <span className={styles.mark} aria-hidden="true">
+            I
+          </span>
+          <span className={styles.brandText}>
+            <span className={styles.brandName}>ICOS</span>
+            <span className={styles.brandSub}>
+              {state.conversationId ? "Conversation en cours" : "Nouvelle conversation"}
+            </span>
           </span>
         </div>
+        <span className={styles.chip} data-tone={meta.tone} role="status" aria-live="polite">
+          {PHASE_ICON[phase]}
+          {meta.label}
+        </span>
+        <button
+          type="button"
+          className={styles.iconButton}
+          onClick={() => setDiagnostics((d) => !d)}
+          aria-expanded={diagnostics}
+          aria-controls="voice-diagnostics"
+          aria-label="Diagnostics techniques"
+        >
+          <Info aria-hidden />
+        </button>
       </header>
 
-      {renderMissionCard()}
-
-      <section className={styles.turns} aria-live="polite" aria-label="Historique de la conversation">
-        {renderTranscript()}
+      <div className={styles.feed} aria-label="Conversation avec ICOS" role="log">
+        {blocking && (
+          <p className={styles.banner} data-tone="critical" role="alert">
+            <ShieldAlert aria-hidden />
+            <span>{userMessage(blocking.code)}</span>
+          </p>
+        )}
+        {state.turns.length === 0 && !blocking && (
+          <div className={styles.empty}>
+            <span className={styles.emptyGlyph} aria-hidden="true">
+              <Sparkles />
+            </span>
+            <p className={styles.emptyTitle}>Parlez à ICOS</p>
+            <p className={styles.emptyText}>
+              Touchez le micro, parlez, puis touchez à nouveau pour envoyer. Vous pouvez interrompre
+              ICOS à tout moment.
+            </p>
+          </div>
+        )}
+        {state.turns.map((turn) => {
+          const status = TURN_STATUS[turn.state];
+          const events = turn.events.map(operationalEvent).filter((e) => e !== null);
+          return (
+            <article key={turn.id} className={styles.turn}>
+              {turn.you && (
+                <p className={`${styles.bubble} ${styles.user}`} data-partial={!turn.youFinal}>
+                  <span className={styles.srOnly}>Vous : </span>
+                  {turn.you}
+                  {!turn.youFinal && <span className={styles.dots} aria-hidden="true" />}
+                </p>
+              )}
+              {!turn.you && turn.id === state.talkingTurnId && (
+                <p className={`${styles.bubble} ${styles.user}`} data-partial="true">
+                  À l&apos;écoute
+                  <span className={styles.dots} aria-hidden="true" />
+                </p>
+              )}
+              {status && (
+                <div className={`${styles.meta} ${styles.metaUser}`}>
+                  <span className={styles.status} data-tone={status.tone}>
+                    {TONE_ICON[status.tone]}
+                    {status.label}
+                  </span>
+                  {turn.state === "failed" && (
+                    <button
+                      type="button"
+                      className={styles.textButton}
+                      onClick={() => resend(turn.id)}
+                    >
+                      Renvoyer
+                    </button>
+                  )}
+                </div>
+              )}
+              {turn.icos && (
+                <p className={`${styles.bubble} ${styles.icos}`}>
+                  <span className={styles.who}>ICOS</span>
+                  {plainText(turn.icos)}
+                </p>
+              )}
+              {events.map((event, i) =>
+                event.kind === "mission" ? (
+                  <Mission key={i} mission={event.mission} label={event.label} tone={event.tone} />
+                ) : (
+                  <p key={i} className={styles.event} data-tone={event.tone}>
+                    {TONE_ICON[event.tone]}
+                    {event.label}
+                  </p>
+                ),
+              )}
+            </article>
+          );
+        })}
         <div ref={turnsEnd} />
-      </section>
+      </div>
 
-      {state.error && (
-        <div className={styles.errorBanner} role="alert" aria-live="assertive">
-          <strong>{state.error.code}</strong> — {state.error.message}
-          {state.error.code === "MICROPHONE" && (
-            <button
-              type="button"
-              className={styles.errorAction}
-              onClick={() => dispatch({ type: "local_error", code: "", message: "" })}
-              aria-label="Fermer l'erreur"
-            >
-              Fermer
-            </button>
-          )}
+      <footer className={styles.dock} data-tone={meta.tone}>
+        <div className={styles.phase} aria-live="polite">
+          <span className={styles.phaseLabel}>
+            {PHASE_ICON[phase]}
+            {meta.label}
+          </span>
+          <span className={styles.phaseHint}>{hint}</span>
         </div>
-      )}
-
-      <footer className={styles.controls}>
+        <div className={styles.side}>
+          <button
+            type="button"
+            className={styles.secondary}
+            onClick={interrupt}
+            disabled={!canInterrupt}
+            aria-label="Interrompre la réponse d'ICOS"
+          >
+            <Square aria-hidden />
+            Stop
+          </button>
+        </div>
         <button
           type="button"
-          className={styles.interrupt}
-          onClick={interrupt}
-          disabled={!speaking && !busy}
-          aria-label="Interrompre ICOS"
-          aria-pressed={speaking || !!busy}
-        >
-          <svg className={styles.stopIcon} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-          <span className={styles.interruptLabel}>Stop</span>
-        </button>
-        <button
-          type="button"
-          className={`${styles.mic} ${styles[`mic-${micState}`]}`}
-          data-state={micState}
+          className={styles.mic}
+          data-phase={phase}
           disabled={!canTalk}
           onClick={talking ? stopTalking : startTalking}
           aria-pressed={talking}
-          aria-label={MIC_ARIA_LABEL[micState]}
-          aria-describedby="mic-hint"
+          aria-label={micLabel}
         >
-          <svg className={styles.micIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="22" />
-          </svg>
-          <span className={styles.micLabel}>{MIC_LABEL[micState]}</span>
+          {talking ? (
+            <ArrowUp aria-hidden />
+          ) : phase === "SPEAKING" ? (
+            <span className={styles.bars} aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+            </span>
+          ) : (
+            <Mic aria-hidden />
+          )}
         </button>
+        <div className={`${styles.side} ${styles.sideEnd}`}>
+          <button
+            type="button"
+            className={styles.secondary}
+            onClick={cancelTalking}
+            disabled={!talking}
+            aria-label="Annuler l'enregistrement"
+          >
+            <X aria-hidden />
+            Annuler
+          </button>
+        </div>
       </footer>
-      <p id="mic-hint" className={styles.srOnly}>
-        {micState === "idle" && "Appuyez pour commencer à parler"}
-        {micState === "listening" && "Relâchez pour envoyer votre message"}
-        {micState === "transcribing" && "Votre message est en cours de transcription"}
-        {micState === "thinking" && "ICOS prépare sa réponse"}
-        {micState === "speaking" && "ICOS parle, appuyez pour l'interrompre"}
-        {micState === "error" && "Une erreur est survenue, réessayez"}
-      </p>
+
+      {diagnostics && (
+        <section
+          id="voice-diagnostics"
+          className={styles.diagnostics}
+          aria-label="Diagnostics techniques"
+        >
+          <div className={styles.missionHead}>
+            <h2>Diagnostics</h2>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={() => setDiagnostics(false)}
+              aria-label="Fermer les diagnostics"
+            >
+              <X aria-hidden />
+            </button>
+          </div>
+          <dl>
+            <dt>phase</dt>
+            <dd>{phase}</dd>
+            <dt>link</dt>
+            <dd>{state.link}</dd>
+            <dt>session</dt>
+            <dd>{state.sessionId ?? "—"}</dd>
+            <dt>conversation</dt>
+            <dd>{state.conversationId ?? "—"}</dd>
+            <dt>last error</dt>
+            <dd>{state.error ? `${state.error.code} — ${state.error.message}` : "—"}</dd>
+            {state.lastMetrics && (
+              <>
+                <dt>simulated</dt>
+                <dd>{String(state.lastMetrics.simulated)}</dd>
+                <dt>speech→final</dt>
+                <dd>{state.lastMetrics.speechEndToFinalMs ?? "n/a"} ms</dd>
+                <dt>final→ICOS</dt>
+                <dd>{state.lastMetrics.finalToFirstCognitiveEventMs ?? "n/a"} ms</dd>
+                <dt>speech→audio</dt>
+                <dd>{state.lastMetrics.speechEndToFirstAudioMs ?? "n/a"} ms</dd>
+              </>
+            )}
+          </dl>
+          {state.error && (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={() => dispatch({ type: "clear_error" })}
+            >
+              Effacer l&apos;erreur
+            </button>
+          )}
+        </section>
+      )}
     </main>
   );
 }

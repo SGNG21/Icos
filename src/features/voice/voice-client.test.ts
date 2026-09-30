@@ -46,6 +46,7 @@ describe("voice client state", () => {
         rev: 1,
         icos: "Tout va bien.",
         state: "answering",
+        events: [],
       },
     ]);
     expect(mayPlay(answering, "t-1")).toBe(true);

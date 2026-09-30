@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { safeNextPath } from "@/auth-navigation";
 import { LoginForm } from "@/components/auth/login-form";
+import { VoiceLogin } from "@/components/voice/voice-login";
 
 export const metadata: Metadata = {
   title: "Connexion — ICOS",
@@ -14,6 +15,11 @@ type LoginPageProps = {
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const next = (await searchParams).next;
   const nextPath = safeNextPath(typeof next === "string" ? next : null);
+
+  // The phone voice client gets its own sign-in screen; same auth, same endpoint.
+  if (nextPath === "/voice" || nextPath.startsWith("/voice?")) {
+    return <VoiceLogin nextPath={nextPath} />;
+  }
 
   return (
     <main className="login-shell">
