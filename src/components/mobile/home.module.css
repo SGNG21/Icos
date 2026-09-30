@@ -1,0 +1,1025 @@
+.page {
+  --bg: #0a0c10;
+  --fg: #e8e9ec;
+  --muted: #7a7f8a;
+  --card: #13151a;
+  --card-hover: #1a1d23;
+  --border: #24272e;
+  --border-strong: #2d3139;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-glow: rgba(59, 130, 246, 0.35);
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --danger-glow: rgba(239, 68, 68, 0.35);
+  --ok: #22c55e;
+  --ok-hover: #16a34a;
+  --ok-glow: rgba(34, 197, 94, 0.35);
+  --warning: #f59e0b;
+  --warning-hover: #d97706;
+  --warning-glow: rgba(245, 158, 11, 0.35);
+  --violet: #a855f7;
+  --violet-hover: #9333ea;
+  --violet-glow: rgba(168, 85, 247, 0.35);
+  --surface: #0e1015;
+  --surface-hover: #15181e;
+  --focus-ring: #60a5fa;
+
+  min-height: 100dvh;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  padding-bottom: 96px; /* space for fixed nav */
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+@media (prefers-color-scheme: light) {
+  .page {
+    --bg: #f8f9fb;
+    --fg: #14161a;
+    --muted: #5b6270;
+    --card: #ffffff;
+    --card-hover: #f1f4f8;
+    --border: #dce2ea;
+    --border-strong: #cdd5df;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-glow: rgba(37, 99, 235, 0.25);
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --danger-glow: rgba(220, 38, 38, 0.25);
+    --ok: #16a34a;
+    --ok-hover: #15803d;
+    --ok-glow: rgba(22, 163, 74, 0.25);
+    --warning: #d97706;
+    --warning-hover: #b45309;
+    --warning-glow: rgba(217, 126, 6, 0.25);
+    --violet: #9333ea;
+    --violet-hover: #7e22ce;
+    --violet-glow: rgba(147, 51, 234, 0.25);
+    --surface: #ffffff;
+    --surface-hover: #f8fafc;
+    --focus-ring: #3b82f6;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: max(16px, env(safe-area-inset-top)) 16px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.logo {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--fg);
+}
+
+.systemStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ok);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
+  width: fit-content;
+}
+
+.systemStatus.status-warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.voiceBadge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--violet);
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--violet) 15%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent);
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+}
+
+.greeting {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.commandSurface {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 24px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.commandSurface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--accent) 8%, transparent) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+.commandPrompt {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 20px;
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.commandModes {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.commandBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 18px 24px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: all 0.15s ease;
+  box-shadow:
+    0 4px 20px var(--accent-glow),
+    0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.commandBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: scale(1.01);
+  box-shadow:
+    0 6px 28px var(--accent-glow),
+    0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.commandBtn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.commandBtn.active {
+  background: var(--violet);
+  box-shadow:
+    0 4px 20px var(--violet-glow),
+    0 0 0 1px color-mix(in srgb, var(--violet) 20%, transparent);
+}
+
+.commandBtn:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.micIcon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.textCommandForm {
+  display: flex;
+  gap: 10px;
+}
+
+.textCommandInput {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  font-size: 1rem;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.textCommandInput::placeholder {
+  color: var(--muted);
+}
+
+.textCommandInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.textCommandSubmit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  padding: 0;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: all 0.15s ease;
+}
+
+.textCommandSubmit:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: scale(1.02);
+}
+
+.textCommandSubmit:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.textCommandSubmit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.textCommandSubmit:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.textCommandSubmit svg {
+  width: 20px;
+  height: 20px;
+}
+
+.section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.sectionTitle {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.notConnected {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.notConnected strong {
+  color: var(--warning);
+}
+
+.muted {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Active Mission Card */
+.missionCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.missionCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.missionCardTitle {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.missionCardStatus {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.missionCardStatus.status-running {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+}
+
+.missionCardStatus.status-planning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+}
+
+.missionCardStatus.status-blocked {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+.missionCardStatus.status-completed {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+}
+
+.missionCardStatus.status-failed {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+.missionCardStatus.status-UNKNOWN {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 15%, var(--surface));
+}
+
+.missionCardMeta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.missionCardField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.missionCardField.attention {
+  grid-column: 1 / -1;
+}
+
+.missionCardLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.missionCardValue {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.missionCardField.attention .missionCardLabel {
+  color: var(--danger);
+}
+
+.missionCardField.attention .missionCardValue {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Approvals */
+.approvalsList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.approvalCard {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.approvalCard:hover {
+  border-color: var(--border-strong);
+}
+
+.approvalCard.approval-pending {
+  border-left: 3px solid var(--warning);
+}
+
+.approvalCard.approval-approved {
+  border-left: 3px solid var(--ok);
+}
+
+.approvalCard.approval-rejected {
+  border-left: 3px solid var(--danger);
+}
+
+.approvalContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.approvalTitle {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.approvalDesc {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.approvalMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.approvalActions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.approvalBtn {
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.approvalBtn.approve {
+  color: #fff;
+  background: var(--ok);
+}
+
+.approvalBtn.approve:hover {
+  background: var(--ok-hover);
+}
+
+.approvalBtn.reject {
+  color: #fff;
+  background: var(--danger);
+}
+
+.approvalBtn.reject:hover {
+  background: var(--danger-hover);
+}
+
+/* Incidents */
+.incidentsList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.incidentCard {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.incidentCard.severity-critical {
+  border-left: 3px solid var(--danger);
+}
+
+.incidentCard.severity-warning {
+  border-left: 3px solid var(--warning);
+}
+
+.incidentCard.severity-info {
+  border-left: 3px solid var(--accent);
+}
+
+.incidentIcon {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  color: var(--danger);
+}
+
+.incidentCard.severity-warning .incidentIcon {
+  color: var(--warning);
+}
+
+.incidentCard.severity-info .incidentIcon {
+  color: var(--accent);
+}
+
+.incidentIcon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.incidentContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.incidentTitle {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.incidentDesc {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.incidentMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+/* Missions List */
+.missionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.missionItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.missionItem:hover {
+  border-color: var(--border-strong);
+}
+
+.missionItemMain {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.missionItemTitle {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.missionItemStatus {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.missionItemStatus.status-running {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+}
+
+.missionItemStatus.status-planning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+}
+
+.missionItemStatus.status-blocked {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+.missionItemStatus.status-completed {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+}
+
+.missionItemStatus.status-failed {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+.missionItemStatus.status-UNKNOWN {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 15%, var(--surface));
+}
+
+.missionItemMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.missionItemOwner {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.missionItemActivity {
+  color: var(--muted);
+}
+
+.attentionBadge {
+  align-self: flex-start;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.attentionBadge.attention-needs_review {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+}
+
+.attentionBadge.attention-blocked {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+/* Workers */
+.workersList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workerItem {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.workerItem:hover {
+  border-color: var(--border-strong);
+}
+
+.workerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workerName {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.workerRuntime {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workerStatus {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.workerStatusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.workerStatusDot.worker-healthy {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok-glow);
+}
+
+.workerStatusDot.worker-degraded {
+  background: var(--warning);
+  box-shadow: 0 0 8px var(--warning-glow);
+}
+
+.workerStatusDot.worker-unhealthy {
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger-glow);
+}
+
+.workerStatusDot.worker-UNKNOWN {
+  background: var(--muted);
+}
+
+.workerStatusText {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.workerStatusText.worker-healthy {
+  color: var(--ok);
+}
+
+.workerStatusText.worker-degraded {
+  color: var(--warning);
+}
+
+.workerStatusText.worker-unhealthy {
+  color: var(--danger);
+}
+
+.workerStatusText.worker-UNKNOWN {
+  color: var(--muted);
+}
+
+.workerTask {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Proposals */
+.proposalsList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.proposalCard {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.proposalCard:hover {
+  border-color: color-mix(in srgb, var(--violet) 40%, var(--border));
+  box-shadow: 0 0 16px var(--violet-glow);
+}
+
+.proposalIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  font-size: 1.25rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--violet) 15%, var(--surface));
+}
+
+.proposalContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.proposalTitle {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.proposalDesc {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.proposalStatus {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.proposalStatus.proposal-proposed {
+  color: var(--violet);
+  background: color-mix(in srgb, var(--violet) 15%, var(--surface));
+}
+
+.proposalStatus.proposal-awaiting_approval {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+}
+
+.proposalStatus.proposal-approved {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+}
+
+.proposalStatus.proposal-rejected {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+}
+
+/* Recent Activity */
+.activityList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.activityItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.activityItem:hover {
+  border-color: var(--border-strong);
+}
+
+.activityIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  font-size: 1rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.activityContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.activityTitle {
+  margin: 0 0 2px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.activityDesc {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.activityTime {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
