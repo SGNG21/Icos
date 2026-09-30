@@ -81,3 +81,14 @@ attempt, **0 non-terminal attempts** at the end. Audit: `auth.login.succeeded`, 
 To run the real LDS mission: a `lds-renov` client entity + human-asserted facts in cognitive memory
 (`POST /api/cognitive/memory`), the LDS site/stack/access as memory facts, and (for anything beyond public
 web reading) the connectors of `ICOS_INTEGRATION_PLAN.md` I6.
+
+## Addendum (I6 build against the proof DB, 2026-09-30 afternoon)
+
+- **F9 (ops/release)** — starting the I6 build against the proof DB still at migration 0050 failed every
+  request with 500: production services seed the `supervisor_observe` job at boot and the
+  `scheduled_jobs_kind_check` of 0050 refuses it. Code ahead of schema is a boot failure, not a degraded
+  mode. `pnpm db:migrate` (0051 → 0053, ledger 51 OK) fixed it; the earlier mission `d48b3347…` and its
+  rows survived the upgrade. Release policy must gate `next start` on `db:verify-ledger`.
+- Origin guard behind a forwarded-HTTPS proxy: not verifiable here — the session cookie is bound to
+  `localhost:3100`, so a request under the tailnet `Host` is 401 before the origin check. Verify with a
+  session issued for the tailnet host (step 4 of the procedure in `INTEGRATION.md`).
