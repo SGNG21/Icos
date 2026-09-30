@@ -192,7 +192,9 @@ export function httpConnector(fetchImpl: typeof fetch = fetch): Connector {
           failureClass: c.failureClass,
           settlement: c.notApplied ? "NOT_APPLIED" : "UNKNOWN",
           message: `HTTP ${res.status}`,
-          retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+          // Untrusted: bounded here and clamped again by the gateway.
+          retryAfterSeconds:
+            Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 3600) : undefined,
         };
       }
       return {

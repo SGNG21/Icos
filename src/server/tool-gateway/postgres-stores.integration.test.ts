@@ -151,11 +151,16 @@ describe.skipIf(!dockerAvailable)("Tool Gateway on PostgreSQL", () => {
     expect(await h2.gateway.execute(caller(), read)).toMatchObject({
       failureClass: "AUTH_FAILURE",
     });
-    // A fresh database (no evidence at all) is UNKNOWN — not HEALTHY.
+    // A fresh database (no evidence at all): the gateway probes before dispatching and
+    // obeys the probe — a failing probe is UNKNOWN (refused), never an assumed HEALTHY.
     await ctx.handle.db.execute(sql`TRUNCATE TABLE tool_connector_health`);
+    h2.connector.health = async () => {
+      throw new Error("probe crashed");
+    };
     expect(await h2.gateway.execute(caller(), read)).toMatchObject({
       failureClass: "PROVIDER_UNAVAILABLE",
     });
+    h2.connector.health = async () => "HEALTHY";
     await h2.gateway.probeHealth(TENANT_A);
     expect((await h2.gateway.execute(caller(), read)).kind).toBe("succeeded");
   });

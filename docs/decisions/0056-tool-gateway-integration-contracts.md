@@ -118,3 +118,35 @@ tool_execution_id)` references `tool_executions (tenant_id, id)`. The runtime st
   migration.
 - The integrator wires `composeToolGateway` into the container and registers the reconciliation
   job kind.
+
+## Independent review (security) — applied
+
+- The provider's `Retry-After` is clamped to 1 s – 1 h, and health bookkeeping after dispatch can
+  never throw past the settlement transition (it had been able to leave a 429 as an
+  `EXECUTING`/UNKNOWN row).
+- Reconciliation queries orphaned `EXECUTING` rows separately from unsettled failures, so they
+  cannot be starved. It also no longer rewrites an already-`SETTLEMENT_UNKNOWN` row that is still
+  unresolvable, which had produced one new version and one audit entry per run.
+- Size budgets are measured in UTF-8 bytes, at half of each DB CHECK (`jsonb::text` spacing is at
+  most ×2). A store failure while recording an approval request becomes an audited denial.
+- Missing or expired health evidence triggers a real probe of that instance before a dispatch
+  decision, so a gateway whose scheduler job is not yet registered does not go dead after one TTL.
+  The probe's answer decides; nothing is assumed.
+- The memory backend writes to the same shared audit port as Postgres.
+- Refused approval decisions and grant changes are audited (`APPROVAL_DECISION_REFUSED`,
+  `GRANT_CHANGE_REFUSED`).
+- A duplicate refusal names the prior execution only to its own requester.
+- A configured instance credential is always resolved (http optional-auth).
+- Credential bindings are restricted to `ICOS_TOOL_CRED_*` environment variables.
+- local-files maps `ERR_FS_EISDIR` to a not-applied refusal.
+
+Accepted gaps, recorded:
+
+- Duplicate detection is best-effort. Two new keys racing between the check and the CAS can both
+  dispatch; an input varied in an ignored field is a different operation where the declared
+  schema is open; an override on an action without approval is not escalated to a human. Today
+  every connected `require_override` action is HIGH, so a human approves it anyway.
+- Re-granting clears the revocation columns; the history remains in the audit.
+- Connector failure text is returned as a message without an untrusted label.
+- Concurrent retries can leave an orphan PENDING approval request.
+- The audit CHECK swap validates under an ACCESS EXCLUSIVE lock.

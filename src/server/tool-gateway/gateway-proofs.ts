@@ -599,6 +599,9 @@ export function defineGatewayProofs(
           failureClass: "DUPLICATE_OPERATION",
           retryable: false,
         });
+        if (again.kind !== "failed") throw new Error(again.kind);
+        // The prior execution id is disclosed to its own requester only.
+        expect(again.message.includes(first.toolExecutionId)).toBe(who === "agent-1");
       }
       expect(await h.approvals.listPending(TENANT_A)).toHaveLength(0); // no approval even requested
       // An override must name the execution it repeats.
@@ -672,15 +675,16 @@ export function defineGatewayProofs(
         (c) => c.instanceId === "inst-a",
       )!;
       expect(view.status).toBe("UNKNOWN");
-      expect(await h.gateway.execute(caller(), mail("READ"))).toMatchObject({
-        failureClass: "PROVIDER_UNAVAILABLE",
-      });
-      // A probe that throws is UNKNOWN too; a probe that answers is recorded, dated.
+      // A dispatch on stale evidence re-probes THIS instance first; a probe that throws is
+      // UNKNOWN, so nothing is dispatched.
       h.connector.health = async () => {
         throw new Error("probe crashed");
       };
-      await h.gateway.probeHealth(TENANT_A);
+      expect(await h.gateway.execute(caller(), mail("READ"))).toMatchObject({
+        failureClass: "PROVIDER_UNAVAILABLE",
+      });
       expect((await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth[0].status).toBe("UNKNOWN");
+      expect(h.connector.effectCount()).toBe(0);
       h.connector.health = async () => "DEGRADED";
       await h.gateway.probeHealth(TENANT_A);
       const degraded = (await h.gateway.cockpitSnapshot(TENANT_A)).connectorHealth[0];
@@ -785,6 +789,78 @@ export function defineGatewayProofs(
           { kind: "human", id: "adm-2" },
         ],
       );
+    });
+
+    it("R4 — an absurd provider Retry-After cannot crash settlement or pin the instance", async () => {
+      await h.grant("agent-1", "mail", "CREATE");
+      h.connector.mode = "ratelimit";
+      h.connector.retryAfter = 1e13;
+      const r = await h.gateway.execute(caller(), mail("CREATE", "ra-key-00001"));
+      expect(r).toMatchObject({ kind: "failed", failureClass: "RATE_LIMIT", retryable: true });
+      expect(await h.executions.getByKey(TENANT_A, "ra-key-00001")).toMatchObject({
+        status: "FAILED",
+        settlementState: "NOT_APPLIED",
+      });
+      h.connector.mode = "ok";
+      h.clock.advance(3_600_000 + 1_000); // clamped to at most 1 h
+      expect((await h.gateway.execute(caller(), mail("CREATE", "ra-key-00001"))).kind).toBe(
+        "succeeded",
+      );
+    });
+
+    it("R5 — reconciliation does not rewrite an unresolvable settlement on every run", async () => {
+      await h.grant("agent-1", "mail", "CREATE");
+      h.connector.reconcile = async () => ({ settlement: "UNKNOWN" as const });
+      h.connector.mode = "throw";
+      await h.gateway.execute(caller(), mail("CREATE", "churn-key-01"));
+      expect((await h.gateway.reconcile(TENANT_A)).map((e) => e.failureClass)).toEqual([
+        "SETTLEMENT_UNKNOWN",
+      ]);
+      const auditBefore = (await readAudit(h)).length;
+      const version = (await h.executions.getByKey(TENANT_A, "churn-key-01"))!.version;
+      for (let i = 0; i < 3; i++) expect(await h.gateway.reconcile(TENANT_A)).toEqual([]);
+      expect((await readAudit(h)).length).toBe(auditBefore);
+      expect((await h.executions.getByKey(TENANT_A, "churn-key-01"))!.version).toBe(version);
+    });
+
+    it("R6 — multibyte input over the preview budget is an audited refusal, never a crash", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      // 3000 chars, 9000 UTF-8 bytes: under a naive length check, over the byte budget.
+      const r = await h.gateway.execute(
+        caller(),
+        mail("SEND", "mb-key-00001", { to: "x@example.com", body: "文".repeat(3000) }),
+      );
+      expect(r).toMatchObject({ kind: "failed", failureClass: "INVALID_INPUT" });
+      expect((await h.executions.getByKey(TENANT_A, "mb-key-00001"))!.status).toBe("DENIED");
+      expect(await h.approvals.listPending(TENANT_A)).toHaveLength(0);
+    });
+
+    it("R7 — refused approval decisions and grant changes are audited too", async () => {
+      await h.grant("agent-1", "mail", "SEND");
+      const p = await h.gateway.execute(caller(), mail("SEND", "refuse-key-1"));
+      if (p.kind !== "approval_required") throw new Error(p.kind);
+      await h.gateway.decideApproval(
+        TENANT_A,
+        p.approvalRequestId,
+        human("v-1", ["viewer"]),
+        "APPROVED",
+      );
+      await h.gateway.setGrant(
+        human("op-1", ["operator"]),
+        {
+          tenantId: TENANT_A,
+          agentId: "agent-1",
+          toolId: "mail",
+          action: "PAY" as never,
+          reason: "x",
+        },
+        "grant",
+      );
+      const refusals = (await readAudit(h)).filter((a) => a.eventType === "tool.request.denied");
+      expect(refusals.map((a) => [a.actor.id, a.details.reason])).toEqual([
+        ["v-1", "APPROVAL_DECISION_REFUSED"],
+        ["op-1", "GRANT_CHANGE_REFUSED"],
+      ]);
     });
 
     it("P15 — UNKNOWN safety state fails closed", async () => {

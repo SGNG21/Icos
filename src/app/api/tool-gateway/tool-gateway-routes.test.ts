@@ -79,11 +79,11 @@ beforeEach(async () => {
     agents: { getById: async (id) => (id.startsWith("agent-") ? agent(id) : null) },
     audit: new ArrayAudit() as never,
     connectors: [new FakeConnector()],
-    env: { FAKE_TOOL_SECRET: SECRET },
+    env: { ICOS_TOOL_CRED_MAIL: SECRET },
     now: clock.now,
     config: {
       instances: [{ instanceId: "mail-1", connectorId: "fake", credentialRef: "cred_mail" }],
-      credentials: { cred_mail: { envVar: "FAKE_TOOL_SECRET" } },
+      credentials: { cred_mail: { envVar: "ICOS_TOOL_CRED_MAIL" } },
     },
   });
   await rt.reconciliation.runOnce();

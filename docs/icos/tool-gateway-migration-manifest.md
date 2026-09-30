@@ -70,3 +70,12 @@ No other lane creates a `tool_*` table.
 contiguous `idx` and strictly increasing `when` (asserted by `migration-journal.test.ts`), rename
 the SQL files to match their tags, and then run the fresh-database test
 (`migrations-fresh-database.integration.test.ts`) together with this lane's parity test.
+
+## Note on the in-place rewrite of 0049
+
+`0049_tool_gateway.sql` was rewritten in place on this branch under the same journal tag. A
+database that applied the first version (commit `abdeb9b`) would silently keep the old table shape,
+because the tables use `CREATE TABLE IF NOT EXISTS`. The review checked `icos_n23_probe`,
+`postgres` and `icos_test`: none has the tool tables. Only Testcontainers databases, recreated per
+run, ever applied it. If any other environment did, drop the four `tool_*` tables there before
+applying the final version.

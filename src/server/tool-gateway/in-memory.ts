@@ -14,6 +14,7 @@ import {
 
 import type {
   ConnectorHealthStore,
+  ToolAuditPort,
   CredentialResolution,
   CredentialResolver,
   ExecutionQuery,
@@ -34,6 +35,9 @@ export const LIVE_OPERATION = (e: ToolExecution): boolean =>
 
 /** In-memory evidence store (dev/test). Same contract as the Postgres store. */
 export class InMemoryToolExecutionStore implements ToolExecutionStore {
+  /** Optional shared audit port: in memory mode, evidence still reaches the canonical audit. */
+  constructor(private readonly sink?: ToolAuditPort) {}
+
   readonly rows = new Map<string, ToolExecution>();
   readonly audit: AuditEntry[] = [];
   private readonly k = (tenantId: string, key: string) => `${tenantId}\u0000${key}`;
@@ -44,6 +48,7 @@ export class InMemoryToolExecutionStore implements ToolExecutionStore {
     if (existing) return { created: false, execution: structuredClone(existing) };
     this.rows.set(key, toolExecutionSchema.parse(structuredClone(execution)));
     this.audit.push(audit);
+    await this.sink?.append(audit);
     return { created: true, execution: structuredClone(execution) };
   }
 
@@ -57,6 +62,7 @@ export class InMemoryToolExecutionStore implements ToolExecutionStore {
     });
     this.rows.set(key, stored);
     this.audit.push(audit);
+    await this.sink?.append(audit);
     return structuredClone(stored);
   }
 
@@ -92,6 +98,9 @@ export class InMemoryToolExecutionStore implements ToolExecutionStore {
 }
 
 export class InMemoryToolApprovalStore implements ToolApprovalStore {
+  /** Optional shared audit port: in memory mode, evidence still reaches the canonical audit. */
+  constructor(private readonly sink?: ToolAuditPort) {}
+
   readonly rows = new Map<string, ToolApprovalRequest>();
   readonly audit: AuditEntry[] = [];
 
@@ -101,6 +110,7 @@ export class InMemoryToolApprovalStore implements ToolApprovalStore {
       toolApprovalRequestSchema.parse(structuredClone(request)),
     );
     this.audit.push(audit);
+    await this.sink?.append(audit);
   }
   async get(tenantId: string, id: string) {
     const r = this.rows.get(id);
@@ -111,6 +121,7 @@ export class InMemoryToolApprovalStore implements ToolApprovalStore {
     if (!cur || cur.tenantId !== next.tenantId || cur.status !== "PENDING") return null;
     this.rows.set(next.approvalRequestId, toolApprovalRequestSchema.parse(structuredClone(next)));
     this.audit.push(audit);
+    await this.sink?.append(audit);
     return structuredClone(next);
   }
   async consume(tenantId: string, id: string, at: string, audit: AuditEntry) {
@@ -120,6 +131,7 @@ export class InMemoryToolApprovalStore implements ToolApprovalStore {
     }
     this.rows.set(id, { ...cur, consumedAt: at });
     this.audit.push(audit);
+    await this.sink?.append(audit);
     return true;
   }
   async listPending(tenantId: string) {
@@ -136,6 +148,9 @@ const sameGrant = (a: GrantKey, b: GrantKey) =>
   a.action === b.action;
 
 export class InMemoryToolGrantStore implements ToolGrantStore {
+  /** Optional shared audit port: in memory mode, evidence still reaches the canonical audit. */
+  constructor(private readonly sink?: ToolAuditPort) {}
+
   readonly rows: ToolGrant[] = [];
   readonly audit: AuditEntry[] = [];
 
@@ -153,6 +168,7 @@ export class InMemoryToolGrantStore implements ToolGrantStore {
     if (i >= 0) this.rows[i] = g;
     else this.rows.push(g);
     this.audit.push(audit);
+    await this.sink?.append(audit);
   }
   async revoke(
     key: GrantKey,
@@ -163,6 +179,7 @@ export class InMemoryToolGrantStore implements ToolGrantStore {
     if (i < 0) return false;
     this.rows[i] = toolGrantSchema.parse({ ...this.rows[i], ...r });
     this.audit.push(audit);
+    await this.sink?.append(audit);
     return true;
   }
 }

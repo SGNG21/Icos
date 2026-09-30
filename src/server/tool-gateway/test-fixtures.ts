@@ -129,6 +129,7 @@ export const ADVERSARIAL_OUTPUT = {
 export class FakeConnector implements Connector {
   readonly definition = FAKE_DEFINITION;
   mode: FakeMode = "ok";
+  retryAfter = 30;
   healthStatus: Awaited<ReturnType<Connector["health"]>> = "HEALTHY";
   effects = new Map<string, number>();
   seenCredential: string | undefined;
@@ -163,7 +164,7 @@ export class FakeConnector implements Connector {
           failureClass: "RATE_LIMIT",
           settlement: "NOT_APPLIED",
           message: "429",
-          retryAfterSeconds: 30,
+          retryAfterSeconds: this.retryAfter,
         };
       case "hang":
         return new Promise(() => {});

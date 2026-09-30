@@ -207,7 +207,9 @@ export type PreClaimDenial =
   | "MISSING_IDEMPOTENCY_KEY"
   | "IDEMPOTENCY_KEY_OF_ANOTHER_REQUESTER"
   | "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH"
-  | "PERMISSION_DENIED";
+  | "PERMISSION_DENIED"
+  | "APPROVAL_DECISION_REFUSED"
+  | "GRANT_CHANGE_REFUSED";
 
 export interface ToolGatewayDeps {
   connectors: readonly Connector[];
@@ -231,6 +233,13 @@ export interface ToolGatewayDeps {
 
 const MAX_SUMMARY_BYTES = 4096;
 const MAX_PREVIEW_BYTES = 8192;
+const MAX_THROTTLE_SECONDS = 3600;
+/**
+ * Byte length of a JSON value as Postgres will see it: `jsonb::text` inserts a
+ * space after every `:` and `,` (each 1 byte in the JSON), so ×2 bounds it.
+ * The app limits are half the DB CHECKs, so a value we accept is one the DB accepts.
+ */
+const jsonBytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v ?? null), "utf8");
 const DEFAULT_HEALTH_TTL_MS = 15 * 60_000;
 
 export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
@@ -432,7 +441,7 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     if (decision.outcome === "approval_required") {
       let req = approvalReq && apState === "pending" ? approvalReq : null;
       // The approver must see exactly what will run: no preview, no approval request.
-      if (!req && JSON.stringify(intent.input).length > MAX_PREVIEW_BYTES) {
+      if (!req && jsonBytes(intent.input) > MAX_PREVIEW_BYTES) {
         return this.settleDenied(exec, "INVALID_INPUT", "input too large to present for approval");
       }
       if (!req) {
@@ -452,10 +461,16 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
           requestedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + ttl * 1000).toISOString(),
         };
-        await this.d.approvals.create(
-          req,
-          this.audit(exec, "tool.approval.requested", { approvalRequestId: req.approvalRequestId }),
-        );
+        try {
+          await this.d.approvals.create(
+            req,
+            this.audit(exec, "tool.approval.requested", {
+              approvalRequestId: req.approvalRequestId,
+            }),
+          );
+        } catch {
+          return this.settleDenied(exec, "INVALID_INPUT", "approval request could not be recorded");
+        }
       }
       const out = await this.transition(exec, {
         status: "AWAITING_APPROVAL",
@@ -635,17 +650,23 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
       await this.d.executions.findLiveByOperation(exec.tenantId, exec.operationFingerprint, since)
     ).filter((e) => e.toolExecutionId !== exec.toolExecutionId);
     if (others.length === 0) return { ok: true };
-    const ids = others.map((e) => e.toolExecutionId);
     const override = intent.duplicateOverride;
-    if (policy.mode === "require_override" && override && ids.includes(override.ofExecutionId)) {
+    if (
+      policy.mode === "require_override" &&
+      override &&
+      others.some((e) => e.toolExecutionId === override.ofExecutionId)
+    ) {
       return { ok: true, duplicateOf: override.ofExecutionId };
     }
+    // Only the requester's OWN prior execution is named: another agent's id is not disclosed.
+    const own = others.find((e) => e.requesterAgentId === exec.requesterAgentId);
+    const prior = own ? ` of ${own.toolExecutionId}` : "";
     return {
       ok: false,
       message:
         policy.mode === "block"
-          ? `duplicate of ${ids[0]} within ${policy.windowSeconds}s`
-          : `possible duplicate of ${ids[0]} within ${policy.windowSeconds}s; repeat only with duplicateOverride.ofExecutionId`,
+          ? `duplicate operation${prior} within ${policy.windowSeconds}s`
+          : `possible duplicate operation${prior} within ${policy.windowSeconds}s; repeat only with duplicateOverride.ofExecutionId`,
     };
   }
 
@@ -746,10 +767,15 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
         };
       }
     } else {
-      if (result.failureClass === "AUTH_FAILURE")
-        await this.markHealth(instance, "AUTH_FAILED", "provider refused the credential");
-      if (result.failureClass === "RATE_LIMIT")
-        await this.markRateLimited(instance, now, result.retryAfterSeconds ?? 60);
+      // Health bookkeeping is best-effort: it must never throw past the settlement below.
+      try {
+        if (result.failureClass === "AUTH_FAILURE")
+          await this.markHealth(instance, "AUTH_FAILED", "provider refused the credential");
+        if (result.failureClass === "RATE_LIMIT")
+          await this.markRateLimited(instance, now, result.retryAfterSeconds);
+      } catch {
+        /* the settlement is the evidence that matters */
+      }
       // A failure of an effect-free action cannot have applied anything.
       const settlement = action.sideEffects === "none" ? "NOT_APPLIED" : result.settlement;
       const message = credential
@@ -778,46 +804,56 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
    * UNKNOWN. Nothing is ever assumed HEALTHY.
    */
   async probeHealth(tenantId: string): Promise<InstanceHealthView[]> {
-    for (const instance of this.d.registry.list(tenantId)) {
-      const connector = this.connectors.get(instance.connectorId);
-      let status: ConnectorStatus;
-      let detail: string | undefined;
-      if (!instance.enabled) status = "DISABLED";
-      else if (!connector || connector.definition.availability !== "CONNECTED") status = "DISABLED";
-      else {
-        const needsCred = connector.definition.tools.some((t) => t.credential?.required);
-        const cred = needsCred
-          ? await this.resolveCredentialFor(instance, tenantId)
-          : { ok: true as const, secret: undefined };
-        if (!cred.ok) {
-          status = cred.reason === "tenant_mismatch" ? "DISABLED" : "AUTH_FAILED";
-          detail = `credential ${cred.reason}`;
-        } else {
-          const probe = await Promise.race([
-            connector
-              .health({
-                instance: structuredClone(instance),
-                credential: cred.secret,
-                signal: AbortSignal.timeout(10_000),
-              })
-              .catch(() => "UNKNOWN" as const),
-            new Promise<"UNKNOWN">((r) => setTimeout(() => r("UNKNOWN"), 10_000).unref()),
-          ]);
-          status = probe;
-        }
-      }
-      await this.markHealth(instance, status, detail);
-    }
+    for (const instance of this.d.registry.list(tenantId)) await this.probeInstance(instance);
     return this.healthViews(tenantId, this.now());
+  }
+
+  private async probeInstance(instance: ConnectorInstance): Promise<void> {
+    const connector = this.connectors.get(instance.connectorId);
+    let status: ConnectorStatus;
+    let detail: string | undefined;
+    if (!instance.enabled) status = "DISABLED";
+    else if (!connector || connector.definition.availability !== "CONNECTED") status = "DISABLED";
+    else {
+      const needsCred =
+        instance.credential !== undefined ||
+        connector.definition.tools.some((t) => t.credential?.required);
+      const cred = needsCred
+        ? await this.resolveCredentialFor(instance, instance.tenantId)
+        : { ok: true as const, secret: undefined };
+      if (!cred.ok) {
+        status = cred.reason === "tenant_mismatch" ? "DISABLED" : "AUTH_FAILED";
+        detail = `credential ${cred.reason}`;
+      } else {
+        let timer: NodeJS.Timeout | undefined;
+        status = await Promise.race([
+          connector
+            .health({
+              instance: structuredClone(instance),
+              credential: cred.secret,
+              signal: AbortSignal.timeout(10_000),
+            })
+            .catch(() => "UNKNOWN" as const),
+          new Promise<"UNKNOWN">((r) => {
+            timer = setTimeout(() => r("UNKNOWN"), 10_000);
+          }),
+        ]).finally(() => clearTimeout(timer));
+      }
+    }
+    await this.markHealth(instance, status, detail);
   }
 
   /** Settle orphaned or unknown side effects of a tenant. Safe at boot and periodically. */
   async reconcile(tenantId: string): Promise<ToolExecution[]> {
-    const rows = await this.d.executions.list(tenantId, {
-      status: ["EXECUTING", "FAILED"],
-      settlement: ["DISPATCHED", "UNKNOWN"],
-      limit: 500,
-    });
+    // Two queries so unresolvable UNKNOWN rows can never starve orphaned EXECUTING ones.
+    const rows = [
+      ...(await this.d.executions.list(tenantId, { status: ["EXECUTING"], limit: 500 })),
+      ...(await this.d.executions.list(tenantId, {
+        status: ["FAILED"],
+        settlement: ["DISPATCHED", "UNKNOWN"],
+        limit: 500,
+      })),
+    ];
     const settled: ToolExecution[] = [];
     for (const row of rows) {
       const instance = this.d.registry.get(tenantId, row.connectorInstanceId);
@@ -826,7 +862,9 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
       const action = tool && findAction(tool, row.action);
       if (!instance || !connector || !tool || !action) continue;
       if (row.status === "EXECUTING" && !this.isOrphaned(row, tool)) continue;
-      settled.push(await this.reconcileOne(row, connector, action, instance));
+      const before = row.version;
+      const after = await this.reconcileOne(row, connector, action, instance);
+      if (after.version !== before) settled.push(after);
     }
     return settled;
   }
@@ -870,6 +908,14 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
       } catch {
         outcome = { settlement: "UNKNOWN" };
       }
+    }
+    // Already recorded as unresolvable and still unresolvable: no new version, no audit churn.
+    if (
+      outcome.settlement === "UNKNOWN" &&
+      exec.status === "FAILED" &&
+      exec.failureClass === "SETTLEMENT_UNKNOWN"
+    ) {
+      return exec;
     }
     const now = this.now().toISOString();
     const patch: Partial<ToolExecution> =
@@ -930,7 +976,34 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     return this.d.approvals.get(tenantId, approvalRequestId);
   }
 
+  /** Decide an approval; every refusal is itself audited (who tried, what, why). */
   async decideApproval(
+    tenantId: string,
+    approvalRequestId: string,
+    approver: HumanPrincipal | AgentPrincipal,
+    decision: "APPROVED" | "REJECTED",
+    reason?: string,
+  ): Promise<
+    | { ok: true; request: ToolApprovalRequest }
+    | { ok: false; failureClass: ToolFailureClass; message: string }
+  > {
+    const r = await this.decideApprovalChecked(
+      tenantId,
+      approvalRequestId,
+      approver,
+      decision,
+      reason,
+    );
+    if (!r.ok) {
+      await this.auditRefusal(tenantId, approver, "APPROVAL_DECISION_REFUSED", r.failureClass, {
+        approvalRequestId: approvalRequestId.slice(0, 128),
+        decision,
+      });
+    }
+    return r;
+  }
+
+  private async decideApprovalChecked(
     tenantId: string,
     approvalRequestId: string,
     approver: HumanPrincipal | AgentPrincipal,
@@ -1014,6 +1087,36 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
    * agents, Lot C1) can: no agent — requester or not — can grant anything.
    */
   async setGrant(
+    admin: HumanPrincipal,
+    input: {
+      tenantId: string;
+      agentId: string;
+      toolId: string;
+      action: ActionClass;
+      reason: string;
+      expiresAt?: string;
+    },
+    op: "grant" | "revoke",
+  ): Promise<
+    { ok: true; grant?: ToolGrant } | { ok: false; failureClass: ToolFailureClass; message: string }
+  > {
+    const r = await this.setGrantChecked(admin, input, op);
+    if (!r.ok) {
+      const actor =
+        admin?.kind === "human" || admin?.kind === "agent"
+          ? { kind: admin.kind, id: String(admin.id).slice(0, 128) }
+          : { kind: "agent" as const, id: "unknown" };
+      await this.auditRefusal(input.tenantId, actor, "GRANT_CHANGE_REFUSED", r.failureClass, {
+        agentId: String(input.agentId).slice(0, 128),
+        toolId: String(input.toolId).slice(0, 128),
+        action: input.action,
+        op,
+      });
+    }
+    return r;
+  }
+
+  private async setGrantChecked(
     admin: HumanPrincipal,
     input: {
       tenantId: string;
@@ -1187,7 +1290,20 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     return views;
   }
 
+  /**
+   * Live status for a dispatch decision. Missing or expired evidence triggers a
+   * real probe of THIS instance (so a gateway whose scheduler job is not wired
+   * yet does not die after one TTL); the probe's result, not an assumption, decides.
+   */
   private async statusOf(instance: ConnectorInstance, now: Date): Promise<ConnectorStatus> {
+    const rec = await this.d.health.get(instance.tenantId, instance.instanceId);
+    if (instance.enabled && (!rec || new Date(rec.expiresAt) <= now)) {
+      await this.probeInstance(instance);
+    }
+    return this.statusOfRecorded(instance, now);
+  }
+
+  private async statusOfRecorded(instance: ConnectorInstance, now: Date): Promise<ConnectorStatus> {
     return effectiveConnectorStatus(
       instance,
       await this.d.health.get(instance.tenantId, instance.instanceId),
@@ -1216,7 +1332,12 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     await this.d.health.put(record);
   }
 
-  private async markRateLimited(instance: ConnectorInstance, now: Date, seconds: number) {
+  /** A provider's Retry-After is untrusted: clamped to [1 s, 1 h], 60 s when absent or absurd. */
+  private async markRateLimited(instance: ConnectorInstance, now: Date, retryAfter?: number) {
+    const seconds =
+      retryAfter !== undefined && Number.isFinite(retryAfter)
+        ? Math.min(Math.max(Math.round(retryAfter), 1), MAX_THROTTLE_SECONDS)
+        : 60;
     const until = new Date(now.getTime() + seconds * 1000);
     const prev = await this.d.health.get(instance.tenantId, instance.instanceId);
     await this.d.health.put({
@@ -1258,7 +1379,8 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     | { ok: true; secret?: SecretValue }
     | { ok: false; failureClass: ToolFailureClass; message: string }
   > {
-    if (!tool.credential?.required) return { ok: true };
+    // Required by the tool, or configured on the instance (optional-auth APIs): resolve it.
+    if (!tool.credential?.required && !instance.credential) return { ok: true };
     const r = await this.resolveCredentialFor(instance, tenantId);
     if (r.ok) return { ok: true, secret: r.secret };
     if (r.reason !== "tenant_mismatch")
@@ -1327,6 +1449,19 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     };
     await this.d.audit.append(entry);
     return { ...fail(failureClass, message), auditReferences: [entry.id] };
+  }
+
+  private async auditRefusal(
+    tenantId: string,
+    actor: { kind: "human" | "agent"; id: string },
+    reason: PreClaimDenial,
+    failureClass: ToolFailureClass,
+    ref: Record<string, JsonValue>,
+  ): Promise<void> {
+    await this.d.audit.append({
+      ...this.baseAudit(tenantId, actor, "tool.request.denied"),
+      details: { tenantId, reason, failureClass, ...ref },
+    });
   }
 
   private async transition(
@@ -1517,6 +1652,6 @@ function safeSummary(
 ): Record<string, JsonValue> | undefined {
   if (!summary) return undefined;
   const s = credential ? scrub(toJsonRecord(summary), credential.reveal()) : toJsonRecord(summary);
-  if (containsSecret(s) || JSON.stringify(s).length > MAX_SUMMARY_BYTES) return { redacted: true };
+  if (containsSecret(s) || jsonBytes(s) > MAX_SUMMARY_BYTES) return { redacted: true };
   return s;
 }

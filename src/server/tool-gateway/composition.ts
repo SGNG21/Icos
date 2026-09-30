@@ -83,7 +83,8 @@ export const toolGatewayConfigSchema = z
         z.string().regex(/^cred_[a-z0-9_-]{3,}$/),
         z
           .object({
-            envVar: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+            // A dedicated namespace: a tool credential can never bind DATABASE_URL, auth secrets, …
+            envVar: z.string().regex(/^ICOS_TOOL_CRED_[A-Z0-9_]+$/),
             expiresAt: z.iso.datetime({ offset: true }).optional(),
           })
           .strict(),
@@ -230,9 +231,10 @@ export function composeToolGateway(deps: ComposeToolGatewayDeps): ToolGatewayRun
     };
   } else {
     stores = {
-      executions: new InMemoryToolExecutionStore(),
-      approvals: new InMemoryToolApprovalStore(),
-      grants: new InMemoryToolGrantStore(),
+      // Same audit port as Postgres mode: one audit log, whatever the backend.
+      executions: new InMemoryToolExecutionStore(deps.audit),
+      approvals: new InMemoryToolApprovalStore(deps.audit),
+      grants: new InMemoryToolGrantStore(deps.audit),
       health: new InMemoryConnectorHealthStore(),
     };
   }

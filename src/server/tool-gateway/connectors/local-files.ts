@@ -197,7 +197,7 @@ export const localFilesConnector: Connector = {
           message: "symlinks are not followed",
         };
       }
-      if (code === "EISDIR")
+      if (code === "EISDIR" || code === "ERR_FS_EISDIR")
         return {
           ok: false,
           failureClass: "INVALID_INPUT",

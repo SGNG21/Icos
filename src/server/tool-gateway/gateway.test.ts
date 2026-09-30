@@ -222,6 +222,17 @@ describe("local files connector", () => {
     ).toMatchObject({ ok: false, failureClass: "NOT_FOUND" });
   });
 
+  it("deleting a directory is a known not-applied refusal, not an unknown settlement", async () => {
+    const { ctx } = await setup();
+    expect(
+      await localFilesConnector.execute("files", "DELETE", { path: "sub" }, ctx),
+    ).toMatchObject({
+      ok: false,
+      failureClass: "INVALID_INPUT",
+      settlement: "NOT_APPLIED",
+    });
+  });
+
   it("refuses to write through a dangling symlink to outside the root", async () => {
     const { root, ctx } = await setup();
     const outside = await mkdtemp(path.join(tmpdir(), "icos-dangling-"));
@@ -413,7 +424,7 @@ describe("composition and reconciliation", () => {
       backend: "memory",
       agents,
       audit: audit as never,
-      env: { HTTP_TOKEN: SECRET },
+      env: { ICOS_TOOL_CRED_HTTP: SECRET },
       config: {
         instances: [
           {
@@ -430,7 +441,7 @@ describe("composition and reconciliation", () => {
             enabled: false,
           },
         ],
-        credentials: { cred_api: { envVar: "HTTP_TOKEN" } },
+        credentials: { cred_api: { envVar: "ICOS_TOOL_CRED_HTTP" } },
       },
     });
     expect(Object.keys(rt).sort()).toEqual(
@@ -498,13 +509,13 @@ describe("composition and reconciliation", () => {
             credentialRef: "cred_api",
           },
         ],
-        credentials: { cred_api: { envVar: "HTTP_TOKEN" } },
+        credentials: { cred_api: { envVar: "ICOS_TOOL_CRED_HTTP" } },
       },
     });
-    // http's credential is optional for its tools: the probe still records CONFIGURED.
+    // A configured credential is always resolved: an absent value is AUTH_FAILED evidence.
     await rt.reconciliation.runOnce();
     const [h] = (await rt.gateway.cockpitSnapshot(CURRENT_SINGLE_TENANT_ID)).connectorHealth;
-    expect(h.status).toBe("CONFIGURED");
+    expect(h.status).toBe("AUTH_FAILED");
   });
 });
 
