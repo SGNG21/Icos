@@ -166,3 +166,77 @@ describe("cognition boundary", () => {
     ).resolves.toMatchObject({ created: true });
   });
 });
+
+/**
+ * Decision 0062. The prompt used to ASSERT capability in prose:
+ * "Tu n'exécutes jamais rien toi-même" and "Ce n'est qu'une proposition soumise à
+ * approbation humaine". On a real phone that produced a generic-assistant
+ * self-description — no external access, every action human-validated — which
+ * contradicted ICOS's own governed execution. Capability must come from the
+ * runtime context, so the prompt must not contain capability absolutes.
+ */
+describe("system prompt: no static capability claims", () => {
+  const systemPromptOf = async (): Promise<string> => {
+    let body = "";
+    const fake = (async (_url: string, init: RequestInit) => {
+      body = String(init.body);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    await new OmniRouteCognitionEngine("http://o.test", "k", "m", fake).think(
+      { userText: "De quoi es-tu capable ?", context: "(vide)", conversationTitle: null },
+      new AbortController().signal,
+    );
+    const messages = (JSON.parse(body) as { messages: { role: string; content: string }[] })
+      .messages;
+    return messages.find((m) => m.role === "system")!.content;
+  };
+
+  it("no longer claims ICOS can never execute anything", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).not.toContain("Tu n'exécutes jamais rien toi-même");
+    // The precise, true statement replaces it.
+    expect(prompt).toContain("tu n'exécutes rien directement");
+    expect(prompt).toContain("tu PROPOSES");
+  });
+
+  it("states that an approved mission then runs durably without a human", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).toContain("durablement");
+    expect(prompt).toContain("sans supervision humaine continue");
+  });
+
+  it("sends capability questions to the runtime context, not to prose", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).toContain("[runtime:capability.*]");
+    for (const state of [
+      "AUTONOMOUS",
+      "GOVERNED",
+      "APPROVAL_REQUIRED",
+      "NOT_CONNECTED",
+      "NOT_SUPPORTED",
+    ]) {
+      expect(prompt).toContain(state);
+    }
+  });
+
+  it("forbids claiming an unavailable capability, and forbids 'everything needs approval'", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).toContain("Ne revendique jamais une capacité");
+    expect(prompt).toContain("NOT_CONNECTED");
+    expect(prompt).toContain("n'affirme jamais que TOUTE action exige une approbation");
+  });
+
+  it("fails closed: with no capability lines, ICOS must say it cannot establish its state", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).toContain("Si aucune ligne de capacité n'est fournie");
+  });
+
+  it("ranks current runtime state above any earlier self-description", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).toContain("de l'historique, jamais la vérité courante");
+    expect(prompt).toContain("ÉTAT ACTUEL DU SYSTÈME");
+  });
+});

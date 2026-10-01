@@ -415,6 +415,8 @@ export const CONTEXT_ITEM_KINDS = [
   "memory",
   "procedure",
   "business_fact",
+  /** A measurement of the running system itself (decision 0062), not a recollection. */
+  "runtime_state",
 ] as const;
 export type ContextItemKind = (typeof CONTEXT_ITEM_KINDS)[number];
 
