@@ -146,18 +146,31 @@ export function scoreCandidate(
  *
  * Two live readings of one subject, or two memories with no live reading, are left alone.
  */
+/**
+ * A reading of NOW, in either of the two spellings central integration had to reconcile:
+ * the `live` flag (decision 0063, live CORE3 state) and the `runtime_state` kind
+ * (decision 0062, the runtime measuring itself). Both are measurements, so neither can be
+ * the "stale" side of a precedence decision.
+ *
+ * Keying this on the flag alone was safe only by accident: the two runtime builders happen
+ * to set no `subject`. `OperationalStateSource` already emits per-mission prose, so one
+ * added field would have made this function silently drop a MEASURED capability line in
+ * favour of a mission reading — suppressing lane B's authority with nothing in its place.
+ */
+const readingOfNow = (c: ContextCandidate) => c.live === true || c.kind === "runtime_state";
+
 export function applyTemporalPrecedence(candidates: readonly ContextCandidate[]): {
   kept: ContextCandidate[];
   stale: ContextExclusion[];
 } {
   const liveSubjects = new Set(
-    candidates.filter((c) => c.live && c.subject).map((c) => c.subject as string),
+    candidates.filter((c) => readingOfNow(c) && c.subject).map((c) => c.subject as string),
   );
   if (!liveSubjects.size) return { kept: [...candidates], stale: [] };
   const kept: ContextCandidate[] = [];
   const stale: ContextExclusion[] = [];
   for (const c of candidates) {
-    if (!c.live && c.subject && liveSubjects.has(c.subject))
+    if (!readingOfNow(c) && c.subject && liveSubjects.has(c.subject))
       stale.push({ ref: c.ref, reason: "stale" });
     else kept.push(c);
   }
