@@ -1,3 +1,4 @@
+import type { CognitiveScope } from "@/core/cognitive/contracts";
 import { capabilityCandidates, type RuntimeCapabilityProbe } from "@/core/cognitive/self-model";
 import type { ContextCandidate } from "@/core/cognitive/context-selection";
 import type { SelfModelSource } from "@/server/cognitive/context-assembler";
@@ -61,7 +62,8 @@ export class RuntimeSelfModel implements SelfModelSource {
     };
   }
 
-  async candidates(now: Date): Promise<ContextCandidate[]> {
+  /** Capability is a property of the runtime, so the scope does not change it. */
+  async candidates(_scope: CognitiveScope, now: Date): Promise<ContextCandidate[]> {
     return capabilityCandidates(await this.probe(), now);
   }
 }

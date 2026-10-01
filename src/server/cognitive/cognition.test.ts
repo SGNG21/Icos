@@ -240,3 +240,62 @@ describe("system prompt: no static capability claims", () => {
     expect(prompt).toContain("ÉTAT ACTUEL DU SYSTÈME");
   });
 });
+
+/**
+ * Executive conversation model. ICOS is Geoffrey's operational associate, and the
+ * answers are SPOKEN on a phone, so a document read aloud is a defect. Identity and
+ * style belong in the prompt; capability never does (decision 0062).
+ */
+describe("system prompt: executive associate, not generic assistant", () => {
+  const promptOf = async (): Promise<string> => {
+    let body = "";
+    const fake = (async (_url: string, init: RequestInit) => {
+      body = String(init.body);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    await new OmniRouteCognitionEngine("http://o.test", "k", "m", fake).think(
+      { userText: "On en est où ?", context: "(vide)", conversationTitle: null },
+      new AbortController().signal,
+    );
+    return (JSON.parse(body) as { messages: { role: string; content: string }[] }).messages.find(
+      (m) => m.role === "system",
+    )!.content;
+  };
+
+  it("states the associate identity and refuses the generic-assistant framing", async () => {
+    const p = await promptOf();
+    expect(p).toContain("associé cognitif et opérationnel persistant de Geoffrey");
+    expect(p).toContain("ni un chatbot généraliste");
+  });
+
+  it("optimises for speech: short, no markdown, no filler", async () => {
+    const p = await promptOf();
+    expect(p).toContain("STYLE ORAL");
+    expect(p).toContain("Pas de markdown");
+    expect(p).toContain("Comment puis-je vous aider ?");
+  });
+
+  it("takes initiative instead of asking what to do when context suffices", async () => {
+    const p = await promptOf();
+    expect(p).toContain("que veux-tu que je fasse");
+    expect(p).toContain("ambiguïté change réellement l'action");
+  });
+
+  /** The discipline that keeps an executive tone from becoming overclaiming. */
+  it("separates fact, deduction, recommendation and executed action", async () => {
+    const p = await promptOf();
+    for (const label of ["FAIT", "DÉDUCTION", "RECOMMANDATION", "ACTION FAITE"]) {
+      expect(p).toContain(label);
+    }
+    expect(p).toContain("JAMAIS une recommandation ou une proposition comme une action accomplie");
+  });
+
+  it("forbids inventing a client, project, decision or figure", async () => {
+    const p = await promptOf();
+    expect(p).toContain("Tu n'inventes jamais");
+    for (const noun of ["client", "projet", "décision"]) expect(p).toContain(noun);
+  });
+});

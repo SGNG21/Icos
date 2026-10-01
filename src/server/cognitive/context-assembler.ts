@@ -36,7 +36,7 @@ export interface OperationalMemorySource {
  * per turn, so ICOS never describes itself from stale prose.
  */
 export interface SelfModelSource {
-  candidates(now: Date): Promise<ContextCandidate[]>;
+  candidates(scope: CognitiveScope, now: Date): Promise<ContextCandidate[]>;
 }
 
 export interface AssembleInput {
@@ -183,7 +183,7 @@ export class ContextAssembler {
      * like "de quoi es-tu capable ?" shares no vocabulary with the capability lines,
      * so relevance scoring would drop exactly the turn that needs them most.
      */
-    if (this.selfModel) candidates.push(...(await this.selfModel.candidates(now)));
+    if (this.selfModel) candidates.push(...(await this.selfModel.candidates(scope, now)));
 
     // 8. Rank and trim (pure, deterministic).
     const selection = selectContext(

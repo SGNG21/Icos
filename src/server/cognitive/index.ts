@@ -24,6 +24,7 @@ import {
   type OperationalMemorySource,
   type SelfModelSource,
 } from "./context-assembler";
+import { CombinedSelfModel, OperationalStateSource } from "./operational-state";
 import { RuntimeSelfModel, type RuntimeProbes } from "./runtime-self-model";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
@@ -149,7 +150,10 @@ export function buildCognitiveRuntime(
   const missionsConnected = options.missions !== undefined && options.missions !== null;
   const selfModel =
     options.selfModel === undefined
-      ? new RuntimeSelfModel(runtimeProbesFor(db, engine, missionsConnected))
+      ? new CombinedSelfModel([
+          new RuntimeSelfModel(runtimeProbesFor(db, engine, missionsConnected)),
+          new OperationalStateSource(db),
+        ])
       : (options.selfModel ?? undefined);
   return new CognitiveRuntime({
     conversations: new PostgresConversationStore(db, clock),
