@@ -65,6 +65,62 @@ export interface WorkerProbe {
   outcome?: WorkerProbeOutcome;
 }
 
+/**
+ * The DECLARATION fields of a worker — everything registration owns, and nothing
+ * a probe owns.
+ *
+ * Exported because two callers must agree on it or they disagree about what
+ * "already registered" means: `register()` uses it to decide whether a
+ * re-registration is a no-op, and the compute bootstrap planner uses it to
+ * classify a candidate as WOULD_UPDATE rather than WOULD_REGISTER. Two
+ * independent notions of "same declaration" would make a dry-run report say one
+ * thing and the write do another.
+ *
+ * `status` is IN, deliberately: registering a deactivated worker is a change (it
+ * comes back as `active`), and must therefore reset evidence like any other
+ * change. `updatedAt`, `health`, `availability`, `lastProbeAt` and
+ * `lastProbeOutcome` are OUT: they are observations, not declarations.
+ *
+ * `metadata` KEYS ARE SORTED, and that is not cosmetic. PostgreSQL `jsonb` does not
+ * preserve object key order, so a declaration read back from the durable store is
+ * key-reordered relative to the one that wrote it. Comparing unsorted would make every
+ * re-registration look like a change AGAINST A REAL DATABASE while passing against an
+ * in-memory store — the no-op would never fire where it matters, and a restart would
+ * still wipe the fleet's probe evidence. Array order is left alone: `jsonb` preserves
+ * it, and capability order is part of the declaration.
+ */
+export function workerDeclaration(
+  input: WorkerRegistrationInput | WorkerRegistryEntry,
+): Record<string, unknown> {
+  const entry = input as Partial<WorkerRegistryEntry> & WorkerRegistrationInput;
+  return {
+    workerKind: entry.workerKind,
+    displayName: entry.displayName,
+    capabilities: entry.capabilities ?? [],
+    features: entry.features ?? [],
+    supportsTools: entry.supportsTools ?? false,
+    supportsStructuredOutput: entry.supportsStructuredOutput ?? false,
+    status: entry.status ?? "active",
+    runtime: entry.runtime ?? "unknown",
+    runtimeSupport: entry.runtimeSupport ?? "UNKNOWN",
+    tags: entry.tags ?? [],
+    metadata: Object.fromEntries(
+      Object.entries(entry.metadata ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    ),
+    maxConcurrency: entry.maxConcurrency ?? 1,
+    capacityPool: entry.capacityPool ?? null,
+    capacityPoolLimit: entry.capacityPoolLimit ?? null,
+  };
+}
+
+/** True when two declarations are identical. Field order is fixed by `workerDeclaration`. */
+export function sameWorkerDeclaration(
+  a: WorkerRegistrationInput | WorkerRegistryEntry,
+  b: WorkerRegistrationInput | WorkerRegistryEntry,
+): boolean {
+  return JSON.stringify(workerDeclaration(a)) === JSON.stringify(workerDeclaration(b));
+}
+
 export class WorkerRegistrationService {
   constructor(
     private readonly workers: WorkerRegistryStore,
@@ -74,11 +130,26 @@ export class WorkerRegistrationService {
   /**
    * Registers or re-registers a worker in the fail-closed state.
    *
-   * Re-registering an existing worker RESETS its health, availability AND its
-   * probe evidence: the declaration changed, so previous probe evidence no
-   * longer describes the thing that is registered now.
+   * Re-registering an existing worker with a CHANGED declaration RESETS its
+   * health, availability AND its probe evidence: the declaration changed, so
+   * previous probe evidence no longer describes the thing that is registered now.
+   *
+   * RE-REGISTERING AN UNCHANGED DECLARATION IS A NO-OP (live-worker bootstrap).
+   * It returns the stored row untouched — same evidence, same `updatedAt`.
+   * Without this, any bootstrap that registers the declared fleet on every boot
+   * would wipe the whole fleet's health evidence at every restart and on every
+   * replica, so a restart would silently make a proven fleet unroutable until the
+   * next probe sweep. Resetting evidence is the right answer to a CHANGE, never
+   * to a repetition: idempotency here is not an optimisation, it is what makes a
+   * startup bootstrap safe to run unconditionally.
    */
   async register(input: WorkerRegistrationInput): Promise<WorkerRegistryEntry> {
+    /*
+     * VALIDATE FIRST, compare second. The no-op below is a write optimisation, never a
+     * reason to skip the contract: a malformed declaration must be refused whether or
+     * not it happens to match a stored row, or the trust boundary would sit behind a
+     * conditional and quietly stop applying the day an HTTP route calls this.
+     */
     const entry = workerRegistryEntrySchema.parse({
       id: input.id,
       workerKind: input.workerKind,
@@ -101,6 +172,11 @@ export class WorkerRegistrationService {
       capacityPoolLimit: input.capacityPoolLimit ?? null,
       updatedAt: this.now().toISOString(),
     });
+
+    const existing = await this.workers.get(entry.id);
+    if (existing && sameWorkerDeclaration(existing, entry)) {
+      return existing;
+    }
 
     return this.workers.upsert(entry);
   }

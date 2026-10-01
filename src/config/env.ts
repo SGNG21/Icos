@@ -45,6 +45,37 @@ const envSchema = z.object({
    */
   ICOS_WORKER_PROBE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
   /*
+   * Whether `startProductionServices` BOOTSTRAPS the declared compute fleet into the
+   * worker registry at boot (live-worker bootstrap lane).
+   *
+   * DEFAULT OFF, and that is the point: registering a fleet writes to whatever
+   * database this process resolved, so it is an explicit operator decision, never
+   * something a deployment acquires by being upgraded. Off, the registry is only ever
+   * written by `pnpm compute:register --apply`. On, every boot reconciles the registry
+   * with what the provider serves — idempotently, and without resetting probe evidence
+   * for a candidate whose declaration has not changed.
+   *
+   * Requires OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY; a provider outage is reported and
+   * never aborts startup, because the rest of the runtime must still boot.
+   */
+  /* Trimmed before parsing: a trailing space in a deployment variable is a typo, not a
+   * reason to refuse to boot the whole runtime. An unrecognised WORD still throws. */
+  ICOS_COMPUTE_BOOTSTRAP: z.preprocess(
+    (v) => emptyAsUndefined(typeof v === "string" ? v.trim() : v),
+    z.stringbool().optional(),
+  ),
+  /*
+   * Budget for ONE model health probe over OmniRoute's HTTP API (live-worker bootstrap).
+   *
+   * Defaults to DEFAULT_HTTP_PROBE_TIMEOUT_MS (15s), chosen from measurement rather than
+   * taste: 15 live candidates through a LOCAL gateway gave p95 5297ms and a worst probe of
+   * 6305ms. Configurable because those are local numbers — a remote gateway must be
+   * re-measured. Keep it low enough that one sweep (ceil(workers / 6) waves) finishes well
+   * inside ICOS_WORKER_PROBE_INTERVAL_MS and the 120s evidence horizon, or healthy workers
+   * flicker out of routable between sweeps.
+   */
+  ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS: optionalPositiveInteger,
+  /*
    * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
    * quarter of the health-evidence horizon, so evidence never expires between
    * sweeps. A value at or above the horizon is REFUSED at composition time.

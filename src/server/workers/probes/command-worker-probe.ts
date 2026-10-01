@@ -1,4 +1,5 @@
 import { runNonInteractive } from "@/server/workers/process/run-process";
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type {
@@ -127,7 +128,7 @@ export class CommandWorkerProbe implements WorkerHealthProbePort {
     if (!healthy) {
       throw new Error(
         `WORKER_PROBE_EXIT_${result.exitCode}: ${command.command}${
-          result.stderr ? ` — ${firstLine(result.stderr)}` : ""
+          result.stderr ? ` — ${firstLineRedacted(result.stderr)}` : ""
         }`,
       );
     }
@@ -135,21 +136,12 @@ export class CommandWorkerProbe implements WorkerHealthProbePort {
     if (command.healthyStdout && !new RegExp(command.healthyStdout).test(result.stdout ?? "")) {
       /* Exited 0 and said something else: the refusal text IS the diagnosis. */
       throw new Error(
-        `WORKER_PROBE_UNEXPECTED_OUTPUT: ${command.command} — ${firstLine((result.stdout ?? "").trim()) || "<empty>"}`,
+        `WORKER_PROBE_UNEXPECTED_OUTPUT: ${command.command} — ${firstLineRedacted((result.stdout ?? "").trim()) || "<empty>"}`,
       );
     }
 
     return { health: "healthy", availability: "available" };
   }
-}
-
-/** One line, bounded, with token-shaped strings masked: some gateways echo keys in 401 bodies. */
-function firstLine(text: string): string {
-  return text
-    .split("\n")[0]!
-    .replace(/(sk-|Bearer\s+)[A-Za-z0-9._-]{6,}/gi, "$1<redacted>")
-    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "<redacted>")
-    .slice(0, 200);
 }
 
 /**

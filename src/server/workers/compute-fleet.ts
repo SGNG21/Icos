@@ -60,6 +60,75 @@ export async function listOmniRouteModels(options: {
 }
 
 /**
+ * ONE minimal chat completion, for asking a model whether it is there.
+ *
+ * It lives HERE, beside `listOmniRouteModels`, because this module is already the compute
+ * fleet's OmniRoute access point and a second client would be a second authority on how
+ * ICOS talks to the gateway. It is deliberately the smallest useful request: no tools, no
+ * streaming, no system prompt, a tiny token budget and temperature 0, so the only thing it
+ * can measure is whether the TARGET MODEL answered.
+ *
+ * TRANSPORT ONLY — it has no opinion on what a healthy answer looks like. The caller owns
+ * the predicate, the classification and the redaction, which is what keeps health policy
+ * out of the HTTP layer.
+ *
+ * The credential is sent in a header and is never returned, logged or placed in a message.
+ * The body is read as text and CAPPED before parsing: a gateway is outside ICOS, and a
+ * probe must not be the thing that buffers a megabyte of someone else's error page.
+ *
+ * ponytail: the cap is applied after `text()` buffers, matching the existing idiom in
+ * `tool-gateway/connectors/http.ts`. A streaming reader would cap before buffering; worth
+ * it only if a gateway ever actually floods this path.
+ */
+export const OMNIROUTE_MAX_PROBE_BODY_BYTES = 8_192;
+
+export interface OmniRouteCompletionRequest {
+  baseUrl: string;
+  credential: string;
+  /** The EXACT model id to ask for. Never defaulted, never substituted. */
+  model: string;
+  prompt: string;
+  maxTokens: number;
+  signal: AbortSignal;
+  fetch?: typeof fetch;
+}
+
+export interface OmniRouteCompletionResponse {
+  ok: boolean;
+  status: number;
+  /** Raw body, truncated to `OMNIROUTE_MAX_PROBE_BODY_BYTES`. Never logged by this module. */
+  body: string;
+}
+
+export async function omniRouteChatCompletion(
+  request: OmniRouteCompletionRequest,
+): Promise<OmniRouteCompletionResponse> {
+  const doFetch = request.fetch ?? globalThis.fetch;
+  const response = await doFetch(`${request.baseUrl.replace(/\/+$/, "")}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: ["Bearer", request.credential].join(" "),
+    },
+    body: JSON.stringify({
+      model: request.model,
+      temperature: 0,
+      max_tokens: request.maxTokens,
+      stream: false,
+      messages: [{ role: "user", content: request.prompt }],
+    }),
+    cache: "no-store",
+    signal: request.signal,
+  });
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    body: (await response.text()).slice(0, OMNIROUTE_MAX_PROBE_BODY_BYTES),
+  };
+}
+
+/**
  * Classifies model ids into the six families. Unrecognised ids are ignored (reported in the
  * snapshot's count), and the `auto/*` meta-routes are skipped: a candidate must be ONE model,
  * or history and independence would be attributed to whatever the meta-route picked that day.

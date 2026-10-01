@@ -1,26 +1,35 @@
 /**
- * Register the compute fleet OmniRoute serves — the operator counterpart of compute:snapshot /
- * compute:probe, and exactly what the ICOS_SELF_BUILD_E2E fixture does before a run.
+ * The compute fleet bootstrap, as an operator command (live-worker bootstrap lane).
  *
- * Thin CLI over four canonical calls, no business logic here:
- *   listOmniRouteModels → representativeModels(classifyModels(...)) →
- *   workerRegistration.register(candidateRegistration(...))  [fail-closed: unknown/unknown]
- *   → workerHealthProber.probeAll()                            [health is probed, never asserted]
+ * Thin CLI over the canonical path, no business logic here:
+ *   discoverComputeFleet  → planComputeBootstrap   [PURE: what WOULD change]
+ *   applyComputeBootstrap → workerRegistration     [fail-closed: unknown/unknown]
+ *   workerHealthProber.probeAll()                  [health is probed, never asserted]
  *
- * Idempotent: re-registering an existing worker id is the registry's business. Nothing is marked
- * healthy here; a candidate routes only once its own probe (ICOS_WORKER_PROBE_COMMANDS) answered.
+ * DRY RUN IS THE DEFAULT. Without `--apply` nothing is written: the report below is
+ * computed by the same planner the write replays, so it cannot disagree with it.
+ * Registering the fleet of a live deployment is a deliberate act, and "no explicit
+ * permission -> deny" applies to an operator command as much as to an agent.
+ *
+ * Idempotent and restart-safe: a candidate whose declaration has not changed is not
+ * rewritten at all, so re-running this (or a restart) preserves probe evidence instead
+ * of resetting the whole fleet to unproven. Nothing is marked healthy here; a candidate
+ * routes only once its own probe (ICOS_WORKER_PROBE_COMMANDS) answered.
+ *
  * Credentials are never printed. Requires PERSISTENCE=postgres, OMNIROUTE_BASE_URL/API_KEY.
  *
- * Usage: pnpm compute:register [capability ...]   (default: code_editing documentation analysis review)
+ * Usage:
+ *   pnpm compute:register                        # dry run, writes nothing
+ *   pnpm compute:register --apply                # register + probe
+ *   pnpm compute:register [--apply] cap1 cap2    # override declared capabilities
  */
 import { loadEnv } from "@/config/env";
 import { createContainer } from "@/server/container";
 import {
-  candidateRegistration,
-  classifyModels,
-  listOmniRouteModels,
-  representativeModels,
-} from "@/server/workers/compute-fleet";
+  applyComputeBootstrap,
+  DEFAULT_COMPUTE_CAPABILITIES,
+  discoverComputeFleet,
+} from "@/server/workers/compute-bootstrap";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -28,30 +37,72 @@ async function main(): Promise<void> {
   if (!env.OMNIROUTE_BASE_URL || !env.OMNIROUTE_API_KEY) {
     throw new Error("OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY requis pour découvrir le compute.");
   }
-  const capabilities =
-    process.argv.length > 2
-      ? process.argv.slice(2)
-      : ["code_editing", "documentation", "analysis", "review"];
+  const args = process.argv.slice(2);
+  /*
+   * REFUSE an unrecognised flag instead of filtering it. `-apply` (one dash) used to
+   * fall through as a capability NAME, so the fleet was declared with a capability
+   * called "-apply" and the operator read a dry run they thought was a write.
+   */
+  const unknown = args.filter((a) => a.startsWith("-") && a !== "--apply");
+  if (unknown.length > 0) {
+    throw new Error(`Option inconnue: ${unknown.join(" ")} (attendu: --apply [capability ...])`);
+  }
+  const apply = args.includes("--apply");
+  const capabilities = args.filter((a) => a !== "--apply");
 
   const container = await createContainer({ env });
   try {
-    const served = await listOmniRouteModels({
+    /* THROWS if the provider is unreachable: no plan, hence no write, hence no fleet
+     * reported as "no longer served" because a gateway was down for ten seconds. */
+    const plan = await discoverComputeFleet({
       baseUrl: env.OMNIROUTE_BASE_URL,
       credential: env.OMNIROUTE_API_KEY,
+      options: {
+        runtime: "binary",
+        capabilities: capabilities.length > 0 ? capabilities : [...DEFAULT_COMPUTE_CAPABILITIES],
+      },
+      workers: container.workerRegistryStore,
     });
-    const discovered = representativeModels(classifyModels(served));
-    const registered: string[] = [];
-    for (const model of discovered) {
-      const entry = candidateRegistration(model, { runtime: "binary", capabilities });
-      await container.workerRegistration.register(entry);
-      registered.push(entry.id);
+
+    const report = {
+      mode: apply ? "APPLY" : "DRY_RUN",
+      source: plan.source,
+      listed: plan.listed,
+      /* EMPTY means the gateway told us nothing, not that every model was withdrawn:
+       * orphan detection is suspended for it, so nothing is reported as withdrawn. */
+      discovery: plan.discovery,
+      wouldRegister: plan.register.map((p) => ({ id: p.id, model: p.model, family: p.family })),
+      wouldUpdate: plan.update.map((p) => ({ id: p.id, model: p.model, family: p.family })),
+      alreadyPresent: plan.unchanged.map((p) => ({ id: p.id, model: p.model })),
+      /* REPORT ONLY — this command never writes a worker's status. */
+      noLongerServed: plan.orphan,
+      disabledLeftAlone: plan.disabled,
+      unavailable: plan.unavailable,
+      pools: plan.pools,
+    };
+
+    if (!apply) {
+      console.log(
+        JSON.stringify(
+          {
+            ...report,
+            writes: 0,
+            note: "DRY RUN — nothing written. Re-run with --apply to register.",
+          },
+          null,
+          2,
+        ),
+      );
+      return;
     }
+
+    const applied = await applyComputeBootstrap(container.workerRegistration, plan);
     const probed = await container.workerHealthProber.probeAll();
     console.log(
       JSON.stringify(
         {
-          served: served.length,
-          registered,
+          ...report,
+          applied,
           probed: probed.map((r) => ({
             workerId: r.workerId,
             outcome: r.outcome,

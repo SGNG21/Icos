@@ -117,6 +117,58 @@ describe("worker registration", () => {
     );
   });
 
+  it("RE_REGISTRATION_IS_A_NO_OP: an UNCHANGED declaration keeps the probe evidence", async () => {
+    const { service, store, router } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    const before = await store.get(WORKER_A);
+
+    /* The same declaration again — what a startup bootstrap does on every boot. */
+    const returned = await service.register(declaration(WORKER_A, ["code-generation"]));
+
+    expect(returned).toEqual(before);
+    expect(await store.get(WORKER_A)).toEqual(before);
+    expect((await router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(
+      WORKER_A,
+    );
+  });
+
+  it("METADATA_KEY_ORDER_IS_NOT_A_CHANGE: jsonb reorders keys; that must not reset evidence", async () => {
+    const { service, store } = harness();
+    const metadata = { model: "m", provider: "p", tierHint: "3" };
+    await service.register({ ...declaration(WORKER_A, ["code-generation"]), metadata });
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    const before = await store.get(WORKER_A);
+
+    /*
+     * Exactly what reading the row back from PostgreSQL produces: the same pairs, a
+     * different key order. Treating that as a changed declaration would make every
+     * restart wipe the fleet's health evidence against a real database while looking
+     * correct here.
+     */
+    await service.register({
+      ...declaration(WORKER_A, ["code-generation"]),
+      metadata: { tierHint: "3", provider: "p", model: "m" },
+    });
+
+    expect(await store.get(WORKER_A)).toEqual(before);
+    expect((await store.get(WORKER_A))?.health).toBe("healthy");
+  });
+
+  it("re-registering a DEACTIVATED worker is a change: it comes back active and unproven", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    await service.deactivate(WORKER_A);
+
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+
+    const stored = await store.get(WORKER_A);
+    expect(stored?.status).toBe("active");
+    expect(stored?.health).toBe("unknown");
+    expect(stored?.lastProbeOutcome).toBe("never");
+  });
+
   it("probing an unregistered worker returns null rather than inventing one", async () => {
     const { service, store } = harness();
 

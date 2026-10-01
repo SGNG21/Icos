@@ -42,6 +42,8 @@ import { CapabilityRouter } from "@/server/routing/capability-router";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
 import { CommandWorkerProbe } from "@/server/workers/probes/command-worker-probe";
+import { OmniRouteHttpWorkerProbe, probeModelOf } from "@/server/workers/probes/omniroute-http-worker-probe";
+import { isComputeCandidate } from "@/server/workers/compute-bootstrap";
 import {
   createWorkerProbeResolver,
   parseWorkerProbeCommands,
@@ -65,6 +67,7 @@ import {
 } from "@/server/execution/external-worker-task-execution-dispatcher";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
+import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { WorkerRegistryPort } from "@/core/contracts/worker-registry";
@@ -410,7 +413,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const workerHealthProber = new WorkerHealthProber(
     workerRegistryStore,
     workerRegistration,
-    { adapters: buildWorkerProbeAdapters() },
+    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector() },
   );
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
@@ -671,7 +674,7 @@ export async function buildPostgresContainer(
   const workerHealthProber = new WorkerHealthProber(
     workerRegistryStore,
     workerRegistration,
-    { adapters: buildWorkerProbeAdapters() },
+    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector() },
   );
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -1132,6 +1135,61 @@ function buildWorkerExecutor(env: Env): {
     runtimes,
     repoPath: env.ICOS_REPO_PATH,
   };
+}
+
+/**
+ * Selects the HTTP probe for a worker that IS a model (M6.1 + live-worker bootstrap).
+ *
+ * The decision is made from CANONICAL METADATA — `metadata.model`, which
+ * `candidateRegistration` sets for every compute candidate — and never from a provider
+ * name, so adding a provider stays configuration. A worker without a model is declined
+ * (`undefined`) and the runtime-keyed command adapters answer for it, exactly as before.
+ *
+ * Returns undefined for EVERY worker when OmniRoute is not configured. That is fail-closed
+ * and deliberate: a model worker then has no adapter at all, is recorded `unsupported`, and
+ * routes nothing. It must NOT quietly inherit the command probe instead — that is the host
+ * authority the HTTP probe exists to remove, and a missing gateway credential is not a
+ * reason to hand a model probe the server's environment and an agent's toolset.
+ */
+function buildModelProbeSelector(): (
+  worker: WorkerRegistryEntry,
+) => OmniRouteHttpWorkerProbe | null | undefined {
+  const env = loadEnv();
+  const probe =
+    env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY
+      ? new OmniRouteHttpWorkerProbe({
+          baseUrl: env.OMNIROUTE_BASE_URL,
+          credential: env.OMNIROUTE_API_KEY,
+          timeoutMs: env.ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS,
+        })
+      : null;
+
+  return (worker) => {
+    /* Not model compute: the runtime-keyed command adapters answer, exactly as before. */
+    if (!isModelWorker(worker)) return undefined;
+    /*
+     * Model compute. The HTTP probe when it exists, and otherwise `null` — explicitly
+     * NOTHING, recorded `unsupported`. It must never fall through to the runtime map:
+     * a model worker declares `runtime: "binary"`, so an absent gateway credential would
+     * otherwise put all 15 candidates back on the agent CLI, which answers `ok` from
+     * starting a runtime and tells us nothing about the model. The whole point of this
+     * adapter is that a missing credential loses health, not that it borrows authority.
+     */
+    return probe;
+  };
+}
+
+/**
+ * Whether a worker IS a model, from canonical metadata only — no provider name.
+ *
+ * `metadata.model` is what `candidateRegistration` writes and what the probe needs. The
+ * `compute:` display-name check is the second door: a compute row whose model metadata was
+ * lost (a hand-edited row, a partial reconcile) is still model compute, and must still be
+ * refused the command probe rather than quietly inheriting it. It then reaches the HTTP
+ * probe's own `WORKER_PROBE_NO_MODEL` guard, which is a diagnosable failure.
+ */
+function isModelWorker(worker: WorkerRegistryEntry): boolean {
+  return probeModelOf(worker) !== null || isComputeCandidate(worker);
 }
 
 function buildWorkerProbeAdapters(): Record<string, CommandWorkerProbe> {
