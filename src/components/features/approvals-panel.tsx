@@ -20,8 +20,6 @@ const executionLabel = {
 
 type ExecutionOutcome = keyof typeof executionLabel;
 
-const DECIDER_LABEL = "Opérateur (simulé)";
-
 export interface ApprovalsPanelProps {
   initialActions: readonly AgentAction[];
   agents: readonly Agent[];
@@ -60,8 +58,8 @@ export function ApprovalsPanel({ initialActions, agents }: ApprovalsPanelProps) 
         const response = await fetch(`/api/actions/${actionId}/decision`, {
           method: "POST",
           headers: { "content-type": "application/json" },
+          /* The decider is the authenticated session user, resolved server-side. */
           body: JSON.stringify({
-            decidedByLabel: DECIDER_LABEL,
             decision,
             ...(motive ? { reason: motive } : {}),
           }),
@@ -101,8 +99,8 @@ export function ApprovalsPanel({ initialActions, agents }: ApprovalsPanelProps) 
       </div>
 
       <p className="approvals-note">
-        Décisions simulées et non persistantes. L’identité du décideur («&nbsp;{DECIDER_LABEL}
-        &nbsp;») n’est pas authentifiée. Aucune action externe n’est exécutée.
+        Décisions simulées et non persistantes. Le décideur tracé est l’utilisateur de votre
+        session authentifiée. Aucune action externe n’est exécutée.
       </p>
 
       {error ? (

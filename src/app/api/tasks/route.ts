@@ -2,6 +2,7 @@ import { canCreateTaskInScope } from "@/server/administration/operational-access
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { createTaskBodySchema } from "@/server/http/schemas";
@@ -23,9 +24,7 @@ export async function GET(request: Request): Promise<Response> {
       return access.response;
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     return json({ tasks: await container.tasks.listForScope(scope) });
   } catch (error) {
@@ -57,9 +56,7 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     if (!canCreateTaskInScope({ scope, assignedAgentId: parsed.data.assignedAgentId })) {
       return apiError("forbidden", "agent hors portée");

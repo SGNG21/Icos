@@ -247,6 +247,13 @@ export function safeMetadata(metadata: Record<string, string>): Record<string, s
 export const hiddenMetadataCount = (metadata: Record<string, string>) =>
   Object.keys(metadata).length - Object.keys(safeMetadata(metadata)).length;
 
+/**
+ * Reads ONE registration key as a Truth. It must be handed SANITIZED metadata: it used to be
+ * called with `w.metadata` raw while the `metadata` block beside it went through
+ * `safeMetadata`, so a `model` / `provider` / `account` value that looked like a credential
+ * (`SECRET_VALUE`) was filtered out of the metadata list and then rendered anyway as the
+ * worker's declared model. A dropped key reads as `not_available`, which is the honest answer.
+ */
 function declared(
   metadata: Record<string, string>,
   key: string,
@@ -298,6 +305,8 @@ export function buildWorkerViews(
       w.health === "healthy" &&
       w.availability === "available" &&
       w.lastProbeOutcome === "ok";
+    // ONE sanitized view, shared by the declared() Truths and the metadata block below.
+    const safe = safeMetadata(w.metadata);
     return {
       id: w.id,
       name: w.displayName,
@@ -312,9 +321,9 @@ export function buildWorkerViews(
         at: w.lastProbeAt,
         ageMs: w.lastProbeAt ? now.getTime() - Date.parse(w.lastProbeAt) : null,
       },
-      model: declared(w.metadata, "model", "BR-03"),
-      provider: declared(w.metadata, "provider", "BR-03"),
-      account: declared(w.metadata, "account", "BR-03"),
+      model: declared(safe, "model", "BR-03"),
+      provider: declared(safe, "provider", "BR-03"),
+      account: declared(safe, "account", "BR-03"),
       slots: {
         used: isReal(activeAssignments)
           ? real(load.get(w.id) ?? 0, "non-terminal dispatches in the ledger")
@@ -325,7 +334,7 @@ export function buildWorkerViews(
       capabilities: [...w.capabilities],
       features: [...w.features],
       tags: [...w.tags],
-      metadata: safeMetadata(w.metadata),
+      metadata: safe,
       metadataHidden: hiddenMetadataCount(w.metadata),
       assignments: byWorker.get(w.id) ?? [],
       leases: isReal(workspaces)

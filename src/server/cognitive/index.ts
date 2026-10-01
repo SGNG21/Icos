@@ -1,6 +1,5 @@
 import type { CognitiveScope } from "@/core/cognitive/contracts";
 import type { ContextCandidate } from "@/core/cognitive/context-selection";
-import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity";
 import type { Container } from "@/server/container";
 import type { Database } from "@/server/database/client";
 import {
@@ -109,37 +108,27 @@ export function buildCognitiveRuntime(
   });
 }
 
-const cache = new WeakMap<Container, { runtime: CognitiveRuntime; lastRecovery: number }>();
-const RECOVERY_INTERVAL_MS = 60_000;
+const cache = new WeakMap<Container, CognitiveRuntime>();
 
 /**
  * The runtime for a container. PostgreSQL only: in memory mode it returns null and the
  * API answers 503 (fail closed — conversations are never kept in RAM).
  *
- * Launch recovery: approved proposals whose launch was interrupted (restart) or hit a
- * transient error are relaunched idempotently when the runtime is composed and then at
- * most once a minute while the API is in use, without anyone reopening the conversation.
+ * COMPOSITION IS SIDE-EFFECT FREE. It used to kick off `recoverLaunches(tenant)` here, so
+ * ANY request that composed the runtime — including a plain `GET /api/cognitive/conversations`
+ * or a page render — could relaunch an approved proposal and enqueue `start_mission`. A read
+ * must never start a mission. Launch recovery now runs ONLY on the explicit production timer
+ * (`cognitiveLaunchRecoverySweeper`, wired into the canonical recovery sweep) — the same
+ * `recoverLaunches` authority, reached from the one path that is allowed to execute.
  */
 export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | null {
   if (!container.db) return null;
-  let entry = cache.get(container);
-  if (!entry) {
-    entry = {
-      runtime: buildCognitiveRuntime(container.db, {
-        missions: new CanonicalGoalLauncher(container),
-      }),
-      lastRecovery: 0,
-    };
-    cache.set(container, entry);
-  }
-  const now = Date.now();
-  if (now - entry.lastRecovery >= RECOVERY_INTERVAL_MS) {
-    entry.lastRecovery = now;
-    void entry.runtime.recoverLaunches(CURRENT_SINGLE_TENANT_ID).catch((error: unknown) => {
-      console.error(
-        `[cognitive] launch recovery failed: ${error instanceof Error ? error.name : "unknown"}`,
-      );
+  let runtime = cache.get(container);
+  if (!runtime) {
+    runtime = buildCognitiveRuntime(container.db, {
+      missions: new CanonicalGoalLauncher(container),
     });
+    cache.set(container, runtime);
   }
-  return entry.runtime;
+  return runtime;
 }

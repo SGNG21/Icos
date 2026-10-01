@@ -2,6 +2,7 @@ import { actionDecisionCommandSchema } from "@/core/contracts";
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { zodDetails } from "@/server/http/errors";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { recordActionDecision } from "@/server/usecases/record-action-decision";
@@ -37,9 +38,7 @@ export async function POST(
       return apiError("invalid_input", "décision invalide", zodDetails(parsed.error));
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     if (!(await container.actions.getByIdForScope(id, scope))) {
       return apiError("not_found", "action introuvable");
@@ -52,7 +51,15 @@ export async function POST(
         tasks: container.tasks,
         uow: container.decisionUow,
       },
-      { actionId: id, command: parsed.data },
+      {
+        actionId: id,
+        command: parsed.data,
+        /*
+         * The decider is the SESSION user, never a label from the body. Same rule as
+         * /api/tool-gateway/approvals/[id]/decision: an approver identity cannot be forged.
+         */
+        decider: { kind: "human", id: access.session.user.id },
+      },
     );
 
     if (!result.ok) {

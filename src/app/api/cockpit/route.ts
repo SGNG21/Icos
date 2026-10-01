@@ -2,6 +2,7 @@ import { getContainer } from "@/server/container";
 import { buildCockpitProjection } from "@/features/cockpit/projection";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { json } from "@/server/http/respond";
 
 /**
@@ -31,9 +32,7 @@ export async function GET(request: Request): Promise<Response> {
       return access.response;
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     const [agents, tasks, pendingActions] = await Promise.all([
       container.agents.listForScope(scope),

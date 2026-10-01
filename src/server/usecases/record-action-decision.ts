@@ -4,6 +4,7 @@ import type {
   ActionDecisionCommand,
   AgentAction,
   Approval,
+  AuditActor,
   AuditEntry,
   Task,
 } from "@/core/contracts";
@@ -44,14 +45,19 @@ export type RecordActionDecisionResult =
  * l'unité de travail transactionnelle. `decideExecution` est appelé en dernier,
  * avec l'action mise à jour et l'agent RÉSOLU côté serveur — jamais un agent ou
  * un niveau fourni par l'appelant.
+ *
+ * `decider` EST L'IDENTITÉ AUTHENTIFIÉE résolue par la route depuis la session serveur.
+ * Elle alimente `approval.decidedBy` et l'acteur des deux entrées d'audit. Auparavant ces
+ * trois champs recopiaient le `decidedByLabel` du corps de la requête : l'appelant pouvait
+ * donc attribuer sa propre décision à quelqu'un d'autre dans le journal d'audit.
  */
 export async function recordActionDecision(
   deps: RecordActionDecisionDeps,
-  input: { actionId: string; command: ActionDecisionCommand },
+  input: { actionId: string; command: ActionDecisionCommand; decider: AuditActor },
 ): Promise<RecordActionDecisionResult> {
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
-  const { actionId, command } = input;
+  const { actionId, command, decider } = input;
 
   // 2. charger l'action
   const action = await deps.actions.getById(actionId);
@@ -98,7 +104,7 @@ export async function recordActionDecision(
   const approval: Approval = {
     id: newId("approval"),
     actionId: action.id,
-    decidedBy: command.decidedByLabel,
+    decidedBy: decider.id,
     decision: command.decision,
     reason: command.reason,
     decidedAt: at,
@@ -110,7 +116,7 @@ export async function recordActionDecision(
       occurredAt: at,
       createdAt: at,
       eventType: "approval.recorded",
-      actor: { kind: "human", id: command.decidedByLabel },
+      actor: decider,
       actionId: action.id,
       taskId: action.taskId,
       details: { decision: command.decision, reason: command.reason ?? null },
@@ -120,7 +126,7 @@ export async function recordActionDecision(
       occurredAt: at,
       createdAt: at,
       eventType: "action.decided",
-      actor: { kind: "human", id: command.decidedByLabel },
+      actor: decider,
       actionId: action.id,
       taskId: action.taskId,
       details: { previousStatus: action.approvalStatus, approvalStatus: nextStatus },
