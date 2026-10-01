@@ -394,6 +394,11 @@ describe("proposal wire contract", () => {
     id: "ref-1",
     conversationId: "c1",
     turnId: "turn-1",
+    // Unscoped proposal: the shape a pre-0054 reference still has on a real row
+    // (decision 0063 reads a NULL scope as "no client"), and the scope plays no
+    // part in the wire contract this block asserts.
+    clientId: null,
+    projectId: null,
     kind: "goal_proposal",
     status: "approval_required",
     payload: {

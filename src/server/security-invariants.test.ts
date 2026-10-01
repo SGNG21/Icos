@@ -80,12 +80,37 @@ describe("NO_IMPLICIT_GLOBAL_SCOPE (structural)", () => {
         !/^(server\/(services|repositories|administration|mission|control)|core)\//.test(s.path),
     );
     expect(consumers.length).toBeGreaterThan(0);
+    /*
+     * A consumer may either call the resolver itself, or RECEIVE an already-resolved scope
+     * from `getCockpitContext` — the single canonical accessor, whose own scope field is
+     * `await resolveOperationalScope(...)` and nothing else. The server-rendered surfaces
+     * (the cockpit pages, the Mobile Home loader) take the second route, and resolving a
+     * second time in each of them would be redundant work, not extra safety.
+     *
+     * The indirection is pinned below, so it can never quietly become the fail-open this
+     * invariant exists to forbid.
+     */
     for (const path of consumers) {
       const text = sources.find((s) => s.path === path)!.text;
-      expect(text, `${path} must resolve scope through mission-scope`).toContain(
-        "@/server/administration/mission-scope",
-      );
+      expect(
+        text.includes("@/server/administration/mission-scope") ||
+          text.includes("getCockpitContext"),
+        `${path} must resolve scope through mission-scope, directly or via getCockpitContext`,
+      ).toBe(true);
     }
+  });
+
+  it("the one tolerated indirection resolves through that same resolver", () => {
+    /*
+     * `getCockpitContext` is the only accepted way to obtain a scope without naming the
+     * resolver. Its definition must therefore come from the resolver and from nowhere else:
+     * if someone gives it a manufactured or defaulted scope, every surface that trusts it
+     * fails open at once, so that single file is pinned here.
+     */
+    const accessor = sources.find((s) => s.path === "features/cockpit/load.ts");
+    expect(accessor, "features/cockpit/load.ts defines getCockpitContext").toBeDefined();
+    expect(accessor!.text).toContain("@/server/administration/mission-scope");
+    expect(accessor!.text).toMatch(/scope:\s*await resolveOperationalScope\(/);
   });
 });
 

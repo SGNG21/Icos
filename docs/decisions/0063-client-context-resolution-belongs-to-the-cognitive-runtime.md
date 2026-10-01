@@ -10,11 +10,16 @@ Renumbered 0062 -> 0063 during central integration: the parallel lane
 ("ICOS's self-model is measured, not declared"), which landed first in the
 integration order. Both decisions are real and both are kept; only this one's
 number moved. The migration keeps the number `0054` (central was at `0053`, and
-`0054` was claimed by no other lane). Evidence that renumbering the migration's
-header was safe: on the live database the ledger held 51 applied rows against a
-52-entry journal, with neither `client_directory` nor
-`cognitive_conversations.previous_client_id` present -- i.e. `0054` had never
-been applied outside test databases.
+`0054` was claimed by no other lane).
+
+Editing this migration's header comment changes its sha256, which is its ledger
+hash, so it was only safe because `0054` had never been applied anywhere but a
+test database. Evidence, read-only, on the live database: the ledger held 51
+applied rows against a 52-entry journal, and none of the objects this migration
+adds existed (`cognitive_conversations.previous_client_id`,
+`cognitive_turns.client_id`, `cognitive_turn_refs.client_id`). On a freshly
+created test database the full journal applies and
+`db:verify-ledger` reports `LEDGER_OK 52 rows match the journal`.
 
 ## Context
 
