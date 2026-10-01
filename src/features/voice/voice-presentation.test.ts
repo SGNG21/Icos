@@ -10,6 +10,7 @@ import {
 } from "./voice-client";
 import {
   PHASE,
+  decisionOutcome,
   isBlocking,
   latestMissionEvents,
   operationalEvent,
@@ -399,6 +400,19 @@ describe("durable proposals: the only mission state the phone can show", () => {
     const cards = proposalCards([older, { nope: true }, launched]);
     expect(cards.map((c) => c.refId)).toEqual(["tref_1", "tref_0"]);
     expect(proposalCards(undefined)).toEqual([]);
+  });
+
+  /**
+   * REGRESSION. A double tap sends two decisions; the server answers the second
+   * 409 already_decided. Telling the user "votre décision n'a pas été transmise"
+   * there would be false — it was transmitted, and it won.
+   */
+  it("reads 409 already_decided as landed, not as a failure", () => {
+    expect(decisionOutcome(200)).toEqual({ landed: true });
+    expect(decisionOutcome(409)).toEqual({ landed: true });
+    expect(decisionOutcome(403)).toEqual({ landed: false, code: "DECISION_FORBIDDEN" });
+    expect(decisionOutcome(404)).toEqual({ landed: false, code: "DECISION" });
+    expect(decisionOutcome(503)).toEqual({ landed: false, code: "DECISION" });
   });
 
   it("names the decision failures in French", () => {

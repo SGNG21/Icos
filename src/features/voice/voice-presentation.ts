@@ -278,11 +278,27 @@ export function proposalCard(ref: unknown): ProposalCard | null {
   };
 }
 
-/** Newest first: a phone screen shows the decision it owes before its history. */
+/**
+ * Newest first: a phone screen shows the decision it owes before its history.
+ * `listRefs` orders by `asc(createdAt), asc(id)` (PostgresConversationStore), so
+ * reversing is exact and stable — not an assumption about arrival order.
+ */
 export function proposalCards(proposals: unknown): ProposalCard[] {
   if (!Array.isArray(proposals)) return [];
   return proposals
     .map(proposalCard)
     .filter((card): card is ProposalCard => card !== null)
     .reverse();
+}
+
+/**
+ * What a decision response means to the user. Pure, because the honest reading of
+ * 409 is a rule, not a detail: `already_decided` means the decision DID land (a
+ * double tap, or a replay after a retry), so reporting "not transmitted" there
+ * would state something false. The refresh that follows shows the real status.
+ */
+export function decisionOutcome(status: number): { landed: boolean; code?: string } {
+  if (status >= 200 && status < 300) return { landed: true };
+  if (status === 409) return { landed: true };
+  return { landed: false, code: status === 403 ? "DECISION_FORBIDDEN" : "DECISION" };
 }

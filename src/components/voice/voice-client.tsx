@@ -38,6 +38,7 @@ import {
 } from "@/features/voice/voice-client";
 import {
   PHASE,
+  decisionOutcome,
   isBlocking,
   latestMissionEvents,
   operationalEvent,
@@ -279,6 +280,8 @@ export function VoiceClient() {
   /** Durable proposals of this conversation; the server record, never local guesswork. */
   const [proposals, setProposals] = useState<ProposalCard[]>([]);
   const [deciding, setDeciding] = useState<string | null>(null);
+  /** Guards against an out-of-order proposal refresh repainting stale state. */
+  const refreshGeneration = useRef(0);
   const turnsEnd = useRef<HTMLDivElement>(null);
   useEffect(() => {
     turnsEnd.current?.scrollIntoView({ block: "end" });
@@ -297,6 +300,9 @@ export function VoiceClient() {
   const refreshProposals = useCallback(async () => {
     const conversationId = session.current.conversationId;
     if (!conversationId) return;
+    // Several refreshes can be in flight (ready, an event, a decision). A slower
+    // earlier read must never repaint over a newer one: mission status is evidence.
+    const generation = ++refreshGeneration.current;
     try {
       const response = await fetch(
         `/api/cognitive/conversations/${encodeURIComponent(conversationId)}`,
@@ -305,6 +311,7 @@ export function VoiceClient() {
       // 401/403/503: show nothing rather than something invented.
       if (!response.ok) return;
       const body = (await response.json()) as { proposals?: unknown };
+      if (generation !== refreshGeneration.current) return;
       setProposals(proposalCards(body.proposals));
     } catch {
       // Offline: the cards on screen stay as the last state the server confirmed.
@@ -326,10 +333,11 @@ export function VoiceClient() {
             body: JSON.stringify({ decision }),
           },
         );
-        if (!response.ok) {
+        const outcome = decisionOutcome(response.status);
+        if (!outcome.landed && outcome.code) {
           dispatch({
             type: "local_error",
-            code: response.status === 403 ? "DECISION_FORBIDDEN" : "DECISION",
+            code: outcome.code,
             message: `decision HTTP ${response.status}`,
           });
         }
