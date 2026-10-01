@@ -3,12 +3,31 @@
 import { usePathname } from "next/navigation";
 import styles from "./mobile-nav.module.css";
 
+/** The five phone tabs. Exported so the route-coverage test can enumerate them. */
+export type NavKey = "home" | "missions" | "voice" | "alerts" | "profile";
+
+/**
+ * Where each tab actually goes. It used to be derived as `/${item.key}`, which sent
+ * Missions, Alerts and Profile to /missions, /alerts and /profile — three routes
+ * that have no page, so a real phone got a 404 (and, on any page that did render, a
+ * 401 from its protected API fetch). Nothing was wrong with auth; the destinations
+ * did not exist. These cockpit routes do, and they sit behind the same session gate
+ * as /voice. `nav-targets.test.ts` fails if any entry stops resolving to a page.
+ */
+export const NAV_HREF: Record<NavKey, string> = {
+  home: "/",
+  missions: "/cockpit/missions",
+  voice: "/voice",
+  alerts: "/cockpit/alerts",
+  profile: "/cockpit/settings",
+};
+
 export function MobileNav({
   active,
   onChange,
 }: {
-  active: "home" | "missions" | "voice" | "alerts" | "profile";
-  onChange: (nav: "home" | "missions" | "voice" | "alerts" | "profile") => void;
+  active: NavKey;
+  onChange: (nav: NavKey) => void;
 }) {
   const pathname = usePathname();
 
@@ -101,7 +120,7 @@ export function MobileNav({
     <nav className={styles.nav} role="navigation" aria-label="Navigation principale">
       {navItems.map((item) => {
         const isActive = active === item.key;
-        const href = item.key === "home" ? "/" : `/${item.key}`;
+        const href = NAV_HREF[item.key];
         const isCurrentPage =
           pathname === href || (item.key !== "home" && pathname?.startsWith(href));
 
