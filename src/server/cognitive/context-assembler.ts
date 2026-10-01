@@ -19,6 +19,7 @@ import {
 } from "@/core/cognitive/context-selection";
 
 import type { Clock } from "./conversation-store";
+import type { CurrentStateSource } from "./current-state-source";
 import type { PostgresCognitiveMemoryStore } from "./memory-store";
 
 /**
@@ -71,7 +72,13 @@ export class ContextAssembler {
     private readonly memory: PostgresCognitiveMemoryStore,
     private readonly clock: Clock,
     private readonly operational?: OperationalMemorySource,
+    /** What the RUNTIME is, measured per turn (decision 0062). */
     private readonly selfModel?: SelfModelSource,
+    /**
+     * CURRENT state of the resolved client's work (decision 0063). Optional: absent ⇒ the
+     * prompt holds only durable memory, and no stale claim can be outranked.
+     */
+    private readonly current?: CurrentStateSource,
   ) {}
 
   async assemble(input: AssembleInput): Promise<ContextSnapshot> {
@@ -175,13 +182,19 @@ export class ContextAssembler {
         confidence: r.confidence,
         epistemic: r.epistemic,
         trust: r.originTrust,
+        // A memory about a mission is a CLAIM about it: a live reading of that mission
+        // supersedes it for this turn (temporal precedence).
+        subject: r.missionId ? `mission:${r.missionId}` : undefined,
       });
     }
     if (this.operational) candidates.push(...(await this.operational.candidates(scope, text)));
+    // 6b. CURRENT state of the client's work, last so it is never shadowed by a
+    // remembered version of itself (decision 0063).
+    if (this.current) candidates.push(...(await this.current.candidates(scope)));
     /*
-     * 7. Who ICOS is right now. Always included and never keyword-gated: a question
-     * like "de quoi es-tu capable ?" shares no vocabulary with the capability lines,
-     * so relevance scoring would drop exactly the turn that needs them most.
+     * 7. Who ICOS is right now (decision 0062). Always included and never keyword-gated:
+     * a question like "de quoi es-tu capable ?" shares no vocabulary with the capability
+     * lines, so relevance scoring would drop exactly the turn that needs them most.
      */
     if (this.selfModel) candidates.push(...(await this.selfModel.candidates(scope, now)));
 
@@ -206,9 +219,13 @@ export class ContextAssembler {
       tenantId: scope.tenantId,
       conversationId: input.conversationId,
       turnId: input.turn.id,
-      policyVersion: this.operational
-        ? CONTEXT_POLICY_VERSION
-        : `${CONTEXT_POLICY_VERSION}+operational:not_connected`,
+      policyVersion: [
+        CONTEXT_POLICY_VERSION,
+        this.operational ? null : "operational:not_connected",
+        this.current ? null : "current_state:not_connected",
+      ]
+        .filter(Boolean)
+        .join("+"),
       scope,
       items: selection.items,
       excluded: allExcluded,

@@ -49,8 +49,23 @@ function gatewayFor(h: DatabaseHandle) {
     scheduler: new SchedulerService(new PostgresScheduledJobRepository(h.db)),
   });
 }
-const runtimeWith = (engine: ScriptedCognitionEngine, h = handle) =>
-  buildCognitiveRuntime(h.db, { engine, missions: gatewayFor(h), operational: null });
+/**
+ * `resolveContext: false` pins the conversation's scope for proofs that are about the SCOPE
+ * PREDICATE itself (P5): their turn text deliberately names another client to create keyword
+ * pressure, and client-context resolution (decision 0063) would legitimately move the scope,
+ * which is a different property — proved in client-context.integration.test.ts.
+ */
+const runtimeWith = (
+  engine: ScriptedCognitionEngine,
+  h = handle,
+  options: { resolveContext?: boolean } = {},
+) =>
+  buildCognitiveRuntime(h.db, {
+    engine,
+    missions: gatewayFor(h),
+    operational: null,
+    resolveContext: options.resolveContext,
+  });
 
 beforeEach(async () => {
   handle ??= open();
@@ -224,7 +239,7 @@ describe("Cognitive runtime on real PostgreSQL", () => {
     expect(secret.kind).toBe("accepted");
 
     const engine = new ScriptedCognitionEngine(() => answer("ok"));
-    const other = runtimeWith(engine);
+    const other = runtimeWith(engine, handle, { resolveContext: false });
     const conv = await other.createConversation(ME, { clientId: "editions-du-mecene" });
     const res = await other.submitTurn(ME, conv.id, {
       text: "Combien de leads LDS Renov reçoit via le formulaire devis ?",
@@ -260,8 +275,20 @@ describe("Cognitive runtime on real PostgreSQL", () => {
       tags: [],
     });
     expect(hop).toEqual({ kind: "rejected", reason: "entity_out_of_scope" });
+    // With resolution ENABLED (the default), naming another client moves the scope on purpose
+    // (decision 0063, acceptance case B) — the isolation above is a property of the predicate,
+    // not of the conversation's initial clientId.
+    const resolving = runtimeWith(new ScriptedCognitionEngine(() => answer("ok")));
+    const cR = await resolving.createConversation(ME, { clientId: "editions-du-mecene" });
+    const rR = await resolving.submitTurn(ME, cR.id, {
+      text: "Combien de leads LDS Renov reçoit via le formulaire devis ?",
+      idempotencyKey: k(),
+    });
+    expect(rR.turn.clientId).toBe("lds-renov");
     // An UNSCOPED conversation (no client) does not see client memory either (M5 finding #1).
-    const unscoped = runtimeWith(new ScriptedCognitionEngine(() => answer("ok")));
+    const unscoped = runtimeWith(new ScriptedCognitionEngine(() => answer("ok")), handle, {
+      resolveContext: false,
+    });
     const c0 = await unscoped.createConversation(ME, {});
     const r0 = await unscoped.submitTurn(ME, c0.id, {
       text: "Combien de leads LDS Renov via le formulaire devis ?",

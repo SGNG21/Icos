@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 
 import type {
   ContextSnapshot,
@@ -60,6 +60,8 @@ const toConversation = (r: ConvRow): Conversation => ({
   title: r.title,
   clientId: r.clientId,
   projectId: r.projectId,
+  previousClientId: r.previousClientId,
+  previousProjectId: r.previousProjectId,
   status: r.status as Conversation["status"],
   createdAt: r.createdAt.toISOString(),
   updatedAt: r.updatedAt.toISOString(),
@@ -68,6 +70,8 @@ const toConversation = (r: ConvRow): Conversation => ({
 const toTurn = (r: TurnRow): Turn => ({
   id: r.id,
   conversationId: r.conversationId,
+  clientId: r.clientId,
+  projectId: r.projectId,
   seq: r.seq,
   role: r.role as Turn["role"],
   authorKind: r.authorKind as Turn["authorKind"],
@@ -87,6 +91,8 @@ const toRef = (r: RefRow): TurnReference => ({
   id: r.id,
   conversationId: r.conversationId,
   turnId: r.turnId,
+  clientId: r.clientId,
+  projectId: r.projectId,
   kind: r.kind as TurnReference["kind"],
   status: r.status as RefStatus,
   payload: r.payload as TurnReference["payload"],
@@ -134,6 +140,8 @@ export class PostgresConversationStore {
           title: input.title ?? null,
           clientId: input.clientId ?? null,
           projectId: input.projectId ?? null,
+          previousClientId: null,
+          previousProjectId: null,
           status: "active",
           nextTurnSeq: 1,
           nextEventSeq: 1,
@@ -180,6 +188,119 @@ export class PostgresConversationStore {
       .orderBy(desc(cognitiveConversations.updatedAt), asc(cognitiveConversations.id))
       .limit(limit);
     return rows.map(toConversation);
+  }
+
+  /**
+   * Moves the conversation's context pointer (decision 0063). The scope being left becomes
+   * `previous_*`, which is what « reviens à LDS » reads — so the pointer survives a restart
+   * without any in-memory stack. The in-flight turn is restamped so it is read and written
+   * under the scope that was actually resolved for it; a terminal turn's scope is immutable
+   * (database trigger), so history can never be moved into another client.
+   *
+   * Idempotent: setting the scope it already has leaves `previous_*` untouched.
+   */
+  async setScope(
+    tenantId: string,
+    conversationId: string,
+    turnId: string | null,
+    next: { clientId: string | null; projectId: string | null },
+    resolution: { source: string; entityKey: string | null },
+  ): Promise<Conversation> {
+    const now = this.clock.now();
+    return await this.db.transaction(async (tx) => {
+      const conv = await this.lockConversation(tx, conversationId);
+      if (conv.clientId === next.clientId && conv.projectId === next.projectId) {
+        if (turnId) await this.stampTurnScope(tx, turnId, next);
+        return toConversation(conv);
+      }
+      const [row] = await tx
+        .update(cognitiveConversations)
+        .set({
+          clientId: next.clientId,
+          projectId: next.projectId,
+          // Only a real scope is worth returning to: never record "no scope" as previous.
+          previousClientId: conv.clientId ?? conv.previousClientId,
+          previousProjectId: conv.clientId ? conv.projectId : conv.previousProjectId,
+          updatedAt: now,
+        })
+        .where(eq(cognitiveConversations.id, conversationId))
+        .returning();
+      if (turnId) await this.stampTurnScope(tx, turnId, next);
+      await this.appendEvent(tx, conversationId, tenantId, "context.resolved", turnId, {
+        clientId: next.clientId,
+        projectId: next.projectId,
+        previousClientId: row.previousClientId,
+        previousProjectId: row.previousProjectId,
+        source: resolution.source,
+        entityKey: resolution.entityKey,
+      });
+      return toConversation(row);
+    });
+  }
+
+  private async stampTurnScope(
+    tx: Executor,
+    turnId: string,
+    scope: { clientId: string | null; projectId: string | null },
+  ): Promise<void> {
+    await tx
+      .update(cognitiveTurns)
+      .set({ clientId: scope.clientId, projectId: scope.projectId })
+      .where(
+        and(
+          eq(cognitiveTurns.id, turnId),
+          inArray(cognitiveTurns.status, ["received", "processing"]),
+        ),
+      );
+  }
+
+  /**
+   * Most recent durable client scope of this owner, outside `exceptConversationId`.
+   * Backs « continue ce qu'on faisait » when the current conversation has no pointer yet.
+   */
+  async recentScope(
+    owner: ConversationOwner,
+    exceptConversationId: string,
+  ): Promise<{ clientId: string | null; projectId: string | null }> {
+    const [row] = await this.db
+      .select({
+        clientId: cognitiveConversations.clientId,
+        projectId: cognitiveConversations.projectId,
+      })
+      .from(cognitiveConversations)
+      .where(
+        and(
+          eq(cognitiveConversations.tenantId, owner.tenantId),
+          eq(cognitiveConversations.ownerUserId, owner.userId),
+          ne(cognitiveConversations.id, exceptConversationId),
+          sql`${cognitiveConversations.clientId} is not null`,
+        ),
+      )
+      .orderBy(desc(cognitiveConversations.updatedAt), desc(cognitiveConversations.id))
+      .limit(1);
+    return row ?? { clientId: null, projectId: null };
+  }
+
+  /** Proposals of a client, newest first — the launch/mission state ICOS durably knows. */
+  async refsForClient(
+    tenantId: string,
+    clientId: string,
+    statuses: readonly RefStatus[],
+    limit = 20,
+  ): Promise<TurnReference[]> {
+    const rows = await this.db
+      .select()
+      .from(cognitiveTurnRefs)
+      .where(
+        and(
+          eq(cognitiveTurnRefs.tenantId, tenantId),
+          eq(cognitiveTurnRefs.clientId, clientId),
+          inArray(cognitiveTurnRefs.status, [...statuses]),
+        ),
+      )
+      .orderBy(desc(cognitiveTurnRefs.createdAt), asc(cognitiveTurnRefs.id))
+      .limit(limit);
+    return rows.map(toRef);
   }
 
   async participants(conversationId: string): Promise<Participant[]> {
@@ -359,6 +480,7 @@ export class PostgresConversationStore {
         .where(and(eq(cognitiveTurns.id, turn.id), eq(cognitiveTurns.status, "processing")))
         .returning({ id: cognitiveTurns.id });
       if (!updated.length) return null;
+      const scope = { clientId: turn.clientId, projectId: turn.projectId };
       const assistant = await this.insertTurn(tx, conv, {
         role: "assistant",
         authorKind: "icos",
@@ -369,6 +491,7 @@ export class PostgresConversationStore {
         replyToTurnId: turn.id,
         contextSnapshotId: turn.contextSnapshotId,
         completedAt: now,
+        scope,
       });
       let ref: TurnReference | null = null;
       if (result.proposal) {
@@ -380,6 +503,8 @@ export class PostgresConversationStore {
             tenantId,
             conversationId: turn.conversationId,
             turnId: turn.id,
+            clientId: scope.clientId,
+            projectId: scope.projectId,
             kind: result.proposal.kind,
             status: policy.status,
             policyReason: policy.reason,
@@ -462,7 +587,23 @@ export class PostgresConversationStore {
     return rows.map(toTurn);
   }
 
-  async recentTurns(conversationId: string, beforeSeq: number, limit: number): Promise<Turn[]> {
+  /**
+   * Recent completed turns of this conversation, restricted to `scope` (decision 0063).
+   *
+   * A turn spoken under another client NEVER re-enters this context: that is the only thing
+   * standing between « Et le Mécène ? » and three turns of LDS detail in the prompt. An
+   * unscoped turn (pre-0054, or spoken before any client was resolved) carries no client
+   * knowledge and stays visible.
+   */
+  async recentTurns(
+    conversationId: string,
+    beforeSeq: number,
+    limit: number,
+    scope: { clientId: string | null; projectId: string | null } = {
+      clientId: null,
+      projectId: null,
+    },
+  ): Promise<Turn[]> {
     const rows = await this.db
       .select()
       .from(cognitiveTurns)
@@ -471,6 +612,12 @@ export class PostgresConversationStore {
           eq(cognitiveTurns.conversationId, conversationId),
           lt(cognitiveTurns.seq, beforeSeq),
           eq(cognitiveTurns.status, "completed"),
+          scope.clientId === null
+            ? isNull(cognitiveTurns.clientId)
+            : or(isNull(cognitiveTurns.clientId), eq(cognitiveTurns.clientId, scope.clientId)),
+          scope.projectId === null
+            ? isNull(cognitiveTurns.projectId)
+            : or(isNull(cognitiveTurns.projectId), eq(cognitiveTurns.projectId, scope.projectId)),
         ),
       )
       .orderBy(desc(cognitiveTurns.seq))
@@ -768,6 +915,13 @@ export class PostgresConversationStore {
       replyToTurnId?: string;
       contextSnapshotId?: string | null;
       completedAt?: Date;
+      /**
+       * Scope to stamp. Defaults to the conversation's current pointer (a fresh user turn).
+       * A REPLY must pass the scope its own user turn was resolved under: the conversation's
+       * pointer is a moving target, and an assistant turn carrying client A's knowledge must
+       * never be stamped with client B.
+       */
+      scope?: { clientId: string | null; projectId: string | null };
     },
   ): Promise<Turn> {
     const now = this.clock.now();
@@ -782,6 +936,8 @@ export class PostgresConversationStore {
         id: this.clock.newId("turn"),
         tenantId: conv.tenantId,
         conversationId: conv.id,
+        clientId: t.scope ? t.scope.clientId : conv.clientId,
+        projectId: t.scope ? t.scope.projectId : conv.projectId,
         seq,
         role: t.role,
         authorKind: t.authorKind,

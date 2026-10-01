@@ -313,6 +313,8 @@ describe("Acceptance semantics (Voice / phone) and disconnect durability", () =>
     expect(seen.map((e) => e.type)).toEqual([
       "turn.received",
       "turn.processing",
+      // Client/project resolution is observable for every turn, before assembly (decision 0063).
+      "context.resolved",
       "context.assembled",
       "turn.completed",
     ]);

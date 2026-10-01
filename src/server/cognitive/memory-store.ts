@@ -14,6 +14,7 @@ import type {
   Sensitivity,
   WritebackOutcome,
 } from "@/core/cognitive/contracts";
+import type { DirectoryEntry } from "@/core/cognitive/client-resolution";
 import {
   classifyCandidate,
   decideAgainstExisting,
@@ -200,6 +201,52 @@ export class PostgresCognitiveMemoryStore {
         createdAt: this.clock.now(),
       })
       .onConflictDoNothing();
+  }
+
+  /**
+   * CLIENT / PROJECT DIRECTORY (decision 0063) — the ONE read that deliberately does not
+   * apply the client scope predicate, because a reference must be resolvable BEFORE a scope
+   * exists: « Où en est LDS ? » asked from an unscoped conversation has to find LDS.
+   *
+   * What it returns is strictly the directory: kind, key, name, aliases, owning client. It
+   * carries no client knowledge — no memory row, no objective, no blocker, no relation — so
+   * it cannot leak one client's facts into another's context. The tenant predicate and the
+   * sensitivity ceiling still apply: a `restricted` client is never resolvable, and a
+   * `sensitive` one only for operator+.
+   */
+  async clientDirectory(tenantId: string, maxSensitivity: Sensitivity): Promise<DirectoryEntry[]> {
+    const allowed: Sensitivity[] =
+      maxSensitivity === "restricted"
+        ? ["normal", "sensitive", "restricted"]
+        : maxSensitivity === "sensitive"
+          ? ["normal", "sensitive"]
+          : ["normal"];
+    const rows = await this.db
+      .select({
+        kind: memoryEntities.kind,
+        key: memoryEntities.key,
+        name: memoryEntities.name,
+        aliases: memoryEntities.aliases,
+        clientId: memoryEntities.clientId,
+        sensitivity: memoryEntities.sensitivity,
+      })
+      .from(memoryEntities)
+      .where(
+        and(
+          eq(memoryEntities.tenantId, tenantId),
+          inArray(memoryEntities.kind, ["client", "project"]),
+          inArray(memoryEntities.sensitivity, allowed),
+        ),
+      )
+      .orderBy(asc(memoryEntities.kind), asc(memoryEntities.key));
+    return rows.map((r) => ({
+      kind: r.kind as DirectoryEntry["kind"],
+      key: r.key,
+      name: r.name,
+      aliases: r.aliases,
+      clientId: r.clientId,
+      sensitivity: r.sensitivity as Sensitivity,
+    }));
   }
 
   async entitiesInScope(scope: CognitiveScope, limit = 200): Promise<Entity[]> {

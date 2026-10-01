@@ -13,6 +13,7 @@ import type {
   WritebackOutcome,
 } from "@/core/cognitive/contracts";
 import { rememberSchema } from "@/core/cognitive/contracts";
+import { isScopeChange, type ContextResolution } from "@/core/cognitive/client-resolution";
 import { maxSensitivityFor } from "@/core/cognitive/context-selection";
 import { governOutcome } from "@/core/cognitive/turn-policy";
 import type { z } from "zod";
@@ -20,6 +21,7 @@ import type { z } from "zod";
 import type { CognitionEngine } from "./cognition";
 import type { ContextAssembler } from "./context-assembler";
 import { renderContext } from "./context-assembler";
+import type { ContextResolver } from "./context-resolver";
 import type { ConversationOwner, PostgresConversationStore } from "./conversation-store";
 import type { MissionGateway } from "./mission-gateway";
 import type { PostgresCognitiveMemoryStore } from "./memory-store";
@@ -87,6 +89,8 @@ export class CognitiveRuntime {
       conversations: PostgresConversationStore;
       memory: PostgresCognitiveMemoryStore;
       assembler: ContextAssembler;
+      /** Resolves « LDS » / « ça » / « reviens » to a scope. Absent ⇒ the pointer never moves. */
+      resolver?: ContextResolver;
       engine: CognitionEngine;
       missions: MissionGateway | null;
       tokenBudget?: number;
@@ -202,8 +206,46 @@ export class CognitiveRuntime {
     const abort = new AbortController();
     this.inflight.set(turn.id, abort);
     try {
+      // CONTEXT RESOLUTION comes first: everything after it — assembly, cognition, writeback,
+      // and any mission launched from this turn — happens under the resolved scope.
+      const resolution = await this.resolveScope(actor, conversation, turn);
+      if (resolution.kind === "ambiguous") {
+        return await this.clarify(actor, conversation, turn, resolution);
+      }
+      if (
+        resolution.kind === "resolved" &&
+        this.deps.resolver &&
+        isScopeChange(resolution, conversation)
+      ) {
+        // `setScope` appends `context.resolved` inside the same transaction as the pointer move.
+        conversation = await conversations.setScope(
+          actor.tenantId,
+          conversationId,
+          turn.id,
+          { clientId: resolution.clientId, projectId: resolution.projectId },
+          { source: resolution.source, entityKey: resolution.entityKey },
+        );
+        // The in-memory turn must carry the scope it was resolved under: its reply and any
+        // proposal it produces are stamped from here, never from the conversation's pointer.
+        turn = { ...turn, clientId: resolution.clientId, projectId: resolution.projectId };
+      } else if (this.deps.resolver) {
+        // The scope did not move, but the resolution still has to be observable: a turn whose
+        // source is `alias` on the client it is already on must be distinguishable from a turn
+        // that referred to nothing at all.
+        await conversations
+          .recordEvent(actor.tenantId, conversationId, "context.resolved", turn.id, {
+            clientId: resolution.clientId,
+            projectId: resolution.projectId,
+            source: resolution.kind === "resolved" ? resolution.source : "none",
+            entityKey: resolution.kind === "resolved" ? resolution.entityKey : null,
+            changed: false,
+          })
+          .catch(() => {});
+      }
       const scope = scopeOf(actor, conversation);
-      const recent = (await conversations.recentTurns(conversationId, turn.seq, 6)).reverse();
+      const recent = (
+        await conversations.recentTurns(conversationId, turn.seq, 6, scope)
+      ).reverse();
       const snapshot = await this.deps.assembler.assemble({
         scope,
         conversationId,
@@ -297,14 +339,21 @@ export class CognitiveRuntime {
     conversationId: string,
     turnId: string,
   ): Promise<{ snapshot: ContextSnapshot; memories: MemoryRecord[] } | null> {
-    const conversation = await this.requireConversation(actor, conversationId);
+    await this.requireConversation(actor, conversationId);
     const snapshot = await this.deps.conversations.getSnapshot(
       owner(actor),
       conversationId,
       turnId,
     );
     if (!snapshot) return null;
-    const scope = scopeOf(actor, conversation);
+    // The scope THIS turn was assembled under: after a client switch, the conversation's
+    // current pointer would hide the memories the turn actually used.
+    const scope: CognitiveScope = {
+      tenantId: actor.tenantId,
+      userId: actor.userId,
+      clientId: snapshot.scope.clientId,
+      projectId: snapshot.scope.projectId,
+    };
     const memories: MemoryRecord[] = [];
     for (const item of snapshot.items) {
       if (!item.ref.startsWith("memory:")) continue;
@@ -409,6 +458,65 @@ export class CognitiveRuntime {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+  /**
+   * Which client/project this turn is about. With no resolver wired the pointer never moves
+   * and the conversation keeps the scope it was created with (previous behaviour).
+   */
+  private async resolveScope(
+    actor: CognitiveActor,
+    conversation: Conversation,
+    turn: Turn,
+  ): Promise<ContextResolution> {
+    if (!this.deps.resolver) {
+      return {
+        kind: "unchanged",
+        clientId: conversation.clientId,
+        projectId: conversation.projectId,
+      };
+    }
+    return await this.deps.resolver.resolve({
+      owner: owner(actor),
+      conversation,
+      text: textOf(turn),
+      maxSensitivity: maxSensitivityFor(actor.roles),
+    });
+  }
+
+  /**
+   * Two plausible clients, or a reference to a context that does not exist: ICOS asks instead
+   * of choosing. The model is NOT consulted, no proposal is created and NOTHING is written to
+   * memory — a guessed entity link is exactly the kind of durable mistake this lane must not
+   * make. The question and the ambiguity state are recorded on the event log.
+   */
+  private async clarify(
+    actor: CognitiveActor,
+    conversation: Conversation,
+    turn: Turn,
+    resolution: Extract<ContextResolution, { kind: "ambiguous" }>,
+  ): Promise<Omit<TurnResult, "replayed">> {
+    const { conversations } = this.deps;
+    await conversations
+      .recordEvent(actor.tenantId, conversation.id, "context.resolved", turn.id, {
+        ambiguity: resolution.reason,
+        candidates: resolution.candidates,
+        clientId: null,
+        projectId: null,
+        source: "none",
+      })
+      .catch(() => {});
+    const done = await conversations.completeTurn(actor.tenantId, turn, {
+      outcome: "CLARIFICATION",
+      reply: resolution.question,
+      intent: `context.${resolution.reason}`,
+    });
+    if (!done) return this.turnOutcome(conversation.id, turn);
+    return {
+      turn: (await conversations.getTurn(conversation.id, turn.id))!,
+      reply: done.assistant,
+      proposal: null,
+    };
+  }
+
   private async requireConversation(actor: CognitiveActor, id: string): Promise<Conversation> {
     const c = await this.deps.conversations.get(owner(actor), id);
     if (!c) throw new ConversationNotFoundError();
@@ -451,8 +559,10 @@ export class CognitiveRuntime {
         conversationId: conversation.id,
         turnId: launching.turnId,
         approvedBy: launching.decidedBy ?? conversation.ownerUserId,
-        clientId: conversation.clientId,
-        projectId: conversation.projectId,
+        // The scope the proposal was MADE under: approving an LDS mission after the
+        // conversation has switched to another client must still launch under LDS.
+        clientId: launching.clientId,
+        projectId: launching.projectId,
       });
       return conversations.finishLaunch(tenantId, launching, result);
     } catch (error) {
@@ -511,14 +621,30 @@ export class CognitiveRuntime {
       conversationId,
       turnId: turn.id,
     };
-    const results: { subjectKey: string; outcome: string }[] = [];
+    const results: {
+      subjectKey: string;
+      outcome: string;
+      memoryId: string | null;
+      clientId: string | null;
+      projectId: string | null;
+    }[] = [];
     const write = async (subjectKey: string, run: () => Promise<WritebackOutcome>) => {
       try {
-        results.push({ subjectKey, outcome: (await run()).kind });
+        const r = await run();
+        results.push({
+          subjectKey,
+          outcome: r.kind,
+          memoryId: "record" in r ? r.record.id : "existingId" in r ? r.existingId : null,
+          clientId: scope.clientId,
+          projectId: scope.projectId,
+        });
       } catch (error) {
         results.push({
           subjectKey,
           outcome: `error:${error instanceof Error ? error.name : "unknown"}`,
+          memoryId: null,
+          clientId: scope.clientId,
+          projectId: scope.projectId,
         });
       }
     };

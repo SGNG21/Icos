@@ -23,9 +23,15 @@ import {
   type OperationalMemorySource,
   type SelfModelSource,
 } from "./context-assembler";
+import { ContextResolver } from "./context-resolver";
 import { CombinedSelfModel, OperationalStateSource } from "./operational-state";
 import { RuntimeSelfModel, type RuntimeProbes } from "./runtime-self-model";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
+import {
+  LaunchedMissionStateSource,
+  type CurrentStateSource,
+  type MissionStatusReader,
+} from "./current-state-source";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
 
@@ -92,6 +98,12 @@ export interface CognitiveRuntimeOptions {
   readonly operational?: OperationalMemorySource | null;
   /** Live capability truth (decision 0062). `null` disables it; tests inject their own. */
   readonly selfModel?: SelfModelSource | null;
+  /** CORE3 mission status reader for the live-state stage. `null` ⇒ launch state only. */
+  readonly missionStatus?: MissionStatusReader | null;
+  /** Explicit override; `null` disables the live-state stage entirely. */
+  readonly currentState?: CurrentStateSource | null;
+  /** `null` freezes the conversation's scope (no client/project resolution). */
+  readonly resolveContext?: boolean;
   readonly staleTurnMs?: number;
 }
 
@@ -154,10 +166,17 @@ export function buildCognitiveRuntime(
           new OperationalStateSource(db),
         ])
       : (options.selfModel ?? undefined);
+  const conversations = new PostgresConversationStore(db, clock);
+  const currentState =
+    options.currentState === undefined
+      ? new LaunchedMissionStateSource(conversations, options.missionStatus ?? null, clock)
+      : (options.currentState ?? undefined);
   return new CognitiveRuntime({
-    conversations: new PostgresConversationStore(db, clock),
+    conversations,
     memory,
-    assembler: new ContextAssembler(memory, clock, operational, selfModel),
+    assembler: new ContextAssembler(memory, clock, operational, selfModel, currentState),
+    resolver:
+      options.resolveContext === false ? undefined : new ContextResolver(memory, conversations),
     engine,
     missions: options.missions === undefined ? null : options.missions,
     staleTurnMs: options.staleTurnMs,
@@ -183,6 +202,10 @@ export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | nu
   if (!runtime) {
     runtime = buildCognitiveRuntime(container.db, {
       missions: new CanonicalGoalLauncher(container),
+      // Live mission state for the CURRENT stage: READ-ONLY use of CORE3's repository.
+      // Reading a status is not executing anything, so it is safe to compose here —
+      // unlike the launch recovery this function used to start (see the note above).
+      missionStatus: container.mission ?? null,
     });
     cache.set(container, runtime);
   }
