@@ -14,7 +14,13 @@ import {
 import { OmniRouteCognitionEngine, type CognitionEngine } from "./cognition";
 import { CognitiveRuntime } from "./cognitive-runtime";
 import { ContextAssembler, type OperationalMemorySource } from "./context-assembler";
+import { ContextResolver } from "./context-resolver";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
+import {
+  LaunchedMissionStateSource,
+  type CurrentStateSource,
+  type MissionStatusReader,
+} from "./current-state-source";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
 
@@ -79,6 +85,12 @@ export interface CognitiveRuntimeOptions {
   readonly engine?: CognitionEngine;
   readonly missions?: MissionGateway | null;
   readonly operational?: OperationalMemorySource | null;
+  /** CORE3 mission status reader for the live-state stage. `null` ⇒ launch state only. */
+  readonly missionStatus?: MissionStatusReader | null;
+  /** Explicit override; `null` disables the live-state stage entirely. */
+  readonly currentState?: CurrentStateSource | null;
+  /** `null` freezes the conversation's scope (no client/project resolution). */
+  readonly resolveContext?: boolean;
   readonly staleTurnMs?: number;
 }
 
@@ -99,10 +111,17 @@ export function buildCognitiveRuntime(
           }),
         )
       : (options.operational ?? undefined);
+  const conversations = new PostgresConversationStore(db, clock);
+  const currentState =
+    options.currentState === undefined
+      ? new LaunchedMissionStateSource(conversations, options.missionStatus ?? null, clock)
+      : (options.currentState ?? undefined);
   return new CognitiveRuntime({
-    conversations: new PostgresConversationStore(db, clock),
+    conversations,
     memory,
-    assembler: new ContextAssembler(memory, clock, operational),
+    assembler: new ContextAssembler(memory, clock, operational, currentState),
+    resolver:
+      options.resolveContext === false ? undefined : new ContextResolver(memory, conversations),
     engine: options.engine ?? OmniRouteCognitionEngine.fromEnv(),
     missions: options.missions === undefined ? null : options.missions,
     staleTurnMs: options.staleTurnMs,
@@ -127,6 +146,8 @@ export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | nu
     entry = {
       runtime: buildCognitiveRuntime(container.db, {
         missions: new CanonicalGoalLauncher(container),
+        // Live mission state for the CURRENT stage: read-only use of CORE3's repository.
+        missionStatus: container.mission ?? null,
       }),
       lastRecovery: 0,
     };

@@ -50,6 +50,9 @@ export interface Conversation {
   readonly title: string | null;
   readonly clientId: string | null;
   readonly projectId: string | null;
+  /** The scope this conversation was on before the last switch (powers « reviens à LDS »). */
+  readonly previousClientId: string | null;
+  readonly previousProjectId: string | null;
   readonly status: "active" | "archived";
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -100,6 +103,9 @@ export type SubmitTurnInput = z.infer<typeof submitTurnSchema>;
 export interface Turn {
   readonly id: string;
   readonly conversationId: string;
+  /** Scope the turn was recorded under: a turn never re-enters another client's context. */
+  readonly clientId: string | null;
+  readonly projectId: string | null;
   readonly seq: number;
   readonly role: "user" | "assistant";
   readonly authorKind: ParticipantKind;
@@ -206,6 +212,9 @@ export interface TurnReference {
   readonly id: string;
   readonly conversationId: string;
   readonly turnId: string;
+  /** Scope at proposal time. The launch uses THIS, never the conversation's current pointer. */
+  readonly clientId: string | null;
+  readonly projectId: string | null;
   readonly kind: RefKind;
   readonly status: RefStatus;
   readonly payload: GoalProposal | ActionProposal;
@@ -415,6 +424,7 @@ export const CONTEXT_ITEM_KINDS = [
   "memory",
   "procedure",
   "business_fact",
+  "current_state",
 ] as const;
 export type ContextItemKind = (typeof CONTEXT_ITEM_KINDS)[number];
 
@@ -441,7 +451,9 @@ export interface ContextExclusion {
     | "project_scope"
     | "user_scope"
     | "inactive"
-    | "expired";
+    | "expired"
+    /** A live-state item about the same subject outranks this durable claim. */
+    | "stale";
 }
 
 export interface ContextSnapshot {
@@ -465,6 +477,7 @@ export const CONVERSATION_EVENT_TYPES = [
   "conversation.created",
   "turn.received",
   "turn.processing",
+  "context.resolved",
   "context.assembled",
   "turn.completed",
   "turn.failed",

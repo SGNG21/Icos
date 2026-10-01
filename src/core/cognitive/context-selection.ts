@@ -19,9 +19,10 @@ import type {
 export const CONTEXT_POLICY_VERSION = "cognitive-context-v1";
 
 export type ContextStage =
-  "goals" | "entities" | "episodic" | "semantic" | "decisions" | "procedures";
+  "current" | "goals" | "entities" | "episodic" | "semantic" | "decisions" | "procedures";
 
 const STAGE_WEIGHT: Record<ContextStage, number> = {
+  current: 0.6,
   goals: 0.5,
   entities: 0.4,
   decisions: 0.35,
@@ -42,6 +43,13 @@ export interface ContextCandidate {
   readonly confidence: number;
   readonly epistemic: Epistemic | null;
   readonly trust: OriginTrust;
+  /**
+   * What this item makes a claim ABOUT (e.g. `mission:m_42`). Two items sharing a subject
+   * are two statements about the same thing, settled by `applyTemporalPrecedence`.
+   */
+  readonly subject?: string;
+  /** True for a reading of CURRENT state (live runtime/CORE3), not a remembered claim. */
+  readonly live?: boolean;
 }
 
 export interface SelectionPolicy {
@@ -97,11 +105,40 @@ export function scoreCandidate(
       authority,
   );
   const reasons = [
+    c.live && "current_state",
     c.anchored && "scope",
     hits > 0 && `keywords:${hits}`,
     entityHit && "entity",
   ].filter(Boolean);
   return { score, relevant: reasons.length > 0, reason: reasons.join("+") || "none" };
+}
+
+/**
+ * TEMPORAL PRECEDENCE: current state outranks remembered state (decision 0062).
+ *
+ * When a live reading and a durable memory speak about the SAME subject, the memory is
+ * dropped from the prompt with reason `stale` — a completed mission can never be presented
+ * as running because an older turn said so. The memory row is untouched and still
+ * readable as history; it simply does not enter this turn's context.
+ *
+ * Two live readings of one subject, or two memories with no live reading, are left alone.
+ */
+export function applyTemporalPrecedence(candidates: readonly ContextCandidate[]): {
+  kept: ContextCandidate[];
+  stale: ContextExclusion[];
+} {
+  const liveSubjects = new Set(
+    candidates.filter((c) => c.live && c.subject).map((c) => c.subject as string),
+  );
+  if (!liveSubjects.size) return { kept: [...candidates], stale: [] };
+  const kept: ContextCandidate[] = [];
+  const stale: ContextExclusion[] = [];
+  for (const c of candidates) {
+    if (!c.live && c.subject && liveSubjects.has(c.subject))
+      stale.push({ ref: c.ref, reason: "stale" });
+    else kept.push(c);
+  }
+  return { kept, stale };
 }
 
 /** Rank, gate on relevance, trim to budget. Ties broken by ref: fully deterministic. */
@@ -113,10 +150,11 @@ export function selectContext(
   now: Date,
 ): { items: ContextItem[]; excluded: ContextExclusion[]; tokensUsed: number } {
   const query = tokenize(turnText);
-  const excluded: ContextExclusion[] = [];
+  const precedence = applyTemporalPrecedence(candidates);
+  const excluded: ContextExclusion[] = [...precedence.stale];
   const seen = new Set<string>();
   const scored = [];
-  for (const c of candidates) {
+  for (const c of precedence.kept) {
     if (seen.has(c.ref)) continue;
     seen.add(c.ref);
     const s = scoreCandidate(c, query, focusEntityIds, now);
