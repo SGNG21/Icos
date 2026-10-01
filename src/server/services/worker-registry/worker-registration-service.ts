@@ -104,7 +104,9 @@ export function workerDeclaration(
     runtime: entry.runtime ?? "unknown",
     runtimeSupport: entry.runtimeSupport ?? "UNKNOWN",
     tags: entry.tags ?? [],
-    metadata: Object.fromEntries(Object.entries(entry.metadata ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+    metadata: Object.fromEntries(
+      Object.entries(entry.metadata ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    ),
     maxConcurrency: entry.maxConcurrency ?? 1,
     capacityPool: entry.capacityPool ?? null,
     capacityPoolLimit: entry.capacityPoolLimit ?? null,
@@ -142,11 +144,12 @@ export class WorkerRegistrationService {
    * startup bootstrap safe to run unconditionally.
    */
   async register(input: WorkerRegistrationInput): Promise<WorkerRegistryEntry> {
-    const existing = await this.workers.get(input.id);
-    if (existing && sameWorkerDeclaration(existing, input)) {
-      return existing;
-    }
-
+    /*
+     * VALIDATE FIRST, compare second. The no-op below is a write optimisation, never a
+     * reason to skip the contract: a malformed declaration must be refused whether or
+     * not it happens to match a stored row, or the trust boundary would sit behind a
+     * conditional and quietly stop applying the day an HTTP route calls this.
+     */
     const entry = workerRegistryEntrySchema.parse({
       id: input.id,
       workerKind: input.workerKind,
@@ -169,6 +172,11 @@ export class WorkerRegistrationService {
       capacityPoolLimit: input.capacityPoolLimit ?? null,
       updatedAt: this.now().toISOString(),
     });
+
+    const existing = await this.workers.get(entry.id);
+    if (existing && sameWorkerDeclaration(existing, entry)) {
+      return existing;
+    }
 
     return this.workers.upsert(entry);
   }

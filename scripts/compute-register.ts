@@ -38,8 +38,17 @@ async function main(): Promise<void> {
     throw new Error("OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY requis pour découvrir le compute.");
   }
   const args = process.argv.slice(2);
+  /*
+   * REFUSE an unrecognised flag instead of filtering it. `-apply` (one dash) used to
+   * fall through as a capability NAME, so the fleet was declared with a capability
+   * called "-apply" and the operator read a dry run they thought was a write.
+   */
+  const unknown = args.filter((a) => a.startsWith("-") && a !== "--apply");
+  if (unknown.length > 0) {
+    throw new Error(`Option inconnue: ${unknown.join(" ")} (attendu: --apply [capability ...])`);
+  }
   const apply = args.includes("--apply");
-  const capabilities = args.filter((a) => !a.startsWith("--"));
+  const capabilities = args.filter((a) => a !== "--apply");
 
   const container = await createContainer({ env });
   try {

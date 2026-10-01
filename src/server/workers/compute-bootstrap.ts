@@ -105,11 +105,16 @@ export interface ComputeBootstrapPlan {
    * `EMPTY` means the listing produced NO candidate at all — an HTTP 200 with an
    * empty `data` array, a credential scoped to nothing, or a listing in which no id
    * is of a recognised family. That is not the provider saying "these models are
-   * gone"; it is the provider telling us nothing, and the two must not be confused:
-   * read as withdrawal it would deactivate the ENTIRE fleet on one bad response.
-   * So orphan reconciliation is SUSPENDED for an empty discovery. The throw paths in
-   * `discoverComputeFleet` cover an outage that announces itself; this covers the one
-   * that arrives as a success.
+   * gone"; it is the provider telling us nothing, and the two must not be confused.
+   *
+   * So `orphan` is left empty for it: reporting the ENTIRE fleet as withdrawn on one
+   * bad response would be a false alarm, and — should anyone ever give orphan handling
+   * a write side — a fleet-wide one. Note that a PARTIAL listing still reads `OK`, so
+   * `discovered.length > 0` is NOT a sufficient signal for a write; nothing is written
+   * from `orphan` today, and that is why it is sufficient here.
+   *
+   * The throw paths in `discoverComputeFleet` cover an outage that announces itself;
+   * this covers the one that arrives as a success.
    */
   discovery: "OK" | "EMPTY";
   /**

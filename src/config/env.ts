@@ -58,7 +58,12 @@ const envSchema = z.object({
    * Requires OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY; a provider outage is reported and
    * never aborts startup, because the rest of the runtime must still boot.
    */
-  ICOS_COMPUTE_BOOTSTRAP: z.preprocess(emptyAsUndefined, z.stringbool().optional()),
+  /* Trimmed before parsing: a trailing space in a deployment variable is a typo, not a
+   * reason to refuse to boot the whole runtime. An unrecognised WORD still throws. */
+  ICOS_COMPUTE_BOOTSTRAP: z.preprocess(
+    (v) => emptyAsUndefined(typeof v === "string" ? v.trim() : v),
+    z.stringbool().optional(),
+  ),
   /*
    * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
    * quarter of the health-evidence horizon, so evidence never expires between

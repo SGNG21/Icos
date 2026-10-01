@@ -4,7 +4,10 @@ import type { Env } from "@/config/env";
 import type { Container } from "@/server/container";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
-import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
+import {
+  bootstrapComputeFleetAtStartup,
+  warnOnAttention,
+} from "@/server/workers/startup-compute-bootstrap";
 
 /*
  * The startup half of the bootstrap: WHEN a boot is allowed to write, and what a boot
@@ -36,18 +39,18 @@ const env = (over: Partial<Env> = {}): Env =>
  * `discoverComputeFleet` resolves its own fetch from globalThis, which is what the
  * startup path does in production. Stubbing it here is the only way to keep this a unit.
  */
-async function run(h: ReturnType<typeof harness>, e: Env) {
+async function run(h: ReturnType<typeof harness>, e: Env, log: (o: unknown) => void = () => {}) {
   const original = globalThis.fetch;
   globalThis.fetch = h.fetch;
   try {
-    return await bootstrapComputeFleetAtStartup(h.container, e, () => {});
+    return await bootstrapComputeFleetAtStartup(h.container, e, log);
   } finally {
     globalThis.fetch = original;
   }
 }
 
 describe("startup compute bootstrap", () => {
-  it("DRY_RUN_NO_WRITE by default: an unflagged deployment writes nothing at boot", async () => {
+  it("DEFAULT_OFF: an unflagged deployment writes nothing at boot", async () => {
     const h = harness();
 
     const outcome = await run(h, env({ ICOS_COMPUTE_BOOTSTRAP: undefined }));
@@ -113,21 +116,72 @@ describe("startup compute bootstrap", () => {
     expect(await h.store.list()).toEqual([]);
   });
 
-  it("never logs the credential", async () => {
-    const h = harness();
+  it("NEVER_LOGS_THE_CREDENTIAL: the failure branch truncates and carries no secret", async () => {
+    const CREDENTIAL = "super-secret-credential";
+    const h = harness(
+      vi.fn().mockRejectedValue(
+        /* A gateway error that embeds BOTH the credential and a long body, which is what
+         * `response.json()` on an HTML error page produces. The catch branch is the only
+         * path that can carry provider text into a log, so it is the one under test. */
+        new Error(
+          `Unexpected token '<' — Authorization: Bearer ${CREDENTIAL}\n` + "x".repeat(5_000),
+        ),
+      ),
+    );
     const logged: unknown[] = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = h.fetch;
-    try {
-      await bootstrapComputeFleetAtStartup(
-        h.container,
-        env({ OMNIROUTE_API_KEY: "super-secret-credential" }),
-        (o) => logged.push(o),
-      );
-    } finally {
-      globalThis.fetch = original;
-    }
 
-    expect(JSON.stringify(logged)).not.toContain("super-secret-credential");
+    const outcome = await run(h, env({ OMNIROUTE_API_KEY: CREDENTIAL }), (o) => logged.push(o));
+
+    expect(outcome.status).toBe("PROVIDER_UNAVAILABLE");
+    /* It is truncated to one bounded line: a whole response body never reaches a log. */
+    const error = (outcome as { error: string }).error;
+    expect(error.length).toBeLessThanOrEqual(200);
+    expect(error).not.toContain("\n");
+    /* And nothing the bootstrap ITSELF builds contains the credential. */
+    expect(JSON.stringify(logged)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(outcome)).not.toContain("x".repeat(500));
+  });
+
+  it("the PRODUCTION log sink stays silent on success and speaks on every attention outcome", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      /* Silent: results are evidence in the registry, never a stdout dump. */
+      warnOnAttention({ status: "DISABLED" });
+      warnOnAttention({
+        status: "APPLIED",
+        source: "https://gateway.invalid",
+        result: { registered: [], updated: [], unchanged: [], skippedDisabled: [] },
+      });
+      expect(warn).not.toHaveBeenCalled();
+
+      /*
+       * Loud: a bootstrap that is ENABLED and did not register the fleet is invisible
+       * otherwise — fail-closed and undiagnosable is the failure mode to avoid.
+       */
+      warnOnAttention({ status: "UNCONFIGURED", missing: ["OMNIROUTE_API_KEY"] });
+      warnOnAttention({ status: "PROVIDER_UNAVAILABLE", error: "COMPUTE_DISCOVERY_HTTP_503" });
+      warnOnAttention({
+        status: "WRITE_FAILED",
+        source: "https://gateway.invalid",
+        error: "connection terminated",
+        registered: 4,
+      });
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn.mock.calls.map((c) => String(c[0])).join(" ")).not.toContain("Bearer");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("WRITE_FAILED is not reported as a provider outage: the two need opposite responses", async () => {
+    const h = harness();
+    const boom = new Error("connection terminated unexpectedly");
+    vi.spyOn(h.container.workerRegistration, "register").mockRejectedValue(boom);
+
+    const outcome = await run(h, env());
+
+    expect(outcome.status).toBe("WRITE_FAILED");
+    expect((outcome as { error: string }).error).toContain("connection terminated");
+    expect(await h.store.list()).toEqual([]);
   });
 });

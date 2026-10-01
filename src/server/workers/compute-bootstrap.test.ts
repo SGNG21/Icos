@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { workerRegistryEntrySchema } from "@/core/contracts/worker-registry";
 import { buildWorkerViews } from "@/features/cockpit/snapshot";
+import { assertSafeTestDatabaseUrl } from "@/server/database/test-database-guard";
 import { missing, real } from "@/features/cockpit/truth";
 import { CapabilityRouter } from "@/server/routing/capability-router";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
@@ -345,46 +347,57 @@ describe("live worker fleet bootstrap", () => {
     expect(unprobed.routable).toBe(false);
   });
 
-  it("TENANT_ENVIRONMENT_ISOLATION: one bootstrap reaches exactly one registry", async () => {
-    const live = harness();
-    const other = harness();
+  it("TENANT_ENVIRONMENT_ISOLATION: a worker carries no tenant key — this fails the day it does", () => {
+    /*
+     * A CANARY, not a tautology. `workers` has no tenant column and a worker is a
+     * runtime execution unit, so isolation here is per DATABASE and no tenant
+     * operation occurs without tenant context. That model is what makes a boot-time
+     * write safe — so assert it, rather than asserting it in a comment. The day a
+     * worker becomes tenant-scoped (a tenant-dedicated provider account, a per-tenant
+     * capacity pool) this boot-time write becomes a cross-tenant write with no key,
+     * and this test is what forces that question instead of letting it pass silently.
+     */
+    const fields = Object.keys(workerRegistryEntrySchema.shape);
+    expect(fields.filter((f) => /tenant|org|account/i.test(f))).toEqual([]);
 
-    await applyComputeBootstrap(live.registration, await live.plan());
-
-    /* Same declaration, different registry: no shared state, no cross-write. */
-    expect((await live.store.list()).length).toBeGreaterThan(1);
-    expect(await other.store.list()).toEqual([]);
-
-    await applyComputeBootstrap(other.registration, await other.plan(["claude/claude-sonnet-5"]));
-    expect((await other.store.list()).length).toBe(1);
-    expect((await live.store.list()).length).toBeGreaterThan(1);
+    const declaration = planComputeBootstrap({
+      source: "https://gateway.invalid",
+      listed: ["claude/claude-sonnet-5"],
+      existing: [],
+      options: OPTIONS,
+    }).register[0]!.declaration;
+    expect(Object.keys(declaration).filter((k) => /tenant/i.test(k))).toEqual([]);
+    /* And the environment reaches the planner ONLY as its `existing` argument. */
+    expect(Object.keys(declaration).sort()).not.toContain("databaseUrl");
   });
 
-  it("NO_TEST_DB_TO_LIVE_COPY: the plan is derived from the provider, never from another registry", async () => {
+  it("NO_TEST_DB_TO_LIVE_COPY: the live database is refused by name, and health never travels", async () => {
+    /*
+     * The real control, exercised: `createDatabase` calls this whenever VITEST is set,
+     * so no test in this repository can open a connection to the live database however
+     * it is configured. That — not the absence of a seeding parameter — is what stops a
+     * populated *_test or proof registry from reaching production.
+     */
+    expect(() => assertSafeTestDatabaseUrl("postgres://localhost:5432/icos_n23_probe")).toThrow(
+      /TEST_DATABASE_UNSAFE/,
+    );
+    expect(() => assertSafeTestDatabaseUrl("postgres://localhost:5432/icos_phone_proof")).toThrow(
+      /TEST_DATABASE_UNSAFE/,
+    );
+    expect(() => assertSafeTestDatabaseUrl("postgres://localhost:5432/icos_test")).not.toThrow();
+
+    /* And health is never inherited: a candidate arrives unprobed in whatever registry
+     * it lands in, however healthy the same model is somewhere else. */
     const seeded = harness();
     await applyComputeBootstrap(seeded.registration, await seeded.plan());
     for (const w of await seeded.store.list()) {
       await seeded.registration.probe(w.id, { health: "healthy", availability: "available" });
     }
+
     const target = harness();
-
-    /*
-     * The ONLY inputs a plan accepts are the provider's listing and the TARGET's own
-     * registry. There is no parameter through which a populated registry — a *_test
-     * database, a proof database — could seed another, and a plan built from an empty
-     * provider listing declares nothing rather than inheriting anything.
-     */
-    const empty = await target.plan([]);
-    expect(empty.discovery).toBe("EMPTY");
-    expect(empty.register).toEqual([]);
-    expect(empty.update).toEqual([]);
-    expect(empty.unchanged).toEqual([]);
-
-    await applyComputeBootstrap(target.registration, empty);
-    expect(await target.store.list()).toEqual([]);
-
-    /* And health never travels: the target's own candidates arrive unprobed. */
     await applyComputeBootstrap(target.registration, await target.plan());
+
+    expect((await target.store.list()).length).toBe((await seeded.store.list()).length);
     for (const w of await target.store.list()) {
       expect(w.health).toBe("unknown");
       expect(w.lastProbeOutcome).toBe("never");

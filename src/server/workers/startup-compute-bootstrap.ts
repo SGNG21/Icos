@@ -38,7 +38,16 @@ export type StartupComputeBootstrapOutcome =
   | { status: "DISABLED" }
   | { status: "UNCONFIGURED"; missing: string[] }
   | { status: "APPLIED"; source: string; result: ComputeBootstrapResult }
-  | { status: "PROVIDER_UNAVAILABLE"; error: string };
+  | { status: "PROVIDER_UNAVAILABLE"; error: string }
+  /**
+   * The registry refused the write. Reported SEPARATELY from a provider outage,
+   * because the two need opposite responses and are indistinguishable otherwise: a
+   * provider outage leaves the registry exactly as it was, while a write failure can
+   * leave it PARTIALLY reconciled — `applyComputeBootstrap` registers row by row and
+   * `WorkerRegistryStore` exposes no transaction. Pointing an operator at the gateway
+   * when the database is the problem is the kind of misdirection that costs an hour.
+   */
+  | { status: "WRITE_FAILED"; source: string; error: string; registered: number };
 
 /**
  * Only the outcomes an operator must ACT on are logged, and as a warning.
@@ -49,10 +58,42 @@ export type StartupComputeBootstrapOutcome =
  * invisible otherwise — that is the defect-16 failure mode (fail-closed and
  * undiagnosable), so it says so.
  */
-function warnOnAttention(outcome: StartupComputeBootstrapOutcome): void {
-  if (outcome.status === "UNCONFIGURED" || outcome.status === "PROVIDER_UNAVAILABLE") {
+export function warnOnAttention(outcome: StartupComputeBootstrapOutcome): void {
+  if (
+    outcome.status === "UNCONFIGURED" ||
+    outcome.status === "PROVIDER_UNAVAILABLE" ||
+    outcome.status === "WRITE_FAILED"
+  ) {
     console.warn(`COMPUTE_BOOTSTRAP ${JSON.stringify(outcome)}`);
   }
+}
+
+/**
+ * One bounded, REDACTED line of an error, for a log an operator reads at boot.
+ *
+ * Three separate things, each for its own reason:
+ *
+ * BOUNDED — the text can be the gateway's own. A 200 with an HTML body makes
+ * `response.json()` throw a SyntaxError carrying a body snippet, so this keeps the
+ * first line and 200 characters: enough to diagnose, never a whole response body.
+ *
+ * REDACTED — this code does not build the credential into any message, but it does not
+ * author every message it logs either. An HTTP library, an agent or a proxy may embed a
+ * request header or a URL with userinfo in ITS error, and "we never put it there" is
+ * not a guarantee about text we did not write. So the credential is struck from the
+ * line before it is logged, whatever produced it. Cheap, and it fails safe.
+ *
+ * LONGEST-FIRST — a short secret that is a substring of a longer one must not leave the
+ * longer one partly intact.
+ */
+function oneLine(error: unknown, secrets: readonly (string | undefined)[] = []): string {
+  const line = (error instanceof Error ? error.message : String(error))
+    .split("\n")[0]!
+    .slice(0, 200);
+  return [...secrets]
+    .filter((s): s is string => typeof s === "string" && s.length > 0)
+    .sort((a, b) => b.length - a.length)
+    .reduce((out, secret) => out.split(secret).join("***REDACTED***"), line);
 }
 
 export async function bootstrapComputeFleetAtStartup(
@@ -79,22 +120,35 @@ export async function bootstrapComputeFleetAtStartup(
     return outcome;
   }
 
+  let plan;
   try {
-    const plan = await discoverComputeFleet({
+    plan = await discoverComputeFleet({
       baseUrl: env.OMNIROUTE_BASE_URL!,
       credential: env.OMNIROUTE_API_KEY!,
       options: { runtime: "binary", capabilities: [...DEFAULT_COMPUTE_CAPABILITIES] },
       workers: container.workerRegistryStore,
     });
+  } catch (error) {
+    const outcome = {
+      status: "PROVIDER_UNAVAILABLE",
+      error: oneLine(error, [env.OMNIROUTE_API_KEY]),
+    } as const;
+    log(outcome);
+    return outcome;
+  }
+
+  try {
     const result = await applyComputeBootstrap(container.workerRegistration, plan);
     const outcome = { status: "APPLIED", source: plan.source, result } as const;
     log(outcome);
     return outcome;
   } catch (error) {
-    /* One line, and never the credential: the gateway's own error text is not logged whole. */
     const outcome = {
-      status: "PROVIDER_UNAVAILABLE",
-      error: (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200),
+      status: "WRITE_FAILED",
+      source: plan.source,
+      error: oneLine(error, [env.OMNIROUTE_API_KEY]),
+      /* How far it got, so a partial reconciliation is visible rather than guessed at. */
+      registered: (await container.workerRegistryStore.list()).length,
     } as const;
     log(outcome);
     return outcome;
