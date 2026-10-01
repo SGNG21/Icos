@@ -7,8 +7,10 @@
  * are unchanged; voice simply is not available there.
  *
  * A phone only grants the microphone to a secure origin. Either put this host
- * behind a TLS proxy (e.g. `tailscale serve`), or set ICOS_VOICE_TLS_CERT and
- * ICOS_VOICE_TLS_KEY (PEM paths) to serve HTTPS directly.
+ * behind a TLS proxy (`tailscale serve` — tailnet only, NEVER `tailscale funnel`,
+ * which publishes it to the public internet), or set ICOS_VOICE_TLS_CERT and
+ * ICOS_VOICE_TLS_KEY (PEM paths) to serve HTTPS directly. The default bind is
+ * loopback: nothing reaches the LAN unless HOST is changed.
  *
  * Prints provider STATUS only — never keys or URLs.
  */

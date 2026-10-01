@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { REF_KINDS, REF_STATUSES, type RefKind, type RefStatus } from "@/core/cognitive/contracts";
 import { MissionEventPayloadSchema, type MissionEventPayload } from "@/core/voice/contracts";
 
 import type { VoiceTurnView, VoiceUiState } from "./voice-client";
@@ -105,6 +106,10 @@ export function userMessage(code: string): string {
       return "Le micro exige une connexion sécurisée (HTTPS).";
     case "PLAYBACK":
       return "Un extrait audio n'a pas pu être lu.";
+    case "DECISION":
+      return "Votre décision n'a pas été transmise. Réessayez.";
+    case "DECISION_FORBIDDEN":
+      return "Votre compte n'a pas le droit d'approuver une mission.";
     default:
       return "Un problème est survenu. Réessayez.";
   }
@@ -195,4 +200,89 @@ export function latestMissionEvents(turns: VoiceTurnView[]): Set<string> {
     });
   }
   return new Set(latest.values());
+}
+
+// --- durable proposals -------------------------------------------------------
+
+/**
+ * What the phone shows for a mission/action PROPOSAL, read from the durable
+ * record (`GET /api/cognitive/conversations/{id}` → `proposals`) rather than
+ * from the `proposal.created` event: that event carries only
+ * `{refId, kind, status, policyReason}`, so the mission's real title and its
+ * CORE3 `missionId` exist nowhere else. The runtime is the authority — same
+ * rule the voice adapter already applies to the reply text.
+ */
+export type ProposalCard = {
+  refId: string;
+  kind: RefKind;
+  title: string;
+  detail: string | null;
+  label: string;
+  tone: Tone;
+  /** Canonical CORE3 identity; only ever set once the launch fixed it. */
+  missionId: string | null;
+  /** This human still owes a decision: the only state with actions. */
+  decidable: boolean;
+  failureReason: string | null;
+};
+
+const PROPOSAL_STATUS: Record<RefStatus, { label: string; tone: Tone }> = {
+  proposed: { label: "Proposition", tone: "warn" },
+  approval_required: { label: "Approbation requise", tone: "warn" },
+  approved: { label: "Approuvée", tone: "flow" },
+  launching: { label: "Lancement en cours", tone: "flow" },
+  launched: { label: "Mission lancée", tone: "ok" },
+  rejected: { label: "Rejetée", tone: "unknown" },
+  failed: { label: "Lancement échoué", tone: "critical" },
+  not_connected: { label: "Backend non connecté", tone: "critical" },
+};
+
+/** Only these two await a human; every other status is a fact, not a question. */
+const DECIDABLE: ReadonlySet<RefStatus> = new Set<RefStatus>(["proposed", "approval_required"]);
+
+const Nullable = (max: number) => z.string().trim().min(1).max(max).nullish();
+
+/** The subset of a durable TurnReference the phone renders. Unknown shapes are dropped. */
+const ProposalRefSchema = z.object({
+  id: z.string().min(1).max(128),
+  kind: z.enum(REF_KINDS),
+  status: z.enum(REF_STATUSES),
+  payload: z.union([
+    z.object({ title: Text, objective: Nullable(4_000) }),
+    z.object({ description: z.string().trim().min(1).max(2_000) }),
+  ]),
+  missionId: Nullable(128),
+  failureReason: Nullable(500),
+});
+
+/**
+ * One durable proposal as a card — or null when the shape is not what this
+ * client understands. Pure: the component only renders what comes back.
+ */
+export function proposalCard(ref: unknown): ProposalCard | null {
+  const parsed = ProposalRefSchema.safeParse(ref);
+  if (!parsed.success) return null;
+  const { id, kind, status, payload, missionId, failureReason } = parsed.data;
+  const { label, tone } = PROPOSAL_STATUS[status];
+  const goal = "title" in payload;
+  return {
+    refId: id,
+    kind,
+    title: goal ? payload.title : payload.description.slice(0, 200),
+    detail: goal ? (payload.objective ?? null) : null,
+    label,
+    tone,
+    missionId: missionId ?? null,
+    decidable: DECIDABLE.has(status),
+    failureReason: failureReason ?? null,
+  };
+}
+
+/** Newest first: a phone screen shows the decision it owes before its history. */
+export function proposalCards(proposals: unknown): ProposalCard[] {
+  if (!Array.isArray(proposals)) return [];
+  return proposals
+    .map(proposalCard)
+    .filter((card): card is ProposalCard => card !== null)
+    .reverse();
 }

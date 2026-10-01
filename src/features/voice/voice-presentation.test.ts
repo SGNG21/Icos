@@ -14,6 +14,8 @@ import {
   latestMissionEvents,
   operationalEvent,
   plainText,
+  proposalCard,
+  proposalCards,
   relativeTime,
   userMessage,
   voicePhase,
@@ -289,6 +291,121 @@ describe("operational events: only real runtime data, never JSON", () => {
     expect(s.turns[0].events).toEqual([
       { kind: "APPROVAL_EVENT", payload: { summary: "Paiement fournisseur" } },
     ]);
+  });
+});
+
+describe("durable proposals: the only mission state the phone can show", () => {
+  /** Exactly what GET /api/cognitive/conversations/{id} returns for a launched mission. */
+  const launched = {
+    id: "tref_1",
+    conversationId: "conv_1",
+    turnId: "turn_1",
+    kind: "goal_proposal",
+    status: "launched",
+    payload: {
+      title: "Analyse de l'état du système",
+      objective: "Produire un résumé sans action externe.",
+      successCriteria: [],
+      constraints: [],
+      riskLevel: "read_only",
+    },
+    policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+    decidedBy: "user_1",
+    decidedAt: "2026-10-01T10:00:00.000Z",
+    goalId: "goal_1",
+    missionId: "11111111-2222-3333-4444-555555555555",
+    launchJobId: "job_1",
+    failureReason: null,
+    createdAt: "2026-10-01T09:59:00.000Z",
+  };
+
+  it("surfaces the real title and the CORE3 mission id", () => {
+    expect(proposalCard(launched)).toEqual({
+      refId: "tref_1",
+      kind: "goal_proposal",
+      title: "Analyse de l'état du système",
+      detail: "Produire un résumé sans action externe.",
+      label: "Mission lancée",
+      tone: "ok",
+      missionId: "11111111-2222-3333-4444-555555555555",
+      decidable: false,
+      failureReason: null,
+    });
+  });
+
+  /**
+   * REGRESSION. The `proposal.created` event payload is only
+   * {refId, kind, status, policyReason} — it has no title and no missionId, so it can
+   * never be a mission card. The phone must read the record; if someone ever points
+   * the mission UI back at the event payload, this test fails.
+   */
+  it("the proposal.created event payload is not, and cannot be, a mission card", () => {
+    const eventPayload = {
+      refId: "tref_1",
+      kind: "goal_proposal",
+      status: "approval_required",
+      policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+    };
+    expect(operationalEvent({ kind: "MISSION_EVENT", payload: eventPayload })).toBeNull();
+    expect(proposalCard(eventPayload)).toBeNull();
+  });
+
+  it("only a pending proposal is decidable, and every status has an honest label", () => {
+    const at = (status: string) => proposalCard({ ...launched, status, missionId: null });
+    expect(at("approval_required")).toMatchObject({
+      decidable: true,
+      label: "Approbation requise",
+      tone: "warn",
+    });
+    expect(at("proposed")).toMatchObject({ decidable: true, tone: "warn" });
+    expect(at("launching")).toMatchObject({ decidable: false, label: "Lancement en cours" });
+    expect(at("rejected")).toMatchObject({ decidable: false, label: "Rejetée" });
+    expect(at("not_connected")).toMatchObject({ decidable: false, tone: "critical" });
+    expect(
+      proposalCard({
+        ...launched,
+        status: "failed",
+        missionId: null,
+        failureReason: "invalid_goal",
+      }),
+    ).toMatchObject({ label: "Lancement échoué", tone: "critical", failureReason: "invalid_goal" });
+  });
+
+  it("renders an action request from its description", () => {
+    expect(
+      proposalCard({
+        ...launched,
+        kind: "action_request",
+        status: "approval_required",
+        missionId: null,
+        payload: { kind: "send_email", description: "Envoyer la relance", riskLevel: "sensitive" },
+      }),
+    ).toMatchObject({ kind: "action_request", title: "Envoyer la relance", detail: null });
+  });
+
+  it("drops a shape it does not understand instead of showing something invented", () => {
+    expect(proposalCard({ id: "x", kind: "goal_proposal", status: "launched" })).toBeNull();
+    expect(proposalCard({ ...launched, status: "elsewhere" })).toBeNull();
+    expect(proposalCard({ ...launched, payload: { title: "" } })).toBeNull();
+    expect(proposalCard(null)).toBeNull();
+  });
+
+  it("lists the newest first and never breaks on a bad row", () => {
+    const older = {
+      ...launched,
+      id: "tref_0",
+      payload: { ...launched.payload, title: "Ancienne" },
+    };
+    const cards = proposalCards([older, { nope: true }, launched]);
+    expect(cards.map((c) => c.refId)).toEqual(["tref_1", "tref_0"]);
+    expect(proposalCards(undefined)).toEqual([]);
+  });
+
+  it("names the decision failures in French", () => {
+    expect(userMessage("DECISION")).toContain("décision");
+    expect(userMessage("DECISION_FORBIDDEN")).toContain("droit");
+    expect(isBlocking("DECISION")).toBe(false);
+    expect(isBlocking("DECISION_FORBIDDEN")).toBe(false);
   });
 });
 

@@ -42,10 +42,12 @@ import {
   latestMissionEvents,
   operationalEvent,
   plainText,
+  proposalCards,
   relativeTime,
   userMessage,
   voicePhase,
   type MissionCard,
+  type ProposalCard,
   type Tone,
   type VoicePhase,
 } from "@/features/voice/voice-presentation";
@@ -157,6 +159,83 @@ function Mission({ mission, label, tone }: { mission: MissionCard; label: string
   );
 }
 
+/**
+ * A durable proposal (decision 0056): what ICOS wants to do, its real status, and
+ * — once launched — the CORE3 mission id. Approve/Reject are the ONLY way a spoken
+ * request becomes a running mission; the voice layer never launches anything itself.
+ */
+function Proposal({
+  card,
+  busy,
+  onDecide,
+}: {
+  card: ProposalCard;
+  busy: boolean;
+  onDecide: (decision: "approve" | "reject") => void;
+}) {
+  return (
+    <section
+      className={styles.mission}
+      aria-label={`${card.kind === "goal_proposal" ? "Mission" : "Action"} : ${card.title}`}
+    >
+      <div className={styles.missionHead}>
+        <h3 className={styles.missionTitle}>{card.title}</h3>
+        <span className={styles.chip} data-tone={card.tone}>
+          {TONE_ICON[card.tone]}
+          {card.label}
+        </span>
+      </div>
+      {card.detail && <p className={styles.footnote}>{card.detail}</p>}
+      {(card.missionId ?? card.failureReason) && (
+        <dl className={styles.facts}>
+          {card.missionId && (
+            <div>
+              <dt>Mission</dt>
+              {/* The id is the evidence: selectable, never truncated. */}
+              <dd>
+                <code>{card.missionId}</code>
+              </dd>
+            </div>
+          )}
+          {card.failureReason && (
+            <div>
+              <dt>Raison</dt>
+              <dd>{card.failureReason}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {card.decidable && (
+        <div className={styles.missionActions}>
+          <button
+            type="button"
+            className={styles.textButton}
+            data-variant="primary"
+            disabled={busy}
+            onClick={() => onDecide("approve")}
+          >
+            {busy ? (
+              <LoaderCircle aria-hidden className={styles.spinner} />
+            ) : (
+              <CircleCheck aria-hidden />
+            )}
+            Approuver
+          </button>
+          <button
+            type="button"
+            className={styles.textButton}
+            disabled={busy}
+            onClick={() => onDecide("reject")}
+          >
+            <X aria-hidden />
+            Rejeter
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 const TURN_STATUS: Partial<Record<VoiceTurnView["state"], { label: string; tone: Tone }>> = {
   interrupted: { label: "Interrompu", tone: "warn" },
   dropped: { label: "Non retenu", tone: "critical" },
@@ -197,6 +276,9 @@ export function VoiceClient() {
     generation: 0,
   });
   const [speaking, setSpeaking] = useState(false);
+  /** Durable proposals of this conversation; the server record, never local guesswork. */
+  const [proposals, setProposals] = useState<ProposalCard[]>([]);
+  const [deciding, setDeciding] = useState<string | null>(null);
   const turnsEnd = useRef<HTMLDivElement>(null);
   useEffect(() => {
     turnsEnd.current?.scrollIntoView({ block: "end" });
@@ -206,6 +288,60 @@ export function VoiceClient() {
     const socket = ws.current;
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   }, []);
+
+  /**
+   * Re-read the conversation's durable proposals. This is the ONLY source of mission
+   * state on the phone: `proposal.created` carries just an id and a status, and after a
+   * reconnect nothing in the socket replays the proposals — so recovery is this read.
+   */
+  const refreshProposals = useCallback(async () => {
+    const conversationId = session.current.conversationId;
+    if (!conversationId) return;
+    try {
+      const response = await fetch(
+        `/api/cognitive/conversations/${encodeURIComponent(conversationId)}`,
+        { cache: "no-store" },
+      );
+      // 401/403/503: show nothing rather than something invented.
+      if (!response.ok) return;
+      const body = (await response.json()) as { proposals?: unknown };
+      setProposals(proposalCards(body.proposals));
+    } catch {
+      // Offline: the cards on screen stay as the last state the server confirmed.
+    }
+  }, []);
+
+  /** The human decision. Launch happens server-side before the response returns. */
+  const decide = useCallback(
+    async (refId: string, decision: "approve" | "reject") => {
+      const conversationId = session.current.conversationId;
+      if (!conversationId) return;
+      setDeciding(refId);
+      try {
+        const response = await fetch(
+          `/api/cognitive/conversations/${encodeURIComponent(conversationId)}/proposals/${encodeURIComponent(refId)}/decision`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ decision }),
+          },
+        );
+        if (!response.ok) {
+          dispatch({
+            type: "local_error",
+            code: response.status === 403 ? "DECISION_FORBIDDEN" : "DECISION",
+            message: `decision HTTP ${response.status}`,
+          });
+        }
+      } catch {
+        dispatch({ type: "local_error", code: "DECISION", message: "decision not sent" });
+      } finally {
+        setDeciding(null);
+        await refreshProposals();
+      }
+    },
+    [refreshProposals],
+  );
 
   /** Stop every scheduled/playing chunk and drop anything still decoding. */
   const stopPlayback = useCallback(() => {
@@ -316,9 +452,13 @@ export function VoiceClient() {
             sessionId: message.sessionId,
             conversationId: message.conversationId,
           };
+          // Recovery: a reconnect gets its mission state back from the record, not the socket.
+          void refreshProposals();
         }
         if (message.type === "turn_accepted")
           session.current.conversationId = message.conversationId;
+        // A proposal was created or advanced: the authority is the record, so re-read it.
+        if (message.type === "response_event") void refreshProposals();
         if (message.type === "playback_stop") {
           silenced.current.add(message.turnId);
           stopPlayback();
@@ -337,8 +477,10 @@ export function VoiceClient() {
         }
         dispatch({ type: "link", link: "reconnecting" });
         // A refused upgrade looks like any drop (1006): after a few, ask HTTP why.
+        // The probe carries the SOCKET's own permission, so a 403 here really is
+        // the socket's 403 — see src/app/api/voice/status/route.ts.
         if (attempt >= 2) {
-          void fetch("/api/conversation", { cache: "no-store" }).then(
+          void fetch("/api/voice/status", { cache: "no-store" }).then(
             (res) => {
               if (res.status === 401) location.assign("/login?next=%2Fvoice");
               if (res.status === 403) {
@@ -379,7 +521,7 @@ export function VoiceClient() {
       capture.current?.stream.getTracks().forEach((track) => track.stop());
       void audio.current?.ctx.close();
     };
-  }, [play, send, stopPlayback, releaseMic]);
+  }, [play, send, stopPlayback, releaseMic, refreshProposals]);
 
   // --- microphone --------------------------------------------------------------
   /** Must start synchronously inside the tap: iOS only unlocks audio there. */
@@ -652,6 +794,19 @@ export function VoiceClient() {
             </article>
           );
         })}
+        {proposals.length > 0 && (
+          <>
+            <h2 className={styles.srOnly}>Missions et actions proposées</h2>
+            {proposals.map((card) => (
+              <Proposal
+                key={card.refId}
+                card={card}
+                busy={deciding === card.refId}
+                onDecide={(decision) => void decide(card.refId, decision)}
+              />
+            ))}
+          </>
+        )}
         <div ref={turnsEnd} />
       </section>
       <p className={styles.srOnly} aria-live="polite">
