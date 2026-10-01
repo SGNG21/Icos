@@ -1,15 +1,16 @@
-# 0063: the compute fleet is RECONCILED at boot — and reconciling is not enabling
+# 0064: the compute fleet is RECONCILED at boot — and reconciling is not enabling
 
 ## Status
 
-**NUMBERING IS PROVISIONAL AND MUST BE RECOMPUTED AT CENTRAL INTEGRATION.** Authored as 0063
-on `feat/live-worker-bootstrap`. 0062 is already taken TWICE in parallel lanes
-(`context-memory-client-knowledge` — client context resolution; `phone-live-proof` — ICOS
-self-model), so 0063 is very likely contested too. Do not cite this number anywhere outside
-this branch until integration assigns the final one, exactly as 0055–0061 were reassigned in
-merge order (2026-09-30). **Migration number: none — this lane adds no migration**, so nothing
-in `drizzle/` needs renumbering; the `workers` table (migrations 0042/0043/0044) is unchanged
-and no column is added.
+**NUMBER ASSIGNED AT CENTRAL INTEGRATION: 0064** (authored as 0063 on
+`feat/live-worker-bootstrap`). The provisional warning was right: central had already
+taken 0063 for `0063-client-context-resolution-belongs-to-the-cognitive-runtime.md`
+(itself renumbered from that lane's own 0062), and 0062 for
+`0062-icos-self-model-is-measured-not-declared.md`. 0064 was free in central and in every
+parallel worktree when this was assigned; nothing else referenced 0063 from this lane, so
+the rename touched only this file. **Migration number: none — this lane adds no
+migration**, so nothing in `drizzle/` needs renumbering; the `workers` table (migrations
+0042/0043/0044) is unchanged and no column is added.
 
 Accepted (foundation).
 The startup path ships **disabled**; no live registry has been written under this decision.
