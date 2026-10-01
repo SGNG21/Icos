@@ -132,8 +132,14 @@ export function sameModelIdentity(requested: string, reported: string): boolean 
   const norm = (id: string) => id.trim().toLowerCase();
   const asked = norm(requested);
   const answered = norm(reported);
+  /*
+   * An EMPTY answer is never agreement. A requested id ending in `/` used to reduce to an
+   * empty `withoutRoute`, so `("nvidia/", "")` — and `("nvidia/", "   ")` — compared equal
+   * and certified the worker healthy on an identity the gateway never stated.
+   */
+  if (!answered) return false;
   const withoutRoute = asked.includes("/") ? asked.slice(asked.indexOf("/") + 1) : null;
-  return answered === asked || answered === withoutRoute;
+  return answered === asked || (withoutRoute !== "" && answered === withoutRoute);
 }
 
 export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
@@ -216,19 +222,29 @@ export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
       );
     }
 
-    if (body.model !== undefined) {
-      /*
-       * PRESENT means it must agree. A non-string `model` (null, a number, an object) is
-       * not "absent": skipping the check for it would let a malformed or hostile body opt
-       * OUT of identity verification entirely, which is the one thing the check is for.
-       */
-      if (typeof body.model !== "string" || !sameModelIdentity(model, body.model)) {
-        throw new Error(
-          `WORKER_PROBE_MODEL_MISMATCH: asked ${model}, gateway answered as ${firstLineRedacted(
-            typeof body.model === "string" ? body.model : JSON.stringify(body.model),
-          )}`,
-        );
-      }
+    /*
+     * IDENTITY IS MANDATORY, ABSENCE INCLUDED. This used to run only `if (body.model !==
+     * undefined)`, which let a body that simply OMITS `model` skip the check entirely: a
+     * 200 of `{"choices":[{"message":{"content":"OK"}}]}` certified every worker healthy on
+     * the strength of the word "OK" alone. That is the one thing this check exists to stop —
+     * without it the gateway could serve one cheap default model for all routes and no
+     * observation would differ, while execution history, capacity accounting and reviewer
+     * independence are credited to a model that never ran.
+     *
+     * The field is external, untrusted input, so a missing identity is treated exactly like
+     * a wrong one. A non-string `model` (null, a number, an object) is likewise a mismatch,
+     * not an absence.
+     */
+    if (typeof body.model !== "string" || !sameModelIdentity(model, body.model)) {
+      throw new Error(
+        `WORKER_PROBE_MODEL_MISMATCH: asked ${model}, gateway answered as ${firstLineRedacted(
+          body.model === undefined
+            ? "<no model field>"
+            : typeof body.model === "string"
+              ? body.model
+              : JSON.stringify(body.model),
+        )}`,
+      );
     }
 
     /* An object with a "0" key is not a choices ARRAY, whatever it indexes like. */

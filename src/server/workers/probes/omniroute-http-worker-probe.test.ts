@@ -72,6 +72,27 @@ function gateway(status: number, raw: string) {
   return { calls, fetch: impl as unknown as typeof fetch };
 }
 
+/**
+ * A gateway that ECHOES the model it was asked for, which is what the live one does
+ * (measured: every answer is the requested id verbatim, or minus one leading route
+ * segment). Needed wherever a test asks for many different models in one go, now that an
+ * omitted `model` is a mismatch rather than a free pass.
+ */
+function echoingGateway(content = "OK") {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const impl = vi.fn(async (url: unknown, init: unknown) => {
+    const i = init as RequestInit;
+    calls.push({ url: String(url), init: i });
+    const asked = JSON.parse(String(i.body)) as { model: string };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ model: asked.model, choices: [{ message: { content } }] }),
+    } as unknown as Response;
+  });
+  return { calls, fetch: impl as unknown as typeof fetch };
+}
+
 const probeWith = (g: { fetch: typeof fetch }, over = {}) =>
   new OmniRouteHttpWorkerProbe({ baseUrl: BASE, credential: CREDENTIAL, fetch: g.fetch, ...over });
 
@@ -117,7 +138,10 @@ describe("OmniRoute HTTP worker probe", () => {
       JSON.stringify({ model: MODEL, choices: [{ message: {} }] }),
       JSON.stringify({ model: MODEL, choices: [{ message: { content: "   " } }] }),
       JSON.stringify({ model: MODEL }),
-      JSON.stringify({}),
+      /* Was `{}`: with identity now mandatory that fails as a MISMATCH first, which is
+       * covered by its own test above. Kept here WITH a model so this case still isolates
+       * what it claims to — an empty content payload. */
+      JSON.stringify({ model: MODEL, choices: [{ message: { content: null } }] }),
     ]) {
       await expect(probeWith(gateway(200, raw)).probe(worker())).rejects.toThrow(
         /WORKER_PROBE_EMPTY_RESPONSE/,
@@ -208,6 +232,36 @@ describe("OmniRoute HTTP worker probe", () => {
     await expect(probeWith(g).probe(worker())).rejects.toThrow(/WORKER_PROBE_MODEL_MISMATCH/);
   });
 
+  it("an OMITTED model field is a mismatch, not a free pass (independent review, HIGH)", async () => {
+    /*
+     * The check used to run only `if (body.model !== undefined)`, so a 200 that simply left
+     * the field out skipped identity verification entirely and was certified healthy on the
+     * word "OK" alone. The gateway could then serve one cheap default model for every route
+     * with nothing in the observation to show it, while execution history, capacity
+     * accounting and reviewer independence were credited to a model that never ran.
+     *
+     * `model` is external, untrusted input: missing identity is treated exactly like wrong
+     * identity. This is the case the suite did not cover.
+     */
+    const noModel = JSON.stringify({ choices: [{ message: { content: "OK" } }] });
+    await expect(probeWith(gateway(200, noModel)).probe(worker())).rejects.toThrow(
+      /WORKER_PROBE_MODEL_MISMATCH/,
+    );
+  });
+
+  it("an EMPTY reported identity is never agreement, even for a trailing-slash request", () => {
+    /*
+     * `withoutRoute` of "nvidia/" was "", so an empty or whitespace answer compared equal
+     * and certified the worker on an identity the gateway never stated. Same root cause as
+     * the omitted field: nothing is not agreement.
+     */
+    expect(sameModelIdentity("nvidia/", "")).toBe(false);
+    expect(sameModelIdentity("nvidia/", "   ")).toBe(false);
+    expect(sameModelIdentity("claude/claude-sonnet-5", "")).toBe(false);
+    /* The real forms still pass, so this is a guard and not a blanket refusal. */
+    expect(sameModelIdentity("claude/claude-sonnet-5", "claude-sonnet-5")).toBe(true);
+  });
+
   it("accepts the two identity forms the live gateway actually produces, and nothing else", async () => {
     /*
      * MEASURED against all 15 candidates: every answer is the requested id verbatim, or
@@ -245,9 +299,21 @@ describe("OmniRoute HTTP worker probe", () => {
 
     const g = gateway(200, body("OK", "claude-sonnet-5"));
     await expect(probeWith(g).probe(worker())).resolves.toMatchObject({ health: "healthy" });
-    /* A gateway that reports no model at all cannot be held to an identity it never gave. */
+    /*
+     * REVERSED by the independent review of the central integration (HIGH). This block used
+     * to assert that "a gateway that reports no model at all cannot be held to an identity
+     * it never gave" and expected `healthy`. That is a fail-open on an external, untrusted
+     * field: a 200 of `{"choices":[{"message":{"content":"OK"}}]}` certified EVERY worker on
+     * the word "OK" alone, so one cheap default model could answer all 15 routes with
+     * nothing in the observation to show it — while capacity accounting and reviewer
+     * independence were credited to a model that never ran.
+     *
+     * The measurement that licensed it ("no missing field occurred across 15 candidates")
+     * describes one gateway on one day; it cannot license a permanent exemption. Absence is
+     * now treated exactly like a wrong identity.
+     */
     const silent = gateway(200, JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
-    await expect(probeWith(silent).probe(worker())).resolves.toMatchObject({ health: "healthy" });
+    await expect(probeWith(silent).probe(worker())).rejects.toThrow(/WORKER_PROBE_MODEL_MISMATCH/);
   });
 
   it("never substitutes a model, and refuses a worker that declares none", async () => {
@@ -494,8 +560,8 @@ describe("OmniRoute HTTP worker probe", () => {
     const planned = representativeModels(classifyModels(served));
     expect(planned).toHaveLength(15);
 
-    /* No `model` echoed back, so identity cannot be asserted against a value never given. */
-    const g = gateway(200, JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+    /* The gateway echoes each requested id, as the live one does: identity is mandatory. */
+    const g = echoingGateway();
     const http = probeWith(g);
     const select = (w: WorkerRegistryEntry) => (probeModelOf(w) ? http : undefined);
 

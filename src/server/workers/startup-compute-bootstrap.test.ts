@@ -23,7 +23,13 @@ function harness(fetchImpl?: unknown) {
     workerRegistryStore: store,
     workerRegistration: new WorkerRegistrationService(store),
   } as unknown as Container;
-  const okFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => MODELS });
+  const okFetch = vi
+    .fn()
+    .mockResolvedValue({
+      ok: true,
+      json: async () => MODELS,
+      text: async () => JSON.stringify(MODELS),
+    });
   return { store, container, fetch: (fetchImpl ?? okFetch) as typeof fetch };
 }
 
@@ -183,5 +189,40 @@ describe("startup compute bootstrap", () => {
     expect(outcome.status).toBe("WRITE_FAILED");
     expect((outcome as { error: string }).error).toContain("connection terminated");
     expect(await h.store.list()).toEqual([]);
+  });
+
+  it("a DEAD CONNECTION still returns WRITE_FAILED and still warns, instead of aborting startup", async () => {
+    /*
+     * INDEPENDENT REVIEW (MEDIUM). The WRITE_FAILED branch counted the registry with an
+     * unguarded `await store.list()` INSIDE its own catch. The realistic cause of a write
+     * failure is a dead connection, in which case `list()` fails too: the error escaped
+     * `bootstrapComputeFleetAtStartup`, `production-services.ts` closed the container and
+     * rethrew, and startup aborted — the exact opposite of this function's documented
+     * promise. `log(outcome)` was never reached either, so the operator got no
+     * COMPUTE_BOOTSTRAP warning: fail-closed AND undiagnosable.
+     *
+     * The previous test could not catch this: it mocked only `register` and left `list()`
+     * healthy, which is the one combination that cannot occur for the error it models.
+     * Here BOTH fail, as a dead connection actually behaves.
+     */
+    const h = harness();
+    const dead = new Error("connection terminated unexpectedly");
+    vi.spyOn(h.container.workerRegistration, "register").mockRejectedValue(dead);
+    let listCalls = 0;
+    vi.spyOn(h.store, "list").mockImplementation(async () => {
+      listCalls += 1;
+      if (listCalls === 1) return []; // discovery still works
+      throw dead; // ...then the connection is gone
+    });
+    const logged: unknown[] = [];
+
+    const outcome = await run(h, env(), (o) => logged.push(o));
+
+    expect(outcome.status).toBe("WRITE_FAILED");
+    /* undefined, not a crash and not a fabricated 0. */
+    expect((outcome as { registered: number | undefined }).registered).toBeUndefined();
+    /* The operator is told, which is what makes this diagnosable. */
+    expect(logged).toHaveLength(1);
+    expect(String(JSON.stringify(logged[0]))).toContain("WRITE_FAILED");
   });
 });

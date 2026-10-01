@@ -39,6 +39,24 @@ interface ModelsResponse {
   data?: Array<{ id?: unknown }>;
 }
 
+/*
+ * BOUNDS ON AN UNTRUSTED LISTING. This response decides how many rows a flagged bootstrap
+ * writes to whatever database the process resolved, and `provider` is just the leading
+ * segment of an id, so the gateway — or anything that can answer as it — chose both the row
+ * count and the row contents. It was previously `await response.json()` with no limit of
+ * any kind, while the chat-completion sibling below already capped its body at
+ * OMNIROUTE_MAX_PROBE_BODY_BYTES: 2000 synthetic ids produced 2000 candidates, and a
+ * 324-character id produced a 324-character displayName.
+ *
+ * These are sanity bounds on a trust boundary, not a tuning knob: a real gateway lists tens
+ * of models with short ids. Exceeding the count is reported as a refusal rather than
+ * silently truncated, because quietly registering the first N of a nonsense listing is how
+ * a half-reconciled fleet gets mistaken for the real one.
+ */
+export const OMNIROUTE_MAX_LISTING_BYTES = 256 * 1_024;
+export const OMNIROUTE_MAX_LISTED_MODELS = 500;
+export const OMNIROUTE_MAX_MODEL_ID_LENGTH = 200;
+
 /** Lists the models OmniRoute serves. The credential is sent, never returned or logged. */
 export async function listOmniRouteModels(options: {
   baseUrl: string;
@@ -52,11 +70,31 @@ export async function listOmniRouteModels(options: {
     signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
   });
   if (!response.ok) throw new Error(`COMPUTE_DISCOVERY_HTTP_${response.status}`);
-  const payload = (await response.json()) as ModelsResponse;
-  return (payload.data ?? [])
+  const text = await response.text();
+  if (text.length > OMNIROUTE_MAX_LISTING_BYTES) {
+    throw new Error(
+      `COMPUTE_DISCOVERY_LISTING_TOO_LARGE: ${text.length} > ${OMNIROUTE_MAX_LISTING_BYTES} bytes`,
+    );
+  }
+  let payload: ModelsResponse;
+  try {
+    payload = JSON.parse(text) as ModelsResponse;
+  } catch {
+    throw new Error("COMPUTE_DISCOVERY_MALFORMED_LISTING");
+  }
+  const ids = (payload.data ?? [])
     .map((m) => m.id)
-    .filter((id): id is string => typeof id === "string" && id.length > 0)
+    .filter(
+      (id): id is string =>
+        typeof id === "string" && id.length > 0 && id.length <= OMNIROUTE_MAX_MODEL_ID_LENGTH,
+    )
     .sort();
+  if (ids.length > OMNIROUTE_MAX_LISTED_MODELS) {
+    throw new Error(
+      `COMPUTE_DISCOVERY_TOO_MANY_MODELS: ${ids.length} > ${OMNIROUTE_MAX_LISTED_MODELS}`,
+    );
+  }
+  return ids;
 }
 
 /**

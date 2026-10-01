@@ -47,7 +47,14 @@ export type StartupComputeBootstrapOutcome =
    * `WorkerRegistryStore` exposes no transaction. Pointing an operator at the gateway
    * when the database is the problem is the kind of misdirection that costs an hour.
    */
-  | { status: "WRITE_FAILED"; source: string; error: string; registered: number };
+  | {
+      status: "WRITE_FAILED";
+      source: string;
+      error: string;
+      /** `undefined` when the registry could not be re-read either (the usual case: the
+       * connection that failed the write is the connection this count would need). */
+      registered: number | undefined;
+    };
 
 /**
  * Only the outcomes an operator must ACT on are logged, and as a warning.
@@ -143,12 +150,29 @@ export async function bootstrapComputeFleetAtStartup(
     log(outcome);
     return outcome;
   } catch (error) {
+    /*
+     * FAILS SAFE, FOR REAL. This count used to be an unguarded `await` inside this very
+     * catch block, and the realistic cause of a write failure is a dead connection — in
+     * which case `list()` fails too, the error escapes this function, and the caller in
+     * `production-services.ts` closes the container and rethrows. A best-effort diagnostic
+     * aborted the whole runtime, which is the opposite of what this function promises, and
+     * `log(outcome)` was never reached either: the operator got no COMPUTE_BOOTSTRAP
+     * warning at all — "fail-closed and undiagnosable", the exact mode this lane set out to
+     * avoid. The count is a nicety; booting is not.
+     */
+    let registered: number | undefined;
+    try {
+      registered = (await container.workerRegistryStore.list()).length;
+    } catch {
+      registered = undefined;
+    }
     const outcome = {
       status: "WRITE_FAILED",
       source: plan.source,
       error: oneLine(error, [env.OMNIROUTE_API_KEY]),
-      /* How far it got, so a partial reconciliation is visible rather than guessed at. */
-      registered: (await container.workerRegistryStore.list()).length,
+      /* How far it got, so a partial reconciliation is visible rather than guessed at.
+       * `undefined` means the registry could not be re-read either. */
+      registered,
     } as const;
     log(outcome);
     return outcome;
