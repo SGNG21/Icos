@@ -65,6 +65,17 @@ const envSchema = z.object({
     z.stringbool().optional(),
   ),
   /*
+   * Budget for ONE model health probe over OmniRoute's HTTP API (live-worker bootstrap).
+   *
+   * Defaults to DEFAULT_HTTP_PROBE_TIMEOUT_MS (15s), chosen from measurement rather than
+   * taste: 15 live candidates through a LOCAL gateway gave p95 5297ms and a worst probe of
+   * 6305ms. Configurable because those are local numbers — a remote gateway must be
+   * re-measured. Keep it low enough that one sweep (ceil(workers / 6) waves) finishes well
+   * inside ICOS_WORKER_PROBE_INTERVAL_MS and the 120s evidence horizon, or healthy workers
+   * flicker out of routable between sweeps.
+   */
+  ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS: optionalPositiveInteger,
+  /*
    * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
    * quarter of the health-evidence horizon, so evidence never expires between
    * sweeps. A value at or above the horizon is REFUSED at composition time.

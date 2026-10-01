@@ -72,6 +72,22 @@ export interface WorkerHealthProbePort {
 export interface WorkerHealthProberOptions {
   /** Adapters keyed by RUNTIME. A runtime absent here is `unsupported`. */
   adapters?: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
+  /**
+   * Selects a probe from the WORKER rather than from its runtime, consulted FIRST.
+   *
+   * Runtime is the right axis for "can this runtime execute here", and the wrong one for a
+   * MODEL behind a gateway: every compute candidate declares `runtime: "binary"`, so the
+   * runtime map cannot tell a model apart from a real binary worker. This selector is how
+   * a model is probed over HTTP while binary workers keep the command probe, with no
+   * provider name anywhere in the decision — it reads canonical metadata only.
+   *
+   * Returning `undefined` means "this worker is not mine", and the runtime map then
+   * answers for it. That is SELECTION, not fallback: it happens before any request is
+   * made, and once a probe is chosen a failure of that probe is recorded as a failure.
+   * Nothing retries the same worker through a different adapter, because doing so would
+   * let a gateway outage silently restore the host authority the HTTP probe removes.
+   */
+  selectProbe?: (worker: WorkerRegistryEntry) => WorkerHealthProbePort | undefined;
   /** How long probe evidence stays valid. Defaults to the canonical horizon. */
   maxEvidenceAgeMs?: number;
   now?: () => Date;
@@ -98,6 +114,7 @@ export const PROBE_CONCURRENCY = 6;
 
 export class WorkerHealthProber {
   private readonly adapters: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
+  private readonly selectProbe?: (worker: WorkerRegistryEntry) => WorkerHealthProbePort | undefined;
   private readonly maxEvidenceAgeMs: number;
   private readonly now: () => Date;
 
@@ -107,6 +124,7 @@ export class WorkerHealthProber {
     options: WorkerHealthProberOptions = {},
   ) {
     this.adapters = options.adapters ?? {};
+    this.selectProbe = options.selectProbe;
     this.maxEvidenceAgeMs = options.maxEvidenceAgeMs ?? HEALTH_EVIDENCE_MAX_AGE_MS;
     this.now = options.now ?? (() => new Date());
   }
@@ -140,7 +158,8 @@ export class WorkerHealthProber {
   }
 
   private async probeOne(worker: WorkerRegistryEntry): Promise<WorkerProbeRecord> {
-    const adapter = this.adapters[worker.runtime];
+    /* Worker-level selection wins; the runtime map answers for whatever it declines. */
+    const adapter = this.selectProbe?.(worker) ?? this.adapters[worker.runtime];
 
     if (!adapter) {
       // We cannot verify this runtime. Say exactly that, and route nothing to it.

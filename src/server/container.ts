@@ -43,6 +43,10 @@ import { WorkerRegistrationService } from "@/server/services/worker-registry/wor
 import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
 import { CommandWorkerProbe } from "@/server/workers/probes/command-worker-probe";
 import {
+  OmniRouteHttpWorkerProbe,
+  probeModelOf,
+} from "@/server/workers/probes/omniroute-http-worker-probe";
+import {
   createWorkerProbeResolver,
   parseWorkerProbeCommands,
   probeableRuntimes,
@@ -64,7 +68,10 @@ import {
   ExternalWorkerTaskExecutionDispatcher,
 } from "@/server/execution/external-worker-task-execution-dispatcher";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
-import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
+import type {
+  WorkerRegistryEntry,
+  WorkerRuntimeDescriptor,
+} from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { WorkerRegistryPort } from "@/core/contracts/worker-registry";
@@ -142,7 +149,11 @@ import { PostgresActionDecisionUnitOfWork } from "@/server/uow/postgres-action-d
 import { InMemoryCapabilityUnitOfWork } from "@/server/uow/in-memory-capability-uow";
 import { PostgresCapabilityUnitOfWork } from "@/server/uow/postgres-capability-uow";
 import { SkillService } from "@/server/services/skill-service";
-import { InMemorySkillRepository, InMemorySkillSecurityScanRepository, InMemorySkillEvaluationRepository } from "@/server/services/in-memory/skill-repository";
+import {
+  InMemorySkillRepository,
+  InMemorySkillSecurityScanRepository,
+  InMemorySkillEvaluationRepository,
+} from "@/server/services/in-memory/skill-repository";
 import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
 import { InMemoryMissionRepository } from "@/server/services/in-memory/mission-repository";
 import { InMemoryTaskExecutionDispatcher } from "@/server/execution/in-memory-task-execution-dispatcher";
@@ -159,7 +170,10 @@ import type { ReviewDecisionRepository } from "@/server/review/review-decision-r
 import { InMemoryReviewDecisionRepository } from "@/server/services/in-memory/review-decision-repository";
 import { InMemoryQualityControlRepository } from "@/server/services/in-memory/quality-control-repository";
 import { InMemoryAutonomousMissionRuntimeRepository } from "@/server/services/in-memory/autonomous-mission-runtime-repository";
-import { InMemoryConversationRepository, InMemoryMessageRepository } from "@/server/services/in-memory/ceo-repository";
+import {
+  InMemoryConversationRepository,
+  InMemoryMessageRepository,
+} from "@/server/services/in-memory/ceo-repository";
 import { ConversationService } from "@/server/services/conversation-service";
 import { CeoApplicationService } from "@/server/services/ceo-service";
 import { MissionService } from "@/server/mission/mission-service";
@@ -182,7 +196,11 @@ import {
   parsePlannerCommand,
 } from "@/server/autonomy/command-planner-provider";
 import type { AutonomousMissionPlanner } from "@/server/autonomy/autonomous-mission-runner";
-import { PostgresSkillRepository, PostgresSkillSecurityScanRepository, PostgresSkillEvaluationRepository } from "@/server/repositories/postgres/skill-repository";
+import {
+  PostgresSkillRepository,
+  PostgresSkillSecurityScanRepository,
+  PostgresSkillEvaluationRepository,
+} from "@/server/repositories/postgres/skill-repository";
 import { InMemorySkillUnitOfWork } from "@/server/uow/in-memory-skill-uow";
 import { PostgresSkillUnitOfWork } from "@/server/uow/postgres-skill-uow";
 import { PersistenceConfigError, resolvePersistence } from "@/server/persistence";
@@ -364,7 +382,13 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const skillSecurityScans = new InMemorySkillSecurityScanRepository();
   const skillEvaluations = new InMemorySkillEvaluationRepository();
   const skillUow = new InMemorySkillUnitOfWork(skills, auditLog);
-  const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, new InMemoryAuditRepository(auditLog), skillUow);
+  const skillService = new SkillService(
+    skills,
+    skillSecurityScans,
+    skillEvaluations,
+    new InMemoryAuditRepository(auditLog),
+    skillUow,
+  );
 
   const tasksRepository = new InMemoryTaskRepository(auditLog, tasks);
   const mission = new InMemoryMissionRepository(tasksRepository);
@@ -407,11 +431,10 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
-  const workerHealthProber = new WorkerHealthProber(
-    workerRegistryStore,
-    workerRegistration,
-    { adapters: buildWorkerProbeAdapters() },
-  );
+  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration, {
+    adapters: buildWorkerProbeAdapters(),
+    selectProbe: buildModelProbeSelector(),
+  });
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -432,7 +455,11 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     database: new InMemoryGateDatabase(),
     control: controlGuard,
   });
-  const integrationApplier = new IntegrationApplier({ git, manager: workspaceManager, control: controlGuard });
+  const integrationApplier = new IntegrationApplier({
+    git,
+    manager: workspaceManager,
+    control: controlGuard,
+  });
   const workspaceExecutionCoordinator = new WorkspaceExecutionCoordinator({
     git,
     manager: workspaceManager,
@@ -444,7 +471,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     durableMemory: new InMemoryDurableMemory(),
   });
 
-    return {
+  return {
     agents: new InMemoryAgentRepository(agents),
     tasks: tasksRepository,
     actions: new InMemoryActionRepository(store),
@@ -467,7 +494,12 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     control: composeControlPlane({
       store: controlStore,
       guard: controlGuard,
-      effects: { missions: mission, tasks: tasksRepository, workers: workerRegistryStore, registration: workerRegistration },
+      effects: {
+        missions: mission,
+        tasks: tasksRepository,
+        workers: workerRegistryStore,
+        registration: workerRegistration,
+      },
     }),
     workforce: createWorkforceRuntime({ store: createWorkforceStore({ kind: "memory" }) }),
     executionCallbackSecret: undefined,
@@ -668,11 +700,10 @@ export async function buildPostgresContainer(
       ),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
-  const workerHealthProber = new WorkerHealthProber(
-    workerRegistryStore,
-    workerRegistration,
-    { adapters: buildWorkerProbeAdapters() },
-  );
+  const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration, {
+    adapters: buildWorkerProbeAdapters(),
+    selectProbe: buildModelProbeSelector(),
+  });
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
 
@@ -737,47 +768,47 @@ export async function buildPostgresContainer(
    */
   const taskExecution: TaskExecutionDispatcher = installDispatchBackstop(
     externalExecution
-    ? new RuntimeDispatchRouter({
-        dispatchAttempts,
-        workers: workerRegistryStore,
-        external: new ExternalWorkerTaskExecutionDispatcher({
-          executor: externalExecution.executor,
-          workers: workerRegistryStore,
+      ? new RuntimeDispatchRouter({
           dispatchAttempts,
-          executionResults,
-          missions: mission,
-          tasks,
-          durableMemory: new PostgresDurableMemory(handle.db),
-          repoPath: externalExecution.repoPath,
-          workspaceRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
-          leaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS,
-          /*
-           * Prefer the GOVERNED workspace when one is registered for this workflow (M8,
-           * defect 19). The manager already indexes workspaces by `workflowId`, so this
-           * needs no reference to the coordinator and creates no composition cycle.
-           * Falls back to an ad-hoc worktree when nothing governed exists, which keeps
-           * a bare dispatch working exactly as it did.
-           */
-          workspaceFor: async (dispatch) => {
-            if (!dispatch.workflowId) return null;
-            const registered = (await workspaceManager.list()).find(
-              (w) => w.workflowId === dispatch.workflowId && w.releasedAt === null,
-            );
-            if (!registered) return null;
-            return {
-              path: registered.worktreePath,
-              mode: "writer",
-              branch: registered.branch,
-              baseCommit: registered.baseCommit,
-              /* The WorkspaceManager owns this worktree's lifecycle, not the executor. */
-              dispose: async () => {},
-            };
-          },
-        }),
-        fallback: temporalDispatcher,
-        externalRuntimes: externalExecution.runtimes,
-      })
-    : temporalDispatcher,
+          workers: workerRegistryStore,
+          external: new ExternalWorkerTaskExecutionDispatcher({
+            executor: externalExecution.executor,
+            workers: workerRegistryStore,
+            dispatchAttempts,
+            executionResults,
+            missions: mission,
+            tasks,
+            durableMemory: new PostgresDurableMemory(handle.db),
+            repoPath: externalExecution.repoPath,
+            workspaceRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
+            leaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS,
+            /*
+             * Prefer the GOVERNED workspace when one is registered for this workflow (M8,
+             * defect 19). The manager already indexes workspaces by `workflowId`, so this
+             * needs no reference to the coordinator and creates no composition cycle.
+             * Falls back to an ad-hoc worktree when nothing governed exists, which keeps
+             * a bare dispatch working exactly as it did.
+             */
+            workspaceFor: async (dispatch) => {
+              if (!dispatch.workflowId) return null;
+              const registered = (await workspaceManager.list()).find(
+                (w) => w.workflowId === dispatch.workflowId && w.releasedAt === null,
+              );
+              if (!registered) return null;
+              return {
+                path: registered.worktreePath,
+                mode: "writer",
+                branch: registered.branch,
+                baseCommit: registered.baseCommit,
+                /* The WorkspaceManager owns this worktree's lifecycle, not the executor. */
+                dispose: async () => {},
+              };
+            },
+          }),
+          fallback: temporalDispatcher,
+          externalRuntimes: externalExecution.runtimes,
+        })
+      : temporalDispatcher,
     controlGuard,
   );
 
@@ -817,7 +848,13 @@ export async function buildPostgresContainer(
       const skillSecurityScans = new PostgresSkillSecurityScanRepository(handle.db);
       const skillEvaluations = new PostgresSkillEvaluationRepository(handle.db);
       const skillUow = new PostgresSkillUnitOfWork(handle.db);
-      const skillService = new SkillService(skills, skillSecurityScans, skillEvaluations, audit, skillUow);
+      const skillService = new SkillService(
+        skills,
+        skillSecurityScans,
+        skillEvaluations,
+        audit,
+        skillUow,
+      );
       return { skills, skillSecurityScans, skillEvaluations, skillUow, skillService };
     })(),
     auth: authentication?.auth,
@@ -836,7 +873,11 @@ export async function buildPostgresContainer(
     /* DEFECT 36: governed work completes on its INTEGRATION, not on its review (0049). */
     qualityControlJobs: new PostgresQualityControlRepository(
       handle.db,
-      new WorkspaceIntegrationSettlement(workspaceManager, pgGit, governedWorkflow(dispatchAttempts, tasks)),
+      new WorkspaceIntegrationSettlement(
+        workspaceManager,
+        pgGit,
+        governedWorkflow(dispatchAttempts, tasks),
+      ),
     ),
     scheduledJobs,
     scheduler: new SchedulerService(scheduledJobs),
@@ -901,7 +942,9 @@ export async function buildPostgresContainer(
       },
       auth: authentication?.auth,
     }),
-    workforce: createWorkforceRuntime({ store: createWorkforceStore({ kind: "postgres", db: handle.db }) }),
+    workforce: createWorkforceRuntime({
+      store: createWorkforceStore({ kind: "postgres", db: handle.db }),
+    }),
   };
 }
 
@@ -1134,6 +1177,34 @@ function buildWorkerExecutor(env: Env): {
   };
 }
 
+/**
+ * Selects the HTTP probe for a worker that IS a model (M6.1 + live-worker bootstrap).
+ *
+ * The decision is made from CANONICAL METADATA — `metadata.model`, which
+ * `candidateRegistration` sets for every compute candidate — and never from a provider
+ * name, so adding a provider stays configuration. A worker without a model is declined
+ * (`undefined`) and the runtime-keyed command adapters answer for it, exactly as before.
+ *
+ * Returns undefined for EVERY worker when OmniRoute is not configured. That is fail-closed
+ * and deliberate: a model worker then has no adapter at all, is recorded `unsupported`, and
+ * routes nothing. It must NOT quietly inherit the command probe instead — that is the host
+ * authority this adapter exists to remove, and a missing gateway credential is not a reason
+ * to hand a model probe the server's environment and an agent's toolset.
+ */
+function buildModelProbeSelector():
+  ((worker: WorkerRegistryEntry) => OmniRouteHttpWorkerProbe | undefined) | undefined {
+  const env = loadEnv();
+  if (!env.OMNIROUTE_BASE_URL || !env.OMNIROUTE_API_KEY) return undefined;
+
+  const probe = new OmniRouteHttpWorkerProbe({
+    baseUrl: env.OMNIROUTE_BASE_URL,
+    credential: env.OMNIROUTE_API_KEY,
+    timeoutMs: env.ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS,
+  });
+
+  return (worker) => (probeModelOf(worker) ? probe : undefined);
+}
+
 function buildWorkerProbeAdapters(): Record<string, CommandWorkerProbe> {
   const configured = parseWorkerProbeCommands(loadEnv().ICOS_WORKER_PROBE_COMMANDS);
   const probe = new CommandWorkerProbe(createWorkerProbeResolver(configured));
@@ -1172,7 +1243,9 @@ function governedWorkflow(
  */
 function assertExecutionLeaseOutlivesWorkers(env: Env): void {
   const leaseMs = env.ICOS_WORKER_EXECUTION_LEASE_MS ?? DEFAULT_EXECUTION_LEASE_MS;
-  for (const [runtime, command] of Object.entries(parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS))) {
+  for (const [runtime, command] of Object.entries(
+    parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS),
+  )) {
     if (command?.timeoutMs !== undefined && !budgetFitsLease(command.timeoutMs, leaseMs)) {
       throw new Error(
         `WORKER_TIMEOUT_EXCEEDS_EXECUTION_LEASE: ${runtime} timeoutMs=${command.timeoutMs} + settlement margin ${SETTLEMENT_MARGIN_MS} > ICOS_WORKER_EXECUTION_LEASE_MS=${leaseMs}`,
