@@ -65,7 +65,8 @@ describe("recordActionDecision", () => {
 
     const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
-      command: { decidedByLabel: "Opérateur", decision: "approved" },
+      command: { decision: "approved" },
+      decider: { kind: "human", id: "user-decider" },
     });
 
     expect(result.ok).toBe(true);
@@ -90,7 +91,8 @@ describe("recordActionDecision", () => {
 
     const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
-      command: { decidedByLabel: "Opérateur", decision: "approved" },
+      command: { decision: "approved" },
+      decider: { kind: "human", id: "user-decider" },
     });
 
     expect(result.ok).toBe(true);
@@ -109,7 +111,8 @@ describe("recordActionDecision", () => {
 
     const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
-      command: { decidedByLabel: "Opérateur", decision: "approved" },
+      command: { decision: "approved" },
+      decider: { kind: "human", id: "user-decider" },
     });
 
     expect(result).toMatchObject({ ok: false, reason: "agent_not_found" });
@@ -127,7 +130,8 @@ describe("recordActionDecision", () => {
 
     const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
-      command: { decidedByLabel: "Opérateur", decision: "rejected", reason: "trop tard" },
+      command: { decision: "rejected", reason: "trop tard" },
+      decider: { kind: "human", id: "user-decider" },
     });
 
     expect(result).toMatchObject({ ok: false, reason: "already_decided" });
@@ -167,7 +171,8 @@ describe("recordActionDecision", () => {
 
     const result = await recordActionDecision(h.deps, {
       actionId: "action-x",
-      command: { decidedByLabel: "Opérateur", decision: "approved" },
+      command: { decision: "approved" },
+      decider: { kind: "human", id: "user-decider" },
     });
 
     expect(result).toMatchObject({ ok: false, reason: "inconsistent_reference" });

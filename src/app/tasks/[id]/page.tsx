@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { StatusBadge } from "@/components/cockpit/task-rows";
 import { taskStatusPresentation, workerKindLabel } from "@/features/cockpit/status-presentation";
 import { resolveCockpitAccess } from "@/server/auth/cockpit-access";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { getContainer } from "@/server/container";
 import type { WorkerKind } from "@/core/contracts";
 
@@ -33,9 +34,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
-  const scope = container.operationalAccess
-    ? await container.operationalAccess.resolveScope(access.session)
-    : { kind: "global" as const };
+  // Fail closed via THE canonical resolver: no access service → minimum scope, never global.
+  const scope = await resolveOperationalScope(container, access.session);
 
   const task = await container.tasks.getByIdForScope(id, scope);
   if (!task) {

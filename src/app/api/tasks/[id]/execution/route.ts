@@ -1,6 +1,7 @@
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { apiError, json } from "@/server/http/respond";
 
 /**
@@ -27,9 +28,7 @@ export async function GET(
     }
 
     const { id } = await ctx.params;
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     const task = await container.tasks.getByIdForScope(id, scope);
     if (!task) {

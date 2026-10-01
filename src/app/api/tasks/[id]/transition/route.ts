@@ -1,6 +1,7 @@
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { zodDetails } from "@/server/http/errors";
 import { transitionBodySchema } from "@/server/http/schemas";
@@ -37,9 +38,7 @@ export async function POST(
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     if (!(await container.tasks.getByIdForScope(id, scope))) {
       return apiError("not_found", "tâche introuvable");

@@ -21,6 +21,7 @@ import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
+import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 
 export interface ProductionServiceScheduler {
@@ -341,6 +342,15 @@ function createRecoveryScheduler(
        * written after execution was never gated or integrated by the runtime.
        */
       ...(pendingReviewGate ? [["pending-review-gate", pendingReviewGate] as const] : []),
+      /*
+       * THE ONLY production caller of cognitive launch recovery. It used to fire from
+       * `cognitiveRuntimeFor(...)` composition, so a plain GET on /api/cognitive/* could
+       * relaunch an approved proposal and enqueue `start_mission`. Same authority, moved
+       * onto this explicit timer: reads no longer execute anything.
+       */
+      ...(container.db
+        ? [["cognitive-launch-recovery", cognitiveLaunchRecoverySweeper(container)] as const]
+        : []),
     ]),
     options,
   );

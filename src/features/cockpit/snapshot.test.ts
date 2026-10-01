@@ -307,6 +307,80 @@ describe("metadata secret filter", () => {
   });
 });
 
+/**
+ * SAFE_WORKER_METADATA / SECRET_VALUE_NEVER_RENDERED.
+ *
+ * `declared()` used to read `w.metadata` RAW while the `metadata` block beside it went through
+ * `safeMetadata`. A `model`/`provider`/`account` value that looks like a credential was
+ * therefore filtered out of the metadata list and then rendered anyway as the worker's
+ * declared model, provider or account.
+ */
+describe("worker read model uses sanitized metadata only", () => {
+  const CREDENTIALS = {
+    model: "sk-abcdef1234567890",
+    provider: "https://user:pw@internal-host/v1",
+    account: "Bearer abc.def.ghi",
+  } as const;
+
+  it("never renders a credential-looking model, provider or account", () => {
+    const snap = buildCockpitSnapshot(
+      sources({ workers: real([worker("aaaaaaaa-w", { metadata: { ...CREDENTIALS } })]) }),
+    );
+    expect(snap.workers.kind).toBe("real");
+    if (snap.workers.kind !== "real") return;
+    const view = snap.workers.value[0];
+
+    for (const field of ["model", "provider", "account"] as const) {
+      expect(view[field].kind, field).toBe("not_available");
+    }
+    const rendered = JSON.stringify(view);
+    for (const secret of Object.values(CREDENTIALS)) {
+      expect(rendered).not.toContain(secret);
+    }
+    expect(view.metadata).toEqual({});
+    expect(view.metadataHidden).toBe(3);
+  });
+
+  it("still exposes a safe model and provider to an authorized reader", () => {
+    const direct = buildCockpitSnapshot(
+      sources({
+        workers: real([
+          worker("bbbbbbbb-w", {
+            metadata: {
+              model: "nvidia/nemotron-3-super-120b-a12b",
+              provider: "omniroute",
+              account: "holding-ia",
+            },
+          }),
+        ]),
+      }),
+    );
+    expect(direct.workers.kind).toBe("real");
+    if (direct.workers.kind !== "real") return;
+    const view = direct.workers.value[0];
+    expect(view.model).toMatchObject({ kind: "real", value: "nvidia/nemotron-3-super-120b-a12b" });
+    expect(view.provider).toMatchObject({ kind: "real", value: "omniroute" });
+    expect(view.account).toMatchObject({ kind: "real", value: "holding-ia" });
+    expect(view.metadataHidden).toBe(0);
+  });
+
+  it("a secret hidden behind a non-allowlisted key is never surfaced either", () => {
+    const snap = buildCockpitSnapshot(
+      sources({
+        workers: real([
+          worker("cccccccc-w", {
+            metadata: { OMNIROUTE_API_KEY: "sk-deadbeef12345678", note: "https://u:p@h/x" },
+          }),
+        ]),
+      }),
+    );
+    if (snap.workers.kind !== "real") throw new Error("expected workers");
+    const rendered = JSON.stringify(snap.workers.value[0]);
+    expect(rendered).not.toContain("sk-deadbeef12345678");
+    expect(rendered).not.toContain("u:p@h");
+  });
+});
+
 describe("error text exposure", () => {
   it("raw error text reaches owner/admin scope only, truncated", async () => {
     const { redactError } = await import("./snapshot");

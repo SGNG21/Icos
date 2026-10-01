@@ -107,6 +107,7 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
   let ctx: PgContext;
   let container: Container;
   let cookie: string;
+  let sessionUserId = "";
 
   beforeAll(async () => {
     ctx = await startPostgres();
@@ -145,6 +146,7 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
       password: PASSWORD,
     });
     if (!created.ok) throw new Error("création humaine refusée");
+    sessionUserId = created.userId;
     await container.roles.grantRole(created.userId, "operator");
     // Link the operator to agent-op so scope resolution works for decisions.
     await ctx.handle.db.insert(humanAgentLinks).values({
@@ -202,10 +204,8 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
     const response = await postDecision(
       jsonRequest(
         "http://localhost/api/actions/action-d/decision",
-        {
-          decidedByLabel: "Opérateur (simulé)",
-          decision: "approved",
-        },
+        /* The decider is the authenticated session, never a body label. */
+        { decision: "approved" },
         cookie,
       ),
       params("action-d"),
@@ -218,8 +218,15 @@ describe.skipIf(!dockerAvailable)("Container PostgreSQL + routes (intégration)"
     const audit = await getAudit(
       new Request("http://localhost/api/audit?actionId=action-d", { headers: { cookie } }),
     );
-    const auditData = (await audit.json()) as { entries: { occurredAt: string }[] };
+    const auditData = (await audit.json()) as {
+      entries: { occurredAt: string; actor: { kind: string; id: string } }[];
+    };
     expect(auditData.entries.length).toBeGreaterThanOrEqual(2);
+    /* AUTHENTICATED_ACTOR_AUDIT, durably: the actor is the session user, not a label. */
+    for (const entry of auditData.entries) {
+      expect(entry.actor.kind).toBe("human");
+      expect(entry.actor.id).toBe(sessionUserId);
+    }
   });
 
   it("parité de tri agents : memory et postgres renvoient le même ordre", async () => {

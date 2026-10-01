@@ -9,6 +9,7 @@ import { buildMemoryContainer, type Container } from "@/server/container";
 
 import { GET as getAdminAgents } from "./admin/agents/route";
 import { GET as getActions } from "./actions/route";
+import { GET as getCockpit } from "./cockpit/route";
 import { GET as getAgentLinks, POST as postAgentLink } from "./users/[id]/agent-links/route";
 import { DELETE as deleteAgentLink } from "./users/[id]/agent-links/[agentId]/route";
 import { PATCH as patchUserRole } from "./users/[id]/role/route";
@@ -60,9 +61,22 @@ function authGateway(session: AuthenticatedSession | null): AuthGateway {
 
 function installSession(session: AuthenticatedSession | null): Container {
   const base = buildMemoryContainer();
+  /*
+   * The REAL access service, composed as every real container composes it. This harness used
+   * to omit it, and the routes answered by falling back to `{ kind: "global" }` — so these
+   * tests passed BECAUSE of the fail-open. The routes now deny when it is absent (see
+   * `resolveOperationalScope`), so the fixture links the session user to every seeded agent:
+   * an operator/viewer who genuinely works with them. `installScopedRole` narrows that set
+   * where the scope itself is what is under test.
+   */
+  const links: HumanAgentLinkRepository = {
+    listForHuman: async () => [],
+    listAgentIdsForHuman: async () => new Set((await base.agents.list()).map((a) => a.id)),
+  };
   const container: Container = {
     ...base,
     auth: authGateway(session),
+    operationalAccess: new OperationalAccessService(links),
   };
   (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
   return container;
@@ -279,7 +293,6 @@ describe("matrice d'autorisation HTTP", () => {
 
   it("réserve les décisions d'approbation à operator+", async () => {
     const command = {
-      decidedByLabel: "Opérateur",
       decision: "approved",
     };
     installRole("viewer");
@@ -446,7 +459,9 @@ describe("POST /api/tasks", () => {
   });
 
   it("rejette un agent assigné inexistant (422)", async () => {
-    installRole("operator");
+    /* Global scope (admin): for a LINKED operator an unknown agent is out of scope (403),
+       which is the stricter answer — it never confirms whether the agent exists. */
+    installRole("admin");
 
     const response = await postTask(
       jsonRequest("/api/tasks", { title: "Test", assignedAgentId: "agent-x" }),
@@ -511,7 +526,6 @@ describe("POST /api/actions/[id]/decision", () => {
 
     const response = await postDecision(
       jsonRequest("/api/actions/action-001/decision", {
-        decidedByLabel: "Opérateur (simulé)",
         decision: "approved",
       }),
       params("action-001"),
@@ -525,7 +539,8 @@ describe("POST /api/actions/[id]/decision", () => {
     };
     expect(data.executed).toBeUndefined();
     expect(["allowed", "awaiting_approval", "refused"]).toContain(data.execution.outcome);
-    expect(data.approval.decidedBy).toBe("Opérateur (simulé)");
+    /* AUTHENTICATED_ACTOR_AUDIT: the session user id, never a label from the body. */
+    expect(data.approval.decidedBy).toBe("human-1");
   });
 
   it("refuse un rejet sans motif (400)", async () => {
@@ -533,7 +548,6 @@ describe("POST /api/actions/[id]/decision", () => {
 
     const response = await postDecision(
       jsonRequest("/api/actions/action-001/decision", {
-        decidedByLabel: "Opérateur",
         decision: "rejected",
       }),
       params("action-001"),
@@ -547,7 +561,6 @@ describe("POST /api/actions/[id]/decision", () => {
 
     const response = await postDecision(
       jsonRequest("/api/actions/action-001/decision", {
-        decidedByLabel: "Opérateur",
         decision: "approved",
         authorizationLevel: 3,
       }),
@@ -562,7 +575,6 @@ describe("POST /api/actions/[id]/decision", () => {
 
     const response = await postDecision(
       jsonRequest("/api/actions/action-999/decision", {
-        decidedByLabel: "Opérateur",
         decision: "approved",
       }),
       params("action-999"),
@@ -574,7 +586,6 @@ describe("POST /api/actions/[id]/decision", () => {
   it("refuse une seconde décision sur la même action (409)", async () => {
     installRole("operator");
     const command = {
-      decidedByLabel: "Opérateur",
       decision: "approved",
     };
     await postDecision(
@@ -1406,7 +1417,6 @@ describe("portée opérationnelle liée", () => {
 
     const response = await postDecision(
       jsonRequest("/api/actions/action-001/decision", {
-        decidedByLabel: "Opérateur",
         decision: "approved",
       }),
       params("action-001"),
@@ -1416,12 +1426,236 @@ describe("portée opérationnelle liée", () => {
   });
 });
 
+/**
+ * OPERATIONAL_ACCESS_FAIL_CLOSED at the HTTP boundary.
+ *
+ * Every one of these routes used to answer `{ kind: "global" }` when `operationalAccess` was
+ * absent, so the service that BOUNDS authority could not be consulted and the caller got the
+ * widest authority instead of none.
+ *
+ * Reachability, stated honestly: `Container.operationalAccess` is typed optional, but the real
+ * Postgres container composes it unconditionally and the memory container has no `auth` at all
+ * (so every scoped route 401s first). The fail-open was therefore LATENT in shipped
+ * compositions — one bad composition away, not live-exploitable. This harness is that bad
+ * composition, which is why these tests used to pass with global authority.
+ *
+ * "Fail closed" here means the canonical MINIMUM scope, not a blanket refusal: unassigned work
+ * stays reachable by design (`mission-scope.ts`), which the last test below pins explicitly.
+ */
+describe("OPERATIONAL_ACCESS_FAIL_CLOSED (routes)", () => {
+  function installWithoutAccess(role: Role): Container {
+    const container = installRole(role);
+    delete container.operationalAccess;
+    return container;
+  }
+
+  it("reveals no agent, task or action of a linked agent instead of a global projection", async () => {
+    installWithoutAccess("owner");
+    const agents = (await (await getAgents(getRequest("/api/agents"))).json()) as {
+      agents: unknown[];
+    };
+    expect(agents.agents).toHaveLength(0);
+
+    installWithoutAccess("owner");
+    const tasks = (await (await getTasks(getRequest("/api/tasks"))).json()) as { tasks: unknown[] };
+    expect(tasks.tasks).toHaveLength(0);
+
+    installWithoutAccess("owner");
+    const actions = (await (await getActions(getRequest("/api/actions"))).json()) as {
+      actions: unknown[];
+    };
+    expect(actions.actions).toHaveLength(0);
+  });
+
+  it("an owner without the access service loses the global projection a real owner has", async () => {
+    installScopedRole("owner", []);
+    const granted = (await (await getAgents(getRequest("/api/agents"))).json()) as {
+      agents: unknown[];
+    };
+    installWithoutAccess("owner");
+    const denied = (await (await getAgents(getRequest("/api/agents"))).json()) as {
+      agents: unknown[];
+    };
+
+    expect(granted.agents.length).toBeGreaterThan(0);
+    expect(denied.agents).toHaveLength(0);
+  });
+
+  it("refuses a WRITE targeting an agent it cannot prove is in scope", async () => {
+    installWithoutAccess("operator");
+    const response = await postTask(
+      jsonRequest("/api/tasks", { title: "Test", assignedAgentId: "agent-cto" }),
+    );
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("forbidden");
+  });
+
+  it("refuses a transition on an ASSIGNED task rather than acting under global authority", async () => {
+    installWithoutAccess("operator");
+    // task-003 is assigned to agent-infra, so the empty scope cannot reach it.
+    const response = await postTransition(
+      jsonRequest("/api/tasks/task-003/transition", { to: "running" }),
+      params("task-003"),
+    );
+    expect(response.status).toBe(404);
+  });
+
+  /**
+   * The RESIDUAL of minimum scope, pinned rather than glossed over. `NO_AGENTS` is "no linked
+   * agent", so UNASSIGNED work stays reachable — the documented rule in `mission-scope.ts`
+   * ("only unassigned work is reachable"), applied identically by every scope consumer. This
+   * test exists so that rule is a decision on the record and not an accident: it still grants
+   * strictly less than the `{ kind: "global" }` fallback it replaced, which reached everything.
+   */
+  it("still permits UNASSIGNED work under minimum scope, and nothing assigned", async () => {
+    installWithoutAccess("operator");
+    const created = await postTask(jsonRequest("/api/tasks", { title: "Sans agent" }));
+    expect(created.status).toBe(201);
+
+    const container = installWithoutAccess("operator");
+    const unassigned = await container.tasks.create({ title: "Libre" });
+    expect(unassigned.ok).toBe(true);
+    if (!unassigned.ok) return;
+
+    const visible = (await (await getTasks(getRequest("/api/tasks"))).json()) as {
+      tasks: { id: string; assignedAgentId?: string }[];
+    };
+    // Reachable: unassigned only. Every seeded task is assigned, so none of them appear.
+    expect(visible.tasks.length).toBeGreaterThan(0);
+    expect(visible.tasks.every((t) => t.assignedAgentId === undefined)).toBe(true);
+  });
+
+  /** An approval must never be the request that widens scope. */
+  it("refuses an approval decision rather than deciding under global authority", async () => {
+    installWithoutAccess("owner");
+
+    const response = await postDecision(
+      jsonRequest("/api/actions/action-001/decision", { decision: "approved" }),
+      params("action-001"),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("read and write agree: neither sees more than the other", async () => {
+    installWithoutAccess("owner");
+    const read = (await (await getActions(getRequest("/api/actions"))).json()) as {
+      actions: unknown[];
+    };
+    installWithoutAccess("owner");
+    const write = await postDecision(
+      jsonRequest("/api/actions/action-001/decision", { decision: "approved" }),
+      params("action-001"),
+    );
+
+    expect(read.actions).toHaveLength(0);
+    expect(write.status).toBe(404);
+  });
+
+  it("an unknown action id never becomes global authority", async () => {
+    installWithoutAccess("owner");
+
+    const response = await postDecision(
+      jsonRequest("/api/actions/action-999/decision", { decision: "approved" }),
+      params("action-999"),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("the cockpit projection stays empty instead of aggregating everything", async () => {
+    installWithoutAccess("owner");
+
+    const response = await getCockpit(getRequest("/api/cockpit"));
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as {
+      counts: Record<string, number>;
+      pendingApprovals: number;
+    };
+    expect(data.pendingApprovals).toBe(0);
+    expect(Object.values(data.counts).every((n) => n === 0)).toBe(true);
+  });
+});
+
+/**
+ * AUTHENTICATED_ACTOR_AUDIT / FORGED_DECIDER_REJECTED at the HTTP boundary.
+ *
+ * `decidedByLabel` from the request body used to become `approval.decidedBy` AND the `actor`
+ * of both audit entries, so any caller holding `approvals.decide` could sign a decision with
+ * another person's name, e-mail or user id.
+ */
+describe("AUTHENTICATED_ACTOR_AUDIT", () => {
+  it("records the session user as the audit actor of a decision", async () => {
+    const container = installRole("operator");
+
+    const decided = await postDecision(
+      jsonRequest("/api/actions/action-001/decision", { decision: "approved" }),
+      params("action-001"),
+    );
+    expect(decided.status).toBe(200);
+
+    const entries = await container.audit.query({ actionId: "action-001" });
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(entry.actor).toEqual({ kind: "human", id: "human-1" });
+    }
+  });
+
+  it("rejects any body that tries to name another decider", async () => {
+    for (const forged of [
+      { decidedByLabel: "owner@icos.test" },
+      { decidedBy: "human-2" },
+      { decider: { kind: "human", id: "human-2" } },
+    ]) {
+      installRole("operator");
+      const response = await postDecision(
+        jsonRequest("/api/actions/action-001/decision", { decision: "approved", ...forged }),
+        params("action-001"),
+      );
+      expect(response.status, JSON.stringify(forged)).toBe(400);
+    }
+  });
+
+  it("two different sessions are never attributed to each other", async () => {
+    const first = installSession({
+      user: { id: "human-a", email: "a@icos.test", status: "active" },
+      roles: ["operator"],
+    });
+    expect(
+      (
+        await postDecision(
+          jsonRequest("/api/actions/action-001/decision", { decision: "approved" }),
+          params("action-001"),
+        )
+      ).status,
+    ).toBe(200);
+    const aEntries = await first.audit.query({ actionId: "action-001" });
+    expect(aEntries.every((e) => e.actor.id === "human-a")).toBe(true);
+
+    const second = installSession({
+      user: { id: "human-b", email: "b@icos.test", status: "active" },
+      roles: ["operator"],
+    });
+    expect(
+      (
+        await postDecision(
+          jsonRequest("/api/actions/action-002/decision", { decision: "approved" }),
+          params("action-002"),
+        )
+      ).status,
+    ).toBe(200);
+    const bEntries = await second.audit.query({ actionId: "action-002" });
+    expect(bEntries.length).toBeGreaterThan(0);
+    expect(bEntries.every((e) => e.actor.id === "human-b")).toBe(true);
+  });
+});
+
 describe("GET /api/audit", () => {
   it("reflète l'audit d'une décision et filtre par type", async () => {
     installRole("operator");
     await postDecision(
       jsonRequest("/api/actions/action-001/decision", {
-        decidedByLabel: "Opérateur",
         decision: "approved",
       }),
       params("action-001"),

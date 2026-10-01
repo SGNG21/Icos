@@ -1,6 +1,7 @@
 import { getContainer } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { zodDetails } from "@/server/http/errors";
 import { apiError, json } from "@/server/http/respond";
 import { actionQuerySchema } from "@/server/http/schemas";
@@ -28,9 +29,7 @@ export async function GET(request: Request): Promise<Response> {
       return apiError("invalid_input", "filtre invalide", zodDetails(parsed.error));
     }
 
-    const scope = container.operationalAccess
-      ? await container.operationalAccess.resolveScope(access.session)
-      : { kind: "global" as const };
+    const scope = await resolveOperationalScope(container, access.session);
 
     return json({ actions: await container.actions.listForScope(scope, parsed.data) });
   } catch (error) {
