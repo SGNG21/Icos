@@ -45,6 +45,21 @@ const envSchema = z.object({
    */
   ICOS_WORKER_PROBE_COMMANDS: z.preprocess(emptyAsUndefined, z.string().optional()),
   /*
+   * Whether `startProductionServices` BOOTSTRAPS the declared compute fleet into the
+   * worker registry at boot (live-worker bootstrap lane).
+   *
+   * DEFAULT OFF, and that is the point: registering a fleet writes to whatever
+   * database this process resolved, so it is an explicit operator decision, never
+   * something a deployment acquires by being upgraded. Off, the registry is only ever
+   * written by `pnpm compute:register --apply`. On, every boot reconciles the registry
+   * with what the provider serves — idempotently, and without resetting probe evidence
+   * for a candidate whose declaration has not changed.
+   *
+   * Requires OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY; a provider outage is reported and
+   * never aborts startup, because the rest of the runtime must still boot.
+   */
+  ICOS_COMPUTE_BOOTSTRAP: z.preprocess(emptyAsUndefined, z.stringbool().optional()),
+  /*
    * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
    * quarter of the health-evidence horizon, so evidence never expires between
    * sweeps. A value at or above the horizon is REFUSED at composition time.

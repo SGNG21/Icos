@@ -15,6 +15,7 @@ import { loadEnv } from "@/config/env";
 import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
+import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
 import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
 import { seedObservation } from "@/server/proactive/observations";
 import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
@@ -389,6 +390,20 @@ export async function startProductionServices(
        * is NOTIFY and compute routing owns remediation, so this observes; it never acts.
        */
       if (container.db) await seedObservation(container.scheduledJobs, COMPUTE_HEALTH_OBSERVATION);
+
+      /*
+       * THE CANONICAL FLEET BOOTSTRAP (live-worker bootstrap lane). Probing was already
+       * ignited above, but nothing ever REGISTERED the declared fleet outside an operator
+       * CLI, so a deployment nobody ran it against probes an empty registry forever and
+       * reads as a routing bug.
+       *
+       * Default OFF (ICOS_COMPUTE_BOOTSTRAP): registering writes to whatever database this
+       * process resolved, which is an operator's decision, not an upgrade side effect.
+       * Unlike the probe seeding above a failure here does NOT abort startup: an
+       * unreachable provider leaves the registry exactly as it was, which is survivable,
+       * whereas refusing to boot the whole runtime over it is not.
+       */
+      await bootstrapComputeFleetAtStartup(container, options.env);
     }
   } catch (error) {
     await container.close();
