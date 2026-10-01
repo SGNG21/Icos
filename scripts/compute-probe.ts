@@ -1,13 +1,20 @@
 /**
- * Live compute probe (decision 0054) — the certification counterpart of compute:snapshot.
+ * Live compute probe — the certification counterpart of compute:snapshot.
  *
- * For one representative model per (family, provider) that OmniRoute LISTS, runs the CANONICAL
- * probe adapter (`CommandWorkerProbe`, configured by ICOS_WORKER_PROBE_COMMANDS — the same
- * adapter the container's WorkerHealthProber uses) and reports whether the model actually
+ * For one representative model per (family, provider) that OmniRoute LISTS, runs the
+ * CANONICAL probe adapter — `OmniRouteHttpWorkerProbe`, the same adapter the container's
+ * WorkerHealthProber selects for a model worker — and reports whether the model actually
  * ANSWERED. Listing is not serving: nothing is AVAILABLE without a real answer.
  *
- * Read-only: registers nothing, writes nothing. Credentials are never printed — the probe
- * command resolves its own, and failure text is cut to one line.
+ * IT USED TO SPAWN AN AGENT CLI, and that was the problem this lane measured: a probe
+ * through `CommandWorkerProbe` inherits the whole process environment (every provider key,
+ * the database credential, the auth secret) and the agent's toolset — terminal, file,
+ * code execution, browser — with approvals auto-bypassed. The unattended sweep stopped
+ * doing that; this operator command had no business continuing to, least of all while
+ * calling itself canonical.
+ *
+ * Read-only: registers nothing, writes nothing, touches no database. The credential is
+ * sent in one header and struck from any failure text.
  *
  * Usage: pnpm compute:probe
  */
@@ -20,11 +27,8 @@ import {
   listOmniRouteModels,
   representativeModels,
 } from "@/server/workers/compute-fleet";
-import { CommandWorkerProbe } from "@/server/workers/probes/command-worker-probe";
-import {
-  createWorkerProbeResolver,
-  parseWorkerProbeCommands,
-} from "@/server/workers/probes/probe-command-config";
+import { OmniRouteHttpWorkerProbe } from "@/server/workers/probes/omniroute-http-worker-probe";
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -33,22 +37,21 @@ async function main(): Promise<void> {
       "COMPUTE_PROBE_UNCONFIGURED: OMNIROUTE_BASE_URL and OMNIROUTE_API_KEY are required",
     );
   }
-  const commands = parseWorkerProbeCommands(env.ICOS_WORKER_PROBE_COMMANDS);
-  const runtime = "binary" as const;
-  if (!commands[runtime])
-    throw new Error("COMPUTE_PROBE_UNCONFIGURED: ICOS_WORKER_PROBE_COMMANDS.binary is required");
-  const probe = new CommandWorkerProbe(createWorkerProbeResolver(commands));
-
-  const listed = await listOmniRouteModels({
-    baseUrl: env.OMNIROUTE_BASE_URL,
-    credential: env.OMNIROUTE_API_KEY,
+  const baseUrl = env.OMNIROUTE_BASE_URL;
+  const credential = env.OMNIROUTE_API_KEY;
+  const probe = new OmniRouteHttpWorkerProbe({
+    baseUrl,
+    credential,
+    timeoutMs: env.ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS,
   });
-  const gateway = new URL(env.OMNIROUTE_BASE_URL).origin;
+
+  const listed = await listOmniRouteModels({ baseUrl, credential });
+  const gateway = new URL(baseUrl).origin;
 
   for (const model of representativeModels(classifyModels(listed))) {
     /* Only identity and metadata matter to a probe; nothing is registered. */
     const worker = candidateRegistration(model, {
-      runtime,
+      runtime: "binary",
       capabilities: [],
     }) as WorkerRegistryEntry;
     const started = Date.now();
@@ -57,9 +60,10 @@ async function main(): Promise<void> {
       await probe.probe(worker);
       result = { ok: true, classification: "AVAILABLE" };
     } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error))
-        .split("\n")[0]!
-        .slice(0, 200);
+      /* Already one redacted line from the adapter; redacted again, never trusted raw. */
+      const message = firstLineRedacted(error instanceof Error ? error.message : String(error))
+        .split(credential)
+        .join("<redacted>");
       result = {
         ok: false,
         classification: /TIMEOUT/.test(message) ? "UNKNOWN" : classifyProbeFailure(message),

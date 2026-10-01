@@ -42,8 +42,17 @@ import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 
 /** The health question. Smallest deterministic request that proves a model answered. */
 export const DEFAULT_PROBE_PROMPT = "Reply with exactly the word OK and nothing else.";
-/** The answer that counts. Same predicate the certified command probe used, so evidence compares. */
-export const DEFAULT_HEALTH_PATTERN = "^\\s*OK\\.?\\s*$";
+/**
+ * The answer that counts — the same predicate the certified command probe used, so the two
+ * paths' evidence is comparable.
+ *
+ * NOT CONFIGURABLE, on purpose. It was briefly an option on this adapter with no caller,
+ * and an unvalidated `string` predicate is the single input that could turn the health
+ * check into `.*` and certify every refusal — including the "no active credentials for
+ * provider" body that decision 0054 exists to catch. A knob nothing sets is not
+ * flexibility; it is an unguarded path to fail-open.
+ */
+const HEALTH_PATTERN = "^\\s*OK\\.?\\s*$";
 /**
  * Default budget for one probe.
  *
@@ -67,14 +76,21 @@ export const DEFAULT_HTTP_PROBE_TIMEOUT_MS = 15_000;
  * positive. A probe reply is a handful of tokens either way, so the headroom is free.
  */
 export const DEFAULT_PROBE_MAX_TOKENS = 512;
+/*
+ * MEASURED SPEND, so the headroom above is not mistaken for cost: across the 13 answering
+ * candidates one sweep costs 435 prompt + 176 completion tokens, and the largest single
+ * completion observed was 85. Nothing approaches 512 — a model that answers "OK" answers
+ * in 4-5 tokens, and only a reasoning route reaches double digits. At the 30s grid
+ * (2880 sweeps/day) that is ~1.25M prompt and ~0.51M completion tokens per day on the
+ * same provider accounts as real work, which is a BUDGET fact for an operator to accept,
+ * not something the token ceiling changes.
+ */
 
 export interface OmniRouteHttpWorkerProbeOptions {
   baseUrl: string;
   credential: string;
   timeoutMs?: number;
   prompt?: string;
-  /** Regex the model's reply must match. Anything else is a failure, never "unknown". */
-  healthPattern?: string;
   maxTokens?: number;
   fetch?: typeof fetch;
 }
@@ -123,6 +139,21 @@ export function sameModelIdentity(requested: string, reported: string): boolean 
 export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
   constructor(private readonly options: OmniRouteHttpWorkerProbeOptions) {}
 
+  /**
+   * Shared masking PLUS this probe's own credential, struck literally.
+   *
+   * `firstLineRedacted` catches token SHAPES — `sk-…`, `Bearer …`, anything 32+ chars. A
+   * short gateway key with none of those markers (`{"api_key":"omni-local-key"}`,
+   * `http://admin:s3cr3t@host`, `X-Api-Key: shortkey123`) survives all of them. This probe
+   * is the one place that KNOWS the exact credential, so it does not have to guess at a
+   * shape: it removes the literal value from any text it is about to put in an error.
+   */
+  private redact(text: string): string {
+    const masked = firstLineRedacted(text);
+    const credential = this.options.credential;
+    return credential ? masked.split(credential).join("<redacted>") : masked;
+  }
+
   async probe(worker: WorkerRegistryEntry): Promise<WorkerHealthObservation> {
     const model = probeModelOf(worker);
     if (!model) {
@@ -157,7 +188,7 @@ export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
         throw new Error(`WORKER_PROBE_TIMEOUT: ${model} did not answer within ${timeoutMs}ms`);
       }
       throw new Error(
-        `WORKER_PROBE_TRANSPORT: ${model} — ${firstLineRedacted(
+        `WORKER_PROBE_TRANSPORT: ${model} — ${this.redact(
           error instanceof Error ? error.message : String(error),
         )}`,
       );
@@ -169,7 +200,7 @@ export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
       /* The status is the diagnosis; the body may be the gateway's, so it is redacted. */
       throw new Error(
         `WORKER_PROBE_HTTP_${response.status}: ${model} — ${
-          firstLineRedacted(response.body.trim()) || "<empty body>"
+          this.redact(response.body.trim()) || "<empty body>"
         }`,
       );
     }
@@ -180,17 +211,29 @@ export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
     } catch {
       throw new Error(
         `WORKER_PROBE_MALFORMED_RESPONSE: ${model} — ${
-          firstLineRedacted(response.body.trim()) || "<empty body>"
+          this.redact(response.body.trim()) || "<empty body>"
         }`,
       );
     }
 
-    if (typeof body.model === "string" && !sameModelIdentity(model, body.model)) {
-      throw new Error(
-        `WORKER_PROBE_MODEL_MISMATCH: asked ${model}, gateway answered as ${firstLineRedacted(
-          body.model,
-        )}`,
-      );
+    if (body.model !== undefined) {
+      /*
+       * PRESENT means it must agree. A non-string `model` (null, a number, an object) is
+       * not "absent": skipping the check for it would let a malformed or hostile body opt
+       * OUT of identity verification entirely, which is the one thing the check is for.
+       */
+      if (typeof body.model !== "string" || !sameModelIdentity(model, body.model)) {
+        throw new Error(
+          `WORKER_PROBE_MODEL_MISMATCH: asked ${model}, gateway answered as ${firstLineRedacted(
+            typeof body.model === "string" ? body.model : JSON.stringify(body.model),
+          )}`,
+        );
+      }
+    }
+
+    /* An object with a "0" key is not a choices ARRAY, whatever it indexes like. */
+    if (body.choices !== undefined && !Array.isArray(body.choices)) {
+      throw new Error(`WORKER_PROBE_MALFORMED_RESPONSE: ${model} — choices is not an array`);
     }
 
     const content = body.choices?.[0]?.message?.content;
@@ -198,16 +241,13 @@ export class OmniRouteHttpWorkerProbe implements WorkerHealthProbePort {
       throw new Error(`WORKER_PROBE_EMPTY_RESPONSE: ${model} returned no usable content`);
     }
 
-    const pattern = this.options.healthPattern ?? DEFAULT_HEALTH_PATTERN;
-    if (!new RegExp(pattern).test(content)) {
+    if (!new RegExp(HEALTH_PATTERN).test(content)) {
       /*
        * Answered 200 and said something else. This is the fail-open hole decision 0054
        * closed: a gateway returns "no active credentials for provider" as a successful
        * completion, and an HTTP status alone would certify a dead model.
        */
-      throw new Error(
-        `WORKER_PROBE_UNEXPECTED_OUTPUT: ${model} — ${firstLineRedacted(content.trim())}`,
-      );
+      throw new Error(`WORKER_PROBE_UNEXPECTED_OUTPUT: ${model} — ${this.redact(content.trim())}`);
     }
 
     return { health: "healthy", availability: "available" };

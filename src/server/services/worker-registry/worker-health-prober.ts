@@ -81,13 +81,23 @@ export interface WorkerHealthProberOptions {
    * a model is probed over HTTP while binary workers keep the command probe, with no
    * provider name anywhere in the decision — it reads canonical metadata only.
    *
-   * Returning `undefined` means "this worker is not mine", and the runtime map then
-   * answers for it. That is SELECTION, not fallback: it happens before any request is
-   * made, and once a probe is chosen a failure of that probe is recorded as a failure.
-   * Nothing retries the same worker through a different adapter, because doing so would
-   * let a gateway outage silently restore the host authority the HTTP probe removes.
+   * THREE ANSWERS, AND THE THIRD ONE IS WHY THIS IS NOT A TWO-STATE FUNCTION:
+   *   a port    — probe this worker with it.
+   *   undefined — "not mine": the runtime map answers for this worker.
+   *   null      — "mine, and NOTHING may probe it": recorded `unsupported`, routes nothing.
+   *
+   * `null` exists because the first version of this had no way to say it, and that was a
+   * fail-OPEN hole, not a cosmetic gap. A model worker declares `runtime: "binary"`, so
+   * "decline" and "forbid" collapsing into one value meant that an unconfigured gateway
+   * sent every model worker to `adapters["binary"]` — the agent CLI — which answered `ok`
+   * by starting a runtime that knows nothing about the model. A health claim produced by
+   * probing the wrong thing is worse than no health claim.
+   *
+   * SELECTION, NOT FALLBACK: it happens before any request is made, and once a probe is
+   * chosen a failure of that probe is recorded as a failure. Nothing retries the same
+   * worker through a different adapter.
    */
-  selectProbe?: (worker: WorkerRegistryEntry) => WorkerHealthProbePort | undefined;
+  selectProbe?: (worker: WorkerRegistryEntry) => WorkerHealthProbePort | null | undefined;
   /** How long probe evidence stays valid. Defaults to the canonical horizon. */
   maxEvidenceAgeMs?: number;
   now?: () => Date;
@@ -114,7 +124,9 @@ export const PROBE_CONCURRENCY = 6;
 
 export class WorkerHealthProber {
   private readonly adapters: Readonly<Partial<Record<WorkerRuntimeDescriptor, WorkerHealthProbePort>>>;
-  private readonly selectProbe?: (worker: WorkerRegistryEntry) => WorkerHealthProbePort | undefined;
+  private readonly selectProbe?: (
+    worker: WorkerRegistryEntry,
+  ) => WorkerHealthProbePort | null | undefined;
   private readonly maxEvidenceAgeMs: number;
   private readonly now: () => Date;
 
@@ -158,8 +170,13 @@ export class WorkerHealthProber {
   }
 
   private async probeOne(worker: WorkerRegistryEntry): Promise<WorkerProbeRecord> {
-    /* Worker-level selection wins; the runtime map answers for whatever it declines. */
-    const adapter = this.selectProbe?.(worker) ?? this.adapters[worker.runtime];
+    /*
+     * Worker-level selection wins. `undefined` declines and lets the runtime map answer;
+     * `null` FORBIDS any probe for this worker and must NOT reach the runtime map, or an
+     * unconfigured model probe would silently become an agent-CLI probe (fail-open).
+     */
+    const selected = this.selectProbe?.(worker);
+    const adapter = selected === undefined ? this.adapters[worker.runtime] : (selected ?? undefined);
 
     if (!adapter) {
       // We cannot verify this runtime. Say exactly that, and route nothing to it.

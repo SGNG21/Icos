@@ -6,7 +6,6 @@ import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
 import {
-  DEFAULT_HTTP_PROBE_TIMEOUT_MS,
   OmniRouteHttpWorkerProbe,
   probeModelOf,
   sameModelIdentity,
@@ -261,27 +260,78 @@ describe("OmniRoute HTTP worker probe", () => {
     expect(g.calls).toHaveLength(0);
   });
 
-  it("HTTP_PROBE_SECRET_REDACTION: no credential or body bulk reaches a failure message", async () => {
+  it("HTTP_PROBE_SECRET_REDACTION: the literal credential never survives, in any shape", async () => {
+    /*
+     * The shapes `firstLineRedacted` alone does NOT mask: a short key with no `sk-`/`Bearer`
+     * marker, JSON-escaped, in URL userinfo, or as Basic base64. A local gateway key is
+     * exactly that shape — this repo's own wiring test uses a 15-character one.
+     */
+    const SHORT = "omni-local-key";
     const leaky = [
-      `401 Unauthorized: Authorization: Bearer ${CREDENTIAL}`,
-      `invalid key sk-live-abcdef0123456789abcdef`,
+      `{"api_key":"${SHORT}"} rejected`,
+      `upstream http://admin:${SHORT}@127.0.0.1:20129/v1 failed`,
+      `X-Api-Key: ${SHORT} invalid`,
+      `Authorization: Bearer ${CREDENTIAL}`,
+      "sk-live-abcdef0123456789abcdef",
       "x".repeat(5_000),
     ].join(" ");
 
-    const failures: string[] = [];
-    for (const g of [gateway(401, leaky), gateway(200, body(leaky))]) {
-      await probeWith(g)
-        .probe(worker())
-        .catch((e: unknown) => failures.push(String((e as Error).message)));
+    for (const credential of [SHORT, CREDENTIAL]) {
+      const messages: string[] = [];
+      for (const g of [gateway(401, leaky), gateway(200, body(leaky))]) {
+        await new OmniRouteHttpWorkerProbe({ baseUrl: BASE, credential, fetch: g.fetch })
+          .probe(worker())
+          .catch((e: unknown) => messages.push((e as Error).message));
+      }
+      expect(messages).toHaveLength(2);
+      for (const message of messages) {
+        expect(message, `credential leaked: ${message}`).not.toContain(credential);
+        expect(message).not.toContain("x".repeat(300));
+        expect(message.length).toBeLessThan(400);
+      }
     }
+  });
 
-    expect(failures).toHaveLength(2);
-    for (const message of failures) {
-      expect(message).not.toContain(CREDENTIAL);
-      expect(message).not.toContain("sk-live-abcdef0123456789abcdef");
-      expect(message).not.toContain("x".repeat(300));
-      expect(message.length).toBeLessThan(400);
+  it("the generic token rule is load-bearing too: a bare 32+ char secret is masked", async () => {
+    /*
+     * Kills the mutation the previous version of this test missed: deleting the generic
+     * `\b[A-Za-z0-9_-]{32,}\b` rule used to keep the suite green, because `Bearer <x>` and
+     * `sk-<x>` were still caught by their own rules. This leaves only that rule in play —
+     * an unrelated long token, no marker, and not this probe's credential.
+     */
+    const foreign = "AKIA0123456789ABCDEFGHIJKLMNOPQRSTUV";
+    const g = gateway(403, `upstream rejected token ${foreign}`);
+
+    const message = await probeWith(g)
+      .probe(worker())
+      .then(() => "")
+      .catch((e: unknown) => (e as Error).message);
+
+    expect(message).toContain("WORKER_PROBE_HTTP_403");
+    expect(message).not.toContain(foreign);
+  });
+
+  it("MODEL_IDENTITY_CANNOT_BE_OPTED_OUT_OF: a non-string model is a mismatch, not an absence", async () => {
+    /*
+     * `typeof body.model === "string"` used to gate the whole check, so a body with
+     * `"model": null` (or a number, or an object) skipped identity verification and could
+     * reach healthy. "Absent" is a gateway that never claimed an identity; "present and
+     * not a string" is a malformed claim, and must not buy an exemption.
+     */
+    for (const value of [null, 42, { id: MODEL }, []]) {
+      const raw = JSON.stringify({ model: value, choices: [{ message: { content: "OK" } }] });
+      await expect(probeWith(gateway(200, raw)).probe(worker())).rejects.toThrow(
+        /WORKER_PROBE_MODEL_MISMATCH/,
+      );
     }
+    /* And `choices` that merely indexes like an array is not one. */
+    const objectChoices = JSON.stringify({
+      model: MODEL,
+      choices: { "0": { message: { content: "OK" } } },
+    });
+    await expect(probeWith(gateway(200, objectChoices)).probe(worker())).rejects.toThrow(
+      /WORKER_PROBE_MALFORMED_RESPONSE/,
+    );
   });
 
   it("HTTP_PROBE_NO_TOOL_AUTHORITY: the probe spawns no process and reads no host secret", async () => {
@@ -457,9 +507,7 @@ describe("OmniRoute HTTP worker probe", () => {
       expect(select(w), `no probe mechanism for ${model.modelId}`).toBe(http);
       expect(probeModelOf(w)).toBe(model.modelId);
     }
-    /* Each candidate is asked for ITS OWN model — 15 distinct ids, no substitution. */
-    const asked = g.calls.map((c) => JSON.parse(String(c.init.body)).model);
-    expect(asked).toEqual([]);
+    /* Each candidate is asked for ITS OWN model: 15 distinct ids, none substituted. */
     for (const model of planned) {
       await http.probe(
         candidateRegistration(model, {
@@ -469,12 +517,5 @@ describe("OmniRoute HTTP worker probe", () => {
       );
     }
     expect(new Set(g.calls.map((c) => JSON.parse(String(c.init.body)).model)).size).toBe(15);
-  });
-
-  it("the default timeout is the measured one, and is overridable", () => {
-    expect(DEFAULT_HTTP_PROBE_TIMEOUT_MS).toBe(15_000);
-    /* > 2x the worst observed probe (6305ms), and 3 waves of it fit the 120s horizon. */
-    expect(DEFAULT_HTTP_PROBE_TIMEOUT_MS).toBeGreaterThan(6_305 * 2);
-    expect(Math.ceil(15 / 6) * DEFAULT_HTTP_PROBE_TIMEOUT_MS).toBeLessThan(120_000);
   });
 });

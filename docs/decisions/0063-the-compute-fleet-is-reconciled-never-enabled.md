@@ -86,6 +86,62 @@ process resolved. Three ways that goes wrong, all of which it did in draft:
    is reported distinctly from a provider outage, because the two need opposite responses and
    `applyComputeBootstrap` is not transactional — a failed write can leave a partial registry.
 
+## Amendment — a model is probed over HTTP, and "no probe" must be sayable
+
+The reconciliation above registers candidates fail-closed and leaves health to the
+`probe_workers` sweep. That sweep's transport turned out to be the larger risk, so it is
+decided here rather than left to configuration.
+
+**A MODEL IS NOT A RUNTIME.** `CommandWorkerProbe` answers "can this runtime execute
+here" by spawning the runtime, which is correct for a runtime and wrong for a model behind
+a gateway. Measured on the previously certified configuration, probing a model that way
+gave every probe the server's whole environment — 9 secrets including the live
+`DATABASE_URL`, `BETTER_AUTH_SECRET`, `ICOS_OWNER_PASSWORD`, `GITHUB_TOKEN` — plus the
+agent CLI's enabled toolsets (terminal, file, code execution, browser, computer use, cron,
+delegation) with approvals auto-bypassed, unattended, every 30 seconds. Nothing went
+wrong, because the prompt is benign. A health check must not hold authority it cannot use.
+
+So: **`OmniRouteHttpWorkerProbe` is the canonical probe for a model.** One minimal
+completion through the gateway ICOS already talks to — no child process, no shell, no
+filesystem, no tool surface, and no credential but the gateway's own. `pnpm compute:probe`
+uses the same adapter; the operator path must not keep an authority the unattended sweep
+gave up.
+
+**SELECTION IS A THREE-STATE DECISION, and that is the load-bearing part.**
+`WorkerHealthProber` keys adapters by RUNTIME, which cannot distinguish a model from a
+real binary worker — every compute candidate declares `runtime: "binary"`. A worker-level
+selector therefore runs first, deciding from canonical `metadata.model` (never a provider
+name). It must be able to say three things:
+
+- a probe — use it;
+- "not mine" — the runtime map answers;
+- **"mine, and nothing may probe it"** — recorded `unsupported`, routes nothing.
+
+The first implementation had only the first two, and that was a FAIL-OPEN hole, not a
+cosmetic gap: with the gateway credential absent, every model worker fell through to
+`adapters["binary"]`, the agent CLI ran, and the sweep recorded `ok` — a model certified
+healthy by starting a runtime that knows nothing about it. Proven by test before fixing.
+Health that comes from probing the wrong thing is worse than no health at all, so a
+missing credential now LOSES health rather than borrowing authority.
+
+**NO FALLBACK ON FAILURE, EVER.** Selection happens before any request. A failed HTTP
+probe is recorded failed; nothing retries that worker through another adapter, because a
+gateway hiccup must not silently restore the authority this removes.
+
+**WHAT A PROBE COSTS**, since this decision changes what it spends: one sweep is 435
+prompt + 176 completion tokens across 13 answering candidates (largest single completion
+observed: 85, against a 512 ceiling that is headroom, not spend). At the 30s grid that is
+~1.25M prompt and ~0.51M completion tokens per day, on the same provider accounts as real
+work. An operator accepts that or changes the interval; it is recorded so the choice is
+explicit.
+
+**KNOWN BLIND SPOT.** The gateway reports the resolved MODEL and never the route it took,
+so `cc/claude-sonnet-5` and `claude/claude-sonnet-5` both answer as `claude-sonnet-5`.
+Measured across the real fleet, 9 of 15 workers sit in such a collision group. Those are
+distinct workers with distinct capacity pools, so a silent route substitution is
+undetectable here and one upstream account can be counted as two ceilings. Closing it
+needs the gateway to echo its route; a cleverer comparison cannot.
+
 ## Consequences
 
 - A deployment can expose its real compute capacity without an operator remembering a command,
