@@ -7,6 +7,7 @@ import { SchedulerService } from "@/server/scheduler/scheduler-service";
 import {
   NotConnectedCognitionEngine,
   OmniRouteCognitionEngine,
+  normalizeCognitionEnvelope,
   parseCognitionOutput,
 } from "./cognition";
 
@@ -20,10 +21,14 @@ describe("cognition boundary", () => {
   it("degrades any invalid model output to a harmless answer (never an action or memory)", () => {
     const smuggled =
       '{"result":{"kind":"ACTION_REQUEST","text":"x","action":{"kind":"Rm -rf","description":"d"}}}';
-    expect(parseCognitionOutput(smuggled)).toEqual({
-      result: { kind: "ANSWER_ONLY", text: smuggled },
-      memorySuggestions: [],
-    });
+    const degraded = parseCognitionOutput(smuggled);
+    // Still fails closed: never an action, never a memory.
+    expect(degraded.result.kind).toBe("ANSWER_ONLY");
+    expect(degraded.memorySuggestions).toEqual([]);
+    // And the rejected payload is NOT echoed back to the user: showing it put
+    // internal JSON on a real phone screen (conv-a1a93dc6 regression below).
+    expect("text" in degraded.result && degraded.result.text).not.toContain("Rm -rf");
+    expect("text" in degraded.result && degraded.result.text).toContain("Reformule");
     expect(parseCognitionOutput("pas du json").result).toEqual({
       kind: "ANSWER_ONLY",
       text: "pas du json",
@@ -297,5 +302,126 @@ describe("system prompt: executive associate, not generic assistant", () => {
     const p = await promptOf();
     expect(p).toContain("Tu n'inventes jamais");
     for (const noun of ["client", "projet", "décision"]) expect(p).toContain(noun);
+  });
+});
+
+/**
+ * REGRESSION — the phone mission-request bug, 2026-10-01 18:34 (conv-a1a93dc6).
+ *
+ * The user asked for a bounded test mission. The model returned a valid
+ * MISSION_REQUEST but nested `memorySuggestions` and `intent` INSIDE `result`.
+ * The result variants are `.strict()`, so the envelope was rejected, the fail-safe
+ * turned the raw JSON into the answer TEXT, and the user read internal JSON on
+ * their phone. Durable consequence: outcome ANSWER_ONLY, zero proposals, zero
+ * jobs, zero missions — the mission silently never existed.
+ */
+describe("phone mission-request envelope (conv-a1a93dc6 regression)", () => {
+  /** The payload the model actually returned, keys and nesting verbatim. */
+  const PHONE_RAW = JSON.stringify({
+    result: {
+      kind: "MISSION_REQUEST",
+      text: "Je propose de lancer une mission de test qui analysera l'état actuel du système (capacités, connexions, mémoire) et fournira un résumé sans effectuer d'action externe.",
+      goal: {
+        title: "Mission de test – analyse système",
+        objective:
+          "Obtenir un résumé de l'état actuel du système ICOS (capacités, connexions, mémoire) sans déclencher d'action externe.",
+        successCriteria: [
+          "Résumé clair de l'état actuel produit",
+          "Aucun appel à des outils externes",
+        ],
+        constraints: [
+          "Utiliser uniquement les capacités internes",
+          "Ne pas déclencher d'actions externes",
+        ],
+        riskLevel: "read_only",
+      },
+      memorySuggestions: [
+        {
+          type: "procedural",
+          subjectKey: "mission-test-analyse-systeme",
+          content: "Proposition de mission de test pour analyser l'état du système.",
+        },
+      ],
+      intent: "propose-mission",
+    },
+  });
+
+  it("recovers the MISSION_REQUEST instead of degrading it to an answer", () => {
+    const out = parseCognitionOutput(PHONE_RAW);
+    expect(out.result.kind).toBe("MISSION_REQUEST");
+    if (out.result.kind !== "MISSION_REQUEST") throw new Error("unreachable");
+    expect(out.result.goal.title).toBe("Mission de test – analyse système");
+    expect(out.result.goal.riskLevel).toBe("read_only");
+    expect(out.result.text).toContain("sans effectuer d'action externe");
+  });
+
+  it("lifts the misnested keys to their canonical position", () => {
+    const out = parseCognitionOutput(PHONE_RAW);
+    expect(out.memorySuggestions).toHaveLength(1);
+    expect(out.memorySuggestions[0].subjectKey).toBe("mission-test-analyse-systeme");
+    expect(out.intent).toBe("propose-mission");
+    // The lifted keys must not survive inside the result.
+    expect(out.result).not.toHaveProperty("memorySuggestions");
+    expect(out.result).not.toHaveProperty("intent");
+  });
+
+  it("NEVER renders internal JSON to the user", () => {
+    const out = parseCognitionOutput(PHONE_RAW);
+    const shown = "text" in out.result ? out.result.text : "";
+    expect(shown).not.toContain("MISSION_REQUEST");
+    expect(shown).not.toContain('{"');
+    expect(shown).not.toContain("memorySuggestions");
+  });
+
+  it("an unrecoverable structured answer is reported, not echoed", () => {
+    for (const raw of [
+      '{"result":{"kind":"NOT_A_KIND"}}',
+      '{"result":{"kind":"MISSION_REQUEST","text":"x"}}', // no goal
+      '{"totally":"different"}',
+      "[1,2,3]",
+      "",
+    ]) {
+      const out = parseCognitionOutput(raw);
+      expect(out.result.kind).toBe("ANSWER_ONLY");
+      const shown = "text" in out.result ? out.result.text : "";
+      expect(shown).not.toContain('{"');
+      expect(shown).not.toContain("kind");
+      expect(shown).toContain("Reformule");
+      // Fails closed: never a mission, an action or a memory.
+      expect(out.memorySuggestions).toEqual([]);
+    }
+  });
+
+  it("still passes plain prose through, which is the useful half of the fail-safe", () => {
+    const out = parseCognitionOutput("Oui, je fonctionne correctement.");
+    expect(out.result).toEqual({ kind: "ANSWER_ONLY", text: "Oui, je fonctionne correctement." });
+  });
+
+  it("does not accept an arbitrary wrapper: only the canonical misnesting is lifted", () => {
+    // A foreign key inside `result` must still fail closed.
+    const foreign = JSON.stringify({
+      result: { kind: "ANSWER_ONLY", text: "ok", somethingElse: 1 },
+    });
+    const out = parseCognitionOutput(foreign);
+    expect("text" in out.result && out.result.text).toContain("Reformule");
+    // An extra TOP-LEVEL key must still fail closed too (the envelope is strict).
+    const extra = JSON.stringify({ result: { kind: "ANSWER_ONLY", text: "ok" }, stray: true });
+    const extraOut = parseCognitionOutput(extra).result;
+    expect(extraOut.kind).toBe("ANSWER_ONLY");
+    expect("text" in extraOut && extraOut.text).toContain("Reformule");
+  });
+
+  it("an outer value wins over a nested one, and already-correct output is untouched", () => {
+    const both = JSON.stringify({
+      result: { kind: "ANSWER_ONLY", text: "ok", intent: "nested" },
+      intent: "outer",
+    });
+    expect(parseCognitionOutput(both).intent).toBe("outer");
+    const correct = JSON.stringify({
+      result: { kind: "ANSWER_ONLY", text: "ok" },
+      memorySuggestions: [],
+      intent: "fine",
+    });
+    expect(normalizeCognitionEnvelope(JSON.parse(correct))).toEqual(JSON.parse(correct));
   });
 });

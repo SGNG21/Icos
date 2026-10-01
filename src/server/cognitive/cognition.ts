@@ -63,20 +63,59 @@ const SYSTEM_PROMPT = [
   "memorySuggestions : seulement des faits durables utiles ; ce sont des inférences, pas des vérités.",
 ].join("\n");
 
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Normalizes the ONE misnesting seen from a real model (phone, 2026-10-01): the
+ * engine put `memorySuggestions` and `intent` INSIDE `result` instead of beside
+ * it. `result` variants are `.strict()`, so the whole envelope was rejected, the
+ * fail-safe echoed the raw JSON to the user, and a valid MISSION_REQUEST never
+ * became a durable proposal.
+ *
+ * This lifts exactly those two keys to their canonical position. The schema is
+ * NOT relaxed: it stays strict, an outer value wins over a nested one, and every
+ * other shape still fails closed.
+ */
+export function normalizeCognitionEnvelope(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.result)) return value;
+  const { memorySuggestions, intent, ...result } = value.result;
+  if (memorySuggestions === undefined && intent === undefined) return value;
+  const lifted = value.memorySuggestions ?? memorySuggestions;
+  const liftedIntent = value.intent ?? intent;
+  return {
+    ...value,
+    result,
+    ...(lifted === undefined ? {} : { memorySuggestions: lifted }),
+    ...(liftedIntent === undefined ? {} : { intent: liftedIntent }),
+  };
+}
+
 /** Extracts and validates the JSON object; anything invalid degrades to a harmless answer. */
 export function parseCognitionOutput(raw: string): CognitionOutput {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start >= 0 && end > start) {
     try {
-      const parsed = cognitionOutputSchema.safeParse(JSON.parse(raw.slice(start, end + 1)));
+      const parsed = cognitionOutputSchema.safeParse(
+        normalizeCognitionEnvelope(JSON.parse(raw.slice(start, end + 1))),
+      );
       if (parsed.success) return parsed.data;
     } catch {
       /* fall through */
     }
   }
-  // Fail safe: unparseable output can never become an action, mission or memory.
-  const text = raw.trim().slice(0, 20_000) || "Réponse vide du moteur cognitif.";
+  /*
+   * Fail safe: unparseable output can never become an action, mission or memory.
+   * It must also never be SHOWN. Echoing the raw payload put internal JSON — and
+   * potentially prompt content — on the user's screen; a structured answer that
+   * failed validation is a malfunction to report, not a message to read out.
+   */
+  const trimmed = raw.trim();
+  const text =
+    !trimmed || /^[[{]/.test(trimmed)
+      ? "Je n'ai pas pu formuler ma réponse correctement. Reformule ta demande."
+      : trimmed.slice(0, 20_000);
   return { result: { kind: "ANSWER_ONLY", text }, memorySuggestions: [] };
 }
 

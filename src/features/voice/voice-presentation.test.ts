@@ -436,3 +436,76 @@ describe("formatting helpers", () => {
     expect(plainText("appelle my__init__ ou a__b")).toBe("appelle my__init__ ou a__b");
   });
 });
+
+/**
+ * The boundary that actually broke on the phone, end to end at the pure layer:
+ * model output → envelope normalization → governed outcome → launch policy →
+ * the durable proposal shape → the card the phone draws. Each step is the real
+ * function, so a regression anywhere in the chain fails here.
+ */
+describe("phone mission request renders an approval card, never raw JSON", () => {
+  const PHONE_RAW = JSON.stringify({
+    result: {
+      kind: "MISSION_REQUEST",
+      text: "Je propose de lancer une mission de test qui analysera l'état actuel du système.",
+      goal: {
+        title: "Mission de test – analyse système",
+        objective: "Obtenir un résumé de l'état actuel du système ICOS.",
+        successCriteria: ["Résumé clair produit"],
+        constraints: ["Aucune action externe"],
+        riskLevel: "read_only",
+      },
+      memorySuggestions: [],
+      intent: "propose-mission",
+    },
+  });
+
+  it("turns the phone's own payload into a decidable card with the real title", async () => {
+    const { parseCognitionOutput } = await import("@/server/cognitive/cognition");
+    const { governOutcome, launchPolicy } = await import("@/core/cognitive/turn-policy");
+
+    const out = parseCognitionOutput(PHONE_RAW);
+    expect(out.result.kind).toBe("MISSION_REQUEST");
+
+    const governed = governOutcome(out.result);
+    expect(governed.outcome).toBe("MISSION_REQUEST");
+    expect(governed.proposal?.kind).toBe("goal_proposal");
+
+    // The policy that decides the initial status of the persisted proposal.
+    const policy = launchPolicy("goal_proposal");
+    expect(policy.status).toBe("approval_required");
+
+    // The durable row that status produces, as the API returns it.
+    const card = proposalCard({
+      id: "tref_phone",
+      kind: "goal_proposal",
+      status: policy.status,
+      payload: governed.proposal!.payload,
+      missionId: null,
+      failureReason: null,
+    });
+
+    expect(card).toMatchObject({
+      kind: "goal_proposal",
+      title: "Mission de test – analyse système",
+      label: "Approbation requise",
+      decidable: true,
+      missionId: null,
+    });
+    // The spoken/displayed reply is prose, and the card title is not JSON.
+    expect(governed.reply).not.toContain('{"');
+    expect(card!.title).not.toContain('{"');
+  });
+
+  it("a refused proposal stops being decidable and claims no mission", () => {
+    const card = proposalCard({
+      id: "tref_phone",
+      kind: "goal_proposal",
+      status: "rejected",
+      payload: { title: "Mission de test", objective: "x" },
+      missionId: null,
+      failureReason: null,
+    });
+    expect(card).toMatchObject({ decidable: false, label: "Rejetée", missionId: null });
+  });
+});
