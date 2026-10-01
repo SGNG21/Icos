@@ -200,7 +200,8 @@ export interface CockpitSnapshot {
 }
 
 const DAY_MS = 86_400_000;
-const ACTIVE_MISSION: ReadonlySet<Mission["status"]> = new Set([
+/** Mission statuses CORE3 considers in flight. One authority, shared by every surface. */
+export const ACTIVE_MISSION: ReadonlySet<Mission["status"]> = new Set([
   "planning",
   "ready",
   "running",

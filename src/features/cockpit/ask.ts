@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { REF_STATUSES } from "@/core/cognitive/contracts";
+
 /**
  * ASK ICOS — cockpit client of the Cognitive Runtime (lane C, decision 0056,
  * committed on feat/cognitive-runtime). The browser renders durable state and
@@ -38,24 +40,42 @@ const turnSchema = z
   .passthrough();
 export type AskTurn = z.infer<typeof turnSchema>;
 
+/**
+ * A `TurnReference` as the runtime actually serializes it (`src/core/cognitive/contracts.ts`).
+ *
+ * This schema used to require an `externalId` the runtime has never had, and a status
+ * vocabulary (`awaiting_approval`, `submitted`) it never emits — so EVERY real proposal
+ * failed `safeParse`. The visible effect was severe: a decision that the server had
+ * already recorded, and whose goal it had already filed through canonical intake, came
+ * back as `unexpected_response` and was shown to the owner as "refused". The schema now
+ * follows `REF_STATUSES`, and the two legacy strings are still accepted so the cockpit's
+ * own branches keep working while they are migrated.
+ */
 const proposalSchema = z
   .object({
     id: z.string(),
     turnId: z.string(),
     kind: z.enum(["goal_proposal", "action_request"]),
-    status: z.enum([
-      "awaiting_approval",
-      "approved",
-      "rejected",
-      "submitted",
-      "not_connected",
-      "failed",
-    ]),
+    status: z.enum([...REF_STATUSES, "awaiting_approval", "submitted"]),
     payload: z.record(z.string(), z.unknown()),
-    externalId: z.string().nullable(),
+    /** Canonical launch identity, set once a proposal reaches CORE3 / goal intake. */
+    goalId: z.string().nullable().optional(),
+    missionId: z.string().nullable().optional(),
+    launchJobId: z.string().nullable().optional(),
+    /** Why the policy put the proposal in its initial state. */
+    policyReason: z.string().optional(),
+    failureReason: z.string().nullable().optional(),
+    /** Legacy alias kept for the cockpit screen; the runtime does not send it. */
+    externalId: z.string().nullable().optional(),
   })
   .passthrough();
 export type AskProposal = z.infer<typeof proposalSchema>;
+
+/** The canonical state in which a proposal is waiting for a human decision. */
+export const PROPOSAL_AWAITING: readonly AskProposal["status"][] = [
+  "approval_required",
+  "awaiting_approval",
+];
 
 const conversationSchema = z
   .object({
