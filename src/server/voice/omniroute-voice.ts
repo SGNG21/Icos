@@ -24,21 +24,40 @@ export type OmniRouteVoiceConfig = {
 
 export type VoiceProviderStatus = "CONFIGURED" | "NOT_CONFIGURED";
 
+/**
+ * Language the providers use when the voice session states none (the client normally
+ * sends `navigator.language`). Configured, not hardcoded: the session locale still
+ * wins, so multilingual use keeps working — this only decides the fallback.
+ */
+export const DEFAULT_VOICE_LANGUAGE = "fr";
+
+/**
+ * A gateway voice id from a session language. The gateway's `/v1/audio/speech` takes
+ * the OpenAI `voice` field as a language code and accepts "fr" but answers 502 to
+ * "fr-FR", so this narrows to the 2-letter code — the same normalization STT does.
+ * Returns null for anything that is not a language tag, so the caller can fall back.
+ */
+export function ttsVoice(language: string | undefined): string | null {
+  const code = language?.trim().slice(0, 2).toLowerCase();
+  return code && /^[a-z]{2}$/.test(code) ? code : null;
+}
+
 export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = process.env): {
   stt: SttProvider | null;
   tts: TtsProvider | null;
-  status: { stt: VoiceProviderStatus; tts: VoiceProviderStatus };
+  status: { stt: VoiceProviderStatus; tts: VoiceProviderStatus; language: string };
 } {
   const baseUrl = env.OMNIROUTE_BASE_URL;
   const apiKey = env.OMNIROUTE_API_KEY;
   const gateway = baseUrl && apiKey ? { baseUrl, apiKey } : null;
+  const language = ttsVoice(env.ICOS_VOICE_LANGUAGE) ?? DEFAULT_VOICE_LANGUAGE;
   const stt =
     gateway && env.ICOS_VOICE_STT_MODEL
-      ? new OmniRouteStt(gateway, env.ICOS_VOICE_STT_MODEL)
+      ? new OmniRouteStt(gateway, env.ICOS_VOICE_STT_MODEL, 1.5, language)
       : null;
   const tts =
     gateway && env.ICOS_VOICE_TTS_MODEL
-      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL)
+      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL, language)
       : null;
   return {
     stt,
@@ -46,6 +65,7 @@ export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = 
     status: {
       stt: stt ? "CONFIGURED" : "NOT_CONFIGURED",
       tts: tts ? "CONFIGURED" : "NOT_CONFIGURED",
+      language,
     },
   };
 }
@@ -115,6 +135,8 @@ export class OmniRouteStt implements SttProvider {
     private readonly model: string,
     /** Seconds of new audio between two interim transcriptions; 0 disables partials. */
     private readonly partialEverySeconds = 1.5,
+    /** Used when the session states no language, so Whisper never has to guess. */
+    private readonly defaultLanguage = DEFAULT_VOICE_LANGUAGE,
   ) {
     this.id = `omniroute:${model}`;
   }
@@ -124,7 +146,7 @@ export class OmniRouteStt implements SttProvider {
     onEvent: (event: SttEvent) => void,
   ) {
     if (options.encoding !== "pcm16") throw new Error(`unsupported encoding ${options.encoding}`);
-    const language = options.language?.slice(0, 2).toLowerCase();
+    const language = ttsVoice(options.language) ?? this.defaultLanguage;
     const chunks: Uint8Array[] = [];
     let bytes = 0;
     let partialAt = 0;
@@ -224,11 +246,21 @@ export class OmniRouteTts implements TtsProvider {
   constructor(
     private readonly config: OmniRouteVoiceConfig,
     private readonly model: string,
+    /** Used when the session states no language. */
+    private readonly defaultLanguage = DEFAULT_VOICE_LANGUAGE,
   ) {
     this.id = `omniroute:${model}`;
   }
 
-  start(_options: { language?: string }, onEvent: (event: TtsEvent) => void) {
+  start(options: { language?: string }, onEvent: (event: TtsEvent) => void) {
+    /*
+     * The language MUST be sent. The gateway ignores the model id for
+     * /v1/audio/speech ("gtts/fr" and "gtts/en" return byte-identical audio) and
+     * otherwise GUESSES the language from the text — so one English token in a
+     * French reply ("(NOT_CONNECTED)") flipped the whole answer to an English
+     * voice reading French. Observed on a real phone; see omniroute-voice.test.ts.
+     */
+    const voice = ttsVoice(options.language) ?? this.defaultLanguage;
     const queue: string[] = [];
     const cancelled = new AbortController();
     let buffer = "";
@@ -240,7 +272,7 @@ export class OmniRouteTts implements TtsProvider {
       const response = await post(
         this.config,
         "/audio/speech",
-        JSON.stringify({ model: this.model, input, response_format: "mp3" }),
+        JSON.stringify({ model: this.model, input, response_format: "mp3", voice }),
         cancelled.signal,
         true,
       );

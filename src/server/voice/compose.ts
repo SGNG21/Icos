@@ -2,6 +2,8 @@ import { cognitiveRuntimeFor } from "@/server/cognitive";
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 
+import { OmniRouteCognitionEngine } from "@/server/cognitive/cognition";
+
 import { CognitiveRuntimeVoiceAdapter } from "./cognitive-runtime-adapter";
 import { omniRouteVoiceFromEnv } from "./omniroute-voice";
 import { VoiceSessionRegistry } from "./voice-session";
@@ -22,6 +24,14 @@ export async function composeVoiceHost() {
   if (!cognitive)
     throw new Error("VOICE_COGNITIVE_RUNTIME_UNAVAILABLE: PostgreSQL persistence required");
   const providers = omniRouteVoiceFromEnv();
+  /*
+   * The cognitive RUNTIME existing is not the same as cognition being CONFIGURED.
+   * Without ICOS_COGNITIVE_MODEL the runtime falls back to NotConnectedCognitionEngine,
+   * which answers "NOT_CONNECTED" as an ordinary turn — so the phone reached "Prêt",
+   * spoke, and got a durable turn that could never propose a mission. Observed on a
+   * real phone. Voice fails closed here instead of looking healthy.
+   */
+  const cognitionConfigured = OmniRouteCognitionEngine.fromEnv().label !== "not_connected";
   /* Roles come from the authenticated session at upgrade time, never from the client. */
   const rolesByUser = new Map<string, readonly string[]>();
   const registry = new VoiceSessionRegistry({
@@ -59,7 +69,14 @@ export async function composeVoiceHost() {
         : { ok: false, status: access.response.status };
     },
     ...(providers.stt
-      ? {}
+      ? cognitionConfigured
+        ? {}
+        : {
+            unavailable: {
+              code: "COGNITION_NOT_CONFIGURED" as const,
+              message: "cognition is not configured (ICOS_COGNITIVE_MODEL)",
+            },
+          }
       : {
           unavailable: {
             code: "PROVIDER_NOT_CONFIGURED" as const,
@@ -73,7 +90,9 @@ export async function composeVoiceHost() {
     status: {
       stt: providers.status.stt,
       tts: providers.status.tts,
+      language: providers.status.language,
       cognitive: "COGNITIVE_RUNTIME" as const,
+      cognition: cognitionConfigured ? ("CONFIGURED" as const) : ("NOT_CONFIGURED" as const),
     },
   };
 }

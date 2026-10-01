@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { SttEvent, TtsEvent } from "@/core/voice/contracts";
 
 import {
+  DEFAULT_VOICE_LANGUAGE,
   OmniRouteStt,
   OmniRouteTts,
   omniRouteVoiceFromEnv,
   speakable,
   takeSentences,
+  ttsVoice,
   wav,
 } from "./omniroute-voice";
 
@@ -76,7 +78,8 @@ describe("OmniRouteStt", () => {
     expect(f.calls).toHaveLength(1);
     f.calls[0].resolve(json({ text: "bon" }));
     await flush();
-    expect(events).toEqual([{ type: "partial", text: "bon", language: undefined }]);
+    // The language is the one STT actually asked for (configured fallback), not undefined.
+    expect(events).toEqual([{ type: "partial", text: "bon", language: "fr" }]);
     stream.write(frame(3200)); // new interim
     expect(f.calls).toHaveLength(2);
     stream.finish(); // aborts the interim, sends the final
@@ -188,6 +191,67 @@ describe("OmniRouteTts", () => {
   });
 });
 
+/**
+ * REGRESSION — the French voice defect observed on a real Xiaomi 13T.
+ *
+ * The gateway IGNORES the model id for /v1/audio/speech ("gtts/fr" and "gtts/en"
+ * return byte-identical audio) and instead guesses the language from the text. The
+ * reply "Le moteur cognitif d'ICOS n'est pas connecté (NOT_CONNECTED) : ..." contains
+ * an English token, so the guess flipped to English and the phone spoke French with an
+ * English voice. Measured round-trip at the time: detected language "English", transcript
+ * "Le motor cognitive dicos nespas connecte, not underscore connected, ...". Sending the
+ * `voice` field fixed it (detected "French"); `language`/`lang` are ignored by the gateway
+ * and "fr-FR" is refused with 502, hence the 2-letter narrowing in ttsVoice.
+ */
+describe("TTS language is sent, never guessed from the text", () => {
+  const voiceOf = (options: { language?: string }, fallback?: string) => {
+    const f = fakeFetch();
+    const tts = fallback
+      ? new OmniRouteTts(config(f.fetch), "gtts/fr", fallback)
+      : new OmniRouteTts(config(f.fetch), "gtts/fr");
+    tts.start(options, () => {}).text("Bonjour. ");
+    return JSON.parse(String(f.calls[0].body)) as { voice?: string; model: string; input: string };
+  };
+
+  it("sends the session language as the gateway `voice` field", () => {
+    expect(voiceOf({ language: "fr-FR" }).voice).toBe("fr");
+    expect(voiceOf({ language: "en-GB" }).voice).toBe("en");
+  });
+
+  it("falls back to the configured language when the session states none", () => {
+    expect(voiceOf({}).voice).toBe(DEFAULT_VOICE_LANGUAGE);
+    expect(voiceOf({}).voice).toBe("fr");
+    expect(voiceOf({}, "es").voice).toBe("es");
+    expect(voiceOf({ language: "!!" }, "es").voice).toBe("es");
+  });
+
+  it("never omits the voice, whatever the session sends", () => {
+    for (const language of [undefined, "", "   ", "x", "fr", "FR-fr", "zzzz"]) {
+      expect(voiceOf({ ...(language === undefined ? {} : { language }) }).voice).toMatch(
+        /^[a-z]{2}$/,
+      );
+    }
+  });
+
+  it("ttsVoice narrows to the 2-letter code the gateway accepts (fr-FR is a 502)", () => {
+    expect(ttsVoice("fr-FR")).toBe("fr");
+    expect(ttsVoice("FR")).toBe("fr");
+    expect(ttsVoice(" en-US ")).toBe("en");
+    expect(ttsVoice("f")).toBeNull();
+    expect(ttsVoice("")).toBeNull();
+    expect(ttsVoice(undefined)).toBeNull();
+    expect(ttsVoice("12")).toBeNull();
+  });
+
+  it("STT asks for the configured language instead of letting Whisper guess", () => {
+    const f = fakeFetch();
+    new OmniRouteStt(config(f.fetch), "whisper", 0, "fr")
+      .open({ encoding: "pcm16", sampleRate: 16_000 }, () => {})
+      .finish();
+    expect((f.calls[0].body as FormData).get("language")).toBe("fr");
+  });
+});
+
 describe("helpers and configuration", () => {
   it("splits sentences and keeps the incomplete tail", () => {
     expect(takeSentences("Oui. Non ! Peut-être… ou pas")).toEqual({
@@ -221,15 +285,33 @@ describe("helpers and configuration", () => {
     expect(omniRouteVoiceFromEnv({}).status).toEqual({
       stt: "NOT_CONFIGURED",
       tts: "NOT_CONFIGURED",
+      language: "fr",
     });
     expect(
       omniRouteVoiceFromEnv({ ICOS_VOICE_STT_MODEL: "m", ICOS_VOICE_TTS_MODEL: "t" }).status,
     ).toEqual({
       stt: "NOT_CONFIGURED",
       tts: "NOT_CONFIGURED",
+      language: "fr",
     });
     const configured = omniRouteVoiceFromEnv({ ...gateway, ICOS_VOICE_STT_MODEL: "m" });
-    expect(configured.status).toEqual({ stt: "CONFIGURED", tts: "NOT_CONFIGURED" });
+    expect(configured.status).toEqual({
+      stt: "CONFIGURED",
+      tts: "NOT_CONFIGURED",
+      language: "fr",
+    });
     expect(configured.stt?.simulated).toBe(false);
+  });
+
+  it("takes the fallback language from configuration, keeping other locales possible", () => {
+    const gateway = { OMNIROUTE_BASE_URL: "http://gw", OMNIROUTE_API_KEY: "k" };
+    expect(omniRouteVoiceFromEnv({ ...gateway }).status.language).toBe("fr");
+    expect(
+      omniRouteVoiceFromEnv({ ...gateway, ICOS_VOICE_LANGUAGE: "en-US" }).status.language,
+    ).toBe("en");
+    // Nonsense never silently becomes a wrong voice: it falls back to the default.
+    expect(omniRouteVoiceFromEnv({ ...gateway, ICOS_VOICE_LANGUAGE: "!" }).status.language).toBe(
+      "fr",
+    );
   });
 });

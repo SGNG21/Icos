@@ -896,3 +896,33 @@
     transition: none !important;
   }
 }
+
+/* Approve / reject a proposal — 44 px targets, side by side, wrapping on a narrow phone. */
+.missionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+.missionActions .textButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+.missionActions .textButton svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.missionActions .textButton[data-variant="primary"] {
+  border-color: transparent;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff;
+  font-weight: 650;
+}
+.missionActions .textButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

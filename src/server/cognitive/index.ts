@@ -12,7 +12,19 @@ import {
 
 import { OmniRouteCognitionEngine, type CognitionEngine } from "./cognition";
 import { CognitiveRuntime } from "./cognitive-runtime";
-import { ContextAssembler, type OperationalMemorySource } from "./context-assembler";
+import { count as sqlCount } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
+
+import { capabilities as capabilitiesTable, workers } from "@/server/database/schema";
+import { toolConnectorHealth, toolGrants } from "@/server/database/tool-gateway-schema";
+
+import {
+  ContextAssembler,
+  type OperationalMemorySource,
+  type SelfModelSource,
+} from "./context-assembler";
+import { CombinedSelfModel, OperationalStateSource } from "./operational-state";
+import { RuntimeSelfModel, type RuntimeProbes } from "./runtime-self-model";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
@@ -78,7 +90,42 @@ export interface CognitiveRuntimeOptions {
   readonly engine?: CognitionEngine;
   readonly missions?: MissionGateway | null;
   readonly operational?: OperationalMemorySource | null;
+  /** Live capability truth (decision 0062). `null` disables it; tests inject their own. */
+  readonly selfModel?: SelfModelSource | null;
   readonly staleTurnMs?: number;
+}
+
+/**
+ * The real measurements behind ICOS's self-description. Counts are per turn and
+ * unfiltered by tenant on purpose: "is ANY connector installed, is ANY worker
+ * registered" is what decides NOT_CONNECTED, and a count that cannot be taken
+ * stays undefined so the self-model fails closed.
+ */
+function runtimeProbesFor(
+  db: Database,
+  engine: CognitionEngine,
+  missionsConnected: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): RuntimeProbes {
+  const count = async (table: PgTable) => {
+    const [row] = await db.select({ n: sqlCount() }).from(table);
+    return Number(row?.n ?? 0);
+  };
+  return {
+    countToolConnectors: () => count(toolConnectorHealth),
+    countToolGrants: () => count(toolGrants),
+    countWorkers: () => count(workers),
+    countCapabilities: () => count(capabilitiesTable),
+    cognitionConfigured: () => engine.label !== "not_connected",
+    missionIntakeConnected: () => missionsConnected,
+    // The sweepers that advance an approved mission only run in this mode
+    // (startProductionServices); without them nothing continues after a disconnect.
+    durableSchedulerRunning: () => env.NODE_ENV === "production" && env.PERSISTENCE === "postgres",
+    speechToText: () =>
+      Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY && env.ICOS_VOICE_STT_MODEL),
+    textToSpeech: () =>
+      Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY && env.ICOS_VOICE_TTS_MODEL),
+  };
 }
 
 export function buildCognitiveRuntime(
@@ -98,11 +145,20 @@ export function buildCognitiveRuntime(
           }),
         )
       : (options.operational ?? undefined);
+  const engine = options.engine ?? OmniRouteCognitionEngine.fromEnv();
+  const missionsConnected = options.missions !== undefined && options.missions !== null;
+  const selfModel =
+    options.selfModel === undefined
+      ? new CombinedSelfModel([
+          new RuntimeSelfModel(runtimeProbesFor(db, engine, missionsConnected)),
+          new OperationalStateSource(db),
+        ])
+      : (options.selfModel ?? undefined);
   return new CognitiveRuntime({
     conversations: new PostgresConversationStore(db, clock),
     memory,
-    assembler: new ContextAssembler(memory, clock, operational),
-    engine: options.engine ?? OmniRouteCognitionEngine.fromEnv(),
+    assembler: new ContextAssembler(memory, clock, operational, selfModel),
+    engine,
     missions: options.missions === undefined ? null : options.missions,
     staleTurnMs: options.staleTurnMs,
   });

@@ -19,9 +19,17 @@ import type {
 export const CONTEXT_POLICY_VERSION = "cognitive-context-v1";
 
 export type ContextStage =
-  "goals" | "entities" | "episodic" | "semantic" | "decisions" | "procedures";
+  "runtime" | "goals" | "entities" | "episodic" | "semantic" | "decisions" | "procedures";
 
+/**
+ * `runtime` outranks every other stage on purpose: it carries what the system
+ * IS right now (which capabilities are connected, what policy requires). A
+ * recalled sentence in which ICOS once described itself is episodic history at
+ * 0.2 and can never outweigh it, so stale self-description cannot be mistaken
+ * for current truth. See decision 0062.
+ */
 const STAGE_WEIGHT: Record<ContextStage, number> = {
+  runtime: 0.9,
   goals: 0.5,
   entities: 0.4,
   decisions: 0.35,

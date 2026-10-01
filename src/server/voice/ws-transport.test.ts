@@ -144,6 +144,36 @@ describe("voice WebSocket transport", () => {
     ]);
   });
 
+  /**
+   * REGRESSION — observed on a real Xiaomi 13T. Without ICOS_COGNITIVE_MODEL the
+   * runtime falls back to NotConnectedCognitionEngine, which answers "NOT_CONNECTED"
+   * as an ORDINARY turn. The phone therefore reached "Prêt", recorded a durable turn
+   * and could never propose a mission, while looking healthy. Voice must now refuse
+   * the session and say which configuration is missing.
+   */
+  it("refuses the session, naming cognition, when the engine is not configured", async () => {
+    const h = await host({
+      unavailable: {
+        code: "COGNITION_NOT_CONFIGURED",
+        message: "cognition is not configured (ICOS_COGNITIVE_MODEL)",
+      },
+    });
+    const c = client(h.port);
+    const [code, reason] = (await once(c.ws, "close")) as [number, Buffer];
+    expect(code).toBe(1011);
+    expect(String(reason)).toBe("COGNITION_NOT_CONFIGURED");
+    expect(c.inbox).toEqual([
+      {
+        type: "error",
+        retryable: false,
+        code: "COGNITION_NOT_CONFIGURED",
+        message: "cognition is not configured (ICOS_COGNITIVE_MODEL)",
+      },
+    ]);
+    // Never a `ready`: the phone cannot show a healthy state.
+    expect(c.inbox.some((m) => (m as { type: string }).type === "ready")).toBe(false);
+  });
+
   it("leaves other upgrade paths to the host (e.g. Next HMR)", async () => {
     const h = await host();
     const c = client(h.port, "/_next/webpack-hmr");

@@ -7,8 +7,10 @@
  * are unchanged; voice simply is not available there.
  *
  * A phone only grants the microphone to a secure origin. Either put this host
- * behind a TLS proxy (e.g. `tailscale serve`), or set ICOS_VOICE_TLS_CERT and
- * ICOS_VOICE_TLS_KEY (PEM paths) to serve HTTPS directly.
+ * behind a TLS proxy (`tailscale serve` — tailnet only, NEVER `tailscale funnel`,
+ * which publishes it to the public internet), or set ICOS_VOICE_TLS_CERT and
+ * ICOS_VOICE_TLS_KEY (PEM paths) to serve HTTPS directly. The default bind is
+ * loopback: nothing reaches the LAN unless HOST is changed.
  *
  * Prints provider STATUS only — never keys or URLs.
  */
@@ -80,7 +82,10 @@ async function main(): Promise<void> {
     console.log(
       `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
         `${publicOrigin ? `, public ${publicOrigin.origin} ` : ""}` +
-        `(STT=${voice.status.stt} TTS=${voice.status.tts} COGNITIVE=${voice.status.cognitive})`,
+        `(STT=${voice.status.stt} TTS=${voice.status.tts} LANG=${voice.status.language} ` +
+        // COGNITIVE is the runtime; COGNITION is the engine. Printing only the former
+        // is what hid an unconfigured ICOS_COGNITIVE_MODEL behind a healthy-looking host.
+        `COGNITIVE=${voice.status.cognitive} COGNITION=${voice.status.cognition})`,
     );
   });
 }
