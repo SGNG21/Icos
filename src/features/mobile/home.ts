@@ -174,7 +174,10 @@ export interface WorkerRow {
 
 export interface IncidentRow {
   id: string;
+  /** Display tone only — several canonical severities share one. */
   severity: "critical" | "warning" | "info";
+  /** The severity ICOS actually stated, verbatim. This is what the owner is shown. */
+  severityLabel: string;
   title: string;
   description: string;
   at: string | null;
@@ -210,6 +213,13 @@ export interface ActivityRow {
 export interface MobileHomeModel {
   generatedAt: string;
   health: { level: HealthLevel; reasons: readonly string[] };
+  /**
+   * The perimeter every section was read under. `"linked"` means the caller sees only what
+   * their agent links grant — and `resolveOperationalScope` falls back to an EMPTY linked
+   * scope when the operational-access service is not composed. An empty result under a
+   * collapsed scope is not "nothing exists", so the scope has to be on screen.
+   */
+  scope: "global" | "linked";
   activeMission: Section<ActiveMissionRow>;
   missions: Section<MissionRow>;
   workers: Section<WorkerRow>;
@@ -286,6 +296,12 @@ const attentionOf = (m: MissionSummary): MissionRow["attention"] =>
 const scopeOf = (s: SupervisorSituationFact): string | null =>
   [s.clientScope, s.projectScope].filter(Boolean).join(" / ") || null;
 
+/**
+ * Supervisor severities mapped onto the three tones the stylesheet has. `high` shares
+ * `critical`'s tone, which is why `IncidentRow` also carries `severityLabel`: the tone
+ * drives colour, the label is what the owner reads. Showing a canonical `high` situation
+ * as the word "CRITICAL" would be this surface inventing a severity ICOS never stated.
+ */
 const SUPERVISOR_SEVERITY: Record<SupervisorSituationFact["severity"], IncidentRow["severity"]> = {
   critical: "critical",
   high: "critical",
@@ -307,6 +323,8 @@ const PROPOSAL_CSS: Record<ProposalState, ProposalRow["cssState"]> = {
 export interface MobileHomeInput {
   generatedAt: string;
   health: { level: HealthLevel; reasons: readonly string[] };
+  /** The perimeter the loader read under (`CockpitSources["scope"]`). */
+  scope: "global" | "linked";
   missions: Truth<readonly MissionSummary[]>;
   /** Canonical focus derivation (longest remaining critical path, attention first). */
   focus: { missionId: string; path: { id: string; title: string; status: string }[] } | null;
@@ -411,6 +429,7 @@ export function buildMobileHome(input: MobileHomeInput): MobileHomeModel {
   return {
     generatedAt: input.generatedAt,
     health: input.health,
+    scope: input.scope,
     activeMission,
     missions,
     workers,
@@ -506,6 +525,7 @@ function buildIncidents(input: MobileHomeInput): Section<IncidentRow> {
     .map((a) => ({
       id: `alert:${a.id}`,
       severity: a.severity === "P0" ? ("critical" as const) : ("warning" as const),
+      severityLabel: a.severity,
       title: a.title,
       description: a.detail ?? a.category,
       at: a.at ?? null,
@@ -527,6 +547,7 @@ function buildIncidents(input: MobileHomeInput): Section<IncidentRow> {
     .map((s) => ({
       id: `situation:${s.id}`,
       severity: SUPERVISOR_SEVERITY[s.severity],
+      severityLabel: s.severity,
       title: `${s.eventType} · ${s.subject}`,
       description: `${s.domain} — ${s.eventCount} événement(s) agrégé(s)`,
       at: s.lastSeenAt,

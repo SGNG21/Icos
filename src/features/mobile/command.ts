@@ -20,9 +20,24 @@ import {
  * proposals (see `CognitiveRuntime.resume`), so calling it on arrival would make opening
  * the home screen mutate durable state and could complete a goal launch. Rendering stays
  * a read; everything shown here is the response to a submission the owner made.
+ *
+ * Arrival is INERT — `idle`, not `loading`. Even listing conversations is not free: every
+ * entry into the Cognitive Runtime's HTTP surface composes the runtime, and composing it
+ * relaunches the tenant's interrupted goal launches at most once a minute
+ * (`cognitiveRuntimeFor` -> `recoverLaunches` -> `launch`, which enqueues `start_mission`).
+ * That is lane C's behaviour behind a GET, not ours to change here; what is ours is to
+ * stop provoking it from the root page. So the link is probed on the owner's FIRST
+ * GESTURE, never on mount: opening the Mobile Home touches the runtime zero times.
  */
 
-export type CommandLink = "loading" | "ready" | "not_connected" | "unavailable" | "error";
+export type CommandLink =
+  /** Nothing has been asked of the runtime yet. The only state a fresh render may show. */
+  | "idle"
+  | "loading"
+  | "ready"
+  | "not_connected"
+  | "unavailable"
+  | "error";
 
 export interface PendingSubmission {
   readonly text: string;
@@ -47,7 +62,7 @@ export interface CommandState {
 }
 
 export const initialCommand: CommandState = {
-  link: "loading",
+  link: "idle",
   engine: null,
   conversationId: null,
   turns: [],
@@ -58,6 +73,7 @@ export const initialCommand: CommandState = {
 };
 
 export type CommandAction =
+  | { type: "probing" }
   | { type: "listed"; engine: string; conversationId: string | null }
   | { type: "link"; link: CommandLink; message?: string }
   | { type: "message"; message: string | null }
@@ -80,6 +96,9 @@ const upsertProposal = (
 
 export function commandReducer(state: CommandState, action: CommandAction): CommandState {
   switch (action.type) {
+    case "probing":
+      // Only an idle link may be probed: never restart a settled failure as "connecting".
+      return state.link === "idle" ? { ...state, link: "loading" } : state;
     case "listed":
       return {
         ...state,
@@ -150,11 +169,25 @@ export const openTurn = (state: CommandState): AskTurn | undefined =>
 export const isBusy = (state: CommandState): boolean =>
   state.sending || state.pending?.phase === "submitting" || Boolean(openTurn(state));
 
-export function canSend(state: CommandState, body: string): boolean {
+/** The runtime has never been asked anything: the owner's first gesture may probe it. */
+export const needsProbe = (state: CommandState): boolean => state.link === "idle";
+
+/**
+ * Whether the owner may type. `idle` is typable on purpose: the field is what triggers the
+ * probe, so disabling it until the link is known would make the probe unreachable. Sending
+ * still requires `ready` — a draft is not a submission.
+ */
+export const canType = (state: CommandState): boolean =>
+  (state.link === "idle" || state.link === "ready") && !isBusy(state);
+
+/** Body-only validity. `canSend` is this plus a ready link and nothing in flight. */
+export const bodyFits = (body: string): boolean => {
   const text = body.trim();
-  return (
-    state.link === "ready" && text.length > 0 && text.length <= ASK_MAX_LENGTH && !isBusy(state)
-  );
+  return text.length > 0 && text.length <= ASK_MAX_LENGTH;
+};
+
+export function canSend(state: CommandState, body: string): boolean {
+  return state.link === "ready" && bodyFits(body) && !isBusy(state);
 }
 
 /**

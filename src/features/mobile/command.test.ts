@@ -11,15 +11,18 @@ import {
 } from "@/features/cockpit/ask";
 
 import {
+  bodyFits,
   canReplay,
   canRetry,
   canSend,
+  canType,
   commandReducer,
   initialCommand,
   isBusy,
   keyFor,
   latestConversation,
   linkFor,
+  needsProbe,
   openTurn,
   proposalRows,
   type CommandState,
@@ -498,5 +501,47 @@ describe("the command bar can always recover", () => {
     state = commandReducer(state, { type: "link", link: "ready" });
     expect(state.sending).toBe(true);
     expect(state.pending?.phase).toBe("submitting");
+  });
+});
+
+/**
+ * Arrival must cost the Cognitive Runtime nothing. Entering its HTTP surface composes the
+ * runtime, and composing it relaunches the tenant's interrupted goal launches at most once
+ * a minute (`cognitiveRuntimeFor` -> `recoverLaunches` -> `launch`, which enqueues a
+ * `start_mission` job). The Mobile Home is the ROOT page, so a probe on mount would turn
+ * every page view into a potential write. The link therefore starts `idle` and is probed
+ * only by the owner's first gesture.
+ */
+describe("arrival is inert", () => {
+  it("starts idle, not loading: no claim about a runtime nobody asked", () => {
+    expect(initialCommand.link).toBe("idle");
+    expect(needsProbe(initialCommand)).toBe(true);
+  });
+
+  it("lets the owner type while idle — the field is what triggers the probe", () => {
+    // A disabled field could never be focused, so the link would stay unknowable forever.
+    expect(canType(initialCommand)).toBe(true);
+  });
+
+  it("still refuses to SEND while the link is unprobed", () => {
+    expect(canSend(initialCommand, "démarre la mission")).toBe(false);
+    // ...even though the body itself is perfectly valid.
+    expect(bodyFits("démarre la mission")).toBe(true);
+  });
+
+  it("probes once: a settled failure is never re-dressed as 'connecting'", () => {
+    const failed = commandReducer(initialCommand, { type: "link", link: "not_connected" });
+    expect(needsProbe(failed)).toBe(false);
+    // A later `probing` must not walk it back to loading.
+    expect(commandReducer(failed, { type: "probing" }).link).toBe("not_connected");
+  });
+
+  it("moves idle -> loading only on an explicit probe", () => {
+    expect(commandReducer(initialCommand, { type: "probing" }).link).toBe("loading");
+  });
+
+  it("is not typable once the link is known to be dead", () => {
+    const dead = commandReducer(initialCommand, { type: "link", link: "unavailable" });
+    expect(canType(dead)).toBe(false);
   });
 });

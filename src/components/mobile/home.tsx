@@ -116,6 +116,22 @@ function SectionState({ section, empty }: { section: Section<unknown>; empty: st
   );
 }
 
+/**
+ * The perimeter the page was read under. An EMPTY mission or approval list is only "there
+ * is nothing" within a known scope: `resolveOperationalScope` falls back to an EMPTY linked
+ * scope when the operational-access service is not composed, and that must not read as an
+ * idle ICOS. Shown as visible text — a phone has no hover.
+ */
+function ScopeNote({ scope }: { scope: MobileHomeModel["scope"] }) {
+  if (scope === "global") return null;
+  return (
+    <p className={styles.muted}>
+      Périmètre <strong>LIÉ</strong> — cette liste ne montre que ce que vos liens d&apos;agent
+      autorisent. Une liste vide ne veut pas dire qu&apos;ICOS n&apos;a rien.
+    </p>
+  );
+}
+
 /** A section that rendered real rows but lost one of its supporting sources. */
 function DegradedNote({ section }: { section: Section<unknown> }) {
   if (section.state !== "DEGRADED") return null;
@@ -303,6 +319,7 @@ export function MobileHome({ session, model }: MobileHomeProps) {
           </h2>
           <SectionState section={model.approvals} empty="Aucune action en attente de décision." />
           <DegradedNote section={model.approvals} />
+          <ScopeNote scope={model.scope} />
           {approvalError && (
             <p className={styles.muted} role="alert">
               {approvalError}
@@ -410,7 +427,7 @@ export function MobileHome({ session, model }: MobileHomeProps) {
                     <h3 className={styles.incidentTitle}>{incident.title}</h3>
                     <p className={styles.incidentDesc}>{incident.description}</p>
                     <div className={styles.incidentMeta}>
-                      <span>{incident.severity.toUpperCase()}</span>
+                      <span>{incident.severityLabel.toUpperCase()}</span>
                       {incident.at && <span>{at(incident.at)}</span>}
                       <span>
                         {incident.source === "supervisor" ? "Superviseur proactif" : "ICOS"}
@@ -431,6 +448,7 @@ export function MobileHome({ session, model }: MobileHomeProps) {
           </h2>
           <SectionState section={model.missions} empty="Aucune mission dans votre périmètre." />
           <DegradedNote section={model.missions} />
+          <ScopeNote scope={model.scope} />
           {model.missions.items.length > 0 && (
             <ul className={styles.missionsList}>
               {model.missions.items.map((mission) => (

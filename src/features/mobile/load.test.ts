@@ -29,7 +29,12 @@ vi.mock("@/features/cockpit/load", () => ({
   getCockpitContext: async () => state.context,
   loadSnapshot: async () => state.snapshot,
   loadSources: async () => state.sources,
-  loadReadModels: async () => state.readModels,
+  // A function stub is CALLED, so a test can make this source throw rather than resolve —
+  // which is the whole point of the containment tests below.
+  loadReadModels: async () =>
+    typeof state.readModels === "function"
+      ? (state.readModels as () => unknown)()
+      : state.readModels,
 }));
 
 const { loadMobileHome } = await import("./load");
@@ -250,5 +255,53 @@ describe("no page-render side effect", () => {
     const model = await loadMobileHome();
     expect(model?.workers.state).toBe("DEGRADED");
     expect(model?.workers.items[0].currentTask.kind).toBe("unknown");
+  });
+});
+
+/**
+ * The loader promises that "each source is read in isolation so one failure degrades that
+ * section to UNKNOWN instead of blanking the page". `loadReadModels` has no error handling
+ * of its own, and the workforce port awaits four service calls that throw when the database
+ * is unavailable — so uncontained it would reject the whole `Promise.all` and 500 the ROOT
+ * page. Containment is the difference between one honest UNKNOWN line and no home screen.
+ */
+describe("one failing source never blanks the page", () => {
+  it("degrades the workforce census to UNKNOWN when the read model THROWS", async () => {
+    runtime({ db: {} });
+    state.readModels = () => {
+      throw new Error("PersistenceUnavailableError: connection terminated");
+    };
+    const model = await loadMobileHome();
+    // The page still renders, and the census says it does not know.
+    expect(model).not.toBeNull();
+    expect(model?.workforce.state).toBe("UNKNOWN");
+    // Every other section is unaffected by a workforce outage.
+    expect(model?.missions.state).not.toBe("UNKNOWN");
+  });
+
+  it("leaks no error internals into the reason it shows", async () => {
+    runtime({ db: {} });
+    state.readModels = () => {
+      throw new Error("postgres://icos:s3cr3t@10.0.0.4:5432/icos timed out");
+    };
+    const model = await loadMobileHome();
+    const reason = model?.workforce.reason ?? "";
+    expect(reason).not.toContain("s3cr3t");
+    expect(reason).not.toContain("postgres://");
+    expect(reason).not.toContain("10.0.0.4");
+  });
+});
+
+describe("the perimeter the facts were read under is carried to the screen", () => {
+  it("reports the snapshot's own scope rather than dropping it", async () => {
+    runtime({ db: {} });
+    state.snapshot = snapshot({ scope: "linked" });
+    expect((await loadMobileHome())?.scope).toBe("linked");
+  });
+
+  it("reports global scope as global", async () => {
+    runtime({ db: {} });
+    state.snapshot = snapshot({ scope: "global" });
+    expect((await loadMobileHome())?.scope).toBe("global");
   });
 });

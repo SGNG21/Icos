@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useReducer, useRef, useState } from "react";
 
 import {
   ASK_MAX_LENGTH,
@@ -16,15 +16,17 @@ import {
 } from "@/features/cockpit/ask";
 import {
   canReplay,
+  bodyFits,
   canRetry,
   canSend,
+  canType,
   commandReducer,
   describeFailure,
   initialCommand,
-  isBusy,
   keyFor,
   latestConversation,
   linkFor,
+  needsProbe,
   proposalRows,
   type CommandLink,
 } from "@/features/mobile/command";
@@ -42,7 +44,14 @@ import styles from "./home.module.css";
  *
  * It never submits work to CORE3, the scheduler, the Workforce or the Tool Gateway, and
  * it never calls the runtime's `resume` route: that route is a recovery operation, not a
- * read. Arriving on the page lists conversations (a pure read) and nothing more.
+ * read.
+ *
+ * ARRIVING ON THE PAGE CALLS THE RUNTIME ZERO TIMES. Listing conversations is a read of
+ * the conversation store, but entering the runtime's HTTP surface at all composes the
+ * runtime, and composing it relaunches the tenant's interrupted goal launches once a
+ * minute (`cognitiveRuntimeFor` -> `recoverLaunches`). On the root page that would make a
+ * page view enqueue `start_mission` jobs. So the link is probed when the owner first
+ * touches the field, never on mount — see `needsProbe`.
  *
  * All decisions live in `@/features/mobile/command`; this file is wiring.
  */
@@ -50,6 +59,7 @@ import styles from "./home.module.css";
 const transport = httpCognitiveTransport();
 
 const LINK_TEXT: Record<Exclude<CommandLink, "ready">, string> = {
+  idle: "",
   loading: "Connexion au runtime cognitif…",
   not_connected: "NON CONNECTÉ — le runtime cognitif n'est pas déployé avec ce build.",
   unavailable:
@@ -82,6 +92,12 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
   /** Closed before the first await: two taps inside one latency window send once. */
   const inFlight = useRef(false);
   const deciding = useRef(false);
+  /**
+   * The link is probed at most once per mount. This latch is the real guard — not a state
+   * check, which a callback closure could read stale — so a settled failure is never
+   * re-dressed as "connecting" and repeated focus events cost exactly one call.
+   */
+  const probing = useRef(false);
 
   const fail = useCallback((reply: Exclude<Reply<unknown>, { kind: "ok" }>) => {
     dispatch({
@@ -91,33 +107,54 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
     });
   }, []);
 
-  // Arrival: list conversations only. This is a pure read — no resume, no recovery.
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      const r = await transport.list().catch(() => null);
-      if (!live) return;
-      if (!r) return dispatch({ type: "link", link: "error" });
-      if (r.kind !== "ok") return fail(r);
-      dispatch({
-        type: "listed",
-        engine: r.value.engine,
-        conversationId: latestConversation(r.value.conversations)?.id ?? null,
-      });
-    })();
-    return () => {
-      live = false;
-    };
-  }, [fail]);
+  /**
+   * Probe the link. Called from the owner's first gesture, NOT from a mount effect: see
+   * the note above on what entering the runtime's HTTP surface sets off. `probing` is a
+   * no-op unless the link is still idle, so repeated focus events cost one call.
+   */
+  const probe = useCallback(async (): Promise<{ conversationId: string | null } | null> => {
+    if (probing.current || !canConverse) return null;
+    probing.current = true;
+    dispatch({ type: "probing" });
+    const r = await transport.list().catch(() => null);
+    if (!r) {
+      dispatch({ type: "link", link: "error" });
+      return null;
+    }
+    if (r.kind !== "ok") {
+      fail(r);
+      return null;
+    }
+    const conversationId = latestConversation(r.value.conversations)?.id ?? null;
+    dispatch({ type: "listed", engine: r.value.engine, conversationId });
+    return { conversationId };
+  }, [canConverse, fail]);
 
   const send = async (resend = false) => {
     if (inFlight.current) return;
     const body = resend && state.pending ? state.pending.text : draft.trim();
+    /**
+     * The owner's first gesture. Arrival probes nothing, so the link is still `idle` here
+     * by design and the readiness half of `canSend` cannot be checked yet — only the body
+     * is. The probe below settles the link inside this same gesture.
+     */
+    const firstGesture = !resend && needsProbe(state);
     // A replay is gated differently from a new question: it may — and must — proceed while
     // the turn it is asking about is still open, or a `processing` turn can never settle.
-    if (!canConverse || !(resend ? canReplay(state) : canSend(state, body))) return;
+    if (!canConverse) return;
+    if (resend ? !canReplay(state) : !(firstGesture ? bodyFits(body) : canSend(state, body)))
+      return;
     inFlight.current = true;
     try {
+      let probed: { conversationId: string | null } | null = null;
+      if (firstGesture) {
+        probed = await probe();
+        // A failed probe stops here: its own notice says why, and nothing is sent blind.
+        // ponytail: this also stops when a focus-triggered probe is still on the wire, so a
+        // cold start can cost a second tap. Deliberate — the alternative is queueing a send
+        // behind an unsettled link, and "never send blind" is the safer corner to keep.
+        if (!probed) return;
+      }
       // The key is settled before anything durable is created, so a non-secure context
       // fails without leaving an empty conversation behind.
       let key: string;
@@ -127,7 +164,7 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
         dispatch({ type: "message", message: "Contexte non sécurisé : rien n'a été envoyé." });
         return;
       }
-      let id = state.conversationId;
+      let id = probed ? probed.conversationId : state.conversationId;
       if (!id) {
         const created = await transport.create().catch(() => null);
         if (!created) {
@@ -175,8 +212,12 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
     }
   };
 
-  const busy = isBusy(state);
-  const ready = state.link === "ready" && canConverse;
+  /**
+   * Typable covers both idle and ready, because the field is what triggers the probe. The
+   * send button adds a non-empty draft; `canSend` (link + nothing in flight) is re-checked
+   * inside `send` itself, so a stale render can never let a submission through.
+   */
+  const typable = canType(state) && canConverse;
   // Only the tail: the phone renders the current exchange, not a transcript.
   const shown = state.turns.slice(-4);
 
@@ -192,7 +233,8 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
           </span>
         </p>
       ) : (
-        state.link !== "ready" && (
+        state.link !== "ready" &&
+        state.link !== "idle" && (
           <p className={styles.commandNotice} data-state={state.link.toUpperCase()} role="status">
             <strong>{LINK_TEXT[state.link]}</strong>
             {state.link === "not_connected" && (
@@ -230,12 +272,13 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
           placeholder="Tapez une commande…"
           className={styles.textCommandInput}
           aria-label="Commande textuelle"
-          disabled={!ready || busy}
+          onFocus={() => void probe()}
+          disabled={!typable}
         />
         <button
           type="submit"
           className={styles.textCommandSubmit}
-          disabled={!ready || busy || draft.trim().length === 0}
+          disabled={!typable || draft.trim().length === 0}
           aria-label="Envoyer à ICOS"
         >
           <svg
@@ -326,18 +369,38 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
               </div>
             ))}
           </dl>
-          {/* Canonical launch identity: what ICOS actually filed, by its real id. */}
+          {/*
+            Canonical launch identity: what ICOS actually filed, by its real id.
+
+            This text used to claim the launch "reste une étape opérateur" and that "une
+            conversation ne lance jamais de workers". Both are false. Approving enqueues a
+            `start_mission` job (`mission-gateway.ts`), whose handler calls
+            `igniteAutonomousMission` -> `startAutonomousMission`: the runner plans and the
+            supervisor DISPATCHES ready tasks through the durable dispatch ledger, with no
+            further human step. The goal carries `humanApprovalPolicy: "always"`, but that
+            is read by `GoalPlanner` for the stored PREVIEW only — it never reaches the
+            autonomous runner, which receives `{id,title,objective,goalId}` and ignores
+            goalId for gating. A consent surface must state what the tap actually commits
+            to, so it now says so.
+          */}
           {(p.goalId || p.missionId || p.externalId) && (
             <span className={styles.muted}>
-              Déposée comme objectif en attente{" "}
-              <code>{p.goalId ?? p.missionId ?? p.externalId}</code>. Son démarrage reste une étape
-              opérateur : une conversation ne lance jamais de workers.
+              Déposée comme objectif <code>{p.goalId ?? p.externalId}</code>
+              {p.missionId && (
+                <>
+                  {" "}
+                  et mission <code>{p.missionId}</code>
+                </>
+              )}
+              . <strong>La mission démarre d&apos;elle-même</strong> : ICOS planifie puis
+              dispatche les tâches prêtes aux workers sans autre étape humaine. Suivez-la dans
+              « Mission active ».
             </span>
           )}
           {p.status === "launching" && (
             <span className={styles.muted}>
               Lancement en cours côté ICOS. Tant qu&apos;il n&apos;est pas confirmé, rien
-              n&apos;affirme que la mission a démarré.
+              n&apos;affirme que la mission a démarré — ni qu&apos;elle n&apos;a pas démarré.
             </span>
           )}
           {p.status === "failed" && p.failureReason && (
@@ -347,6 +410,13 @@ export function CommandBar({ canConverse, canDecideProposals }: CommandBarProps)
             <span className={styles.muted}>
               Approuvée, mais les actions n&apos;ont pas encore de backend conversationnel (NON
               CONNECTÉ).
+            </span>
+          )}
+          {/* Said BEFORE the tap, not only after it: approving is what starts the work. */}
+          {PROPOSAL_AWAITING.includes(p.status) && p.kind === "goal_proposal" && (
+            <span className={styles.muted}>
+              Approuver crée la mission <strong>et la démarre</strong> : ICOS planifie et
+              dispatche les tâches aux workers sans autre validation.
             </span>
           )}
           {PROPOSAL_AWAITING.includes(p.status) &&

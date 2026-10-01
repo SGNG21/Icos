@@ -66,12 +66,17 @@ export async function loadMobileHome(): Promise<MobileHomeModel | null> {
         }),
       ),
     ),
-    loadReadModels(),
+    // Contained like every other source: `loadReadModels` has no error handling of its
+    // own and the workforce port awaits four service calls that can throw (an unavailable
+    // database raises). Uncontained, one of those would 500 the whole home page instead of
+    // degrading one line to UNKNOWN — the opposite of what this loader promises above.
+    read("Read models", loadReadModels),
     readSupervisor(container.db, global),
   ]);
 
   const workforce: Truth<WorkforceCensus> = (() => {
-    const wf = readModels?.workforce;
+    if (!isReal(readModels)) return readModels as Truth<WorkforceCensus>;
+    const wf = readModels.value?.workforce;
     if (!wf) return missing("unknown", "The workforce read model could not be read.");
     if (!isReal(wf)) return wf as Truth<WorkforceCensus>;
     const view = buildWorkforceView(wf.value, new Date());
@@ -81,6 +86,10 @@ export async function loadMobileHome(): Promise<MobileHomeModel | null> {
   return buildMobileHome({
     generatedAt: snapshot.generatedAt,
     health: snapshot.health,
+    // Which perimeter these facts were read under. `resolveOperationalScope` fails CLOSED
+    // to an empty linked scope when the operational-access service is absent, so without
+    // this an owner would read a silently minimal perimeter as "nothing exists".
+    scope: snapshot.scope,
     missions: snapshot.missions,
     focus: snapshot.focus,
     workers: snapshot.workers,

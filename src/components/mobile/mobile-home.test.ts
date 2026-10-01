@@ -29,6 +29,7 @@ const session = {
 const baseInput: MobileHomeInput = {
   generatedAt: "2026-09-30T10:05:00.000Z",
   health: { level: "healthy", reasons: [] },
+  scope: "global",
   missions: real([]),
   focus: null,
   workers: real([]),
@@ -298,21 +299,44 @@ describe("control surfaces are permission gated", () => {
 });
 
 describe("command surface", () => {
-  it("renders the ICOS prompt and refuses to send before the runtime answered", () => {
+  /**
+   * Arrival must call the Cognitive Runtime ZERO times. Entering its HTTP surface composes
+   * the runtime, and composing it relaunches the tenant's interrupted goal launches once a
+   * minute (`cognitiveRuntimeFor` -> `recoverLaunches` -> `launch`, which enqueues
+   * `start_mission`). On the root page that would turn a page view into a write. So the
+   * first render is `idle`: no probe, and therefore no claim about the link either way.
+   */
+  it("renders the ICOS prompt without touching the runtime on arrival", () => {
     const out = render(model());
     expect(out).toContain("Que voulez-vous faire ?");
-    expect(out).toContain("Connexion au runtime cognitif");
-    // Nothing can be submitted while the link is unknown.
-    expect(out).toMatch(/aria-label="Commande textuelle"[^>]*disabled/);
+    // No link claim of any kind: the runtime has not been asked, so nothing is known.
+    // Every command-link notice names the runtime, so its absence is the whole assertion.
+    // (A bare "NON CONNECTÉE" would be too broad — that is also a legitimate SECTION state,
+    // e.g. the Digital Workforce line, which has nothing to do with the command link.)
+    expect(out).not.toContain("runtime cognitif");
+    expect(out).not.toContain("MOTEUR COGNITIF");
+    // Nothing can be submitted: the send button stays disabled until there is a draft
+    // AND a probed link. An empty draft alone is enough to keep it shut.
+    expect(out).toMatch(/aria-label="Envoyer à ICOS"/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*aria-label="Envoyer à ICOS"/);
   });
 
-  it("says that it shows only this session's exchanges, before ICOS answers", () => {
-    // Nothing has been sent yet, so no transcript is implied at all.
+  /**
+   * The field itself is what triggers the probe (onFocus), so it must NOT be disabled on
+   * arrival — a disabled input could never be focused and the link would stay unknowable.
+   */
+  it("leaves the field usable so the owner's first gesture can probe the link", () => {
+    const out = render(model());
+    expect(out).toMatch(/aria-label="Commande textuelle"/);
+    expect(out).not.toMatch(/aria-label="Commande textuelle"[^>]*disabled/);
+  });
+
+  it("implies no transcript and no submission before anything was sent", () => {
     const out = render(model());
     expect(out).not.toContain("Échanges de cette session");
-    // And the link notice is the only state shown — never alongside a submission claim.
-    expect(out).toContain("Connexion au runtime cognitif");
     expect(out).not.toContain("ICOS traite ce tour");
+    // Nor the "a conversation already exists" note, which needs a probed conversation.
+    expect(out).not.toContain("Une conversation ICOS existe déjà");
   });
 
   it("offers nothing to a session that may read but not converse", () => {
@@ -451,5 +475,88 @@ describe("Mobile Home does not invoke CORE3 directly", () => {
       ),
     );
     expect([...used].sort()).toEqual(["create", "decide", "list", "submit"]);
+  });
+});
+
+/**
+ * A consent surface must state what the tap actually commits to. Approving a goal proposal
+ * enqueues `start_mission` (`mission-gateway.ts`), whose handler calls
+ * `igniteAutonomousMission` -> `startAutonomousMission`: the runner plans and the supervisor
+ * DISPATCHES ready tasks through the durable dispatch ledger, with no further human step.
+ * The goal's `humanApprovalPolicy: "always"` is read by `GoalPlanner` for the stored PREVIEW
+ * only; it never reaches the autonomous runner, which gets `{id,title,objective,goalId}` and
+ * ignores goalId for gating.
+ *
+ * The proposal block only renders after a live submission, which static rendering cannot
+ * reach, so this is asserted on the source text. A lint, not a proof — but the hazard here
+ * IS the wording, and a lint is exactly what stops the old sentence coming back.
+ */
+describe("the approval surface states what approving really does", () => {
+  const bar = readFileSync(join(process.cwd(), "src/components/mobile/command-bar.tsx"), "utf8");
+  /** Only rendered strings count; the comment above the block explains the old claim. */
+  const rendered = bar.replaceAll(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("no longer claims that starting the mission stays a human step", () => {
+    expect(rendered).not.toContain("étape opérateur");
+    expect(rendered).not.toContain("ne lance jamais de workers");
+  });
+
+  it("states that the mission starts by itself and dispatches to workers", () => {
+    expect(rendered).toContain("La mission démarre d");
+    expect(rendered).toContain("dispatche les tâches prêtes aux workers");
+  });
+
+  it("warns BEFORE the tap, next to the Approuver button, not only after it", () => {
+    expect(rendered).toContain("et la démarre");
+    const warning = rendered.indexOf("Approuver crée la mission");
+    // The approve button is identified by its handler, not its label text, which JSX wraps.
+    const button = rendered.indexOf('decide(p.id, "approve")');
+    expect(warning).toBeGreaterThan(-1);
+    expect(button).toBeGreaterThan(-1);
+    expect(warning).toBeLessThan(button);
+  });
+});
+
+describe("scope disclosure", () => {
+  /**
+   * `resolveOperationalScope` falls back to an EMPTY linked scope when the operational-access
+   * service is not composed, so an empty mission list is not evidence that ICOS is idle.
+   */
+  it("says the perimeter is LIÉ when the reads were scope-limited", () => {
+    const out = render(model({ scope: "linked" }));
+    expect(out).toContain("LIÉ");
+    expect(out).toContain("ne veut pas dire qu");
+  });
+
+  it("says nothing extra at owner/admin scope — there is no perimeter caveat to make", () => {
+    expect(render(model({ scope: "global" }))).not.toContain("Périmètre");
+  });
+});
+
+describe("canonical severity is shown, not a re-derived one", () => {
+  it("shows a HIGH supervisor situation as HIGH, never as CRITICAL", () => {
+    const out = render(
+      model({
+        alerts: [],
+        supervisor: real([
+          {
+            id: "s1",
+            domain: "finance",
+            eventType: "invoice.overdue",
+            subject: "LDS",
+            kind: "problem" as const,
+            severity: "high" as const,
+            state: "open" as const,
+            eventCount: 3,
+            lastSeenAt: "2026-09-30T09:00:00.000Z",
+            clientScope: null,
+            projectScope: null,
+            proposal: null,
+          },
+        ]),
+      }),
+    );
+    expect(out).toContain("HIGH");
+    expect(out).not.toContain("CRITICAL");
   });
 });

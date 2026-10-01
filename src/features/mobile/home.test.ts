@@ -95,6 +95,7 @@ const situation = (over: Partial<SupervisorSituationFact> = {}): SupervisorSitua
 const input = (over: Partial<MobileHomeInput> = {}): MobileHomeInput => ({
   generatedAt: "2026-09-30T10:05:00.000Z",
   health: { level: "healthy", reasons: [] },
+  scope: "global",
   missions: real([mission()]),
   focus: null,
   workers: real([worker()]),
