@@ -2,11 +2,16 @@
 
 ## Status
 
-Numbering: authored as 0063 on `feat/live-worker-bootstrap`. 0062 is already taken twice in
-parallel lanes (`context-memory-client-knowledge`, `phone-live-proof`), so this number is
-provisional and is reassigned at central integration, like 0055–0061 before it.
+**NUMBERING IS PROVISIONAL AND MUST BE RECOMPUTED AT CENTRAL INTEGRATION.** Authored as 0063
+on `feat/live-worker-bootstrap`. 0062 is already taken TWICE in parallel lanes
+(`context-memory-client-knowledge` — client context resolution; `phone-live-proof` — ICOS
+self-model), so 0063 is very likely contested too. Do not cite this number anywhere outside
+this branch until integration assigns the final one, exactly as 0055–0061 were reassigned in
+merge order (2026-09-30). **Migration number: none — this lane adds no migration**, so nothing
+in `drizzle/` needs renumbering; the `workers` table (migrations 0042/0043/0044) is unchanged
+and no column is added.
 
-Accepted (foundation). No migration: the `workers` table (0042/0043/0044) is unchanged.
+Accepted (foundation).
 The startup path ships **disabled**; no live registry has been written under this decision.
 
 ## Context
