@@ -243,6 +243,9 @@ describe("user-facing errors", () => {
       expect(text.length).toBeGreaterThan(10);
     }
     expect(isBlocking("PROVIDER_NOT_CONFIGURED")).toBe(true);
+    // An unconfigured cognition engine blocks the screen: retrying cannot fix config.
+    expect(isBlocking("COGNITION_NOT_CONFIGURED")).toBe(true);
+    expect(userMessage("COGNITION_NOT_CONFIGURED")).toContain("moteur cognitif");
     expect(isBlocking("TURN_DROPPED")).toBe(false);
   });
 });

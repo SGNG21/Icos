@@ -62,6 +62,8 @@ export const VoiceErrorCodeSchema = z.enum([
   "SESSION_EXPIRED",
   "SESSION_FORBIDDEN",
   "PROVIDER_NOT_CONFIGURED",
+  /** The cognition engine is not configured: voice would have nothing to think with. */
+  "COGNITION_NOT_CONFIGURED",
   "STT_UNAVAILABLE",
   "STT_TIMEOUT",
   "TTS_UNAVAILABLE",

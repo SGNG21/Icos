@@ -480,7 +480,11 @@ export function VoiceClient() {
         stopPlayback();
         releaseMic(); // an utterance cannot survive a lost link
         if (closed) return;
-        if (event.code === 1011 && event.reason === "PROVIDER_NOT_CONFIGURED") {
+        // 1011 + a reason: the server said why voice cannot work at all (no STT, no
+        // cognition). Keep the server's own code so the screen states the real cause
+        // instead of retrying something that configuration alone can fix.
+        if (event.code === 1011 && event.reason) {
+          dispatch({ type: "local_error", code: event.reason, message: event.reason });
           return dispatch({ type: "link", link: "unavailable" });
         }
         dispatch({ type: "link", link: "reconnecting" });

@@ -95,6 +95,8 @@ export function userMessage(code: string): string {
       return "ICOS n'a pas confirmé votre message. Vous pouvez le renvoyer.";
     case "PROVIDER_NOT_CONFIGURED":
       return "La voix n'est pas activée sur ce serveur ICOS.";
+    case "COGNITION_NOT_CONFIGURED":
+      return "Le moteur cognitif d'ICOS n'est pas configuré sur ce serveur : la voix est désactivée plutôt que de répondre sans réfléchir.";
     case "SESSION_EXPIRED":
       return "Session vocale expirée : une nouvelle session a démarré.";
     case "SESSION_FORBIDDEN":
@@ -117,9 +119,13 @@ export function userMessage(code: string): string {
 
 /** Errors that concern the whole screen (not one message bubble). */
 export function isBlocking(code: string): boolean {
-  return ["PROVIDER_NOT_CONFIGURED", "FORBIDDEN", "SESSION_FORBIDDEN", "INSECURE_CONTEXT"].includes(
-    code,
-  );
+  return [
+    "PROVIDER_NOT_CONFIGURED",
+    "COGNITION_NOT_CONFIGURED",
+    "FORBIDDEN",
+    "SESSION_FORBIDDEN",
+    "INSECURE_CONTEXT",
+  ].includes(code);
 }
 
 // --- operational events ------------------------------------------------------

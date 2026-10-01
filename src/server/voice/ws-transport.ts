@@ -24,7 +24,10 @@ export type VoiceUpgradeOptions = {
   registry: VoiceSessionRegistry;
   authenticate: (request: Request) => Promise<VoiceAuthResult>;
   /** When set, every connection is told why voice cannot work, then closed. */
-  unavailable?: { code: "PROVIDER_NOT_CONFIGURED"; message: string };
+  unavailable?: {
+    code: "PROVIDER_NOT_CONFIGURED" | "COGNITION_NOT_CONFIGURED";
+    message: string;
+  };
   heartbeatMs?: number;
   maxMessagesPerSecond?: number;
   /** One JSON frame; audio frames are ≤ 64 KiB of base64. */

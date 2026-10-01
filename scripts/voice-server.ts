@@ -82,7 +82,10 @@ async function main(): Promise<void> {
     console.log(
       `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
         `${publicOrigin ? `, public ${publicOrigin.origin} ` : ""}` +
-        `(STT=${voice.status.stt} TTS=${voice.status.tts} COGNITIVE=${voice.status.cognitive})`,
+        `(STT=${voice.status.stt} TTS=${voice.status.tts} LANG=${voice.status.language} ` +
+        // COGNITIVE is the runtime; COGNITION is the engine. Printing only the former
+        // is what hid an unconfigured ICOS_COGNITIVE_MODEL behind a healthy-looking host.
+        `COGNITIVE=${voice.status.cognitive} COGNITION=${voice.status.cognition})`,
     );
   });
 }
