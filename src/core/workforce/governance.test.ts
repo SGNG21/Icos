@@ -9,6 +9,7 @@ import {
   isAgentTransitionAllowed,
   isAssignmentTransitionAllowed,
   memoryScopeWithin,
+  namespaceAllowed,
   policyWithin,
   type Verdict,
 } from "./governance";
@@ -603,12 +604,63 @@ describe("namespace containment refuses traversal", () => {
     expect(memoryScopeWithin(scope(["tenant/a/../escape"]), scope(["*"]))).toBe(false);
   });
 
+  it.each([
+    ["nested traversal", "a/b/../../x"],
+    ["trailing traversal", "a/b/.."],
+    ["lower-case percent encoding", "a/b/%2e%2e/x"],
+    ["upper-case percent encoding", "a/b/%2E%2E/x"],
+    ["an encoded separator", "a/b/%2e%2e%2fescape"],
+    ["double encoding", "a/b/%252e%252e/escape"],
+    ["backslash separators", "a\\b\\..\\escape"],
+  ])("refuses %s", (_case, namespace) => {
+    expect(memoryScopeWithin(scope([namespace]), scope(["a/b"]))).toBe(false);
+  });
+
+  it.each([
+    ["an empty namespace", ""],
+    ["a whitespace-only namespace", " \t "],
+    ["an empty interior segment", "a//b"],
+    ["a whitespace-only interior segment", "a/ \t /b"],
+  ])("refuses %s", (_case, namespace) => {
+    expect(namespaceAllowed(namespace, ["a"])).toBe(false);
+  });
+
+  it("normalizes `.` segments on both sides of the comparison", () => {
+    expect(namespaceAllowed("a/./b", ["a/b"])).toBe(true);
+    expect(namespaceAllowed("a/b", ["a/./b"])).toBe(true);
+  });
+
+  it("normalizes leading and trailing separators on both sides", () => {
+    expect(namespaceAllowed("/a/b/", ["a/b"])).toBe(true);
+    expect(namespaceAllowed("a/b", ["/a/b/"])).toBe(true);
+  });
+
+  it("fails closed when a parent pattern cannot be canonicalized", () => {
+    expect(namespaceAllowed("a/b", ["a/../b"])).toBe(false);
+    expect(namespaceAllowed("a/b", ["*", "a//b"])).toBe(false);
+  });
+
   it("still allows a genuine descendant and an exact match", () => {
     expect(memoryScopeWithin(scope(["tenant/a/b"]), scope(["tenant/a"]))).toBe(true);
     expect(memoryScopeWithin(scope(["tenant/a"]), scope(["tenant/a"]))).toBe(true);
   });
 
+  it("still lets `*` hold every canonical namespace", () => {
+    expect(namespaceAllowed("outside/anywhere", ["*"])).toBe(true);
+  });
+
   it("does not mistake a sibling whose name merely starts with the parent", () => {
     expect(memoryScopeWithin(scope(["tenant/abc"]), scope(["tenant/ab"]))).toBe(false);
+  });
+
+  it("gates encoded traversal during agent creation", () => {
+    const narrow = agent({ memoryScope: scope(["tenant/a"]) });
+    const escaping = child(narrow, {
+      memoryScope: scope(["tenant/a/%252e%252e/escape"]),
+      scope: narrow.scope,
+    });
+    expect(violations(spawn(escaping, { supervisor: narrow, org: [narrow] }))).toContain(
+      "MEMORY_SCOPE_ESCAPE",
+    );
   });
 });
