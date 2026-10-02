@@ -89,7 +89,10 @@ function stage(
 }
 
 export function buildPipeline(
-  sources: Pick<CockpitSources, "attempts" | "qualityJobs" | "workspaces" | "now">,
+  sources: Pick<
+    CockpitSources,
+    "attempts" | "qualityJobs" | "escalatedJobs" | "workspaces" | "now"
+  >,
 ): { stages: PipelineStage[]; alerts: Alert[] } {
   const { attempts, qualityJobs: qc, workspaces: ws } = sources;
   // Released workspaces are history; the flow stages count only live ones.
@@ -136,10 +139,7 @@ export function buildPipeline(
     {
       key: "escalated",
       label: "Escalated to a human",
-      count: missing<number>(
-        "not_available",
-        "Escalated jobs are listable (PostgresQualityControlRepository.listEscalated) but no cockpit source reads them yet: `qualityJobs` is built from listPending, which excludes them because it is also a recovery input.",
-      ),
+      count: sources.escalatedJobs,
       tone: "unknown" as Tone,
       note: "Needs a human decision",
     },

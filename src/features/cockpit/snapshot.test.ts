@@ -72,6 +72,7 @@ function sources(over: Partial<CockpitSources> = {}): CockpitSources {
     pendingApprovals: real(0),
     audit: real([]),
     qualityJobs: real([]),
+    escalatedJobs: real(0),
     workspaces: real([]),
     ...over,
   };

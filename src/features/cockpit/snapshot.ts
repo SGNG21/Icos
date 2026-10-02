@@ -46,6 +46,8 @@ export interface CockpitSources {
   audit: Truth<AuditEntry[]>;
   /** Pending quality-control jobs of in-scope missions. */
   qualityJobs: Truth<QualityFact[]>;
+  /** Count of ESCALATED jobs of in-scope missions; `qualityJobs` excludes them by design. */
+  escalatedJobs: Truth<number>;
   /** Workspace registry: integration lifecycle, leases, fencing tokens. */
   workspaces: Truth<WorkspaceFact[]>;
 }

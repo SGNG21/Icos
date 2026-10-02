@@ -49,6 +49,7 @@ describe("pipeline", () => {
       now: NOW,
       attempts: missing("unknown", "x"),
       qualityJobs: missing("unknown", "x"),
+      escalatedJobs: missing("unknown", "x"),
       workspaces: missing("not_available", "no manager"),
     });
     for (const s of stages) {
@@ -62,6 +63,7 @@ describe("pipeline", () => {
       now: NOW,
       attempts: real([]),
       qualityJobs: real([]),
+      escalatedJobs: real(0),
       workspaces: real([]),
     });
     expect(stages.find((s) => s.key === "settlement")!.count.kind).toBe("not_connected");
@@ -74,6 +76,7 @@ describe("pipeline", () => {
       now: NOW,
       attempts: real([]),
       qualityJobs: real([qc("review_unavailable"), qc("review_pending")]),
+      escalatedJobs: real(0),
       workspaces: real([
         ws("blk", "blocked"),
         ws("old", "working", { leaseOwner: "sup-1", leaseExpiresAt: "2026-09-29T11:00:00Z" }),
@@ -106,6 +109,7 @@ describe("pipeline flow vs history", () => {
       now: NOW,
       attempts: real([]),
       qualityJobs: real([]),
+      escalatedJobs: real(0),
       workspaces: real([
         ws("old-ok", "accepted", released),
         ws("old-blk", "blocked", released),
@@ -119,15 +123,40 @@ describe("pipeline flow vs history", () => {
     expect(alerts).toHaveLength(0);
   });
 
-  it("only dispatched attempts count as dispatched; escalations are an explicit gap", () => {
+  it("only dispatched attempts count as dispatched", () => {
     const attempts = real([{ state: "prepared" }, { state: "dispatched" }] as never[]);
     const { stages } = buildPipeline({
       now: NOW,
       attempts,
       qualityJobs: real([]),
+      escalatedJobs: real(0),
       workspaces: real([]),
     });
     expect(stages.find((s) => s.key === "execution")!.count).toMatchObject({ value: 1 });
-    expect(stages.find((s) => s.key === "escalated")!.count.kind).toBe("not_available");
+  });
+});
+
+describe("escalated work is heard", () => {
+  const base = { now: NOW, attempts: real([]), qualityJobs: real([]), workspaces: real([]) };
+
+  it("surfaces the escalated count from its own source", () => {
+    // `qualityJobs` vient de listPending, qui exclut `escalated` : sans source dédiée, ICOS
+    // pouvait escalader vers un humain sans que personne ne le voie.
+    const { stages } = buildPipeline({ ...base, escalatedJobs: real(2) });
+    expect(stages.find((s) => s.key === "escalated")!.count).toMatchObject({ value: 2 });
+  });
+
+  it("distinguishes nothing-escalated from cannot-read-escalations", () => {
+    const none = buildPipeline({ ...base, escalatedJobs: real(0) });
+    expect(none.stages.find((s) => s.key === "escalated")!.count).toMatchObject({
+      kind: "real",
+      value: 0,
+    });
+
+    const unreadable = buildPipeline({
+      ...base,
+      escalatedJobs: missing("unknown", "repository unavailable"),
+    });
+    expect(unreadable.stages.find((s) => s.key === "escalated")!.count.kind).not.toBe("real");
   });
 });

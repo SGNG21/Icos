@@ -5,7 +5,7 @@ import type { CognitiveScope } from "@/core/cognitive/contracts";
 import { LaunchedMissionStateSource } from "./current-state-source";
 
 const NOW = new Date("2026-10-02T12:00:00.000Z");
-const clock = { now: () => NOW };
+const clock = { now: () => NOW, newId: () => "id-fixed" };
 
 const scope = (overrides: Partial<CognitiveScope> = {}): CognitiveScope => ({
   tenantId: "tenant-1",

@@ -143,6 +143,20 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
       })
     : missions;
 
+  /*
+   * Les travaux ESCALADÉS, comptés à part : `qualityJobs` vient de `listPending`, qui les exclut
+   * (elle sert aussi d'entrée de reprise). Sans cette lecture, ICOS peut escalader vers un humain
+   * sans que personne ne le voie — une file vide se lit alors comme « rien à décider ».
+   */
+  const escalatedJobs: CockpitSources["escalatedJobs"] = isReal(missions)
+    ? await read("Escalated quality control", async () => {
+        const visible = new Set(missions.value.map((m) => m.mission.id));
+        return (await container.qualityControlJobs.listEscalated()).filter((j) =>
+          visible.has(j.missionId),
+        ).length;
+      })
+    : missions;
+
   const manager = container.workspaceManager;
   const workspaces: CockpitSources["workspaces"] = !global
     ? outOfScope
@@ -179,6 +193,7 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
     pendingApprovals,
     audit,
     qualityJobs,
+    escalatedJobs,
     workspaces,
   };
 });

@@ -10,6 +10,7 @@ const stages = () =>
     now: NOW,
     attempts: real([]),
     qualityJobs: real([]),
+    escalatedJobs: real(0),
     workspaces: real([]),
   }).stages;
 
@@ -32,16 +33,19 @@ describe("pipeline gaps state the verified reason", () => {
     expect(reason).toMatch(/counter/i);
   });
 
-  it("names the listable escalation query and why the cockpit source still misses it", () => {
-    const reason = reasonOf("escalated");
-    expect(reason).toMatch(/listEscalated/);
-    expect(reason).toMatch(/listPending/);
+  /*
+   * L'escalade N'EST PLUS une lacune : `escalatedJobs` est désormais une source à part entière
+   * (port `listEscalated` -> loader cockpit). Cette assertion a été inversée volontairement : la
+   * version précédente affirmait que le cockpit ne pouvait pas la lire, ce qui serait maintenant
+   * la lie que ce fichier existe pour empêcher.
+   */
+  it("reads escalations from a real source instead of declaring them unreadable", () => {
+    const count = stages().find((s) => s.key === "escalated")!.count;
+    expect(count.kind).toBe("real");
   });
 
-  it("keeps both as explicit gaps rather than zero", () => {
-    for (const key of ["settlement", "escalated"]) {
-      expect(stages().find((s) => s.key === key)!.count.kind).not.toBe("real");
-      expect(stages().find((s) => s.key === key)!.tone).toBe("unknown");
-    }
+  it("keeps settlement an explicit gap rather than zero", () => {
+    expect(stages().find((s) => s.key === "settlement")!.count.kind).not.toBe("real");
+    expect(stages().find((s) => s.key === "settlement")!.tone).toBe("unknown");
   });
 });

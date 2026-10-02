@@ -109,6 +109,13 @@ export interface QualityControlRepository {
   settleAccepted(missionId?: string): Promise<number>;
   getByWorkflowId(workflowId: string): Promise<QualityControlJob | null>;
   listPending(missionId?: string): Promise<QualityControlJob[]>;
+  /**
+   * Les travaux ESCALADÉS, que `listPending` exclut volontairement puisqu'elle sert aussi
+   * d'entrée de reprise : réintégrer `escalated` y ferait re-réviser indéfiniment ce qui attend
+   * justement une décision humaine. Méthode soeur, en lecture seule, pour l'affichage — sans
+   * quoi ICOS peut demander un humain sans jamais être entendu.
+   */
+  listEscalated(missionId?: string): Promise<QualityControlJob[]>;
 }
 
 /**

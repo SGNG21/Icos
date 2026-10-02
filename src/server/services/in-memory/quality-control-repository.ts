@@ -466,6 +466,15 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
     return job ? clone(job) : null;
   }
 
+  async listEscalated(missionId?: string): Promise<QualityControlJob[]> {
+    return [...this.jobs.values()]
+      .filter(
+        (job) =>
+          (missionId === undefined || job.missionId === missionId) && job.state === "escalated",
+      )
+      .map(clone);
+  }
+
   async listPending(missionId?: string): Promise<QualityControlJob[]> {
     return [...this.jobs.values()]
       .filter(

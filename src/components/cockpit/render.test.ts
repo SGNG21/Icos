@@ -156,6 +156,7 @@ describe("system map", () => {
     pendingApprovals: real(0),
     audit: real([]),
     qualityJobs: real([]),
+    escalatedJobs: real(0),
     workspaces: real([]),
   };
 
@@ -187,6 +188,7 @@ describe("worker identity", () => {
         pendingApprovals: real(0),
         audit: real([]),
         qualityJobs: real([]),
+        escalatedJobs: real(0),
         workspaces: real([]),
       },
       activeAssignments: real([]),
