@@ -579,3 +579,36 @@ describe("workforce governance — Phase 11 proofs", () => {
     });
   });
 });
+
+describe("namespace containment refuses traversal", () => {
+  const scope = (read: string[], write: string[] = read) => ({
+    read,
+    write,
+    maxVisibility: "private" as const,
+  });
+
+  it("refuses a `..` segment that only LOOKS contained by prefix", () => {
+    // `tenant/a/../escape` commence par `tenant/a/` mais en sort : la comparaison étant
+    // préfixielle, sans garde ce namespace passerait pour un descendant légitime.
+    expect(memoryScopeWithin(scope(["tenant/a/../escape"]), scope(["tenant/a"]))).toBe(false);
+  });
+
+  it("refuses traversal on the write side too", () => {
+    expect(
+      memoryScopeWithin(scope(["tenant/a"], ["tenant/a/../escape"]), scope(["tenant/a"])),
+    ).toBe(false);
+  });
+
+  it("refuses traversal even when the parent holds everything", () => {
+    expect(memoryScopeWithin(scope(["tenant/a/../escape"]), scope(["*"]))).toBe(false);
+  });
+
+  it("still allows a genuine descendant and an exact match", () => {
+    expect(memoryScopeWithin(scope(["tenant/a/b"]), scope(["tenant/a"]))).toBe(true);
+    expect(memoryScopeWithin(scope(["tenant/a"]), scope(["tenant/a"]))).toBe(true);
+  });
+
+  it("does not mistake a sibling whose name merely starts with the parent", () => {
+    expect(memoryScopeWithin(scope(["tenant/abc"]), scope(["tenant/ab"]))).toBe(false);
+  });
+});

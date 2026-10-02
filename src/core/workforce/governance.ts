@@ -138,10 +138,25 @@ export function scopeCovers(
   );
 }
 
-/** Namespace containment: `a/b` is within `a`; `*` holds everything. */
+/**
+ * Un segment `..` ferait d'un namespace un faux descendant : `a/b/../escape` commence bien par
+ * `a/b/` alors qu'il en sort. La comparaison étant purement préfixielle, la traversée est
+ * refusée ici — l'unique point de passage de `memoryScopeWithin` et `namespaceAllowed` — et non
+ * chez chaque appelant. Fail closed : un namespace non traversable n'est jamais « contenu ».
+ */
+function traverses(namespace: string): boolean {
+  return namespace.split("/").includes("..");
+}
+
+/** Namespace containment: `a/b` is within `a`; `*` holds everything; `..` never contained. */
 function namespacesWithin(child: readonly string[], parent: readonly string[]): boolean {
+  if (child.some(traverses)) return false;
   if (parent.includes(ALL)) return true;
-  return child.every((c) => c !== ALL && parent.some((p) => c === p || c.startsWith(`${p}/`)));
+  return child.every(
+    (c) =>
+      c !== ALL &&
+      parent.some((p) => !traverses(p) && (c === p || c.startsWith(`${p}/`))),
+  );
 }
 
 const VISIBILITY_RANK = { private: 0, restricted: 1, tenant: 2 } as const;
