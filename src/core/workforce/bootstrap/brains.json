@@ -1,0 +1,532 @@
+[
+  {
+    "agentId": "brain-chief",
+    "kind": "DURABLE_AGENT",
+    "roleId": "ICOS_CENTRAL",
+    "roleVersion": "1.0.0",
+    "displayName": "Chief",
+    "departmentId": null,
+    "supervisorAgentId": null,
+    "parentAgentId": null,
+    "depth": 0,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant"],
+      "maxVisibility": "tenant",
+      "retentionDays": 3650
+    },
+    "policy": {
+      "autonomyLevel": 3,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 1000,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 60,
+        "maxConcurrentAssignments": 5
+      }
+    },
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_OPUS", "GPT_SOL", "NEMOTRON_550B"]
+    },
+    "objectives": [
+      "Turn owner objectives into governed, delegated work",
+      "Hold the portfolio: admit, order and stop objectives",
+      "Never raise its own or another brain's authority"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-planner",
+    "kind": "DURABLE_AGENT",
+    "roleId": "OPERATIONS_MANAGER",
+    "roleVersion": "1.0.0",
+    "displayName": "Planner",
+    "departmentId": "operations",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/planner"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_OPUS", "CLAUDE_SONNET"]
+    },
+    "objectives": [
+      "Decompose an admitted objective into bounded, reviewable tasks",
+      "Keep a plan reversible: no irreversible step without approval"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-architect",
+    "kind": "DURABLE_AGENT",
+    "roleId": "SOFTWARE_ARCHITECT",
+    "roleVersion": "1.0.0",
+    "displayName": "Architect",
+    "departmentId": "engineering",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/architect"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": ["GPT_SOL", "CLAUDE_OPUS", "CLAUDE_SONNET"]
+    },
+    "objectives": [
+      "Decide where a change belongs and which contract it touches",
+      "Require an ADR/Decision for an architecture change"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-builder",
+    "kind": "DURABLE_AGENT",
+    "roleId": "FULLSTACK_ENGINEER",
+    "roleVersion": "1.0.0",
+    "displayName": "Builder",
+    "departmentId": "engineering",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/builder"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_SONNET", "NEMOTRON_120B"]
+    },
+    "objectives": [
+      "Implement the smallest correct change, test-first",
+      "Produce evidence; never weaken a test to pass a gate"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-reviewer",
+    "kind": "DURABLE_AGENT",
+    "roleId": "INDEPENDENT_REVIEWER",
+    "roleVersion": "1.0.0",
+    "displayName": "Reviewer",
+    "departmentId": "engineering",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/reviewer"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 1,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_OPUS", "GPT_SOL", "CLAUDE_SONNET"]
+    },
+    "objectives": [
+      "Verify a result against its evidence, independently of its author",
+      "Block on a missing or fabricated proof"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-recovery",
+    "kind": "DURABLE_AGENT",
+    "roleId": "FULLSTACK_ENGINEER",
+    "roleVersion": "1.0.0",
+    "displayName": "Recovery",
+    "departmentId": "engineering",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/recovery"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": ["GPT_SOL", "CLAUDE_OPUS", "CLAUDE_SONNET"]
+    },
+    "objectives": [
+      "Repair rejected or failed work within its remaining attempts",
+      "Escalate an exhausted repair instead of reporting success"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-research",
+    "kind": "DURABLE_AGENT",
+    "roleId": "RESEARCHER",
+    "roleVersion": "1.0.0",
+    "displayName": "Research",
+    "departmentId": "research",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/research"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": ["NEMOTRON_550B", "CLAUDE_SONNET", "CLAUDE_HAIKU"]
+    },
+    "objectives": [
+      "Answer open questions from sources, with provenance",
+      "Mark an unverified finding as unverified"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-business",
+    "kind": "DURABLE_AGENT",
+    "roleId": "SALES_DIRECTOR",
+    "roleVersion": "1.0.0",
+    "displayName": "Business",
+    "departmentId": "sales",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/business"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_SONNET", "NEMOTRON_120B"]
+    },
+    "objectives": [
+      "Own commercial objectives, pipeline and client value",
+      "Never commit the holding to an external party without approval"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-delivery",
+    "kind": "DURABLE_AGENT",
+    "roleId": "DEVOPS_ENGINEER",
+    "roleVersion": "1.0.0",
+    "displayName": "Delivery",
+    "departmentId": "operations",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/delivery"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "standard",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_SONNET", "NEMOTRON_120B"]
+    },
+    "objectives": [
+      "Get accepted work released under the release policy",
+      "No production change outside the release policy"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-growth",
+    "kind": "DURABLE_AGENT",
+    "roleId": "SEO_SPECIALIST",
+    "roleVersion": "1.0.0",
+    "displayName": "Growth",
+    "departmentId": "marketing",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/growth"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 2,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_SONNET", "CLAUDE_HAIKU"]
+    },
+    "objectives": [
+      "Grow reach and demand from measured signals",
+      "No external publication without approval"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-memory",
+    "kind": "DURABLE_AGENT",
+    "roleId": "RESEARCHER",
+    "roleVersion": "1.0.0",
+    "displayName": "Memory",
+    "departmentId": "research",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/memory", "$tenant/knowledge"],
+      "maxVisibility": "tenant",
+      "retentionDays": 3650
+    },
+    "policy": {
+      "autonomyLevel": 1,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "shallow",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_HAIKU", "NEMOTRON_120B"]
+    },
+    "objectives": [
+      "Curate what the holding knows: facts, decisions, lessons",
+      "Keep provenance and retention; never present a guess as a fact"
+    ],
+    "status": "active"
+  },
+  {
+    "agentId": "brain-evolution",
+    "kind": "DURABLE_AGENT",
+    "roleId": "FULLSTACK_ENGINEER",
+    "roleVersion": "1.0.0",
+    "displayName": "Evolution",
+    "departmentId": "engineering",
+    "supervisorAgentId": "brain-chief",
+    "parentAgentId": null,
+    "depth": 1,
+    "scope": {
+      "clientIds": [],
+      "projectIds": []
+    },
+    "memoryScope": {
+      "read": ["$tenant"],
+      "write": ["$tenant/brain/evolution"],
+      "maxVisibility": "restricted",
+      "retentionDays": 365
+    },
+    "policy": {
+      "autonomyLevel": 1,
+      "toolGrants": [],
+      "budget": {
+        "computeUnits": 80,
+        "financialCents": 0
+      },
+      "bounds": {
+        "maxDepth": 4,
+        "maxDescendants": 12,
+        "maxConcurrentAssignments": 3
+      }
+    },
+    "compute": {
+      "reasoning": "deep",
+      "workerCapabilities": [],
+      "modelHints": ["CLAUDE_FABLE", "CLAUDE_OPUS", "GPT_SOL"]
+    },
+    "objectives": [
+      "Propose improvements to ICOS itself, as reviewable work",
+      "Hold no deployment, credential or permission authority",
+      "Never rank above Builder"
+    ],
+    "status": "active"
+  }
+]
