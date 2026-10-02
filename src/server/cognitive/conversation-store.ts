@@ -282,9 +282,15 @@ export class PostgresConversationStore {
   }
 
   /** Proposals of a client, newest first — the launch/mission state ICOS durably knows. */
+  /**
+   * `clientId: null` lit les refs SANS client de ce tenant — et non celles de tous les clients.
+   * Un objectif interne (SELF_IMPROVEMENT) n'a par nature pas de client : sans ce cas, son état
+   * était illisible. Élargir à tous les clients serait une fuite inter-clients ; on reste donc
+   * sur l'égalité stricte « pas de client ».
+   */
   async refsForClient(
     tenantId: string,
-    clientId: string,
+    clientId: string | null,
     statuses: readonly RefStatus[],
     limit = 20,
   ): Promise<TurnReference[]> {
@@ -294,7 +300,9 @@ export class PostgresConversationStore {
       .where(
         and(
           eq(cognitiveTurnRefs.tenantId, tenantId),
-          eq(cognitiveTurnRefs.clientId, clientId),
+          clientId === null
+            ? isNull(cognitiveTurnRefs.clientId)
+            : eq(cognitiveTurnRefs.clientId, clientId),
           inArray(cognitiveTurnRefs.status, [...statuses]),
         ),
       )

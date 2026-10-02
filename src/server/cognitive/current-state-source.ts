@@ -34,10 +34,14 @@ export class LaunchedMissionStateSource implements CurrentStateSource {
   ) {}
 
   async candidates(scope: CognitiveScope): Promise<ContextCandidate[]> {
-    if (!scope.clientId) return [];
+    /*
+     * Un scope sans client n'est PAS un scope vide : tout objectif interne ("Améliore ICOS")
+     * est sans client, et ce retour anticipé l'empêchait de rapporter son propre état vivant —
+     * exactement l'interaction visée. On lit alors les refs sans client de ce tenant.
+     */
     const refs = await this.conversations.refsForClient(
       scope.tenantId,
-      scope.clientId,
+      scope.clientId ?? null,
       LIVE_STATUSES,
     );
     const out: ContextCandidate[] = [];
