@@ -50,6 +50,44 @@ export interface ObjectiveCoordinatorDeps {
   readonly priorityPolicy?: PriorityPolicy;
   readonly portfolioPolicy?: PortfolioPolicy;
   readonly now?: () => Date;
+  /**
+   * SÉRIALISE l'admission (verrou C7). Sans elle, `admit` est un check-then-enqueue : plusieurs
+   * approbations simultanées observent la MÊME charge, aucune ne voit l'enfilement de l'autre,
+   * et toutes passent — un plafond de classe à 1 en admet autant qu'il y a d'appels. Lire,
+   * décider et enfiler doivent donc être atomiques les uns par rapport aux autres.
+   *
+   * Absente, elle retombe sur une sérialisation PAR PROCESSUS ({@link inProcessAdmission}),
+   * qui est exacte tant qu'il n'y a qu'un processus — le conteneur en mémoire — et INSUFFISANTE
+   * dès qu'il y en a plusieurs. Le conteneur PostgreSQL en fournit une qui tient en base.
+   */
+  readonly serializeAdmission?: AdmissionSerializer;
+}
+
+/** Exécute `fn` en exclusion mutuelle avec toute autre admission du même périmètre. */
+export type AdmissionSerializer = <T>(fn: () => Promise<T>) => Promise<T>;
+
+/**
+ * Sérialisation PAR PROCESSUS : une file d'attente de promesses.
+ *
+ * Ce qu'elle garantit : dans CE processus, deux admissions ne s'entrelacent jamais, donc la
+ * seconde voit bien la charge que la première a créée. C'est exact pour le conteneur en
+ * mémoire, qui est un processus unique de bout en bout.
+ *
+ * Ce qu'elle NE garantit PAS : rien du tout entre deux processus. Un déploiement à plusieurs
+ * instances doit fournir {@link ObjectiveCoordinatorDeps.serializeAdmission} adossé à la base,
+ * sans quoi le plafond redevient advisoire. C'est écrit ici plutôt que supposé ailleurs.
+ */
+export function inProcessAdmission(): AdmissionSerializer {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = tail.then(fn, fn);
+    /* Un échec ne doit pas empoisonner la file : la suivante démarre quand même. */
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
 }
 
 export interface AdmitInput {
@@ -98,9 +136,12 @@ const zeroedByClass = (): Record<WorkClass, number> =>
   Object.fromEntries(WORK_CLASSES.map((c) => [c, 0])) as Record<WorkClass, number>;
 
 export class ObjectiveCoordinator {
+  private readonly serialize: AdmissionSerializer;
+
   constructor(private readonly deps: ObjectiveCoordinatorDeps) {
     assertPriorityPolicyCoherent(this.priorityPolicy);
     assertPortfolioPolicyCoherent(this.portfolioPolicy);
+    this.serialize = deps.serializeAdmission ?? inProcessAdmission();
   }
 
   private get priorityPolicy(): PriorityPolicy {
@@ -160,7 +201,16 @@ export class ObjectiveCoordinator {
     };
   }
 
+  /**
+   * ADMISSION SÉRIALISÉE (verrou C7). Tout le corps — observer, décider, enfiler — est dans
+   * la section critique. Enfermer seulement la lecture ne servirait à rien : c'est l'écart
+   * entre « j'ai observé 0 actif » et « j'ai enfilé » qui laissait deux admissions passer.
+   */
   async admit(input: AdmitInput): Promise<AdmissionResult> {
+    return this.serialize(() => this.admitSerially(input));
+  }
+
+  private async admitSerially(input: AdmitInput): Promise<AdmissionResult> {
     const now = this.deps.now?.() ?? new Date();
 
     const priority = scoreObjective(this.priorityPolicy, input.goal, { now });

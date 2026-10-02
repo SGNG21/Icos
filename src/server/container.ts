@@ -9,6 +9,7 @@ import { PostgresControlStore } from "@/server/control/postgres-control-store";
 import { installDispatchBackstop, RuntimeControlGuard } from "@/server/control/runtime-control";
 import { WORK_CLASSES } from "@/core/supervisor/contracts";
 import { ObjectiveCoordinator } from "@/server/supervisor/objective-coordinator";
+import { postgresAdmission } from "@/server/supervisor/postgres-admission-serializer";
 import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
@@ -931,6 +932,13 @@ export async function buildPostgresContainer(
       scheduler: schedulerService,
       goals: goalRepository,
       missions: mission,
+      /*
+       * Verrou C7 : lire la charge, décider et enfiler sont atomiques les uns par rapport aux
+       * autres. Sans cela, plusieurs approbations simultanées observent la même charge et
+       * dépassent le plafond de classe. La sérialisation est en base, pas en mémoire de
+       * processus, sinon chaque instance aurait son propre plafond.
+       */
+      serializeAdmission: postgresAdmission(handle.db),
       pendingLaunches: {
         /*
          * Conservative on purpose: an enqueued `start_mission` has no mission row yet and

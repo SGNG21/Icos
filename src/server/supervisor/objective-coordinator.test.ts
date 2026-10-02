@@ -208,3 +208,122 @@ describe("ObjectiveCoordinator — the cap must actually cap (review I3, I6)", (
     for (const [filter] of list.mock.calls) expect(filter?.status).toBeDefined();
   });
 });
+
+/**
+ * VERROU C7 — L'ADMISSION ÉTAIT UN CHECK-THEN-ENQUEUE.
+ *
+ * `admit()` observait la charge, décidait, puis enfilait, sans rien entre les trois. Plusieurs
+ * approbations simultanées lisaient donc le même « 0 actif » et étaient TOUTES admises : un
+ * plafond de classe à 1 en laissait passer autant qu'il y avait d'appels simultanés.
+ *
+ * Ce que ce fichier prouve : la sérialisation est réelle (les appels ne s'entrelacent pas) et
+ * la capacité n'est pas dépassée. Ce qu'il ne prouve PAS : la sérialisation ENTRE PROCESSUS,
+ * qui est une propriété de PostgreSQL — voir `postgres-admission-serializer.ts`.
+ */
+describe("ObjectiveCoordinator — l'admission simultanée ne dépasse pas la capacité (C7)", () => {
+  /** RESEARCH : `maxConcurrent: 1` dans la politique par défaut. Le plafond le plus serré. */
+  const research = goal({ id: "g-r", metadata: { "icos.work_class": "RESEARCH" } });
+
+  /**
+   * Une charge observée qui REFLÈTE les admissions déjà accordées. Sans cela, le test ne
+   * mesurerait que la file d'attente et pas le plafond : la deuxième admission doit voir ce
+   * que la première a créé, ce qui est exactement ce que la sérialisation rend possible.
+   *
+   * Le `await` dans `countByWorkClass` est délibéré : il force un point de reprise au MILIEU
+   * de la section critique, donc un `admit` non sérialisé s'y entrelace à coup sûr.
+   */
+  const admittedQueue = () => {
+    const admitted: string[] = [];
+    return {
+      admitted,
+      pendingLaunches: {
+        countByWorkClass: async () => {
+          await Promise.resolve();
+          return { RESEARCH: admitted.length };
+        },
+      },
+    };
+  };
+
+  it("trois approbations SIMULTANÉES n'en admettent qu'UNE sous un plafond de 1", async () => {
+    const { admitted, pendingLaunches } = admittedQueue();
+    const enqueue = vi.fn(async (input: { runAt?: Date }) => {
+      if (input.runAt === undefined) admitted.push("x");
+      return { job: { id: "job", missionId: "m" }, created: true };
+    });
+    const c = new ObjectiveCoordinator({
+      scheduler: { enqueue } as never,
+      goals: { list: vi.fn(async () => []) } as never,
+      missions: { list: vi.fn(async () => []) } as never,
+      now: () => NOW,
+      pendingLaunches,
+    });
+
+    /* Trois promesses créées SANS await, résolues ensemble : la course est réelle. */
+    const results = await Promise.all(
+      ["a", "b", "c"].map((k) =>
+        c.admit({ goal: research, idempotencyKey: k, title: "t", objective: "o" }),
+      ),
+    );
+
+    expect(results.filter((r) => r.outcome === "enqueued")).toHaveLength(1);
+    expect(results.filter((r) => r.outcome === "deferred")).toHaveLength(2);
+    /* L'INVARIANT dit directement : la capacité de la classe n'a jamais été dépassée. */
+    expect(admitted).toHaveLength(1);
+    for (const deferred of results.filter((r) => r.outcome === "deferred")) {
+      expect(deferred).toMatchObject({ reason: "CLASS_CONCURRENCY" });
+    }
+  });
+
+  it("une admission qui ÉCHOUE ne bloque pas la file : la suivante démarre quand même", async () => {
+    let first = true;
+    const enqueue = vi.fn(async () => {
+      if (first) {
+        first = false;
+        throw new Error("ordonnanceur indisponible");
+      }
+      return { job: { id: "job", missionId: "m" }, created: true };
+    });
+    const c = new ObjectiveCoordinator({
+      scheduler: { enqueue } as never,
+      goals: { list: vi.fn(async () => []) } as never,
+      missions: { list: vi.fn(async () => []) } as never,
+      now: () => NOW,
+    });
+
+    const [a, b] = await Promise.allSettled([
+      c.admit({ goal: goal(), idempotencyKey: "a", title: "t", objective: "o" }),
+      c.admit({ goal: goal(), idempotencyKey: "b", title: "t", objective: "o" }),
+    ]);
+    expect(a?.status).toBe("rejected");
+    expect(b?.status).toBe("fulfilled");
+  });
+
+  it("DEUX classes distinctes ne se bloquent pas l'une l'autre pour rien", async () => {
+    /* La sérialisation est globale : elle doit ORDONNER, jamais REFUSER ce qui tient. */
+    const enqueue = vi.fn(async () => ({ job: { id: "job", missionId: "m" }, created: true }));
+    const c = new ObjectiveCoordinator({
+      scheduler: { enqueue } as never,
+      goals: { list: vi.fn(async () => []) } as never,
+      missions: { list: vi.fn(async () => []) } as never,
+      now: () => NOW,
+    });
+    const results = await Promise.all([
+      c.admit({ goal: research, idempotencyKey: "a", title: "t", objective: "o" }),
+      c.admit({
+        goal: goal({ id: "g-s", metadata: { "icos.work_class": "SECURITY" } }),
+        idempotencyKey: "b",
+        title: "t",
+        objective: "o",
+      }),
+    ]);
+    expect(results.every((r) => r.outcome === "enqueued")).toBe(true);
+  });
+});
+
+/** La politique par défaut doit bien porter le plafond que le test ci-dessus exerce. */
+describe("DEFAULT_PORTFOLIO_POLICY — le plafond exercé par les preuves C7", () => {
+  it("RESEARCH est bien plafonné à une seule admission concurrente", () => {
+    expect(DEFAULT_PORTFOLIO_POLICY.classes.RESEARCH.maxConcurrent).toBe(1);
+  });
+});
