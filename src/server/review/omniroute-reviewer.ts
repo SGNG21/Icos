@@ -275,6 +275,14 @@ export function createOmniRouteReviewer(
     Env,
     "OMNIROUTE_BASE_URL" | "OMNIROUTE_API_KEY" | "ICOS_REVIEWER_MODEL" | "ICOS_REVIEWER_TIMEOUT_MS"
   >,
+  /**
+   * LA COUTURE DU COMPTEUR (verrou C1). Une relecture est du TRAVAIL DE MISSION : elle part
+   * pendant l'exécution d'un goal, donc sous sa portée d'imputation, donc sous son plafond.
+   * Sans cet argument elle émettait sur `globalThis.fetch` — invisible au journal, sans
+   * réservation, et sans aucune borne de sortie. Un relecteur qui dépense hors budget est
+   * exactement le trou que la réservation existe pour fermer.
+   */
+  fetchImpl?: typeof fetch,
 ): ReviewerPort | undefined {
   const requested =
     env.ICOS_REVIEWER_MODEL !== undefined || env.ICOS_REVIEWER_TIMEOUT_MS !== undefined;
@@ -287,5 +295,6 @@ export function createOmniRouteReviewer(
     credential: env.OMNIROUTE_API_KEY,
     model: env.ICOS_REVIEWER_MODEL,
     timeoutMs: env.ICOS_REVIEWER_TIMEOUT_MS ?? 60_000,
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
 }
