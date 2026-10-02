@@ -58,6 +58,8 @@ describe("production services bootstrap", () => {
     expect(schedulerFactory).toHaveBeenCalledTimes(1);
     expect(schedulerFactory).toHaveBeenCalledWith(container, {
       intervalMs: 5_000,
+      /* Absent ICOS_SELF_DEVELOPMENT must mean OFF: ICOS never self-modifies by default. */
+      selfDevelopment: false,
     });
     expect(start).toHaveBeenCalledTimes(1);
 
@@ -293,5 +295,54 @@ describe("production services bootstrap", () => {
     ).rejects.toThrow("DB_DOWN");
 
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("self-development runs ONLY when the owner enables it explicitly", async () => {
+    const start = vi.fn();
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const close = vi.fn().mockResolvedValue(undefined);
+    const schedulerFactory = vi.fn().mockReturnValue({ start, stop });
+    const container = {
+      autonomousRuntime: {},
+      scheduledJobs: jobs(),
+      close,
+    } as unknown as Container;
+
+    const services = await startProductionServices({
+      env: env({ ICOS_SELF_DEVELOPMENT: "enabled" }),
+      createContainer: vi.fn().mockResolvedValue(container),
+      schedulerFactory,
+      signals,
+    });
+
+    expect(schedulerFactory).toHaveBeenCalledWith(
+      container,
+      expect.objectContaining({ selfDevelopment: true }),
+    );
+
+    await services.stop();
+  });
+
+  it("an explicit `disabled` keeps self-development off", async () => {
+    const schedulerFactory = vi.fn().mockReturnValue({ start: vi.fn(), stop: vi.fn() });
+    const container = {
+      autonomousRuntime: {},
+      scheduledJobs: jobs(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Container;
+
+    const services = await startProductionServices({
+      env: env({ ICOS_SELF_DEVELOPMENT: "disabled" }),
+      createContainer: vi.fn().mockResolvedValue(container),
+      schedulerFactory,
+      signals,
+    });
+
+    expect(schedulerFactory).toHaveBeenCalledWith(
+      container,
+      expect.objectContaining({ selfDevelopment: false }),
+    );
+
+    await services.stop();
   });
 });

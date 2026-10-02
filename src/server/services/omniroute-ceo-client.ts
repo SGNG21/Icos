@@ -16,8 +16,14 @@ export class OmniRouteCeoClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly configuredModel?: string;
+  /**
+   * Seam de transport. Les quatre autres appelants OmniRoute acceptent déjà un `typeof fetch`
+   * injectable ; celui-ci appelait le `fetch` global, donc le compteur de dépense ne pouvait pas
+   * l'atteindre et son coût restait non mesuré. Paramètre optionnel : aucun appelant existant ne change.
+   */
+  private readonly fetchImpl: typeof fetch;
 
-  constructor() {
+  constructor(fetchImpl: typeof fetch = (input, init) => globalThis.fetch(input, init)) {
     const baseUrl = process.env.OMNIROUTE_BASE_URL;
     const apiKey = process.env.OMNIROUTE_API_KEY;
 
@@ -27,6 +33,7 @@ export class OmniRouteCeoClient {
 
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
+    this.fetchImpl = fetchImpl;
 
     this.configuredModel =
       process.env.ICOS_CEO_MODEL ??
@@ -39,7 +46,7 @@ export class OmniRouteCeoClient {
       return this.configuredModel;
     }
 
-    const response = await fetch(`${this.baseUrl}/v1/models`, {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/models`, {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
       },
@@ -71,7 +78,7 @@ export class OmniRouteCeoClient {
     // On n'envoie pas toute la vie de la conversation au modèle.
     const recentMessages = messages.slice(-20);
 
-    const response = await fetch(
+    const response = await this.fetchImpl(
       `${this.baseUrl}/v1/chat/completions`,
       {
         method: "POST",

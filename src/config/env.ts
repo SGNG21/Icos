@@ -127,6 +127,17 @@ const envSchema = z.object({
   ICOS_REVIEWER_COMMAND: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_EXECUTION_CALLBACK_SECRET: optionalSecret,
   AUTONOMY_RECOVERY_INTERVAL_MS: optionalPositiveInteger,
+  /**
+   * Interrupteur du PASSAGE d'auto-amélioration gouvernée sur le timer de production.
+   * Absent = `disabled` : le coordinateur reste joignable mais ICOS ne se modifie jamais
+   * de lui-même tant que le propriétaire ne l'a pas activé explicitement. Énumération et
+   * non booléen : une faute de frappe échoue à la validation au lieu de désactiver en silence
+   * une capacité que l'on croit active.
+   */
+  ICOS_SELF_DEVELOPMENT: z.preprocess(
+    emptyAsUndefined,
+    z.enum(["enabled", "disabled"]).optional(),
+  ),
   SCHEDULER_LEASE_MS: optionalPositiveInteger,
   TEMPORAL_ADDRESS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_TASK_QUEUE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),

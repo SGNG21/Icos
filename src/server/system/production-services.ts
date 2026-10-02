@@ -22,6 +22,7 @@ import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
+import type { AutonomyRecoverySweepResult } from "@/server/autonomy/autonomy-recovery-sweeper";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 
@@ -48,7 +49,7 @@ export interface StartProductionServicesOptions {
   createContainer?: (options: { env: Env }) => Promise<Container>;
   schedulerFactory?: (
     container: Container,
-    options: { intervalMs: number },
+    options: { intervalMs: number; selfDevelopment: boolean },
   ) => ProductionServiceScheduler;
   signals?: ProductionServiceSignals;
   registerSignals?: boolean;
@@ -265,9 +266,10 @@ export function composeAutonomyRuntime(container: Container): {
 
 function createRecoveryScheduler(
   container: Container,
-  options: { intervalMs: number },
+  options: { intervalMs: number; selfDevelopment: boolean },
 ): ProductionServiceScheduler {
-  const { supervisor, wakeup, recovery, pendingReviewGate } = composeAutonomyRuntime(container);
+  const { supervisor, wakeup, recovery, pendingReviewGate, selfDevelopment } =
+    composeAutonomyRuntime(container);
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
   }
@@ -352,6 +354,51 @@ function createRecoveryScheduler(
       ...(container.db
         ? [["cognitive-launch-recovery", cognitiveLaunchRecoverySweeper(container)] as const]
         : []),
+      /*
+       * THE ONLY production caller of governed self-development ("Améliore ICOS"). The
+       * coordinator was composed but never invoked by anything, so the self-improvement loop
+       * existed and could not start. It is attached to the SAME lifecycle timer rather than a
+       * second scheduler: no new authority.
+       *
+       * OPT-IN, and absent means off. Putting ICOS's self-modification on a 30 s timer is the
+       * largest autonomy increase in the system, so it stays the owner's switch
+       * (`ICOS_SELF_DEVELOPMENT=enabled`), never a default acquired by deployment.
+       */
+      ...(options.selfDevelopment
+        ? [
+            [
+              "self-development",
+              {
+                async sweep(): Promise<AutonomyRecoverySweepResult> {
+                  const idle: AutonomyRecoverySweepResult = {
+                    discovered: 0,
+                    attempted: 0,
+                    succeeded: 0,
+                    failed: 0,
+                    failures: [],
+                  };
+                  const outcome = await selfDevelopment.advance();
+                  /* No candidate is the normal idle tick: nothing discovered, nothing attempted. */
+                  /* L'union n'a pas de clé commune : on la discrimine par présence. */
+                  if ("status" in outcome) return idle;
+                  /*
+                   * `policy_denied`, `gate_rejected` and `human_decision_required` are the
+                   * governance WORKING, not errors: they are attempted-but-not-succeeded, and
+                   * are deliberately NOT reported as `failed`, which is reserved for a thrown
+                   * fault (sweepAll catches those). attempted > succeeded + failed is the signal.
+                   */
+                  return {
+                    discovered: 1,
+                    attempted: 1,
+                    succeeded: outcome.finalState === "integrated" ? 1 : 0,
+                    failed: 0,
+                    failures: [],
+                  };
+                },
+              },
+            ] as const,
+          ]
+        : []),
     ]),
     options,
   );
@@ -378,6 +425,7 @@ export async function startProductionServices(
       scheduler = schedulerFactory(container, {
         intervalMs:
           options.env.AUTONOMY_RECOVERY_INTERVAL_MS ?? DEFAULT_AUTONOMY_RECOVERY_INTERVAL_MS,
+        selfDevelopment: options.env.ICOS_SELF_DEVELOPMENT === "enabled",
       });
       scheduler.start();
 
