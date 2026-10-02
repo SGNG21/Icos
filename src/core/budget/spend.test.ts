@@ -74,6 +74,29 @@ describe("emptyWindow / accumulate", () => {
     expect(w.unmeteredCalls).toBe(1);
   });
 
+  it("NE BLANCHIT PAS une observation mesurée arrivée sans coût", () => {
+    // Sans garde, les tokens s'accumulaient tandis que `amount`, `pricedCalls` et
+    // `unpricedCalls` restaient intacts : la fenêtre paraissait propre et `decide` déclarait
+    // n'importe quel maxAmount satisfait.
+    const costless: SpendObservation = {
+      modelId: "test/model",
+      usage: {
+        kind: "METERED",
+        usage: { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000 },
+      },
+    };
+
+    const w = windowOf(costless);
+    expect(w.totalTokens).toBe(2_000_000);
+    expect(w.amount).toBe(0);
+    expect(w.pricedCalls).toBe(0);
+    expect(w.unpricedCalls).toBe(1);
+    expect(decide(w, capped({ maxAmount: 10 }))).toMatchObject({
+      kind: "DENY",
+      reason: "UNPRICED_USAGE_IN_WINDOW",
+    });
+  });
+
   it("ne mute pas la fenêtre d'entrée", () => {
     const before = emptyWindow();
     accumulate(before, metered(10, 10, 1));

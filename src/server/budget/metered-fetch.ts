@@ -19,6 +19,8 @@ import type { SpendLedgerPort } from "./ports";
  *
  * Invariants :
  * - le refus arrive AVANT `inner` : un appel refusé n'est jamais émis ;
+ * - seule une requête de complétion est MESURÉE ; les autres requêtes du même seam
+ *   (`GET /v1/models`) n'écrivent rien, mais restent soumises au contrôle pré-vol ;
  * - la réponse rendue est l'objet de `inner`, intact et entièrement lisible — la mesure lit
  *   un `clone()` ;
  * - une erreur ou une annulation de l'appelant remonte telle quelle et n'écrit rien ;
@@ -57,6 +59,28 @@ export interface MeteredFetchDeps {
 }
 
 const JSON_CONTENT_TYPE = /^application\/(\w+\+)?json\b/i;
+
+/** Le seul chemin facturé : les cinq appelants postent tous là. */
+const COMPLETION_PATH = /\/v1\/chat\/completions\/?$/;
+
+/**
+ * Seule une COMPLÉTION est une dépense. Le même fetch injecté sert aussi à des requêtes qui
+ * ne facturent rien — `GET /v1/models` pour la découverte des modèles — dont la réponse est un
+ * 2xx JSON sans `usage` : les enregistrer UNMETERED condamnait l'imputation entière dès la
+ * première requête, sans décroissance ni remise à zéro.
+ *
+ * On décide d'après la REQUÊTE, et d'après le CHEMIN : `input` peut être une chaîne, une URL
+ * ou un `Request`, et deviner d'après le corps serait bien moins fiable.
+ */
+function isCompletionRequest(input: RequestInfo | URL): boolean {
+  const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  try {
+    return COMPLETION_PATH.test(new URL(href).pathname);
+  } catch {
+    /* URL relative : on teste le chemin brut, sans requête ni fragment. */
+    return COMPLETION_PATH.test(href.split(/[?#]/, 1)[0] ?? "");
+  }
+}
 
 /** Le modèle demandé, quand le corps de requête est une chaîne JSON (les cinq appelants). */
 function requestedModel(init: RequestInit | undefined): string | undefined {
@@ -124,6 +148,14 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
      * bloquerait le système pour une erreur transitoire.
      */
     if (!response.ok) return response;
+
+    /*
+     * Rien à mesurer sur une requête qui n'est pas une complétion : aucune observation n'est
+     * écrite. Attention à la sur-correction : une complétion dont la consommation est
+     * illisible (flux SSE) reste enregistrée UNMETERED ci-dessous — c'est une vraie dépense
+     * qu'ICOS n'a pas pu mesurer, la laisser passer rouvrirait le trou que ce fichier ferme.
+     */
+    if (!isCompletionRequest(input)) return response;
 
     const observed = await observe(response);
     try {

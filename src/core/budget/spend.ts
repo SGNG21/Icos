@@ -21,7 +21,14 @@ import {
 export interface SpendObservation {
   readonly modelId: string;
   readonly usage: UsageOutcome;
-  /** Absent quand `usage` est UNMETERED : il n'y a rien à chiffrer. */
+  /**
+   * Absent UNIQUEMENT quand `usage` est UNMETERED : il n'y a alors rien à chiffrer.
+   *
+   * Une consommation MESURÉE doit porter un chiffrage — un coût ou un UNPRICED explicite.
+   * Le type ne peut pas encore l'imposer (une union discriminée casserait la construction
+   * de `in-memory-spend-ledger.ts`, hors du périmètre de ce lot), donc `accumulate` tient
+   * l'invariant au moment de l'accumulation : mesuré sans coût = non chiffré, jamais gratuit.
+   */
   readonly cost?: CostOutcome;
 }
 
@@ -98,7 +105,13 @@ export function accumulate(window: SpendWindow, observation: SpendObservation): 
       /* Un total non finissable ne doit pas se propager : on garde le dernier total sain. */
       saturated = true;
     }
-  } else if (observation.cost?.kind === UNPRICED) {
+  } else if (observation.cost?.kind === UNPRICED || observation.usage.kind !== UNMETERED) {
+    /*
+     * Coût UNPRICED, ou coût absent sur une consommation MESURÉE. Le second cas laissait les
+     * tokens s'accumuler en laissant `amount`, `pricedCalls` et `unpricedCalls` intacts : la
+     * fenêtre paraissait propre et n'importe quel plafond monétaire était déclaré satisfait.
+     * Un coût qu'on n'a pas n'est pas un coût nul : il compte comme non chiffré.
+     */
     unpricedCalls += 1;
   }
 
