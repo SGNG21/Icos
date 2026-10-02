@@ -1,6 +1,12 @@
 import type { MissionRepository } from "@/server/mission/ports";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import {
+  AUTONOMY_BOUNDS_CEILING,
+  resolveBounds,
+  type RequestedBounds,
+  type RuntimeBounds,
+} from "@/core/autonomy/bounds";
+import {
   AutonomousMissionRunner,
   type AutonomousMissionPlanner,
   type AutonomousSupervisor,
@@ -31,7 +37,12 @@ import {
  *   - ownership/fencing: the runner claims the runtime lease; a losing caller
  *     receives `waiting`/`AUTONOMY_RUNTIME_ALREADY_OWNED` and must not mutate;
  *   - budgets: cycle/runtime/stagnation/replan budgets are the runtime's own
- *     durable values, never widened here;
+ *     durable values, never widened here. A caller MAY request tighter bounds
+ *     for a *fresh* mission (`input.bounds`); the request is resolved against
+ *     the ceiling in `@/core/autonomy/bounds`, may only narrow, and a widening
+ *     attempt is clamped and reported in `clampedBounds`. Re-igniting an
+ *     existing runtime reuses its persisted caps and ignores the request —
+ *     the runner enforces `runtime.max*`, not these options;
  *   - fail-closed: an unavailable planner surfaces as a thrown planner error,
  *     never an implicit empty plan or false success;
  *   - idempotency: re-igniting an existing runtime is safe — createIfAbsent is a
@@ -50,19 +61,29 @@ export interface StartAutonomousMissionDeps {
 export interface StartAutonomousMissionInput {
   missionId: string;
   goalId?: string;
+
+  /**
+   * Optional per-mission runtime bounds. Absent fields keep the ceiling value,
+   * so omitting `bounds` entirely is byte-identical to the previous behaviour.
+   */
+  bounds?: RequestedBounds;
 }
 
-const DEFAULT_OPTIONS: AutonomousMissionRunnerOptions = {
-  maxCycles: 100,
-  maxRuntimeMs: 60 * 60 * 1000,
-  maxStagnationCycles: 3,
-  maxReplans: 5,
-};
+const DEFAULT_OPTIONS: AutonomousMissionRunnerOptions = AUTONOMY_BOUNDS_CEILING;
 
 export async function startAutonomousMission(
   deps: StartAutonomousMissionDeps,
   input: StartAutonomousMissionInput,
 ): Promise<AutonomousMissionRunnerResult> {
+  const baseOptions = deps.options ?? DEFAULT_OPTIONS;
+
+  /*
+   * No request -> the base options are used verbatim, exactly as before.
+   * A request -> resolved against those same options as the ceiling, so an
+   * injected (tighter) deployment configuration can never be widened either.
+   */
+  const resolved = input.bounds ? resolveBounds(input.bounds, ceilingOf(baseOptions)) : null;
+
   const mission = await deps.missions.findById(input.missionId);
   if (!mission) {
     throw new Error(`START_AUTONOMOUS_MISSION_NOT_FOUND:${input.missionId}`);
@@ -72,10 +93,25 @@ export async function startAutonomousMission(
     deps.missions,
     deps.supervisor,
     deps.planner,
-    deps.options ?? DEFAULT_OPTIONS,
+    resolved ? { ...baseOptions, ...resolved.bounds } : baseOptions,
     deps.now ?? (() => new Date()),
     deps.runtimeRepository,
   );
 
-  return runner.run(input.missionId);
+  const result = await runner.run(input.missionId);
+
+  if (resolved && resolved.clamped.length > 0) {
+    return { ...result, clampedBounds: resolved.clamped };
+  }
+
+  return result;
+}
+
+function ceilingOf(options: AutonomousMissionRunnerOptions): RuntimeBounds {
+  return {
+    maxCycles: options.maxCycles,
+    maxRuntimeMs: options.maxRuntimeMs,
+    maxStagnationCycles: options.maxStagnationCycles,
+    maxReplans: options.maxReplans ?? AUTONOMY_BOUNDS_CEILING.maxReplans,
+  };
 }

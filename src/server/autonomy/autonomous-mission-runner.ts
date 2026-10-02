@@ -1,4 +1,5 @@
 import type { Mission, MissionTask } from "@/core/mission/contracts";
+import { AUTONOMY_BOUNDS_CEILING, type RuntimeBoundsField } from "@/core/autonomy/bounds";
 
 import type { MissionRepository } from "@/server/mission/ports";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
@@ -61,6 +62,13 @@ export interface AutonomousMissionRunnerResult {
   finishedAt: Date;
   lastFingerprint: string;
   reason: string;
+
+  /**
+   * Bound fields whose requested value exceeded the ceiling and was reduced
+   * to it. Present only when a widening request was clamped, so the narrowing
+   * is never granted silently.
+   */
+  clampedBounds?: RuntimeBoundsField[];
 }
 
 interface LeaseRenewalGuard {
@@ -136,12 +144,12 @@ export class AutonomousMissionRunner {
 
     private readonly planner: AutonomousMissionPlanner,
 
-    private readonly options: AutonomousMissionRunnerOptions = {
-      maxCycles: 100,
-      maxRuntimeMs: 60 * 60 * 1000,
-      maxStagnationCycles: 3,
-      maxReplans: 5,
-    },
+    /*
+     * Single source of truth for the bound ceiling: see
+     * @/core/autonomy/bounds. This block used to restate the same four
+     * constants that start-autonomous-mission.ts also declared.
+     */
+    private readonly options: AutonomousMissionRunnerOptions = AUTONOMY_BOUNDS_CEILING,
 
     private readonly now: () => Date = () => new Date(),
 
@@ -608,7 +616,7 @@ export class AutonomousMissionRunner {
       replanCount: 0,
       stagnationCount: 0,
       maxCycles: this.options.maxCycles,
-      maxReplans: this.options.maxReplans ?? 5,
+      maxReplans: this.options.maxReplans ?? AUTONOMY_BOUNDS_CEILING.maxReplans,
       maxRuntimeMs: this.options.maxRuntimeMs,
       maxStagnationCycles: this.options.maxStagnationCycles,
       lastReason: "AUTONOMY_STARTED",
