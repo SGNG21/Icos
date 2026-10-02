@@ -186,6 +186,7 @@ import {
 } from "@/server/services/in-memory/ceo-repository";
 import { ConversationService } from "@/server/services/conversation-service";
 import { CeoApplicationService } from "@/server/services/ceo-service";
+import { OmniRouteCeoClient } from "@/server/services/omniroute-ceo-client";
 import { MissionService } from "@/server/mission/mission-service";
 import { GoalNormalizer } from "./services/goal-normalizer";
 import { GoalPlanner } from "./services/goal-planner";
@@ -1015,7 +1016,18 @@ export async function buildPostgresContainer(
     autonomyPolicy: buildAutonomyCompositionPolicy(env),
     improvementProposalProvider: buildImprovementProposalProvider(env),
     conversationService,
-    ceoService: new CeoApplicationService(conversationService, missionService),
+    /*
+     * VERROU C1 — LE DERNIER CHEMIN NON MESURÉ. `OmniRouteCeoClient` acceptait déjà un
+     * `fetch` injectable, et personne ne le lui passait : ses complétions partaient donc
+     * sur le `fetch` global, invisibles au journal, sans réservation et sans borne de
+     * sortie. Le CEO conversationnel dépense comme la conversation — même portée, même
+     * plafond par conversation, strictement séparé du budget d'exécution d'un goal.
+     */
+    ceoService: new CeoApplicationService(
+      conversationService,
+      missionService,
+      () => new OmniRouteCeoClient(spend.conversation),
+    ),
     db: handle.db,
     /*
      * CLOSE EVERY CLIENT THIS CONTAINER OPENED, not just the shared handle (D1).

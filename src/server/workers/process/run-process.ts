@@ -110,6 +110,11 @@ export type NonInteractiveRunner = (
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 /** Grace between SIGTERM and SIGKILL: a chance to flush, not a chance to linger. */
 export const KILL_GRACE_MS = 2_000;
+/**
+ * Fenêtre de drainage entre la mort du worker et la conclusion. Assez pour recueillir la
+ * fin de sa sortie, assez courte pour qu'un petit-enfant survivant ne retarde rien.
+ */
+export const OUTPUT_DRAIN_MS = 150;
 
 /** `sandbox-exec` : présent sur macOS, absent ailleurs. Résolu une fois par processus. */
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -203,6 +208,21 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
     const child = spawn(launch.command, launch.args, {
       cwd: spec.cwd,
       /*
+       * GROUPE DE PROCESSUS À PART (défaut de l'orphelin, mesuré).
+       *
+       * Sans `detached`, `child.kill()` ne vise QUE l'enfant direct. Un worker qui lance
+       * son propre sous-processus laissait donc celui-ci VIVANT après le kill — et comme
+       * le petit-enfant hérite des tuyaux stdout/stderr, l'évènement `close` n'arrivait
+       * jamais : la promesse ne se résolvait PLUS DU TOUT. Reproduit : un worker qui
+       * ignore SIGTERM et lance un `sleep` bloquait le runner indéfiniment et laissait
+       * deux processus derrière lui. C'est exactement le « hang » que l'en-tête de ce
+       * fichier déclare empêcher, et il ne l'empêchait pas.
+       *
+       * `detached: true` fait de l'enfant le CHEF de son groupe, ce qui rend l'arbre
+       * entier tuable d'un seul signal (voir `killTree`).
+       */
+      detached: true,
+      /*
        * Le dépôt AUGMENTE `NodeJS.ProcessEnv` pour exiger `NODE_ENV` : c'est une contrainte
        * sur l'environnement de CE processus, pas sur celui qu'on compose pour un enfant,
        * qui peut légitimement ne pas en avoir. D'où la conversion, à cet unique endroit.
@@ -213,12 +233,25 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
       shell: false,
     });
 
+    /**
+     * Tue l'ARBRE, pas seulement l'enfant. Le signal négatif vise le groupe entier, donc
+     * les petits-enfants que le worker a pu lancer. Sans cela ils survivent au worker et
+     * gardent ses tuyaux ouverts.
+     */
+    const killTree = (signal: NodeJS.Signals) => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, signal);
+      } catch {
+        /* Groupe déjà parti : rien à tuer, et ce n'est pas une erreur. */
+      }
+    };
+
     let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       // Ask first, insist second: a worker may still flush a partial verdict.
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+      killTree("SIGTERM");
+      killTimer = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
     }, spec.timeoutMs);
 
     const finish = (exitCode: number | null, signal: string | null) => {
@@ -261,5 +294,19 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
       finish(null, null);
     });
 
+    /*
+     * `exit` (le processus est mort) et non `close` (les tuyaux sont fermés).
+     *
+     * `close` attend que TOUT détenteur des tuyaux les lâche, y compris un petit-enfant
+     * survivant : c'est ce qui faisait attendre le runner pour toujours. `exit` dit que le
+     * worker lui-même est terminé, ce qui est la seule question à laquelle l'appelant a
+     * besoin d'une réponse. On laisse une courte fenêtre de drainage pour ne pas couper la
+     * fin de sa sortie, puis on tranche.
+     */
+    child.on("exit", (code, signal) => {
+      killTree("SIGKILL"); // tout survivant du groupe part avec lui
+      setTimeout(() => finish(code, signal ?? null), OUTPUT_DRAIN_MS).unref?.();
+    });
+    /* Si les tuyaux se ferment avant la fenêtre de drainage, on conclut tout de suite. */
     child.on("close", (code, signal) => finish(code, signal ?? null));
   });
