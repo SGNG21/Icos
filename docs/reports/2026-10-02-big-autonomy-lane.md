@@ -233,3 +233,50 @@ that protects correctness in practice: the reviewer had a fresh context, an adve
 stake in the work passing, and no knowledge of the implementers' reasoning — and it did in fact
 contradict the coordinator on several points, which is the behaviour diversity is meant to buy.
 That is weaker than a different model family and is reported as such.
+
+## 9. FINDING — a quarter of the integration suite never runs, and says "passed"
+
+This was found by accident and is probably the most important thing in this report.
+
+13 of 87 integration test files are gated `describe.skipIf(!dockerAvailable)` and use
+Testcontainers. **The Docker daemon is not running on this machine**, so all 13 skip. Vitest
+reports the run as `71 passed | 16 skipped` and exits 0. Nothing fails, nothing warns, and
+"integration suite green" therefore means considerably less than it appears to.
+
+What is NOT being exercised:
+
+| File | What goes unproven |
+|---|---|
+| `server/auth/auth-foundation.integration.test.ts` | authentication foundation |
+| `server/auth/auth-application.integration.test.ts` | auth application layer |
+| `server/auth/auth-bootstrap-cli.integration.test.ts` | auth bootstrap |
+| `server/database/append-only.integration.test.ts` | **audit append-only enforcement** |
+| `server/workforce/postgres-workforce-store.integration.test.ts` | the workforce store the 12 brains depend on |
+| `server/repositories/postgres/repositories.integration.test.ts` | the Postgres repositories |
+| `server/uow/postgres-capability-uow.integration.test.ts` | transactional unit of work |
+| `server/uow/postgres-action-decision-uow.integration.test.ts` | transactional unit of work |
+| `server/tool-gateway/postgres-stores.integration.test.ts` | governed tool-gateway stores |
+| `server/container.postgres.integration.test.ts` | the Postgres container composition |
+| `server/database/capability-schema.integration.test.ts` | capability schema |
+| `server/administration/user-agent-administration.integration.test.ts` | user/agent administration |
+
+Three of those are authentication and one is audit append-only — both security properties. The
+workforce-store one matters directly to the brain registry: its durability is asserted by a test
+that does not run.
+
+This lane converted exactly one of the 13 (the spend ledger) to the local test database, because
+durability was that lane's whole purpose and leaving it unproven would have meant claiming
+durability on an unexecuted assertion. Running it immediately found a defect **in the proof
+itself**: the `goals` fixture omitted `createdAt` and `updatedAt`, both NOT NULL without defaults,
+so all three resolver proofs failed on their own fixture. They now pass, 19/19, against real
+PostgreSQL.
+
+The other 12 were deliberately NOT converted. Testcontainers gives each file a pristine empty
+database; several of those tests likely assume that, and the shared local test database carries
+rows from its siblings. A blind conversion would produce confident false results, which is worse
+than a visible skip.
+
+**Recommended, for the owner to choose:** either start the Docker daemon before an integration
+run and re-run the full suite, or convert those files deliberately, one at a time, verifying each
+actually passes rather than merely stops skipping. Until then, treat "integration green" as
+covering 74 of 87 files, and do not read it as covering auth or audit append-only.
