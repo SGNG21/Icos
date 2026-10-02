@@ -18,8 +18,8 @@ import { SupervisorService } from "./supervisor-service";
  */
 
 const need = (over: Partial<BrainComputeNeed> = {}): BrainComputeNeed => ({
-  assignmentId: "wfa-1",
-  agentId: "brain-builder",
+  assignmentIds: ["wfa-1"],
+  agentIds: ["brain-builder"],
   workerCapabilities: [],
   complexity: "low",
   approvalPending: false,

@@ -1,4 +1,5 @@
 import type { TaskComplexity } from "@/core/workers/compute-routing";
+import { higherComplexity } from "@/core/workforce/compute";
 import type { WorkAssignment } from "@/core/workforce/contracts";
 import type { Principal } from "@/core/workforce/governance";
 
@@ -30,9 +31,18 @@ const AWAITING_DISPATCH: ReadonlySet<WorkAssignment["status"]> = new Set([
 ]);
 
 export interface BrainComputeNeed {
-  assignmentId: string;
-  /** The durable brain identity the work is assigned to. */
-  agentId: string;
+  /**
+   * TOUTES les affectations vivantes de cette tâche, pas une seule.
+   *
+   * Le défaut (verrou C6) : `find()` prenait la PREMIÈRE de la liste, donc la première par
+   * ordre d'id. Deux affectations vivantes sur la même tâche — une reprise, un changement de
+   * cerveau, une double écriture — et la plus STRICTE pouvait être ignorée : sa capacité
+   * supplémentaire disparaissait, et surtout son approbation humaine requise cessait de
+   * retenir le dispatch. Un contournement d'approbation par ordre lexicographique.
+   */
+  assignmentIds: readonly string[];
+  /** Les identités durables à qui ce travail est affecté, pour la provenance. */
+  agentIds: readonly string[];
   /**
    * Worker capabilities, in the canonical matcher's vocabulary — `toWorkerRequirement`, not the
    * assignment's own role/skill capability keys (those select the AGENT, not the worker).
@@ -66,19 +76,48 @@ export function workforceTaskCompute(deps: {
        * assignment volume ever makes this measurable.
        */
       const assignments = await deps.store.listAssignments(deps.system.tenantId);
-      const assignment = assignments.find(
+      const live = assignments.filter(
         (a) => a.missionId === missionId && a.taskId === taskId && AWAITING_DISPATCH.has(a.status),
       );
-      if (!assignment) return null;
-      const request = await deps.compute.requestFor(deps.system, assignment.assignmentId);
-      return {
-        assignmentId: request.assignmentId,
-        agentId: request.agent.agentId,
+      if (live.length === 0) return null;
+
+      /*
+       * LA PLUS STRICTE GAGNE, SUR CHAQUE AXE INDÉPENDAMMENT (verrou C6).
+       *
+       * Prendre la première affectation laissait la plus stricte être ignorée. Refuser tout
+       * net quand il y en a plusieurs bloquerait un dispatch légitime sur une incohérence de
+       * données. On applique donc la contrainte la plus forte de chacune : c'est exactement
+       * le contrat déjà annoncé de ce seam — un cerveau ne peut que RESSERRER — et la seule
+       * composition qui ne puisse jamais relâcher ce qu'une affectation exigeait.
+       *
+       *   difficulté   -> la PLUS HAUTE
+       *   capacités    -> l'UNION (ajouter est permis, retirer ne l'est pas)
+       *   approbation  -> EN ATTENTE dès qu'UNE SEULE l'exige sans l'avoir
+       */
+      const requests = await Promise.all(
+        live.map((a) => deps.compute.requestFor(deps.system, a.assignmentId)),
+      );
+
+      const workerCapabilities = new Set<string>();
+      let complexity: TaskComplexity | undefined;
+      let approvalPending = false;
+      for (const request of requests) {
         // Absent means the brain's skill declares NO worker capability — nothing to add to the
         // task's own requirement. It is never a wildcard, so it never widens anything.
-        workerCapabilities: request.workerRequirement.requiredCapabilities ?? [],
-        complexity: request.compute.complexity,
-        approvalPending: request.approval.required && !request.approval.satisfied,
+        for (const capability of request.workerRequirement.requiredCapabilities ?? []) {
+          workerCapabilities.add(capability);
+        }
+        complexity = higherComplexity(request.compute.complexity, complexity);
+        approvalPending ||= request.approval.required && !request.approval.satisfied;
+      }
+
+      return {
+        assignmentIds: requests.map((r) => r.assignmentId),
+        agentIds: requests.map((r) => r.agent.agentId),
+        workerCapabilities: [...workerCapabilities],
+        /* `requests` n'est jamais vide ici : `live.length === 0` est déjà sorti plus haut. */
+        complexity: complexity as TaskComplexity,
+        approvalPending,
       };
     },
   };
