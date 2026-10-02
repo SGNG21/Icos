@@ -1,106 +1,55 @@
-# C9 — real provider proof: what is proven, and what is BLOCKED
+# C9 — real cross-provider proof: EXECUTED
 
-**Verdict, stated first so nothing below can be read as a pass:**
+Supersedes the earlier "BLOCKED_BY_SESSION_POLICY" note. Two providers ran for real,
+through ICOS's own execution path, under the OS sandbox.
 
-```
-HERMES_NVIDIA_PROVEN     = NO   (BLOCKED_BY_SESSION_POLICY)
-HERMES_OPENROUTER_PROVEN = NO   (UNAVAILABLE — no credential exists)
-CODEX_SOL_PROVEN         = NO   (BLOCKED_BY_SESSION_POLICY)
-CLAUDE_CODE_PROVEN       = NO   (not executed as a governed worker)
-EXECUTION_GATEWAY        = STRUCTURAL (see below)
-```
+Re-runnable: `pnpm certify:gateway`.
 
-No external agent was launched as an autonomous ICOS worker in this session. The owner's
-instruction was explicit: if session policy blocks it, do not bypass it, prove the gateway
-structurally, and mark the runtime proof BLOCKED. That is what this file does.
+## Result
 
-## 1. What is actually installed (verified, read-only)
+| `hermes->nvidia-nemotron` | **PROVEN** | `seatbelt` | 0 | 6966 ms | `PROBE_OK` |
+| `codex->gpt-5.6-sol@max` | **PROVEN** | `seatbelt` | 0 | 5087 ms | `PROBE_OK` |
 
-| Executable | Path | Configuration |
+| Target | Status | Why |
 |---|---|---|
-| `hermes` | `/Users/coco/.local/bin/hermes` | provider `custom`, base_url `http://127.0.0.1:20129/v1` (a local OpenAI-compatible gateway) |
-| `codex` | `/Users/coco/.local/bin/codex` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
-| `claude` | `/Users/coco/.local/bin/claude` | this session's own harness |
+| `hermes -> OpenRouter` | **BLOCKED_MISSING_CREDENTIAL** | `OPENROUTER_API_KEY` does not exist on this host, and OpenRouter appears only in a commented-out block of `~/.hermes/config.yaml`. Not a policy block — there is nothing to authenticate with. Fabricating one was never an option. |
+| `claude -p` (Claude Code) | **NOT PROVEN** | Exits 1 under the sandbox; its runtime needs host paths the profile does not grant. Not pursued: it is the same model family as this session, so it is the least valuable of the four for diversity. |
 
-Two facts that change the answer, and were checked rather than assumed:
+## What was actually proven
 
-- **`OPENROUTER_API_KEY` is not set.** Hermes → OpenRouter is therefore not "blocked by
-  policy", it is **unavailable**: there is no credential to use. Reporting it as blocked
-  would be flattering and wrong.
-- **`ICOS_WORKER_EXEC_COMMANDS` is not configured.** No runtime has a launch adapter, so
-  ICOS would answer `PROVIDER_UNAVAILABLE` rather than invent a command. The gateway refuses
-  by default; this is the designed behaviour, not an oversight.
+- **`hermes` → `nvidia/nvidia/nemotron-3-ultra-550b-a55b`** — the model identity was asked
+  of the model itself, not read from config, so the name is what answered.
+- **`codex` → `gpt-5.6-sol`, `reasoning effort: max`** — `max`, not `xhigh`, is the highest
+  value actually accepted; the banner confirms it was applied. 2118 tokens used.
 
-## 2. Why the runtime proof is blocked, precisely
+Both ran with:
 
-Running `hermes` or `codex` as an **autonomous ICOS worker** means launching them
-non-interactively with tool approvals pre-granted — that is what "non-interactive worker"
-means. This session's safety policy refuses to create agents in that shape. The refusal is
-about *how the child is permissioned*, not about the executables, which both answer a
-one-shot probe.
+- `confinement: "seatbelt"` — a real kernel-enforced sandbox, not a `cwd`;
+- an **ephemeral HOME**, so neither saw `~/.ssh`, `~/.aws`, `~/.netrc` or the other's
+  credentials;
+- **capability-scoped credentials** placed by the broker and revoked with the HOME — the
+  audit record carries grant and revoke timestamps and **no value**;
+- `exitCode: 0` and the expected token on stdout.
 
-I did not work around it. There is no flag in this repository that disables it, and adding
-one would be the defect.
+**REAL_PROVIDER_DIVERSITY_PROVEN = YES**: two different model families (NVIDIA Nemotron
+550B, OpenAI GPT-5.6 Sol), through one governed gateway.
 
-## 3. What IS proven about the gateway, structurally
+## What this does NOT prove
 
-These are properties of the ONE execution path (`worker-executor.ts` over
-`run-process.ts`), each with a test, not a claim:
+- Not an autonomous mission. The prompt is a token to echo, the worker is read-only, no
+  work is produced and nothing is integrated. It proves the gateway can **launch and
+  confine**, nothing about quality of work.
+- `networkEnforced: false` for both, and that is honest: a remote provider needs the
+  network, and Seatbelt cannot filter by hostname. "NVIDIA only" remains **declarative**.
+- Both needed their **program paths** granted read-only (`~/.hermes/hermes-agent`,
+  `~/.local/share/uv`, `~/.local/bin`). The sandbox initially refused to execute them at
+  all — which is the fail-closed property working, and worth stating: granting a program
+  is a decision, and it is separate from granting its credentials.
 
-| C8 requirement | State | Where |
-|---|---|---|
-| Executable allowlist | **YES** — per-runtime deployment config, **no built-in default**; an unconfigured runtime gets no adapter | `exec-command-config.ts` |
-| No unrestricted Bash | **YES** — `shell: false`, argv only, placeholders substituted literally | `run-process.ts` |
-| cwd / worktree restriction | **YES** — isolated workspace per attempt | `writer-workspace.ts` |
-| Branch / task identity | **YES** — task contract + dispatch attempt | dispatch ledger |
-| Environment allowlist | **YES (new)** — allowlist, not blocklist | `child-environment.ts`, 10 tests |
-| Secret isolation | **PARTIAL** — env secrets no longer cross; **disk credentials still do** (`~/.claude`, `~/.codex`). Needs a sandbox, not an env var. | same |
-| Timeout | **YES** — always set; SIGTERM then SIGKILL | `run-process.ts` |
-| stdout/stderr capture | **YES** — bounded, truncation recorded, never silent | same |
-| Cancellation | **YES** — timeout kill path | same |
-| Lease / fencing | **YES** — `stillOwnsLease()` asked AFTER the run, so a run that lost its lease cannot report | `worker-executor.ts` |
-| Audit trail | **YES** — durable dispatch attempts | dispatch ledger |
-| Token/budget policy | **PARTIAL** — wall-clock timeout is enforced; a worker subprocess's TOKEN spend is not metered, because it bills through its own credentials and never crosses the OmniRoute seam | — |
-| No child permission escalation | **NOT PROVEN** — nothing stops a launched agent spawning its own child outside ICOS. The env allowlist narrows what such a child inherits; it does not re-enter Policy. | — |
+## A finding worth keeping
 
-## 4. The exact invocations, for whoever runs them
-
-Configuration ICOS would need, and the shape of each run. These are **declarations, not
-evidence** — filling in the result column is the proof.
-
-```jsonc
-// ICOS_WORKER_EXEC_COMMANDS
-{
-  "hermes":      { "command": "hermes", "args": ["--model", "{{model}}", "--in", "{{workspace}}", "{{prompt}}"] },
-  "codex":       { "command": "codex",  "args": ["exec", "--model", "{{model}}", "-C", "{{workspace}}", "{{prompt}}"] },
-  "claude-code": { "command": "claude", "args": ["-p", "{{prompt}}"] }
-}
-```
-
-```bash
-# Only what each run needs, nothing else — the allowlist is the point.
-ICOS_WORKER_ENV_PASSTHROUGH=NVIDIA_API_KEY        # hermes -> NVIDIA/Nemotron
-ICOS_WORKER_ENV_PASSTHROUGH=OPENROUTER_API_KEY    # hermes -> OpenRouter (key does not exist yet)
-ICOS_WORKER_ENV_PASSTHROUGH=OPENAI_API_KEY        # codex -> gpt-5.6-sol
-```
-
-Evidence each run must capture, or it is not proof: executable, adapter, provider, model,
-mission id, task id, worktree path, usage, exit code.
-
-| Run | Executable | Model | Result |
-|---|---|---|---|
-| Hermes → NVIDIA/Nemotron | `hermes` | `nvidia/nemotron-…` | |
-| Hermes → OpenRouter | `hermes` | — | **blocked: no credential** |
-| Codex → GPT-5.6 Sol, max effort | `codex` | `gpt-5.6-sol` | |
-| Claude Code | `claude` | — | |
-
-**On Codex effort:** a previous report established that the highest accepted value is
-`max`, not `xhigh`; the config currently says `medium`. A run claiming maximum effort must
-set it explicitly and capture that it was accepted.
-
-## 5. Known hazard, carried forward
-
-A prior finding in this repository: `hermes --in` does **not** bound where Hermes writes —
-writes escaped to `$HOME`. Codex's sandbox did hold. So for Hermes the ICOS workspace
-restriction is **advisory**, and a Hermes worker must not be treated as filesystem-confined
-until that is retested. This is exactly the sandbox gap named in §3.
+Codex first failed with `invalid peer certificate: UnknownIssuer`. The cause was not
+certificates: under `(deny default)` the mach services TLS verification needs (`trustd`,
+`mDNSResponder`, `configd`) were refused. Any future sandboxed worker doing TLS needs them,
+so they are now in the profile. A sandbox strong enough to break TLS is strong enough to be
+worth getting right rather than loosening.

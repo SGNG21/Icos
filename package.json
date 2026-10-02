@@ -31,7 +31,8 @@
     "compute:register": "tsx scripts/compute-register.ts",
     "compute:probe": "tsx scripts/compute-probe.ts",
     "voice:serve": "tsx scripts/voice-server.ts",
-    "workforce:bootstrap": "tsx scripts/workforce-bootstrap.ts"
+    "workforce:bootstrap": "tsx scripts/workforce-bootstrap.ts",
+    "certify:gateway": "tsx scripts/certify-execution-gateway.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",

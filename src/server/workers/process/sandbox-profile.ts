@@ -111,6 +111,29 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
 
   if (policy.allowNetwork) {
     lines.push("(allow network-outbound)", "(allow system-socket)");
+    /*
+     * TLS a besoin de PLUS que d'une socket. La vérification d'un certificat sur macOS
+     * passe par `trustd` via XPC, et la résolution DNS par `mDNSResponder` : sous
+     * `(deny default)` ces services mach sont refusés, et le worker échoue sur
+     * « invalid peer certificate: UnknownIssuer » — mesuré, pas supposé (Codex y est
+     * tombé). Les ouvrir n'élargit rien sur le disque : ce sont des services système, pas
+     * des chemins.
+     */
+    for (const service of [
+      "com.apple.trustd",
+      "com.apple.trustd.agent",
+      "com.apple.SecurityServer",
+      "com.apple.SystemConfiguration.configd",
+      "com.apple.SystemConfiguration.DNSConfiguration",
+      "com.apple.dnssd.service",
+      "com.apple.mDNSResponder",
+      "com.apple.nehelper",
+      "com.apple.nesessionmanager",
+      "com.apple.networkd",
+      "com.apple.usymptomsd",
+    ]) {
+      lines.push(`(allow mach-lookup (global-name ${quote(service)}))`);
+    }
   }
   /* Pas de branche `else` : `(deny default)` a déjà tout refusé. Le silence EST le refus. */
 
