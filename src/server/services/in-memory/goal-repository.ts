@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
 import type { AuditEntry } from "@/core/contracts";
 import type { AuditLog } from "@/server/audit/in-memory-audit-log";
-import type { GoalRepository } from "@/server/repositories/ports";
+import type { GoalRecord, GoalRepository } from "@/server/repositories/ports";
 
 /**
  * In-memory repository for goals to support durability and idempotency.
@@ -51,6 +51,24 @@ export class InMemoryGoalRepository implements GoalRepository {
       resultingMissionId: undefined,
       idempotencyKey: undefined,
     });
+  }
+
+  async list(filter?: { status?: string; limit?: number }): Promise<GoalRecord[]> {
+    const rows = [...this.goals.values()]
+      .filter((e) => filter?.status === undefined || e.status === filter.status)
+      .map((e) => ({
+        goal: e.goal,
+        status: e.status,
+        resultingMissionId: e.resultingMissionId ?? null,
+        convertedAt: e.convertedAt ?? null,
+      }))
+      // Newest first, id as the tie-break: the same total order as PostgreSQL.
+      .sort(
+        (a, b) =>
+          new Date(b.goal.createdAt).getTime() - new Date(a.goal.createdAt).getTime() ||
+          (a.goal.id < b.goal.id ? -1 : a.goal.id > b.goal.id ? 1 : 0),
+      );
+    return filter?.limit === undefined ? rows : rows.slice(0, filter.limit);
   }
 
   async getById(goalId: string): Promise<{ goal: HighLevelGoal; preview: GoalPlanPreview } | null> {

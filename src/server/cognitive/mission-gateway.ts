@@ -1,5 +1,5 @@
 import type { GoalProposal } from "@/core/cognitive/contracts";
-import { HighLevelGoalSchema } from "@/core/contracts/high-level-goal";
+import { HighLevelGoalSchema, type HighLevelGoal } from "@/core/contracts/high-level-goal";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { SchedulerService } from "@/server/scheduler/scheduler-service";
 import type { GoalNormalizer } from "@/server/services/goal-normalizer";
@@ -56,6 +56,19 @@ export class CanonicalGoalLauncher implements MissionGateway {
       goalPreviewStore: GoalPreviewStore;
       goalRepository: GoalRepository;
       scheduler: Pick<SchedulerService, "enqueue">;
+      /**
+       * Objective admission (decision 0065). Optional: without it a launch enqueues at
+       * priority 0 and unbounded, exactly as before this lane. The coordinator never
+       * replaces the scheduler — it calls the same enqueue with a priority and runAt.
+       */
+      objectiveCoordinator?: {
+        admit(input: {
+          goal: HighLevelGoal;
+          idempotencyKey: string;
+          title: string;
+          objective: string;
+        }): Promise<{ jobId: string; missionId: string | undefined }>;
+      };
     },
   ) {}
 
@@ -68,6 +81,13 @@ export class CanonicalGoalLauncher implements MissionGateway {
       approvedBy: r.approvedBy,
       ...(r.clientId ? { clientId: r.clientId } : {}),
       ...(r.projectId ? { projectId: r.projectId } : {}),
+      /*
+       * Reserved namespace (decision 0065): the priority governor classifies on these and
+       * on nothing else, because ICOS wrote them. The unprefixed keys above stay for the
+       * readers that already depend on them (cognitive operational state reads clientId).
+       */
+      "icos.source": "cognitive_conversation",
+      ...(r.clientId ? { "icos.clientId": r.clientId } : {}),
     };
     const goal = this.deps.goalNormalizer.normalize({
       title: p.title,
@@ -89,12 +109,32 @@ export class CanonicalGoalLauncher implements MissionGateway {
     if (!existing) {
       await this.deps.goalPreviewStore.store(goal.id, goal, this.deps.goalPlanner.plan(goal));
     }
-    const { job } = await this.deps.scheduler.enqueue({
-      kind: "start_mission",
-      idempotencyKey: launchIdempotencyKey(r.refId),
-      payload: { title: goal.title, objective: goal.objective, goalId: goal.id },
-    });
-    if (!job.missionId) return { status: "failed", reason: "scheduler_returned_no_mission_id" };
-    return { status: "launched", goalId: goal.id, missionId: job.missionId, launchJobId: job.id };
+    const idempotencyKey = launchIdempotencyKey(r.refId);
+    const admitted = this.deps.objectiveCoordinator
+      ? await this.deps.objectiveCoordinator.admit({
+          goal,
+          idempotencyKey,
+          title: goal.title,
+          objective: goal.objective,
+        })
+      : await this.deps.scheduler
+          .enqueue({
+            kind: "start_mission",
+            idempotencyKey,
+            payload: { title: goal.title, objective: goal.objective, goalId: goal.id },
+          })
+          .then(({ job }) => ({ jobId: job.id, missionId: job.missionId }));
+
+    if (!admitted.missionId) return { status: "failed", reason: "scheduler_returned_no_mission_id" };
+    /*
+     * A DEFERRED admission is still `launched`: the durable job exists and the missionId is
+     * fixed. Reporting a failure would push the caller to launch a second time.
+     */
+    return {
+      status: "launched",
+      goalId: goal.id,
+      missionId: admitted.missionId,
+      launchJobId: admitted.jobId,
+    };
   }
 }

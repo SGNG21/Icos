@@ -44,6 +44,7 @@ function install(access: Access) {
     goalPlanner: new GoalPlanner(),
     goalPreviewStore: new GoalPreviewStore(new class implements GoalRepository {
       create = vi.fn().mockResolvedValue(undefined);
+      list = vi.fn().mockResolvedValue([]);
       getById = vi.fn().mockResolvedValue(null);
       updateStatus = vi.fn().mockResolvedValue(undefined);
       setConverted = vi.fn().mockResolvedValue(undefined);

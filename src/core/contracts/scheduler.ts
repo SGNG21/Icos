@@ -73,4 +73,11 @@ export interface ScheduledJobRepository {
     options: { retryable: boolean },
   ): Promise<{ ok: boolean; state?: ScheduledJobState }>;
   getById(id: string): Promise<ScheduledJob | null>;
+  /**
+   * How many jobs of `kind` are enqueued and not yet settled. READ-ONLY.
+   *
+   * Admission needs it: a `start_mission` job that has not run yet has no mission row and
+   * its goal is still `pending`, so load counted from missions alone is a lower bound.
+   */
+  countScheduledByKind(kind: ScheduledJobKind): Promise<number>;
 }

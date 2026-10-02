@@ -7,6 +7,8 @@ import {
 import { InMemoryControlStore } from "@/server/control/in-memory-control-store";
 import { PostgresControlStore } from "@/server/control/postgres-control-store";
 import { installDispatchBackstop, RuntimeControlGuard } from "@/server/control/runtime-control";
+import { WORK_CLASSES } from "@/core/supervisor/contracts";
+import { ObjectiveCoordinator } from "@/server/supervisor/objective-coordinator";
 import { sql } from "drizzle-orm";
 
 import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
@@ -291,6 +293,13 @@ export interface Container {
   /** Durable Scheduler (ADR-0025) : file de jobs différés + point d'entrée applicatif. */
   scheduledJobs: ScheduledJobRepository;
   scheduler: SchedulerService;
+  /**
+   * Objective admission (decision 0065): scores a goal and consults the portfolio before
+   * the existing `start_mission` job is enqueued. Thin — it owns no loop and no state.
+   */
+  objectiveCoordinator: ObjectiveCoordinator;
+  /** READ-ONLY for projections; the canonical authority over running work. */
+  controlGuard: RuntimeControlGuard;
   autonomousRuntime: AutonomousMissionRuntimeRepository;
   autonomousPlanner?: AutonomousMissionPlanner;
   /**
@@ -386,6 +395,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
   const reviewDecisions = new InMemoryReviewDecisionRepository();
   const autonomousRuntime = new InMemoryAutonomousMissionRuntimeRepository();
   const scheduledJobs = new InMemoryScheduledJobRepository();
+  const schedulerService = new SchedulerService(scheduledJobs);
   const conversationService = new ConversationService(
     new InMemoryConversationRepository(),
     new InMemoryMessageRepository(),
@@ -493,7 +503,27 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       ),
     ),
     scheduledJobs,
-    scheduler: new SchedulerService(scheduledJobs),
+    scheduler: schedulerService,
+    objectiveCoordinator: new ObjectiveCoordinator({
+      scheduler: schedulerService,
+      goals: goalRepository,
+      missions: mission,
+      pendingLaunches: {
+        /*
+         * Conservative on purpose: an enqueued `start_mission` has no mission row yet and
+         * its payload's class is not resolvable without loading each goal, so the whole
+         * pending queue is charged to the class being admitted. That can defer a launch
+         * that another class's backlog would not really have blocked — the wrong side to
+         * be wrong on, since the alternative is a cap that stops capping under a burst.
+         * Upgrade path: resolve each pending payload's goalId to its class.
+         */
+        countByWorkClass: async () => {
+          const pending = await scheduledJobs.countScheduledByKind("start_mission");
+          return Object.fromEntries(WORK_CLASSES.map((c) => [c, pending]));
+        },
+      },
+    }),
+    controlGuard,
     autonomousRuntime,
     autonomousPlanner: undefined,
     improvementProposalProvider: undefined,
@@ -622,6 +652,7 @@ export async function buildPostgresContainer(
   const reviewDecisions = new PostgresReviewDecisionRepository(handle.db);
   const autonomousRuntime = new PostgresAutonomousMissionRuntimeRepository(handle.db);
   const scheduledJobs = new PostgresScheduledJobRepository(handle.db);
+  const schedulerService = new SchedulerService(scheduledJobs);
   const llmReviewer = buildLlmReviewer(env);
   if (!llmReviewer) {
     await handle.close().catch(() => {});
@@ -842,7 +873,27 @@ export async function buildPostgresContainer(
       new WorkspaceIntegrationSettlement(workspaceManager, pgGit, governedWorkflow(dispatchAttempts, tasks)),
     ),
     scheduledJobs,
-    scheduler: new SchedulerService(scheduledJobs),
+    scheduler: schedulerService,
+    objectiveCoordinator: new ObjectiveCoordinator({
+      scheduler: schedulerService,
+      goals: goalRepository,
+      missions: mission,
+      pendingLaunches: {
+        /*
+         * Conservative on purpose: an enqueued `start_mission` has no mission row yet and
+         * its payload's class is not resolvable without loading each goal, so the whole
+         * pending queue is charged to the class being admitted. That can defer a launch
+         * that another class's backlog would not really have blocked — the wrong side to
+         * be wrong on, since the alternative is a cap that stops capping under a burst.
+         * Upgrade path: resolve each pending payload's goalId to its class.
+         */
+        countByWorkClass: async () => {
+          const pending = await scheduledJobs.countScheduledByKind("start_mission");
+          return Object.fromEntries(WORK_CLASSES.map((c) => [c, pending]));
+        },
+      },
+    }),
+    controlGuard,
     autonomousRuntime,
     autonomousPlanner: buildAutonomousPlanner(env),
     improvementProposalProvider: buildImprovementProposalProvider(env),

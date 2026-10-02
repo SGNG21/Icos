@@ -1,3 +1,4 @@
+import { stripUntrustedMetadata } from "@/core/supervisor/priority";
 import { getContainer } from "@/server/container";
 import { protectRoute } from "@/server/http/protect-route";
 import { apiError, json, readJson } from "@/server/http/respond";
@@ -47,8 +48,17 @@ export async function POST(request: Request): Promise<Response> {
       return apiError("invalid_input", "paramètres invalides", zodDetails(parsed.error));
     }
 
-    // Normalize the goal using the container's normalizer.
-    const goal = container.goalNormalizer.normalize(parsed.data);
+    /*
+     * Trust boundary (decision 0065): metadata arriving over HTTP may not carry the
+     * reserved `icos.` namespace. Those keys decide the goal's priority CLASS, and a
+     * caller that could set them would be choosing its own place in the queue.
+     */
+    const goal = container.goalNormalizer.normalize({
+      ...parsed.data,
+      ...(parsed.data.metadata
+        ? { metadata: stripUntrustedMetadata(parsed.data.metadata) }
+        : {}),
+    });
 
     // Validate the normalized goal (throws if invalid).
     HighLevelGoalSchema.parse(goal);
