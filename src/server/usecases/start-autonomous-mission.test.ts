@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Attribution } from "@/core/budget/contracts";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import { AUTONOMY_BOUNDS_CEILING } from "@/core/autonomy/bounds";
+import { currentAttribution } from "@/server/budget/attribution-context";
 import type {
   AutonomousMissionRuntime,
   AutonomousMissionRuntimeRepository,
@@ -267,5 +269,64 @@ describe("startAutonomousMission runtime bounds", () => {
         { missionId: "mission-bounds" },
       ),
     ).rejects.toThrow(/START_AUTONOMOUS_MISSION_NOT_FOUND/);
+  });
+});
+
+/**
+ * L'allumage est l'une des deux seules frontières qui connaissent le goal d'une mission.
+ * Ce qui est prouvé ici : la portée est bien ouverte pendant `run` (observée depuis un appel
+ * que le runner fait lui-même), elle porte le goal PERSISTÉ, elle est refermée à la sortie,
+ * et une mission sans goal n'en reçoit pas une inventée.
+ */
+describe("startAutonomousMission — portée d'imputation de la dépense", () => {
+  const observing = (repository: ReturnType<typeof runtimeRepository>, goalId?: string) => {
+    const seen: (Attribution | null)[] = [];
+    const base = deps(repository);
+
+    return {
+      seen,
+      deps: {
+        ...base,
+        missions: {
+          ...base.missions,
+          findById: vi.fn().mockResolvedValue(goalId ? { ...mission(), goalId } : mission()),
+          listTasks: vi.fn().mockImplementation(async () => {
+            seen.push(currentAttribution());
+            return [task()];
+          }),
+        },
+      } satisfies StartAutonomousMissionDeps,
+    };
+  };
+
+  it("impute au goal PERSISTÉ de la mission pendant toute l'exécution", async () => {
+    const observer = observing(runtimeRepository(), "goal-7");
+
+    await startAutonomousMission(observer.deps, { missionId: "mission-bounds" });
+
+    expect(observer.seen.length).toBeGreaterThan(0);
+    expect(observer.seen).toEqual(observer.seen.map(() => ({ goalId: "goal-7" })));
+    /* La portée ne fuit pas hors de l'allumage. */
+    expect(currentAttribution()).toBeNull();
+  });
+
+  it("n'invente aucune imputation pour une mission sans goal", async () => {
+    const observer = observing(runtimeRepository());
+
+    await startAutonomousMission(observer.deps, { missionId: "mission-bounds" });
+
+    expect(observer.seen.length).toBeGreaterThan(0);
+    expect(observer.seen).toEqual(observer.seen.map(() => null));
+  });
+
+  it("ignore un goalId soufflé par l'appelant : la mission persistée est l'autorité", async () => {
+    const observer = observing(runtimeRepository());
+
+    await startAutonomousMission(observer.deps, {
+      missionId: "mission-bounds",
+      goalId: "goal-du-caller",
+    });
+
+    expect(observer.seen).toEqual(observer.seen.map(() => null));
   });
 });

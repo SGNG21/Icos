@@ -1,4 +1,5 @@
 import type { MissionRepository } from "@/server/mission/ports";
+import { runWithAttribution } from "@/server/budget/attribution-context";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import {
   AUTONOMY_BOUNDS_CEILING,
@@ -98,7 +99,25 @@ export async function startAutonomousMission(
     deps.runtimeRepository,
   );
 
-  const result = await runner.run(input.missionId);
+  /*
+   * PORTÉE D'IMPUTATION DE LA DÉPENSE (verrou B1). C'est l'allumage qui connaît le goal ;
+   * les adaptateurs, eux, sont construits une fois pour le processus. Tout appel mesuré
+   * descendant de `run` est donc imputé ici, sans qu'aucune signature intermédiaire change.
+   *
+   * LA CLÉ EST LE GOAL SEUL, pas (mission, goal) : `attributionKey` dérive la fenêtre de
+   * TOUTE l'imputation, donc y ajouter la mission donnerait à chaque mission une copie
+   * NEUVE du budget de son goal — N missions, N fois le budget. Or c'est le goal qui porte
+   * `budget`, c'est donc lui qu'on accumule.
+   *
+   * Le `goalId` vient de la MISSION PERSISTÉE, la seule autorité sur ce lien (`input.goalId`
+   * reste inutilisé, comme avant). Une mission sans goal n'ouvre AUCUNE portée : l'appel est
+   * alors non imputé et le journal le refuse. Fermé par défaut — une mission qu'aucun budget
+   * ne couvre ne dépense pas, et surtout on ne lui en fabrique pas un.
+   */
+  const run = () => runner.run(input.missionId);
+  const result = await (mission.goalId
+    ? runWithAttribution({ goalId: mission.goalId }, run)
+    : run());
 
   if (resolved && resolved.clamped.length > 0) {
     return { ...result, clampedBounds: resolved.clamped };
