@@ -51,7 +51,7 @@ export default async function SelfDevelopmentPage() {
               <span
                 className="cx-missing"
                 data-kind="not_available"
-                title="No persisted candidates to count (BR-08)."
+                title="Candidates ARE persisted; no cockpit read path counts them (BR-08)."
               >
                 —
               </span>
@@ -59,7 +59,7 @@ export default async function SelfDevelopmentPage() {
           ))}
         </ol>
         <p className="cx-dim">
-          Stage counts appear here once improvement candidates are persisted and readable.
+          Stage counts appear here once a cockpit read path exposes the durable backlog.
         </p>
       </Panel>
 
@@ -77,9 +77,10 @@ export default async function SelfDevelopmentPage() {
               <tr>
                 <td colSpan={COLUMNS.length}>
                   <Unavailable title="Improvement candidates are NOT AVAILABLE" requirement="BR-08">
-                    The improvement backlog exists only in memory inside the self-development
-                    coordinator; nothing is persisted or exposed to the cockpit. No candidate is
-                    shown rather than an invented one.
+                    The backlog IS durable: <code>DurableImprovementBacklog</code> persists every
+                    candidate in durable memory, so a restart no longer forgets them. What is
+                    missing is a cockpit read path — nothing here can read that store yet, so no
+                    candidate is shown rather than an invented one.
                   </Unavailable>
                 </td>
               </tr>
