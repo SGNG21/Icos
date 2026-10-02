@@ -115,8 +115,12 @@ and must not contain `probe|live|prod`, and the live base is `icos_n23_probe`.
 |---|---|---|
 | typecheck | clean | clean |
 | lint | 0 errors / 280 warnings | 0 errors, same 280 pre-existing warnings |
-| unit suite | 219 files / 2925 tests | 240 files / 3162 tests |
+| unit suite | 219 files / 2925 tests | 237 files / 3151 tests |
 | integration suite (dedicated DB `icos_bigauto_test`) | 71 passed, 15 skipped / 540 passed, 125 skipped, exit 0 | identical: 71 passed, 15 skipped / 540 passed, 125 skipped, exit 0 |
+
+(The "after" row is a measured `pnpm test` run at this commit, not a projection. An earlier
+draft of this table carried a predicted count; it was wrong and is corrected here, because a
+fabricated number in an evidence document is the same class of defect as an overstated decision.)
 
 No pre-existing test was weakened, skipped or deleted. Three test assertions were **inverted or
 updated on purpose**, each because the change made the old assertion state something false:
