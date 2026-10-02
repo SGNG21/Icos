@@ -1,3 +1,7 @@
+import { z } from "zod";
+
+import { requestedBoundsSchema } from "@/core/autonomy/bounds";
+import { requestedComputePolicySchema } from "@/core/autonomy/model-allowlist";
 import type { ScheduledJobKind } from "@/core/contracts/scheduler";
 import type { MissionRepository } from "@/server/mission/ports";
 import { PermanentJobError, type JobHandler } from "@/server/scheduler/durable-scheduler";
@@ -30,6 +34,16 @@ export interface SchedulerHandlerDeps {
   supervisorObservation?: Parameters<typeof createObservationHandler>[0];
 }
 
+/**
+ * Ce qu'une ADMISSION a le droit de déclarer pour une mission autonome. Les deux
+ * schémas sont ceux des modules de politique: une seule définition de ce qui est
+ * demandable, ici comme à l'enqueue.
+ */
+const admittedPolicySchema = z.object({
+  bounds: requestedBoundsSchema.optional(),
+  computePolicy: requestedComputePolicySchema.optional(),
+});
+
 const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim().length > 0 ? value : null;
 
@@ -57,8 +71,35 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
        */
       const goalId = text(job.payload.goalId) ?? undefined;
 
+      /*
+       * CAPS ET POOL DE COMPTE ADMIS (P0-E/P0-F). Le job durable est le point de
+       * déclaration: ce que l'admission a enregistré arrive ici, traverse l'allumage et
+       * se retrouve dans la ligne de runtime persistée.
+       *
+       * Revalidés ici et pas seulement à l'enqueue: le payload revient de la base en
+       * jsonb, donc il est une DONNÉE, pas une valeur typée. Malformé = erreur
+       * PERMANENTE, jamais une borne ignorée en silence — une politique qu'on croit
+       * appliquée et qui ne l'est pas est pire qu'une absence de politique.
+       */
+      const admitted = admittedPolicySchema.safeParse({
+        bounds: job.payload.bounds,
+        computePolicy: job.payload.computePolicy,
+      });
+      if (!admitted.success) {
+        throw new PermanentJobError("SCHEDULER_INVALID_PAYLOAD");
+      }
+
       // Fixed Mission id + idempotent create: a replay never creates a second Mission.
-      await igniteAutonomousMission(deps.ignite, { id: missionId, title, objective, goalId });
+      await igniteAutonomousMission(deps.ignite, {
+        id: missionId,
+        title,
+        objective,
+        goalId,
+        ...(admitted.data.bounds !== undefined ? { bounds: admitted.data.bounds } : {}),
+        ...(admitted.data.computePolicy !== undefined
+          ? { computePolicy: admitted.data.computePolicy }
+          : {}),
+      });
     },
 
     async wake_mission(job) {

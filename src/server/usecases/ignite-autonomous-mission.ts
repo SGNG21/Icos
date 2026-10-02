@@ -1,9 +1,18 @@
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import type { AutonomousMissionPlanner, AutonomousSupervisor } from "@/server/autonomy/autonomous-mission-runner";
 import type { MissionRepository } from "@/server/mission/ports";
-import { startAutonomousMission } from "@/server/usecases/start-autonomous-mission";
+import {
+  startAutonomousMission,
+  type AutonomyCompositionPolicy,
+  type StartAutonomousMissionInput,
+} from "@/server/usecases/start-autonomous-mission";
 
-export interface IgniteAutonomousMissionDeps {
+/**
+ * La politique de composition (plafond du déploiement + pool de compute système) est
+ * TRANSPORTÉE, pas reconstruite: elle vient du conteneur et n'est interprétée qu'à
+ * l'allumage. Absente = plafond historique et compute non restreint.
+ */
+export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
   missions: Pick<MissionRepository, "create" | "findById" | "listTasks" | "applyPlan" | "replacePlan">;
   runtimeRepository: AutonomousMissionRuntimeRepository;
   supervisor: AutonomousSupervisor;
@@ -31,7 +40,10 @@ const TERMINAL_RUNTIME_STATES = ["succeeded", "failed", "cancelled", "escalated"
  */
 export async function igniteAutonomousMission(
   deps: IgniteAutonomousMissionDeps,
-  input: { id?: string; title: string; objective: string; goalId?: string },
+  input: { id?: string; title: string; objective: string; goalId?: string } & Pick<
+    StartAutonomousMissionInput,
+    "bounds" | "computePolicy"
+  >,
 ): Promise<IgniteAutonomousMissionResult> {
   const mission = await deps.missions.create({
     ...(input.id !== undefined ? { id: input.id } : {}),
@@ -48,8 +60,18 @@ export async function igniteAutonomousMission(
         runtimeRepository: deps.runtimeRepository,
         supervisor: deps.supervisor,
         planner: deps.planner,
+        ...(deps.options !== undefined ? { options: deps.options } : {}),
+        ...(deps.systemModelAllowlist !== undefined
+          ? { systemModelAllowlist: deps.systemModelAllowlist }
+          : {}),
+        ...(deps.plannerCompute !== undefined ? { plannerCompute: deps.plannerCompute } : {}),
       },
-      { missionId: mission.id },
+      {
+        missionId: mission.id,
+        /* Les bornes et le pool demandés traversent tels quels; l'allumage les résout. */
+        ...(input.bounds !== undefined ? { bounds: input.bounds } : {}),
+        ...(input.computePolicy !== undefined ? { computePolicy: input.computePolicy } : {}),
+      },
     );
     return { missionId: mission.id, outcome: "started", state: result.state, reason: result.reason };
   } catch (error) {

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
+import { requestedBoundsSchema } from "@/core/autonomy/bounds";
+import { requestedComputePolicySchema } from "@/core/autonomy/model-allowlist";
 import type { ScheduledJob, ScheduledJobRepository } from "@/core/contracts/scheduler";
 
 const common = {
@@ -29,6 +31,18 @@ export const enqueueScheduledJobSchema = z
              * cap (GoalNormalizer), so a real launch would otherwise be refused.
              */
             goalId: z.string().trim().min(1).max(5000).optional(),
+            /*
+             * PLAFONDS ET POOL DE COMPUTE DEMANDÉS (P0-E/P0-F). L'admission est le point
+             * de déclaration: ces deux valeurs voyagent dans le payload durable jusqu'à
+             * `igniteAutonomousMission` -> `startAutonomousMission`, où elles ne peuvent
+             * que RESSERRER le plafond du déploiement et RÉDUIRE le pool système.
+             *
+             * Les schémas sont ceux des modules de politique (`@/core/autonomy/*`): une
+             * seule définition de ce qui est demandable, donc aucune dérive possible
+             * entre l'admission et l'exécution. Absents = comportement historique.
+             */
+            bounds: requestedBoundsSchema.optional(),
+            computePolicy: requestedComputePolicySchema.optional(),
           })
           .strict(),
         ...common,

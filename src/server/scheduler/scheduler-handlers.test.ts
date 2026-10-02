@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ScheduledJob } from "@/core/contracts/scheduler";
+import { modelAllowlist } from "@/core/autonomy/model-allowlist";
+import type { AutonomyCompositionPolicy } from "@/server/usecases/start-autonomous-mission";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
 import { PermanentJobError } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
@@ -26,7 +28,7 @@ const jobOf = (kind: ScheduledJob["kind"], payload: Record<string, unknown>): Sc
   updatedAt: new Date(),
 });
 
-function setup() {
+function setup(policy: AutonomyCompositionPolicy = {}) {
   const tasks = new InMemoryTaskRepository(new InMemoryAuditLog(), []);
   const missions = new InMemoryMissionRepository(tasks);
   const runtimeRepository = new InMemoryAutonomousMissionRuntimeRepository();
@@ -40,11 +42,11 @@ function setup() {
   const wakeup = { wake: vi.fn().mockResolvedValue(null) };
   const supervisor = new SupervisorService(missions, tasks, { dispatch }, {} as never);
   const handlers = createSchedulerHandlers({
-    ignite: { missions, runtimeRepository, supervisor, planner: planner as never },
+    ignite: { missions, runtimeRepository, supervisor, planner: planner as never, ...policy },
     missions,
     wakeup,
   });
-  return { missions, dispatch, planner, wakeup, handlers };
+  return { missions, runtimeRepository, dispatch, planner, wakeup, handlers };
 }
 
 describe("scheduler handlers", () => {
@@ -93,5 +95,83 @@ describe("scheduler handlers", () => {
     await expect(f.handlers.start_mission(jobOf("start_mission", { title: "T" }), { signal })).rejects.toBeInstanceOf(
       PermanentJobError,
     );
+  });
+
+  /*
+   * P0-E. La demande du propriétaire voyage dans le job durable et doit se retrouver
+   * DANS LA LIGNE DE RUNTIME PERSISTÉE, pas seulement dans un retour de résolveur.
+   */
+  it("carries the admitted caps (30 min / 20 cycles / 2 replans) into the persisted runtime", async () => {
+    const f = setup();
+    await f.handlers.start_mission(
+      jobOf("start_mission", {
+        title: "T",
+        objective: "O",
+        missionId: "m-caps",
+        bounds: { maxRuntimeMs: 1_800_000, maxCycles: 20, maxReplans: 2 },
+      }),
+      { signal },
+    );
+
+    const runtime = await f.runtimeRepository.get("m-caps");
+    expect(runtime?.maxRuntimeMs).toBe(30 * 60 * 1000);
+    expect(runtime?.maxCycles).toBe(20);
+    expect(runtime?.maxReplans).toBe(2);
+  });
+
+  it("keeps the historical caps when the job admits none", async () => {
+    const f = setup();
+    await f.handlers.start_mission(
+      jobOf("start_mission", { title: "T", objective: "O", missionId: "m-default" }),
+      { signal },
+    );
+
+    const runtime = await f.runtimeRepository.get("m-default");
+    expect(runtime?.maxRuntimeMs).toBe(60 * 60 * 1000);
+    expect(runtime?.maxCycles).toBe(100);
+    expect(runtime?.maxReplans).toBe(5);
+  });
+
+  it("refuses a malformed caps request permanently instead of ignoring it", async () => {
+    const f = setup();
+    await expect(
+      f.handlers.start_mission(
+        jobOf("start_mission", { title: "T", objective: "O", missionId: "m-bad", bounds: { maxCycles: 0 } }),
+        { signal },
+      ),
+    ).rejects.toBeInstanceOf(PermanentJobError);
+    await expect(
+      f.handlers.start_mission(
+        jobOf("start_mission", {
+          title: "T",
+          objective: "O",
+          missionId: "m-bad-2",
+          computePolicy: { allowedModels: "cheap" },
+        }),
+        { signal },
+      ),
+    ).rejects.toBeInstanceOf(PermanentJobError);
+  });
+
+  /* P0-F: la politique du goal traverse le job, et le refus l'emporte sur l'allumage. */
+  it("carries a goal compute policy and REFUSES a model the system does not permit", async () => {
+    const f = setup({
+      systemModelAllowlist: modelAllowlist(["cheap-model"]),
+      plannerCompute: { modelId: "cheap-model" },
+    });
+
+    await expect(
+      f.handlers.start_mission(
+        jobOf("start_mission", {
+          title: "T",
+          objective: "O",
+          missionId: "m-policy",
+          computePolicy: { allowedModels: ["expensive-model"] },
+        }),
+        { signal },
+      ),
+    ).rejects.toThrow(/COMPUTE_REFUSED/);
+    expect(await f.missions.findById("m-policy")).toBeTruthy();
+    expect(await f.runtimeRepository.get("m-policy")).toBeNull();
   });
 });

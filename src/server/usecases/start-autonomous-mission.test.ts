@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Attribution } from "@/core/budget/contracts";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import { AUTONOMY_BOUNDS_CEILING } from "@/core/autonomy/bounds";
+import { modelAllowlist } from "@/core/autonomy/model-allowlist";
 import { currentAttribution } from "@/server/budget/attribution-context";
 import type {
   AutonomousMissionRuntime,
@@ -328,5 +329,139 @@ describe("startAutonomousMission — portée d'imputation de la dépense", () =>
     });
 
     expect(observer.seen).toEqual(observer.seen.map(() => null));
+  });
+});
+
+describe("startAutonomousMission — politique de compute par goal (P0-F)", () => {
+  /*
+   * HEADLINE TEST. Un goal ne s'octroie JAMAIS une autorité que le système n'a pas
+   * déjà accordée. Demander un modèle hors de l'ensemble système est REFUSÉ, pas
+   * accordé, et la mission ne démarre pas.
+   */
+  it("REFUSES a goal asking for a model outside the system-allowed set", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(
+        deps(repository, {
+          systemModelAllowlist: modelAllowlist(["cheap-model"]),
+          plannerCompute: { modelId: "expensive-model" },
+        }),
+        {
+          missionId: "mission-bounds",
+          computePolicy: { allowedModels: ["expensive-model"] },
+        },
+      ),
+    ).rejects.toThrow(/START_AUTONOMOUS_MISSION_COMPUTE_REFUSED:modelIds:expensive-model/);
+
+    /* Rien n'a été persisté : le refus précède tout effet de bord. */
+    expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    expect(repository.current).toBeNull();
+  });
+
+  it("starts when the goal's pool is a SUBSET that covers the configured compute", async () => {
+    const repository = runtimeRepository();
+
+    const result = await startAutonomousMission(
+      deps(repository, {
+        systemModelAllowlist: modelAllowlist(["cheap-model", "expensive-model"]),
+        plannerCompute: { modelId: "cheap-model" },
+      }),
+      { missionId: "mission-bounds", computePolicy: { allowedModels: ["cheap-model"] } },
+    );
+
+    expect(result.state).toBe("succeeded");
+    expect(repository.createIfAbsent).toHaveBeenCalledTimes(1);
+  });
+
+  it("REFUSES when the configured compute is outside the goal's own pool", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(
+        deps(repository, {
+          systemModelAllowlist: modelAllowlist(["cheap-model", "expensive-model"]),
+          plannerCompute: { modelId: "expensive-model" },
+        }),
+        { missionId: "mission-bounds", computePolicy: { allowedModels: ["cheap-model"] } },
+      ),
+    ).rejects.toThrow(/COMPUTE_REFUSED:MODEL_NOT_IN_ALLOWLIST/);
+  });
+
+  /* Fermé par défaut : un modèle inconnu/irrésoluble sous un goal restreint est REFUSÉ. */
+  it("REFUSES a restricted goal when the configured compute declares no model", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(deps(repository, { plannerCompute: undefined }), {
+        missionId: "mission-bounds",
+        computePolicy: { allowedModels: ["cheap-model"] },
+      }),
+    ).rejects.toThrow(/COMPUTE_REFUSED:MODEL_ID_INVALID/);
+  });
+
+  it("REFUSES an empty goal pool rather than reading it as 'no restriction'", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(deps(repository, { plannerCompute: { modelId: "cheap-model" } }), {
+        missionId: "mission-bounds",
+        computePolicy: { allowedModels: [] },
+      }),
+    ).rejects.toThrow(/COMPUTE_REFUSED:MODEL_ALLOWLIST_EMPTY/);
+  });
+
+  it("enforces a SYSTEM allowlist even when the goal requests nothing", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(
+        deps(repository, {
+          systemModelAllowlist: modelAllowlist(["cheap-model"]),
+          plannerCompute: { modelId: "something-else" },
+        }),
+        { missionId: "mission-bounds" },
+      ),
+    ).rejects.toThrow(/COMPUTE_REFUSED:MODEL_NOT_IN_ALLOWLIST/);
+  });
+
+  it("is byte-identical to the previous behaviour when neither side restricts anything", async () => {
+    const repository = runtimeRepository();
+
+    const result = await startAutonomousMission(deps(repository), {
+      missionId: "mission-bounds",
+    });
+
+    expect(result.state).toBe("succeeded");
+    expect(bounded(repository.current)).toEqual(AUTONOMY_BOUNDS_CEILING);
+  });
+
+  it("enforces the provider axis too", async () => {
+    const repository = runtimeRepository();
+
+    await expect(
+      startAutonomousMission(
+        deps(repository, {
+          systemModelAllowlist: modelAllowlist(["cheap-model"], ["omniroute"]),
+          plannerCompute: { modelId: "cheap-model", providerId: "autre-passerelle" },
+        }),
+        { missionId: "mission-bounds" },
+      ),
+    ).rejects.toThrow(/COMPUTE_REFUSED:PROVIDER_NOT_IN_ALLOWLIST/);
+  });
+});
+
+describe("startAutonomousMission — la demande du propriétaire arrive (P0-E)", () => {
+  it("persists EXACTLY 30 min / 20 cycles / 2 replans in the runtime row", async () => {
+    const repository = runtimeRepository();
+
+    await startAutonomousMission(deps(repository), {
+      missionId: "mission-bounds",
+      bounds: { maxRuntimeMs: 30 * 60 * 1000, maxCycles: 20, maxReplans: 2 },
+    });
+
+    expect(repository.current?.maxRuntimeMs).toBe(30 * 60 * 1000);
+    expect(repository.current?.maxCycles).toBe(20);
+    expect(repository.current?.maxReplans).toBe(2);
   });
 });
