@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   doublePrecision,
@@ -1278,4 +1279,53 @@ export const controlReauthProofs = pgTable(
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
   },
   (t) => [unique("control_reauth_proofs_token_hash_unique").on(t.tokenHash)],
+);
+
+/**
+ * Journal de dépense durable (verrou d'autonomie B1, migration 0055_spend_ledger.sql).
+ *
+ * Une ligne IMMUABLE par appel observé. La fenêtre de dépense est obtenue en RELISANT ces
+ * lignes, jamais depuis un total courant gardé en mémoire : c'est précisément ce que le
+ * redémarrage faisait oublier. Append-only par trigger (ERRCODE 42501), comme
+ * `audit_entries`.
+ *
+ * TENANT : `tenant_id` NOT NULL, premier terme du seul index de lecture et prédicat
+ * obligatoire de toute requête. RLS non activé — conforme à toutes les autres tables ICOS
+ * (voir l'en-tête de `workforce-schema.ts`) ; l'isolation est applicative jusqu'à
+ * COMPLIANCE-1.
+ *
+ * UNE ABSENCE N'EST JAMAIS UN ZÉRO : un appel UNMETERED a ses trois compteurs à NULL et une
+ * raison, un appel UNPRICED a `amount` à NULL et une raison. Un vrai zéro mesuré est
+ * `usage_kind = 'METERED'` avec trois zéros et reste distinguable pour toujours. Les CHECK
+ * de la migration rendent toute autre combinaison non représentable.
+ */
+export const spendLedger = pgTable(
+  "spend_ledger",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id").notNull(),
+    /** `attributionKey()` de core/budget/contracts, `UNATTRIBUTED` si aucune imputation. */
+    attributionKey: text("attribution_key").notNull(),
+    /** L'imputation telle que RAPPORTÉE. Texte nu, sans FK : la preuve survit au goal. */
+    missionId: text("mission_id"),
+    goalId: text("goal_id"),
+    brainId: text("brain_id"),
+    modelId: text("model_id").notNull(),
+    usageKind: text("usage_kind").notNull(),
+    promptTokens: bigint("prompt_tokens", { mode: "number" }),
+    completionTokens: bigint("completion_tokens", { mode: "number" }),
+    totalTokens: bigint("total_tokens", { mode: "number" }),
+    unmeteredReason: text("unmetered_reason"),
+    costKind: text("cost_kind"),
+    currency: text("currency"),
+    amount: doublePrecision("amount"),
+    unpricedReason: text("unpriced_reason"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("spend_ledger_usage_kind_check", sql`${t.usageKind} in ('METERED','UNMETERED')`),
+    check("spend_ledger_cost_kind_check", sql`${t.costKind} in ('COST','UNPRICED')`),
+    index("spend_ledger_window_idx").on(t.tenantId, t.attributionKey, t.recordedAt, t.id),
+  ],
 );
