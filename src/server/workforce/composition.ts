@@ -16,6 +16,11 @@ import {
   type SessionPrincipals,
 } from "./principals";
 import { WorkforceReadModel } from "./read-model";
+import { bootstrapWorkforce, type WorkforceBootstrapReport } from "./bootstrap-workforce";
+import type { Principal } from "@/core/workforce/governance";
+
+import { brainRegistry } from "./brain-registry";
+import { chiefDelegation, type ChiefDelegation } from "./chief-delegation";
 import { WorkforceService } from "./workforce-service";
 
 /**
@@ -62,6 +67,20 @@ export interface WorkforceRuntime {
   authority: WorkforceAuthorityPort;
   sessions: SessionPrincipals;
   runtime: RuntimePrincipals;
+  /**
+   * L'AMORÇAGE CANONIQUE des douze cerveaux, déjà lié à ce magasin (verrou C6).
+   *
+   * Composé ICI, et exposé comme une opération plutôt qu'en sortant le `store`, parce que
+   * le magasin ne doit jamais quitter cette racine. Un acte d'administration, lancé par le
+   * propriétaire : il ne s'exécute jamais au démarrage du runtime.
+   */
+  bootstrap: (admin: Principal, certifier: Principal) => Promise<WorkforceBootstrapReport>;
+  /**
+   * GOAL → CHIEF → CERVEAU → AFFECTATION, déjà lié à ce magasin (verrou C6). Le `chief` est
+   * le principal qui délègue ; la gouvernance vérifie qu'il supervise bien les cerveaux
+   * qu'il affecte, donc un autre principal ne pourrait rien accorder.
+   */
+  chiefDelegation: (chief: Principal) => ChiefDelegation;
 }
 
 export function createWorkforceRuntime(options: WorkforceRuntimeOptions): WorkforceRuntime {
@@ -88,5 +107,7 @@ export function createWorkforceRuntime(options: WorkforceRuntimeOptions): Workfo
     authority: new WorkforceAuthorityPort({ store, principals, now }),
     sessions: principals.sessions,
     runtime: principals.runtime,
+    bootstrap: (admin, certifier) => bootstrapWorkforce({ service, store, now }, admin, certifier),
+    chiefDelegation: (chief) => chiefDelegation({ registry: brainRegistry(store), service, chief }),
   };
 }

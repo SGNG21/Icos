@@ -97,7 +97,16 @@ export function planDelegation(input: {
   for (const request of requests) {
     const reports = org.agents
       .filter(
-        (a) => a.supervisorAgentId === supervisor.agentId && a.tenantId === supervisor.tenantId,
+        (a) =>
+          a.supervisorAgentId === supervisor.agentId &&
+          a.tenantId === supervisor.tenantId &&
+          /*
+           * RÉDUCTION SEULE (verrou C6). Quand le Chief a nommé un cerveau, il est le SEUL
+           * candidat — mais il subit ensuite exactement les mêmes contrôles de gouvernance
+           * que tout le monde. Nommer restreint, n'autorise jamais : un nommé refusé
+           * devient un gap, pas un remplacement discret.
+           */
+          (request.requiredAgentId === undefined || a.agentId === request.requiredAgentId),
       )
       .sort(
         (a, b) =>

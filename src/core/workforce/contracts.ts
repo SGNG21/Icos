@@ -447,4 +447,22 @@ export interface WorkRequest {
   computeUnits: number;
   /** Action class of what the task will do, matched against `approvalRequiredFor`. */
   actionClass?: string;
+  /**
+   * LE CERVEAU QUE LE CHIEF A CHOISI pour cette demande (verrou C6).
+   *
+   * Pourquoi ce champ existe. Le Chief décide QUI, au niveau de l'OBJECTIF
+   * (`planObjectiveDelegation`) : c'est sa fonction, et c'est la seule façon d'exprimer
+   * « l'auto-amélioration passe par Evolution » quand Builder, Recovery et Evolution
+   * partagent le même rôle, donc les mêmes capacités. Sans ce champ, la workforce
+   * re-choisissait par charge puis par ordre d'id, et le choix du Chief était perdu.
+   *
+   * CE N'EST PAS UNE SECONDE AUTORITÉ, et ce n'est pas un contournement. Deux questions
+   * distinctes, deux décideurs : le Chief dit QUI, la workforce dit SI C'EST PERMIS — rôle
+   * actif, skill couvrant la capacité, bornes, approbation humaine. Le nommé passe
+   * exactement les mêmes contrôles que n'importe quel candidat ; il ne fait que RÉDUIRE
+   * l'ensemble des candidats à un seul. Un nommé qui échoue aux contrôles produit un GAP,
+   * jamais un remplaçant choisi en silence — sans quoi « ce travail va à Recovery »
+   * redeviendrait un vœu.
+   */
+  requiredAgentId?: string;
 }

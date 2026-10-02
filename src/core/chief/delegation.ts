@@ -51,6 +51,23 @@ export interface DelegationStage {
   readonly capability: string;
   /** Stages sharing a wave may run in parallel. Lower waves run first. */
   readonly wave: number;
+  /**
+   * LE CERVEAU NOMMÉ de cette étape, quand l'identité compte autant que la compétence.
+   *
+   * POURQUOI C'EST NÉCESSAIRE. La sélection par capacité seule ne peut pas distinguer les
+   * cerveaux qui partagent un rôle : Builder, Recovery et Evolution sont tous les trois
+   * FULLSTACK_ENGINEER, donc `code_write`, donc indiscernables — l'ordre alphabétique
+   * choisissait, et « l'auto-amélioration passe par Evolution » n'était pas exprimable.
+   * Pire : SALES_DIRECTOR déclare `independent_review`, donc `brain-business` gagnait la
+   * relecture indépendante devant `brain-reviewer`, par ordre d'id.
+   *
+   * CE QUE CE CHAMP NE FAIT PAS. Il ne contourne RIEN : le cerveau nommé doit quand même
+   * DÉCLARER la capacité de l'étape, être actif, et tenir dans ses propres bornes. Nommer ne
+   * peut que RÉDUIRE l'ensemble des candidats, jamais l'élargir — et un cerveau nommé absent,
+   * inactif ou sans la capacité devient un BESOIN NON COUVERT, jamais un remplaçant choisi
+   * d'office.
+   */
+  readonly brainId?: string;
 }
 
 /**
@@ -61,20 +78,50 @@ export interface DelegationStage {
  * A work class with no shape is refused, not improvised.
  */
 export const DELEGATION_SHAPES: Readonly<Partial<Record<WorkClass, readonly DelegationStage[]>>> = {
+  /* AUTO-AMÉLIORATION : entre par Evolution, qui fan-out ensuite. */
   SELF_IMPROVEMENT: [
-    { stage: "EVOLUTION", capability: "self_improvement_planning", wave: 0 },
-    { stage: "ARCHITECT", capability: "architecture_design", wave: 1 },
-    { stage: "RESEARCH", capability: "research", wave: 1 },
-    { stage: "BUILDER", capability: "implementation", wave: 1 },
-    { stage: "RECOVERY", capability: "recovery", wave: 1 },
-    { stage: "MEMORY", capability: "memory_curation", wave: 1 },
+    { stage: "EVOLUTION", capability: "code_write", wave: 0, brainId: "brain-evolution" },
+    { stage: "ARCHITECT", capability: "architecture_design", wave: 1, brainId: "brain-architect" },
+    { stage: "RESEARCH", capability: "research", wave: 1, brainId: "brain-research" },
+    { stage: "BUILDER", capability: "code_write", wave: 1, brainId: "brain-builder" },
+    { stage: "MEMORY", capability: "synthesis", wave: 1, brainId: "brain-memory" },
+  ],
+  /* TRAVAIL LOGICIEL ORDINAIRE demandé par le propriétaire : on planifie, puis on construit. */
+  USER: [
+    { stage: "PLANNER", capability: "planning", wave: 0, brainId: "brain-planner" },
+    { stage: "BUILDER", capability: "code_write", wave: 1, brainId: "brain-builder" },
+  ],
+  /* RÉPARATION : c'est Recovery, pas Builder. Même rôle, autre responsabilité. */
+  MAINTENANCE: [
+    { stage: "RECOVERY", capability: "code_write", wave: 0, brainId: "brain-recovery" },
   ],
   CLIENT: [
-    { stage: "CLIENT_LEAD", capability: "client_audit", wave: 0 },
-    { stage: "RESEARCH", capability: "research", wave: 1 },
-    { stage: "BUILDER", capability: "implementation", wave: 1 },
+    { stage: "CLIENT_LEAD", capability: "sales_strategy", wave: 0, brainId: "brain-business" },
+    { stage: "RESEARCH", capability: "research", wave: 1, brainId: "brain-research" },
+    { stage: "BUILDER", capability: "code_write", wave: 1, brainId: "brain-builder" },
   ],
+  REVENUE: [
+    { stage: "BUSINESS", capability: "sales_strategy", wave: 0, brainId: "brain-business" },
+    { stage: "GROWTH", capability: "seo_audit", wave: 1, brainId: "brain-growth" },
+  ],
+  RESEARCH: [{ stage: "RESEARCH", capability: "research", wave: 0, brainId: "brain-research" }],
 };
+
+/**
+ * LE RELECTEUR INDÉPENDANT CANONIQUE. Nommé, et pas seulement « celui qui déclare
+ * `independent_review` » : SALES_DIRECTOR déclare aussi cette capacité, donc la sélection
+ * par capacité seule donnait la relecture à `brain-business` par ordre alphabétique. Une
+ * relecture attribuée par ordre d'id n'est pas une garantie d'indépendance.
+ *
+ * L'indépendance reste VÉRIFIÉE, pas supposée : si ce cerveau a déjà une étape
+ * d'implémentation dans le même plan, le plan est REFUSÉ (`REVIEWER_NOT_INDEPENDENT`), il
+ * n'est pas remplacé en silence.
+ */
+export const CANONICAL_REVIEWER_BRAIN_ID = "brain-reviewer";
+
+/** SECURITY n'a volontairement aucune forme : les douze cerveaux n'en comportent aucun dont
+ * le rôle couvre la sécurité, et improviser une affectation sécurité serait pire que la
+ * refuser. `NO_SHAPE_FOR_WORK_CLASS` est la réponse honnête jusqu'à ce qu'un rôle existe. */
 
 /**
  * Capabilities this layer refuses to schedule at all. Whoever edits a shape table later
@@ -200,9 +247,17 @@ export function planObjectiveDelegation(
       continue;
     }
 
-    /* Eligibility is DECLARED capability only. No permissive fallback, ever. */
+    /*
+     * Éligibilité = capacité DÉCLARÉE, puis, quand l'étape nomme un cerveau, CE cerveau.
+     * Les deux conditions se cumulent : nommer RÉDUIT, ne remplace jamais la capacité.
+     * Aucun repli permissif, jamais.
+     */
     const eligible = active
-      .filter((b) => b.capabilities.includes(stage.capability))
+      .filter(
+        (b) =>
+          b.capabilities.includes(stage.capability) &&
+          (stage.brainId === undefined || b.brainId === stage.brainId),
+      )
       .sort((a, b) => taken(a.brainId) - taken(b.brainId) || byBrainId(a, b));
     if (eligible.length === 0) {
       unmetNeeds.push({
@@ -243,9 +298,18 @@ export function planObjectiveDelegation(
    * A queued implementer counts as an implementer — it will do the work later.
    */
   const implementers = new Set([...assignments, ...deferred].map((a) => a.brainId));
-  const reviewCandidates = active.filter((b) =>
-    b.capabilities.includes(INDEPENDENT_REVIEW_CAPABILITY),
-  );
+  /*
+   * Le relecteur CANONIQUE d'abord, les autres porteurs de la capacité ensuite. Sans cet
+   * ordre, `brain-business` (SALES_DIRECTOR déclare `independent_review`) remportait la
+   * relecture devant `brain-reviewer` par simple ordre alphabétique.
+   */
+  const reviewCandidates = active
+    .filter((b) => b.capabilities.includes(INDEPENDENT_REVIEW_CAPABILITY))
+    .sort(
+      (a, b) =>
+        Number(b.brainId === CANONICAL_REVIEWER_BRAIN_ID) -
+          Number(a.brainId === CANONICAL_REVIEWER_BRAIN_ID) || byBrainId(a, b),
+    );
   if (reviewCandidates.length === 0) {
     return { ok: false, refusals: ["NO_INDEPENDENT_REVIEWER"], excludedBrains };
   }

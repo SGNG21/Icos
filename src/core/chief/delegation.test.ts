@@ -11,8 +11,8 @@ import {
 } from "./delegation";
 
 const brain = (over: Partial<BrainDescriptor> & { brainId: string }): BrainDescriptor => ({
-  role: "BUILDER",
-  capabilities: ["implementation"],
+  role: "FULLSTACK_ENGINEER",
+  capabilities: ["code_write"],
   autonomyLevel: 2,
   status: "active",
   maxConcurrentAssignments: 1,
@@ -20,19 +20,75 @@ const brain = (over: Partial<BrainDescriptor> & { brainId: string }): BrainDescr
   ...over,
 });
 
-/** One active brain per SELF_IMPROVEMENT stage, plus an independent reviewer. */
+/*
+ * LA VRAIE FLOTTE : les douze identités canoniques, avec les ids et les capacités que le
+ * registre produit RÉELLEMENT (rôles de `bootstrap/roles.json` composés de leurs skills).
+ *
+ * Les fixtures d'origine inventaient des ids (`b-evolution`) et des capacités
+ * (`implementation`, `recovery`, `memory_curation`, `self_improvement_planning`) qui
+ * n'existent dans AUCUN skill. Elles prouvaient donc l'algorithme contre un monde qui
+ * n'existe pas — et c'est très exactement pour ça que la table des formes n'avait jamais pu
+ * router : elle nommait des capacités introuvables.
+ *
+ * Noter les collisions RÉELLES, qui sont tout l'intérêt : Builder, Recovery et Evolution
+ * partagent FULLSTACK_ENGINEER (donc `code_write`), Research et Memory partagent RESEARCHER,
+ * et SALES_DIRECTOR déclare `independent_review` comme le relecteur.
+ */
 const fullFleet = (): BrainDescriptor[] => [
-  brain({ brainId: "b-evolution", role: "EVOLUTION", capabilities: ["self_improvement_planning"] }),
-  brain({ brainId: "b-architect", role: "ARCHITECT", capabilities: ["architecture_design"] }),
-  brain({ brainId: "b-research", role: "RESEARCH", capabilities: ["research"] }),
-  brain({ brainId: "b-builder", role: "BUILDER", capabilities: ["implementation"] }),
-  brain({ brainId: "b-recovery", role: "RECOVERY", capabilities: ["recovery"] }),
-  brain({ brainId: "b-memory", role: "MEMORY", capabilities: ["memory_curation"] }),
   brain({
-    brainId: "b-reviewer",
-    role: "REVIEWER",
-    capabilities: [INDEPENDENT_REVIEW_CAPABILITY],
+    brainId: "brain-chief",
+    role: "ICOS_CENTRAL",
+    capabilities: ["capability_decomposition", "orchestration", "synthesis"],
+    autonomyLevel: 3,
   }),
+  brain({
+    brainId: "brain-planner",
+    role: "OPERATIONS_MANAGER",
+    capabilities: ["planning", "process_management"],
+  }),
+  brain({
+    brainId: "brain-architect",
+    role: "SOFTWARE_ARCHITECT",
+    capabilities: ["architecture_design", "code_review"],
+  }),
+  brain({ brainId: "brain-builder", capabilities: ["code_review", "code_write", "testing"] }),
+  brain({
+    brainId: "brain-reviewer",
+    role: "INDEPENDENT_REVIEWER",
+    capabilities: ["evidence_verification", INDEPENDENT_REVIEW_CAPABILITY],
+  }),
+  brain({ brainId: "brain-recovery", capabilities: ["code_review", "code_write", "testing"] }),
+  brain({
+    brainId: "brain-research",
+    role: "RESEARCHER",
+    capabilities: ["lead_research", "market_research", "research", "synthesis"],
+  }),
+  brain({
+    brainId: "brain-business",
+    role: "SALES_DIRECTOR",
+    capabilities: [
+      "evidence_verification",
+      INDEPENDENT_REVIEW_CAPABILITY,
+      "pipeline_management",
+      "sales_strategy",
+    ],
+  }),
+  brain({
+    brainId: "brain-delivery",
+    role: "DEVOPS_ENGINEER",
+    capabilities: ["ci_cd", "infrastructure_ops"],
+  }),
+  brain({
+    brainId: "brain-growth",
+    role: "SEO_SPECIALIST",
+    capabilities: ["keyword_research", "seo_audit"],
+  }),
+  brain({
+    brainId: "brain-memory",
+    role: "RESEARCHER",
+    capabilities: ["lead_research", "market_research", "research", "synthesis"],
+  }),
+  brain({ brainId: "brain-evolution", capabilities: ["code_review", "code_write", "testing"] }),
 ];
 
 const LIMITS: DelegationLimits = { maxParallelAssignments: 10, maxAutonomyLevel: 3 };
@@ -48,19 +104,20 @@ describe("chief delegation — self-improvement fan-out", () => {
   it("routes Améliore ICOS to the Evolution brain first, then fans out", () => {
     const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
     expect(plan.workClass).toBe("SELF_IMPROVEMENT");
-    expect(plan.assignments[0]).toMatchObject({ role: "EVOLUTION", wave: 0 });
+    /* L'IDENTITÉ, pas le rôle : Builder, Recovery et Evolution partagent le même rôle. */
+    expect(plan.assignments[0]).toMatchObject({ brainId: "brain-evolution", wave: 0 });
     expect(
       plan.assignments
         .filter((a) => a.wave === 1)
-        .map((a) => a.role)
+        .map((a) => a.brainId)
         .sort(),
-    ).toEqual(["ARCHITECT", "BUILDER", "MEMORY", "RECOVERY", "RESEARCH"]);
+    ).toEqual(["brain-architect", "brain-builder", "brain-memory", "brain-research"]);
     expect(plan.unmetNeeds).toEqual([]);
   });
 
   it("names the independent reviewer in a later wave than every implementer", () => {
     const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
-    expect(plan.review.brainId).toBe("b-reviewer");
+    expect(plan.review.brainId).toBe("brain-reviewer");
     expect(plan.review.wave).toBeGreaterThan(Math.max(...plan.assignments.map((a) => a.wave)));
   });
 
@@ -84,15 +141,23 @@ describe("chief delegation — self-improvement fan-out", () => {
 describe("chief delegation — only active brains, and absences are reported", () => {
   it("never selects a suspended, retired or blocked brain and reports its exclusion", () => {
     const fleet = fullFleet().map((b) =>
-      b.brainId === "b-builder" ? { ...b, status: "suspended" as const } : b,
+      b.brainId === "brain-builder" ? { ...b, status: "suspended" as const } : b,
     );
     const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
-    expect(plan.assignments.map((a) => a.brainId)).not.toContain("b-builder");
-    expect(plan.excludedBrains).toEqual([{ brainId: "b-builder", status: "suspended" }]);
+    expect(plan.assignments.map((a) => a.brainId)).not.toContain("brain-builder");
+    expect(plan.excludedBrains).toEqual([{ brainId: "brain-builder", status: "suspended" }]);
+    /*
+     * ET SURTOUT : aucun remplaçant. `brain-recovery` et `brain-evolution` déclarent
+     * exactement les mêmes capacités que Builder ; sans l'étape NOMMÉE, l'un d'eux aurait
+     * pris sa place en silence et un cerveau suspendu n'aurait rien suspendu du tout.
+     */
+    expect(plan.unmetNeeds).toEqual([
+      { stage: "BUILDER", capability: "code_write", reason: "NO_ACTIVE_BRAIN_WITH_CAPABILITY" },
+    ]);
   });
 
   it("reports an unmet capability instead of back-filling an arbitrary brain", () => {
-    const fleet = fullFleet().filter((b) => b.brainId !== "b-research");
+    const fleet = fullFleet().filter((b) => b.brainId !== "brain-research");
     const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.unmetNeeds).toEqual([
       { stage: "RESEARCH", capability: "research", reason: "NO_ACTIVE_BRAIN_WITH_CAPABILITY" },
@@ -119,9 +184,9 @@ describe("chief delegation — only active brains, and absences are reported", (
 describe("chief delegation — reviewer independence is owner policy", () => {
   it("refuses a plan whose only reviewer is also an implementer, instead of repairing it", () => {
     const fleet = fullFleet()
-      .filter((b) => b.brainId !== "b-reviewer")
+      .filter((b) => b.brainId !== "brain-reviewer" && b.brainId !== "brain-business")
       .map((b) =>
-        b.brainId === "b-builder"
+        b.brainId === "brain-builder"
           ? { ...b, capabilities: [...b.capabilities, INDEPENDENT_REVIEW_CAPABILITY] }
           : b,
       );
@@ -131,7 +196,10 @@ describe("chief delegation — reviewer independence is owner policy", () => {
   });
 
   it("refuses when nobody at all declares the review capability", () => {
-    const fleet = fullFleet().filter((b) => b.brainId !== "b-reviewer");
+    /* `brain-business` en déclare une aussi (SALES_DIRECTOR) : il faut retirer les deux. */
+    const fleet = fullFleet().filter(
+      (b) => b.brainId !== "brain-reviewer" && b.brainId !== "brain-business",
+    );
     const outcome = planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.refusals).toEqual(["NO_INDEPENDENT_REVIEWER"]);
@@ -139,9 +207,9 @@ describe("chief delegation — reviewer independence is owner policy", () => {
 
   it("does not use a reviewer that is merely DEFERRED as an implementer", () => {
     const fleet = fullFleet()
-      .filter((b) => b.brainId !== "b-reviewer")
+      .filter((b) => b.brainId !== "brain-reviewer" && b.brainId !== "brain-business")
       .map((b) =>
-        b.brainId === "b-memory"
+        b.brainId === "brain-memory"
           ? { ...b, capabilities: [...b.capabilities, INDEPENDENT_REVIEW_CAPABILITY] }
           : b,
       );
@@ -156,11 +224,13 @@ describe("chief delegation — reviewer independence is owner policy", () => {
 
   it("marks review as required for a brain whose reviewPolicy is always", () => {
     const fleet = fullFleet().map((b) =>
-      b.brainId === "b-builder" ? { ...b, reviewPolicy: "always" as const } : b,
+      b.brainId === "brain-builder" ? { ...b, reviewPolicy: "always" as const } : b,
     );
     const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
-    expect(plan.assignments.find((a) => a.brainId === "b-builder")?.reviewRequired).toBe(true);
-    expect(plan.assignments.find((a) => a.brainId === "b-research")?.reviewRequired).toBe(false);
+    expect(plan.assignments.find((a) => a.brainId === "brain-builder")?.reviewRequired).toBe(true);
+    expect(plan.assignments.find((a) => a.brainId === "brain-research")?.reviewRequired).toBe(
+      false,
+    );
   });
 });
 
@@ -173,8 +243,8 @@ describe("chief delegation — over-subscription defers, never drops", () => {
       }),
     );
     expect(plan.assignments).toHaveLength(2);
-    expect(plan.deferred).toHaveLength(4);
-    expect(plan.deferred.map((d) => d.reason)).toEqual(Array(4).fill("PARALLELISM_LIMIT"));
+    expect(plan.deferred).toHaveLength(3);
+    expect(plan.deferred.map((d) => d.reason)).toEqual(Array(3).fill("PARALLELISM_LIMIT"));
     /* nothing was dropped: every shape stage is accounted for exactly once */
     expect([...plan.assignments, ...plan.deferred].map((a) => a.stage).sort()).toEqual(
       DELEGATION_SHAPES.SELF_IMPROVEMENT!.map((s) => s.stage).sort(),
@@ -183,20 +253,28 @@ describe("chief delegation — over-subscription defers, never drops", () => {
 
   it("defers a second part rather than exceeding a brain's maxConcurrentAssignments", () => {
     /* one brain holds two capabilities but only one slot */
+    /*
+     * Une forme SUR MESURE : un seul cerveau nommé sur deux étapes, avec un seul créneau.
+     * Les étapes nommées rendent le cas explicite au lieu de dépendre d'une collision.
+     */
     const fleet: BrainDescriptor[] = [
       brain({
         brainId: "b-omni",
-        role: "EVOLUTION",
-        capabilities: ["self_improvement_planning", "research"],
+        capabilities: ["code_write", "research"],
         maxConcurrentAssignments: 1,
       }),
       brain({
-        brainId: "b-reviewer",
-        role: "REVIEWER",
+        brainId: "brain-reviewer",
+        role: "INDEPENDENT_REVIEWER",
         capabilities: [INDEPENDENT_REVIEW_CAPABILITY],
       }),
     ];
-    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(
+      planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS, [
+        { stage: "EVOLUTION", capability: "code_write", wave: 0, brainId: "b-omni" },
+        { stage: "RESEARCH", capability: "research", wave: 1, brainId: "b-omni" },
+      ]),
+    );
     expect(plan.assignments.filter((a) => a.brainId === "b-omni")).toHaveLength(1);
     expect(plan.deferred).toEqual([
       expect.objectContaining({
@@ -247,8 +325,8 @@ describe("chief delegation — no authority escalation", () => {
     const objective: ClassifiedObjective = { ...SELF_IMPROVEMENT, escalations: [] };
     const plan = expectOk(
       planObjectiveDelegation(objective, fullFleet(), LIMITS, [
-        { stage: "EVOLUTION", capability: "self_improvement_planning", wave: 0 },
-        { stage: "SHIPPER", capability: "deployment", wave: 1 },
+        { stage: "EVOLUTION", capability: "code_write", wave: 0, brainId: "brain-evolution" },
+        { stage: "SHIPPER", capability: "deployment", wave: 1, brainId: "brain-delivery" },
       ]),
     );
     expect(plan.assignments.map((a) => a.stage)).toEqual(["EVOLUTION"]);
