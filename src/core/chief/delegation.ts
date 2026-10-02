@@ -60,9 +60,7 @@ export interface DelegationStage {
  *
  * A work class with no shape is refused, not improvised.
  */
-export const DELEGATION_SHAPES: Readonly<
-  Partial<Record<WorkClass, readonly DelegationStage[]>>
-> = {
+export const DELEGATION_SHAPES: Readonly<Partial<Record<WorkClass, readonly DelegationStage[]>>> = {
   SELF_IMPROVEMENT: [
     { stage: "EVOLUTION", capability: "self_improvement_planning", wave: 0 },
     { stage: "ARCHITECT", capability: "architecture_design", wave: 1 },

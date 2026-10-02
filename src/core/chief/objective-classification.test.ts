@@ -146,9 +146,9 @@ describe("raw objective classification — prohibitions fail to the safe side", 
     expect(classifyRawObjective("Améliore ICOS avec une nouvelle API key.").escalations).toContain(
       "CREDENTIALS",
     );
-    expect(
-      classifyRawObjective("Améliore ICOS en désactivant les tests.").escalations,
-    ).toContain("POLICY_DISABLING");
+    expect(classifyRawObjective("Améliore ICOS en désactivant les tests.").escalations).toContain(
+      "POLICY_DISABLING",
+    );
     expect(classifyRawObjective("Améliore ICOS.").escalations).toEqual([]);
   });
 });

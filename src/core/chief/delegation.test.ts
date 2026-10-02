@@ -49,13 +49,12 @@ describe("chief delegation — self-improvement fan-out", () => {
     const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
     expect(plan.workClass).toBe("SELF_IMPROVEMENT");
     expect(plan.assignments[0]).toMatchObject({ role: "EVOLUTION", wave: 0 });
-    expect(plan.assignments.filter((a) => a.wave === 1).map((a) => a.role).sort()).toEqual([
-      "ARCHITECT",
-      "BUILDER",
-      "MEMORY",
-      "RECOVERY",
-      "RESEARCH",
-    ]);
+    expect(
+      plan.assignments
+        .filter((a) => a.wave === 1)
+        .map((a) => a.role)
+        .sort(),
+    ).toEqual(["ARCHITECT", "BUILDER", "MEMORY", "RECOVERY", "RESEARCH"]);
     expect(plan.unmetNeeds).toEqual([]);
   });
 
@@ -72,7 +71,11 @@ describe("chief delegation — self-improvement fan-out", () => {
   });
 
   it("refuses an objective that did not classify", () => {
-    const outcome = planDelegation(classifyRawObjective("Quelle heure est-il ?"), fullFleet(), LIMITS);
+    const outcome = planDelegation(
+      classifyRawObjective("Quelle heure est-il ?"),
+      fullFleet(),
+      LIMITS,
+    );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.refusals).toContain("OBJECTIVE_NOT_CLASSIFIED");
   });
@@ -187,12 +190,20 @@ describe("chief delegation — over-subscription defers, never drops", () => {
         capabilities: ["self_improvement_planning", "research"],
         maxConcurrentAssignments: 1,
       }),
-      brain({ brainId: "b-reviewer", role: "REVIEWER", capabilities: [INDEPENDENT_REVIEW_CAPABILITY] }),
+      brain({
+        brainId: "b-reviewer",
+        role: "REVIEWER",
+        capabilities: [INDEPENDENT_REVIEW_CAPABILITY],
+      }),
     ];
     const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.assignments.filter((a) => a.brainId === "b-omni")).toHaveLength(1);
     expect(plan.deferred).toEqual([
-      expect.objectContaining({ brainId: "b-omni", stage: "RESEARCH", reason: "BRAIN_AT_CAPACITY" }),
+      expect.objectContaining({
+        brainId: "b-omni",
+        stage: "RESEARCH",
+        reason: "BRAIN_AT_CAPACITY",
+      }),
     ]);
   });
 });
@@ -211,7 +222,8 @@ describe("chief delegation — no authority escalation", () => {
         maxAutonomyLevel: 1,
       }),
     );
-    for (const a of [...plan.assignments, plan.review]) expect(a.autonomyLevel).toBeLessThanOrEqual(1);
+    for (const a of [...plan.assignments, plan.review])
+      expect(a.autonomyLevel).toBeLessThanOrEqual(1);
   });
 
   it("sends deployment / credential / permission / policy work to the owner, and plans none of it", () => {
