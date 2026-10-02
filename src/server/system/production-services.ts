@@ -146,6 +146,18 @@ export function composeAutonomyRuntime(container: Container): {
     container.capabilityRouter,
     /* Decision 0044: paused missions / safe mode admit no new work. */
     container.control?.guard,
+    /*
+     * THE WORKFORCE SEAM (decision 0057 + 0066). Without this argument the brain registry is
+     * inert: `WorkforceComputePort.requestFor` had no CORE3 call site at all, so twelve seeded
+     * brains would have been twelve rows the dispatcher ignores.
+     *
+     * A brain may only ever TIGHTEN a dispatch here — raise difficulty, add the worker
+     * capabilities its skill declares, or HOLD while a required human approval is missing. It
+     * can never lower difficulty, remove the task's own capabilities, or name a model
+     * (`modelHints` stay non-binding and are deliberately not forwarded to the router).
+     * Optional, so a composition without a workforce routes byte-identically.
+     */
+    container.workforce?.core3Compute,
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,
