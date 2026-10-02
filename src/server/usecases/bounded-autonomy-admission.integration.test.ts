@@ -88,7 +88,8 @@ async function admitAndRun(
 
   return {
     missionId: job.missionId as string,
-    run: () => handlersWith(policy).start_mission(claimed!, { signal: new AbortController().signal }),
+    run: () =>
+      handlersWith(policy).start_mission(claimed!, { signal: new AbortController().signal }),
   };
 }
 
