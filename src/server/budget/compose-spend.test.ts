@@ -210,14 +210,23 @@ describe("composeSpendMeters — couture frais opérationnels : UNCAPPED par cho
     const { fetchImpl } = provider(10_000);
     const meters = composeSpendMeters({ db, maxTotalTokensPerGoal: 100, inner: fetchImpl });
 
+    /*
+     * Le chemin RÉEL de la sonde : `OmniRouteHttpWorkerProbe` sonde un modèle par une
+     * complétion (`compute-fleet` poste sur /v1/chat/completions). Un chemin inventé ne serait
+     * plus mesuré du tout depuis que seules les complétions le sont, et ce test ne prouverait
+     * alors plus rien.
+     */
     await runWithAttribution({ goalId: "g1" }, () =>
-      meters.overhead("https://provider.test/v1/probe", { body: "{}" }),
+      meters.overhead("https://provider.test/v1/chat/completions", { body: "{}" }),
     );
 
+    expect(db.rows).toHaveLength(1);
     expect(db.rows[0].goal_id).toBeNull();
     /* 10 000 tokens de sonde n'épuisent pas le plafond de 100 du goal : il reste passant. */
     await expect(
-      runWithAttribution({ goalId: "g1" }, () => meters.mission("https://provider.test/v1/chat")),
+      runWithAttribution({ goalId: "g1" }, () =>
+        meters.mission("https://provider.test/v1/chat/completions", { body: "{}" }),
+      ),
     ).resolves.toBeInstanceOf(Response);
   });
 });
