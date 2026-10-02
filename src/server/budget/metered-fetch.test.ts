@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Attribution, SpendDecision } from "@/core/budget/contracts";
+import { MICROS_PER_EUR } from "@/core/budget/contracts";
 import type { PriceTable } from "@/core/budget/price-table";
 import type { SpendWindow } from "@/core/budget/spend";
 import { emptyWindow } from "@/core/budget/spend";
@@ -324,7 +325,7 @@ describe("meteredFetch — ne corrompt pas le journal", () => {
 describe("meteredFetch — bout en bout avec le journal en mémoire", () => {
   it("applique « budget maximum 10 EUR » : laisse passer puis refuse", async () => {
     const ledger = new InMemorySpendLedger({
-      caps: async () => ({ kind: "CAPPED", maxAmount: 10 }),
+      caps: async () => ({ kind: "CAPPED", maxCostMicros: 10 * MICROS_PER_EUR }),
       priceTable: PRICE_TABLE,
     });
     const inner = vi.fn<typeof fetch>(async () =>
@@ -352,7 +353,7 @@ describe("meteredFetch — bout en bout avec le journal en mémoire", () => {
 
   it("UNPRICED ne peut pas être blanchi en plafond monétaire satisfait", async () => {
     const ledger = new InMemorySpendLedger({
-      caps: async () => ({ kind: "CAPPED", maxAmount: 10 }),
+      caps: async () => ({ kind: "CAPPED", maxCostMicros: 10 * MICROS_PER_EUR }),
       priceTable: {}, // table vide : état honnête par défaut
     });
     const inner = vi.fn<typeof fetch>(async () =>
