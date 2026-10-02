@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Per-mission model/provider restriction.
  *
@@ -156,4 +158,106 @@ function frozenIds(ids: readonly string[], field: string): string[] {
 
     return id;
   });
+}
+
+/**
+ * Ce qu'UN GOAL demande comme pool de compute. Volontairement distinct de
+ * `BoundedModelAllowlist` : c'est une DEMANDE, pas une autorité. Elle ne devient
+ * une autorité qu'après réduction contre l'ensemble autorisé par le système.
+ */
+export const requestedComputePolicySchema = z
+  .object({
+    allowedModels: z.array(z.string().trim().min(1)).optional(),
+    allowedProviders: z.array(z.string().trim().min(1)).optional(),
+  })
+  .strict();
+
+export type RequestedComputePolicy = z.infer<typeof requestedComputePolicySchema>;
+
+export interface NarrowedModelAllowlist {
+  allowlist: MissionModelAllowlist;
+
+  /**
+   * Ids demandés que le système n'autorisait PAS, sous la forme `champ:id`.
+   * Non vide = la demande tentait de s'octroyer une autorité nouvelle.
+   */
+  refused: string[];
+}
+
+/**
+ * Réduit l'ensemble autorisé par le SYSTÈME par la politique demandée par UN GOAL.
+ *
+ * Invariant (P0-F) — « ne jamais s'octroyer d'autorité nouvelle » : le résultat est
+ * toujours un SOUS-ENSEMBLE de `system`. Un id que le système n'autorise pas n'est
+ * jamais accordé ; il est écarté ET nommé dans `refused`, pour qu'aucun appelant ne
+ * puisse confondre « refusé » et « accordé ».
+ *
+ * Aucune demande (absente, `null` ou sans axe renseigné) renvoie `system` TEL QUEL :
+ * c'est un passe-plat vers l'autorité, pas un repli permissif — l'absence de politique
+ * de goal ne décide rien, c'est toujours `system` qui décide.
+ */
+export function narrowModelAllowlist(
+  system: MissionModelAllowlist,
+  requested?: RequestedComputePolicy | null,
+): NarrowedModelAllowlist {
+  const policy = requested ?? {};
+
+  if (policy.allowedModels === undefined && policy.allowedProviders === undefined) {
+    return { allowlist: system, refused: [] };
+  }
+
+  const refused: string[] = [];
+
+  const systemModels = system.mode === "allowlist" ? system.modelIds : undefined;
+  const systemProviders = system.mode === "allowlist" ? system.providerIds : undefined;
+
+  const models = reduceIds(policy.allowedModels, systemModels, "modelIds", refused);
+  const providers = reduceIds(policy.allowedProviders, systemProviders, "providerIds", refused);
+
+  if (models === undefined) {
+    /*
+     * « Seulement ces fournisseurs » sur un système qui n'interdit aucun modèle n'est
+     * pas exprimable : il faudrait un ensemble de modèles non borné DANS une liste
+     * d'autorisation. Refusé plutôt que converti en deny-all silencieux.
+     */
+    throw new Error(
+      "MODEL_ALLOWLIST_INVALID:allowedModels is required when the system restricts no model",
+    );
+  }
+
+  return { allowlist: modelAllowlist(models, providers), refused };
+}
+
+/**
+ * Intersection d'un axe. `requestedIds` absent = axe non réduit (on hérite de
+ * `permitted`). `permitted` absent = le système ne restreint pas cet axe, donc toute
+ * liste demandée est une réduction légitime.
+ */
+function reduceIds(
+  requestedIds: readonly string[] | undefined,
+  permitted: readonly string[] | undefined,
+  field: string,
+  refused: string[],
+): readonly string[] | undefined {
+  if (requestedIds === undefined) {
+    return permitted;
+  }
+
+  if (permitted === undefined) {
+    return requestedIds;
+  }
+
+  const kept: string[] = [];
+
+  for (const id of requestedIds) {
+    if (permitted.includes(id)) {
+      kept.push(id);
+
+      continue;
+    }
+
+    refused.push(`${field}:${id}`);
+  }
+
+  return kept;
 }

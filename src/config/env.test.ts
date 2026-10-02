@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { loadEnv } from "./env";
+import { AUTONOMY_BOUNDS_CEILING } from "@/core/autonomy/bounds";
+import {
+  MODEL_ALLOWLIST_UNRESTRICTED,
+  isModelAllowed,
+} from "@/core/autonomy/model-allowlist";
+
+import { loadEnv, resolveAutonomyBounds, resolveSystemModelAllowlist } from "./env";
 
 describe("loadEnv", () => {
   it("traite les chaînes vides des variables optionnelles comme absentes", () => {
@@ -120,5 +126,95 @@ describe("ICOS_SELF_DEVELOPMENT", () => {
     // C'est la raison du z.enum plutôt qu'un booléen : « enbaled » ne doit pas vouloir dire off.
     expect(() => loadEnv({ ICOS_SELF_DEVELOPMENT: "enbaled" })).toThrow();
     expect(() => loadEnv({ ICOS_SELF_DEVELOPMENT: "true" })).toThrow();
+  });
+});
+describe("plafonds d'autonomie configurables (P0-E)", () => {
+  it("rien de configuré = EXACTEMENT le plafond de politique historique", () => {
+    expect(resolveAutonomyBounds(loadEnv({}))).toEqual(AUTONOMY_BOUNDS_CEILING);
+    expect(AUTONOMY_BOUNDS_CEILING).toEqual({
+      maxCycles: 100,
+      maxRuntimeMs: 60 * 60 * 1000,
+      maxStagnationCycles: 3,
+      maxReplans: 5,
+    });
+  });
+
+  it("un déploiement peut RESSERRER chaque borne", () => {
+    const env = loadEnv({
+      ICOS_AUTONOMY_MAX_CYCLES: "20",
+      ICOS_AUTONOMY_MAX_RUNTIME_MS: "1800000",
+      ICOS_AUTONOMY_MAX_REPLANS: "2",
+      ICOS_AUTONOMY_MAX_STAGNATION_CYCLES: "2",
+    });
+
+    expect(resolveAutonomyBounds(env)).toEqual({
+      maxCycles: 20,
+      maxRuntimeMs: 30 * 60 * 1000,
+      maxReplans: 2,
+      maxStagnationCycles: 2,
+    });
+  });
+
+  it("maxReplans = 0 est une valeur VALIDE (aucun replan autorisé)", () => {
+    expect(resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_REPLANS: "0" })).maxReplans).toBe(0);
+  });
+
+  it("REFUSE DE DÉMARRER si un déploiement tente d'ÉLARGIR au-dessus du plafond", () => {
+    /* Un élargissement silencieusement ramené au plafond est une politique mensongère. */
+    expect(() =>
+      resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_CYCLES: "100000" })),
+    ).toThrow(/ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING/);
+    expect(() =>
+      resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_RUNTIME_MS: "86400000" })),
+    ).toThrow(/ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING/);
+  });
+
+  it("refuse une valeur non entière ou négative au chargement", () => {
+    expect(() => loadEnv({ ICOS_AUTONOMY_MAX_CYCLES: "0" })).toThrow();
+    expect(() => loadEnv({ ICOS_AUTONOMY_MAX_CYCLES: "vingt" })).toThrow();
+    expect(() => loadEnv({ ICOS_AUTONOMY_MAX_REPLANS: "-1" })).toThrow();
+  });
+});
+
+describe("pool de compute autorisé par le SYSTÈME (P0-F)", () => {
+  it("absent = NON RESTREINT, état explicite et comportement d'avant", () => {
+    expect(resolveSystemModelAllowlist(loadEnv({}))).toEqual(MODEL_ALLOWLIST_UNRESTRICTED);
+    expect(resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "" }))).toEqual(
+      MODEL_ALLOWLIST_UNRESTRICTED,
+    );
+  });
+
+  it("une liste déclarée borne le système, et elle seule", () => {
+    const allowlist = resolveSystemModelAllowlist(
+      loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "cheap-model, other-model" }),
+    );
+
+    expect(isModelAllowed(allowlist, "cheap-model")).toBe(true);
+    expect(isModelAllowed(allowlist, "other-model")).toBe(true);
+    expect(isModelAllowed(allowlist, "expensive-model")).toBe(false);
+  });
+
+  it("borne aussi les fournisseurs quand ils sont déclarés", () => {
+    const allowlist = resolveSystemModelAllowlist(
+      loadEnv({
+        ICOS_AUTONOMY_ALLOWED_MODELS: "cheap-model",
+        ICOS_AUTONOMY_ALLOWED_PROVIDERS: "omniroute",
+      }),
+    );
+
+    expect(isModelAllowed(allowlist, "cheap-model", "omniroute")).toBe(true);
+    expect(isModelAllowed(allowlist, "cheap-model", "autre-passerelle")).toBe(false);
+  });
+
+  it("REFUSE DE DÉMARRER si des fournisseurs sont déclarés sans modèles", () => {
+    expect(() =>
+      resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_PROVIDERS: "omniroute" })),
+    ).toThrow(/ICOS_AUTONOMY_ALLOWED_PROVIDERS/);
+  });
+
+  it("refuse une liste malformée plutôt que de l'ignorer", () => {
+    expect(() =>
+      resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "cheap,,other" })),
+    ).toThrow(/MODEL_ALLOWLIST_INVALID/);
   });
 });

@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import { resolveBounds, type RuntimeBounds } from "@/core/autonomy/bounds";
+import {
+  MODEL_ALLOWLIST_UNRESTRICTED,
+  modelAllowlist,
+  type MissionModelAllowlist,
+} from "@/core/autonomy/model-allowlist";
+
 /**
  * Les variables optionnelles vides (`FOO=`) sont traitées comme absentes :
  * copier `.env.example` tel quel reste valide.
@@ -14,6 +21,12 @@ const persistenceSchema = z.preprocess(emptyAsUndefined, z.enum(["memory", "post
 const optionalPositiveInteger = z.preprocess(
   emptyAsUndefined,
   z.coerce.number().int().positive().optional(),
+);
+
+/* 0 est une valeur de politique LÉGITIME là où elle veut dire « aucun », pas « absent ». */
+const optionalNonNegativeInteger = z.preprocess(
+  emptyAsUndefined,
+  z.coerce.number().int().nonnegative().optional(),
 );
 
 const envSchema = z.object({
@@ -145,6 +158,37 @@ const envSchema = z.object({
    * qu'une mission autonome puisse dépenser quoi que ce soit.
    */
   ICOS_GOAL_MAX_TOTAL_TOKENS: optionalPositiveInteger,
+  /*
+   * PLAFOND DE DÉPLOIEMENT des bornes d'UNE mission autonome (P0-E). Ces quatre valeurs
+   * étaient codées en dur (100 cycles / 60 min / 5 replans / 3 cycles de stagnation) ;
+   * elles restent le plafond de POLITIQUE (`AUTONOMY_BOUNDS_CEILING`) et un déploiement
+   * ne peut que le RESSERRER.
+   *
+   * Absentes = exactement le comportement historique. Une valeur AU-DESSUS du plafond
+   * refuse de démarrer (`resolveAutonomyBounds`) au lieu d'être ramenée en silence : un
+   * plafond qu'on croit à 24 h et qui vaut 1 h est une politique mensongère.
+   *
+   * Un goal, lui, ne peut que resserrer encore ce plafond-ci — voir
+   * `startAutonomousMission` (`input.bounds`).
+   */
+  ICOS_AUTONOMY_MAX_CYCLES: optionalPositiveInteger,
+  ICOS_AUTONOMY_MAX_RUNTIME_MS: optionalPositiveInteger,
+  ICOS_AUTONOMY_MAX_STAGNATION_CYCLES: optionalPositiveInteger,
+  /** 0 = aucun replan autorisé. C'est la borne la plus serrée, pas une absence. */
+  ICOS_AUTONOMY_MAX_REPLANS: optionalNonNegativeInteger,
+  /*
+   * POOL DE COMPUTE AUTORISÉ PAR LE SYSTÈME (P0-F), listes séparées par des virgules.
+   *
+   * Absent = NON RESTREINT : l'état explicite `unrestricted`, c'est-à-dire le
+   * comportement d'avant cette lane, et la SEULE façon de l'obtenir. Déclarées, ces
+   * listes deviennent le plafond qu'une politique de goal ne peut que réduire : un goal
+   * ne s'octroie JAMAIS un modèle que le système n'autorisait pas.
+   *
+   * Déclarer des fournisseurs sans modèles refuse de démarrer : « seulement ces
+   * fournisseurs, tous modèles » n'est pas exprimable dans une liste d'autorisation.
+   */
+  ICOS_AUTONOMY_ALLOWED_MODELS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  ICOS_AUTONOMY_ALLOWED_PROVIDERS: z.preprocess(emptyAsUndefined, z.string().optional()),
   ICOS_SELF_DEVELOPMENT: z.preprocess(
     emptyAsUndefined,
     z.enum(["enabled", "disabled"]).optional(),
@@ -186,6 +230,70 @@ export function resolveAuthConfig(env: Env): AuthConfig {
     throw new Error("BETTER_AUTH_URL est requis pour l'authentification humaine.");
   }
   return { secret: env.BETTER_AUTH_SECRET, baseURL: env.BETTER_AUTH_URL };
+}
+
+/**
+ * Résout le PLAFOND DE DÉPLOIEMENT des bornes d'autonomie (P0-E).
+ *
+ * Réutilise `resolveBounds`, l'unique autorité de résolution : la configuration est
+ * traitée exactement comme n'importe quelle demande, donc elle ne peut que RÉDUIRE
+ * `AUTONOMY_BOUNDS_CEILING`. Différence assumée avec un goal : un élargissement demandé
+ * par un GOAL est rogné et rapporté, un élargissement écrit dans la CONFIGURATION D'UN
+ * DÉPLOIEMENT refuse de démarrer — personne ne lit un rapport de rognage au boot.
+ */
+export function resolveAutonomyBounds(env: Env): RuntimeBounds {
+  const { bounds, clamped } = resolveBounds({
+    ...(env.ICOS_AUTONOMY_MAX_CYCLES !== undefined
+      ? { maxCycles: env.ICOS_AUTONOMY_MAX_CYCLES }
+      : {}),
+    ...(env.ICOS_AUTONOMY_MAX_RUNTIME_MS !== undefined
+      ? { maxRuntimeMs: env.ICOS_AUTONOMY_MAX_RUNTIME_MS }
+      : {}),
+    ...(env.ICOS_AUTONOMY_MAX_STAGNATION_CYCLES !== undefined
+      ? { maxStagnationCycles: env.ICOS_AUTONOMY_MAX_STAGNATION_CYCLES }
+      : {}),
+    ...(env.ICOS_AUTONOMY_MAX_REPLANS !== undefined
+      ? { maxReplans: env.ICOS_AUTONOMY_MAX_REPLANS }
+      : {}),
+  });
+
+  if (clamped.length > 0) {
+    throw new Error(`ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING:${clamped.join(",")}`);
+  }
+
+  return bounds;
+}
+
+/**
+ * Résout le pool de compute autorisé par le SYSTÈME (P0-F).
+ *
+ * C'est l'autorité de référence : une politique de goal ne peut que la réduire
+ * (`narrowModelAllowlist`). Absent = `unrestricted`, un état NOMMÉ et non un repli.
+ */
+export function resolveSystemModelAllowlist(env: Env): MissionModelAllowlist {
+  const models = splitIds(env.ICOS_AUTONOMY_ALLOWED_MODELS);
+  const providers = splitIds(env.ICOS_AUTONOMY_ALLOWED_PROVIDERS);
+
+  if (models === undefined) {
+    if (providers !== undefined) {
+      throw new Error(
+        "ICOS_AUTONOMY_ALLOWED_PROVIDERS_WITHOUT_MODELS: déclarer des fournisseurs autorisés exige de déclarer aussi les modèles autorisés",
+      );
+    }
+
+    return MODEL_ALLOWLIST_UNRESTRICTED;
+  }
+
+  return modelAllowlist(models, providers);
+}
+
+/**
+ * `undefined` (variable absente) et une liste sont deux états distincts ; une entrée
+ * vide n'est PAS écartée, elle est transmise telle quelle pour que `modelAllowlist`
+ * refuse la configuration au lieu de l'ignorer.
+ */
+function splitIds(value: string | undefined): string[] | undefined {
+  return value === undefined ? undefined : value.split(",").map((id) => id.trim());
 }
 
 /**
