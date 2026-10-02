@@ -182,3 +182,54 @@ It was not launched. No live DB write, no deploy, no external side effect.
    end to end.
 6. Only then consider the first controlled autonomous mission, gated on a token cap and a
    bounded model allowlist.
+
+## 8. Independent review, and what it changed
+
+An independent adversarial reviewer was run against the whole branch with an explicit brief to
+break the safety claims rather than confirm them. Verdict: **no CRITICAL, 7 HIGH,
+INTEGRATE WITH FIXES**. Its most valuable finding was not a bug but an overstatement: four of the
+five headline capabilities had no production caller while an accepted decision asserted, in the
+present tense, that they were installed and enforcing. That is recorded in §7 and corrected in
+decision 0066.
+
+The coordinator independently re-verified every HIGH before acting on it. None was taken on trust.
+
+| Finding | Verified | Disposition |
+|---|---|---|
+| H1 — meter has no production caller; `goals.budget` still unenforced | yes, by `git grep` | a dedicated lane now installs it; until it lands B1 is open |
+| H2 — a `0` price reads as PRICED, so a money cap is satisfied forever | yes | fixed: a rate must be strictly positive, else UNPRICED |
+| H3 — provider-billed reasoning tokens charged at zero, reported as fully priced | yes | fixed: a provider total above prompt+completion is UNPRICED |
+| H4 — a METERED observation with no cost counts as free and invisible | yes (latent) | fixed by a fail-closed guard in `accumulate` |
+| H5 — every request on the seam was metered, so one `/v1/models` call denies an attribution forever | yes | fixed: only `/v1/chat/completions` is metered; a streaming completion still records UNMETERED |
+| H6 — self-development would starve the durable job queue for up to an hour | yes | fixed: its own timer, non-overlap guard, shutdown does not wait |
+| H7 — the branch did not typecheck as committed | was true when observed | already resolved by the next commit; HEAD typechecks clean |
+
+Each budget fix carries revert/restore mutation evidence that the new test actually fails against
+the broken version. One pre-existing assertion was **corrected, not weakened**: a test blessed
+H3's behaviour by asserting that tokens beyond prompt+completion are not charged. It encoded the
+defect. Replacement positive coverage was added so the ordinary pricing path stays tested.
+
+### A consequence of the H3 fix the owner must know
+
+Because a provider total greater than prompt+completion now yields UNPRICED, and because an
+UNPRICED call cannot be proven under a money cap, **any provider that reports reasoning or cache
+tokens will make every monetary cap DENY** until a tariff for those tokens exists. This is the
+intended fail-closed behaviour, not a regression, but in production it will appear as denials
+rather than as silent under-counting. The alternative — charging billed tokens at zero — is what
+the review classified as HIGH. Token caps are unaffected.
+
+### Reviewer diversity — stated truthfully
+
+The owner asked for implementation by Hermes/NVIDIA and review by Codex GPT-5.6 Sol at the
+highest available reasoning effort, and asked that an unavailable model never be presented as
+having run. Both CLIs exist and were probed working (`PROBE_OK`; Codex's highest effort is `max`,
+not `xhigh`). Neither could be used: launching them non-interactively requires bypassing all tool
+approvals, which this session's safety policy blocked as unsafe-agent creation. It was not worked
+around.
+
+Consequence: implementation AND review both ran as Claude subagents. Model-family diversity
+between implementer and reviewer was therefore **NOT achieved**. What was preserved is the part
+that protects correctness in practice: the reviewer had a fresh context, an adversarial brief, no
+stake in the work passing, and no knowledge of the implementers' reasoning — and it did in fact
+contradict the coordinator on several points, which is the behaviour diversity is meant to buy.
+That is weaker than a different model family and is reported as such.
