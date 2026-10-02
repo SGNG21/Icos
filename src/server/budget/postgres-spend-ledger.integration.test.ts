@@ -3,13 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { UNMETERED, type Attribution } from "@/core/budget/contracts";
 import type { PriceEntry, PriceTable } from "@/core/budget/price-table";
-import { createDatabase } from "@/server/database/client";
-import {
-  dockerAvailable,
-  startPostgres,
-  stopPostgres,
-  type PgContext,
-} from "@/server/database/testing/pg-support";
+import { createDatabase, type DatabaseHandle } from "@/server/database/client";
+import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 
 import { createGoalBudgetCapResolver } from "./goal-budget-cap-resolver";
 import { PostgresSpendLedger } from "./postgres-spend-ledger";
@@ -24,8 +19,15 @@ import type { BudgetCapResolver, SpendEntry } from "./ports";
  * `pnpm test` n'exécute PAS ce fichier (exclu par vitest.config.ts) : il est destiné à la
  * passe sérielle du coordinateur, qui est seule propriétaire de la base de test partagée.
  *
- * `truncateAll` de pg-support ne connaît pas `spend_ledger` (fichier hors de ce lot) : chaque
- * test vide donc la table lui-même. TRUNCATE n'est pas couvert par un trigger de ligne.
+ * `truncateAll` de pg-support ne connaît pas `spend_ledger` : chaque test vide donc la table
+ * lui-même. TRUNCATE n'est pas couvert par un trigger de ligne.
+ *
+ * HARNESS : la base de test LOCALE (`ICOS_TEST_DATABASE_URL`), et non Testcontainers. Le lot
+ * d'origine avait copié le motif `describe.skipIf(!dockerAvailable)`, mais le démon Docker n'est
+ * pas disponible sur cette machine : ces 13 fichiers-là se SAUTENT en silence, et la durabilité —
+ * l'unique raison d'être de ce lot — n'était donc jamais prouvée. Les 74 autres fichiers
+ * d'intégration utilisent la base locale et s'exécutent réellement. `createDatabase` applique
+ * `assertSafeTestDatabaseUrl` sous VITEST, donc la base live reste inatteignable d'ici.
  */
 
 const TENANT = "default";
@@ -74,14 +76,14 @@ const pgCode = async (p: Promise<unknown>): Promise<string> => {
   }
 };
 
-describe.skipIf(!dockerAvailable)("spend_ledger (Testcontainers, migration 0055)", () => {
-  let ctx: PgContext;
+describe("spend_ledger (base de test locale, migration 0055)", () => {
+  let ctx: { handle: DatabaseHandle };
 
-  beforeAll(async () => {
-    ctx = await startPostgres();
-  }, 120_000);
+  beforeAll(() => {
+    ctx = { handle: createDatabase(TEST_DATABASE_URL, { max: 5 }) };
+  });
   afterAll(async () => {
-    await stopPostgres(ctx);
+    await ctx.handle.close();
   });
 
   beforeEach(async () => {
@@ -121,7 +123,7 @@ describe.skipIf(!dockerAvailable)("spend_ledger (Testcontainers, migration 0055)
     const before = await ledger().windowFor(G1);
 
     /* Nouveau client PostgreSQL = nouveau processus, aucun état partagé. */
-    const fresh = createDatabase(ctx.container.getConnectionUri(), { max: 2 });
+    const fresh = createDatabase(TEST_DATABASE_URL, { max: 2 });
     try {
       const after = await new PostgresSpendLedger({
         db: fresh.db,
@@ -285,11 +287,17 @@ describe.skipIf(!dockerAvailable)("spend_ledger (Testcontainers, migration 0055)
   });
 
   describe("createGoalBudgetCapResolver contre la vraie table goals", () => {
+    /*
+     * `goals.createdAt` et `goals.updatedAt` sont NOT NULL sans défaut : l'insertion du lot d'origine l'omettait et
+     * n'avait jamais été exécutée (le fichier était gaté sur Docker, indisponible ici), donc
+     * les trois preuves du résolveur échouaient sur leur propre fixture, pas sur le code testé.
+     */
     const seedGoal = async (id: string, budget: number | null) =>
       ctx.handle.db.execute(sql`
         insert into goals ("id", "goalId", "title", "objective", "rawInput",
-                           "normalizedIntent", "budget")
-        values (${id}, ${id}, 'titre', 'objectif', 'entrée', 'intention', ${budget})
+                           "normalizedIntent", "budget", "createdAt", "updatedAt")
+        values (${id}, ${id}, 'titre', 'objectif', 'entrée', 'intention', ${budget},
+                '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z')
       `);
 
     it("un budget NULL n'est ni sans plafond ni zéro : sans plafond de tokens, il refuse", async () => {
