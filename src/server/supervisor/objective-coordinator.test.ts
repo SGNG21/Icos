@@ -327,3 +327,76 @@ describe("DEFAULT_PORTFOLIO_POLICY — le plafond exercé par les preuves C7", (
     expect(DEFAULT_PORTFOLIO_POLICY.classes.RESEARCH.maxConcurrent).toBe(1);
   });
 });
+
+/**
+ * VERROU C5 — LE CHAÎNON MANQUANT ENTRE L'INTAKE ET LE RUNTIME.
+ *
+ * Le mécanisme des caps existait de bout en bout : `requestedBoundsSchema` -> payload du job
+ * durable -> handler `start_mission` -> `igniteAutonomousMission` -> colonnes
+ * `autonomous_mission_runtime`, que la boucle relit à chaque cycle (donc replan, réveil et
+ * redémarrage repartent des caps PERSISTÉS — prouvé dans
+ * `autonomous-mission-runner-restart.integration.test.ts` et
+ * `bounded-autonomy-admission.integration.test.ts`).
+ *
+ * Il manquait le PREMIER maillon : l'admission laissait tomber la demande, donc rien ne
+ * pouvait l'alimenter depuis l'intake et toute mission tournait au plafond de politique.
+ * Ce qui suit est ce maillon, et seulement lui.
+ */
+describe("ObjectiveCoordinator — les caps demandés atteignent le job durable (C5)", () => {
+  it("porte bounds et computePolicy DANS LE PAYLOAD, pas dans la mémoire du processus", async () => {
+    const { enqueue, deps: d } = deps();
+    const bounds = { maxRuntimeMs: 1_800_000, maxCycles: 20, maxReplans: 2 };
+    const computePolicy = { allowedModels: ["cheap-model"] };
+
+    await new ObjectiveCoordinator(d).admit({
+      goal: goal(),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+      bounds,
+      computePolicy,
+    });
+
+    /* Le payload est ce qui SURVIT au processus : il repart de la base en jsonb. */
+    expect(enqueue.mock.calls[0][0].payload).toMatchObject({ bounds, computePolicy });
+  });
+
+  it("n'écrit PAS les clés absentes : un `undefined` en jsonb deviendrait un null refusé", async () => {
+    const { enqueue, deps: d } = deps();
+    await new ObjectiveCoordinator(d).admit({
+      goal: goal(),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+    });
+    const payload = enqueue.mock.calls[0][0].payload as Record<string, unknown>;
+    expect("bounds" in payload).toBe(false);
+    expect("computePolicy" in payload).toBe(false);
+  });
+
+  it("porte les caps AUSSI sur une admission DIFFÉRÉE : un report ne les perd pas", async () => {
+    /*
+     * Le cas qui compte vraiment. Une admission différée enfile le MÊME job avec un `runAt`,
+     * et c'est le scheduler qui le rejoue plus tard. Si les caps ne voyageaient que sur le
+     * chemin « admis tout de suite », toute mission mise en attente par la pression du
+     * portefeuille repartirait au plafond — une restriction perdue par le simple fait
+     * d'avoir attendu.
+     */
+    const { enqueue, deps: d } = deps({
+      pendingLaunches: { countByWorkClass: async () => ({ RESEARCH: 5 }) },
+    });
+    const bounds = { maxCycles: 3 };
+
+    const result = await new ObjectiveCoordinator(d).admit({
+      goal: goal({ id: "g-r", metadata: { "icos.work_class": "RESEARCH" } }),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+      bounds,
+    });
+
+    expect(result.outcome).toBe("deferred");
+    expect(enqueue.mock.calls[0][0].runAt).toBeInstanceOf(Date);
+    expect(enqueue.mock.calls[0][0].payload).toMatchObject({ bounds });
+  });
+});

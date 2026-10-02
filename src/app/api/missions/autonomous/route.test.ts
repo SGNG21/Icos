@@ -19,7 +19,10 @@ function install(access: Access, plan: () => Promise<unknown> = onePlan) {
   const session: AuthenticatedSession | null =
     access === "anonymous" || access === "expired" || access === "no-auth-gateway"
       ? null
-      : { user: { id: "human-1", email: "h@icos.test", name: "H", status: "active" }, roles: [access] };
+      : {
+          user: { id: "human-1", email: "h@icos.test", name: "H", status: "active" },
+          roles: [access],
+        };
   const auth: AuthGateway = {
     createHumanUser: async () => ({ ok: false, reason: "invalid_input" }),
     readHumanUser: async () => session?.user ?? null,
@@ -40,10 +43,18 @@ function install(access: Access, plan: () => Promise<unknown> = onePlan) {
     taskExecution: { dispatch } as never,
   } as Container;
   (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
-  return { container, dispatch, planner, readSession: auth.readSession as ReturnType<typeof vi.fn> };
+  return {
+    container,
+    dispatch,
+    planner,
+    readSession: auth.readSession as ReturnType<typeof vi.fn>,
+  };
 }
 
-async function callRoute(headers: Record<string, string>, body: unknown = { title: "t", objective: "o", goalId: "g-1" }) {
+async function callRoute(
+  headers: Record<string, string>,
+  body: unknown = { title: "t", objective: "o", goalId: "g-1" },
+) {
   const { POST } = await import("./route");
   return POST(
     new Request(`${ORIGIN}/api/missions/autonomous`, {
@@ -121,7 +132,11 @@ describe("POST /api/missions/autonomous — authentication and authorization (fa
 describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonical execution authority", () => {
   const dueJobs = async (c: Container) => {
     const claimed = [];
-    for (let job = await c.scheduledJobs.claimDue("test", 60_000); job; job = await c.scheduledJobs.claimDue("test", 60_000)) {
+    for (
+      let job = await c.scheduledJobs.claimDue("test", 60_000);
+      job;
+      job = await c.scheduledJobs.claimDue("test", 60_000)
+    ) {
       claimed.push(job);
     }
     return claimed;
@@ -139,7 +154,12 @@ describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonica
       /* Durable before the 202: the job exists and names the mission it will create. */
       const job = await f.container.scheduledJobs.getById(body.jobId);
       expect(job).toMatchObject({ kind: "start_mission", missionId: body.missionId });
-      expect(job!.payload).toMatchObject({ title: "t", objective: "o", goalId: "g-1", missionId: body.missionId });
+      expect(job!.payload).toMatchObject({
+        title: "t",
+        objective: "o",
+        goalId: "g-1",
+        missionId: body.missionId,
+      });
 
       /* No mission, no runtime, no plan, no dispatch in the request: its lifetime cannot matter. */
       expect(await f.container.mission.list()).toHaveLength(0);
@@ -170,12 +190,16 @@ describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonica
 
   it("DUPLICATE LAUNCH is idempotent per caller key; the same key for other content is 409", async () => {
     const f = install("operator");
-    const first = (await (await callRoute({ ...authed, "idempotency-key": "launch-1" })).json()) as {
+    const first = (await (
+      await callRoute({ ...authed, "idempotency-key": "launch-1" })
+    ).json()) as {
       missionId: string;
       jobId: string;
       replayed: boolean;
     };
-    const again = (await (await callRoute({ ...authed, "idempotency-key": "launch-1" })).json()) as typeof first;
+    const again = (await (
+      await callRoute({ ...authed, "idempotency-key": "launch-1" })
+    ).json()) as typeof first;
     expect(again).toMatchObject({ missionId: first.missionId, jobId: first.jobId, replayed: true });
     expect(first.replayed).toBe(false);
     expect(await dueJobs(f.container)).toHaveLength(1);
@@ -201,9 +225,10 @@ describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonica
     const { createSchedulerHandlers } = await import("@/server/scheduler/scheduler-handlers");
     const runtime = composeAutonomyRuntime(f.container);
     /* The canonical supervisor carries the governed workspace coordinator — the API's did not. */
-    expect((runtime.supervisor as unknown as { workspaceExecutionCoordinator: unknown }).workspaceExecutionCoordinator).toBe(
-      f.container.workspaceExecutionCoordinator,
-    );
+    expect(
+      (runtime.supervisor as unknown as { workspaceExecutionCoordinator: unknown })
+        .workspaceExecutionCoordinator,
+    ).toBe(f.container.workspaceExecutionCoordinator);
     expect(f.container.workspaceExecutionCoordinator).toBeDefined();
 
     const handlers = createSchedulerHandlers({
@@ -237,7 +262,11 @@ describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonica
         if (statSync(file).isDirectory()) walk(file);
         else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) {
           const src = readFileSync(file, "utf8");
-          if (/new SupervisorService\(|new AutonomousMissionRunner\(|startAutonomousMission\(|igniteAutonomousMission\(/.test(src)) {
+          if (
+            /new SupervisorService\(|new AutonomousMissionRunner\(|startAutonomousMission\(|igniteAutonomousMission\(/.test(
+              src,
+            )
+          ) {
             offenders.push(path.relative(root, file));
           }
         }
@@ -327,5 +356,61 @@ describe("POST /api/missions/autonomous — admission cannot be bypassed (review
     expect(res.status).toBe(202);
     const scored = await admit.mock.results[0].value;
     expect(scored.evidence.priority.class).toBe("USER");
+  });
+});
+
+/**
+ * VERROU C5 — LES CAPS DEMANDÉS DOIVENT ÊTRE ATTEIGNABLES DEPUIS L'INTAKE.
+ *
+ * Toute la chaîne existait (payload du job -> handler -> ignite -> colonnes
+ * `autonomous_mission_runtime`, relues à chaque cycle par la boucle), mais cette route
+ * n'acceptait pas le champ : aucune restriction demandée par le propriétaire ne pouvait
+ * l'emprunter, et toute mission tournait au plafond de politique en silence.
+ */
+describe("POST /api/missions/autonomous — les caps demandés atteignent l'admission (C5)", () => {
+  it("transmet bounds et computePolicy à l'admission, qui les met dans le job durable", async () => {
+    const f = install("operator");
+    const admit = vi.spyOn(f.container.objectiveCoordinator, "admit");
+    const bounds = { maxRuntimeMs: 1_800_000, maxCycles: 20, maxReplans: 2 };
+    const computePolicy = { allowedModels: ["cheap-model"] };
+
+    const res = await callRoute(authed, {
+      title: "t",
+      objective: "o",
+      goalId: "g-1",
+      bounds,
+      computePolicy,
+    });
+
+    expect(res.status).toBe(202);
+    expect(admit.mock.calls[0]?.[0]).toMatchObject({ bounds, computePolicy });
+  });
+
+  it("400 sur des caps invalides : une borne refusée n'est jamais ignorée en silence", async () => {
+    install("operator");
+    /* 0 cycle n'est pas « pas de limite » : c'est une valeur que la base refuserait. */
+    const res = await callRoute(authed, {
+      title: "t",
+      objective: "o",
+      goalId: "g-1",
+      bounds: { maxCycles: 0 },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("refuse un champ de borne INCONNU au lieu de l'ignorer", async () => {
+    install("operator");
+    const res = await callRoute(authed, {
+      title: "t",
+      objective: "o",
+      goalId: "g-1",
+      bounds: { maxThings: 3 },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("une requête sans caps reste acceptée, à l'identique", async () => {
+    install("operator");
+    expect((await callRoute(authed)).status).toBe(202);
   });
 });

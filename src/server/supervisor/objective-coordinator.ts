@@ -95,6 +95,20 @@ export interface AdmitInput {
   readonly idempotencyKey: string;
   readonly title: string;
   readonly objective: string;
+  /**
+   * CAPS DEMANDÉS POUR CETTE MISSION (verrou C5). Réduction seule : `resolveBounds` les
+   * rabat sur le plafond de politique et signale tout élargissement au lieu de l'accorder.
+   *
+   * Ils voyagent dans le PAYLOAD DU JOB DURABLE, pas dans la mémoire de ce processus : le
+   * gestionnaire `start_mission` les revalide à l'exécution et `igniteAutonomousMission` les
+   * écrit dans la ligne `autonomous_mission_runtime`. C'est cette ligne que la boucle relit
+   * à chaque cycle, donc un redémarrage, un réveil ou une replanification repartent des caps
+   * PERSISTÉS et non du plafond. Sans ce champ, l'admission les perdait avant même la base,
+   * et une restriction demandée depuis l'interface n'atteignait jamais le runtime.
+   */
+  readonly bounds?: unknown;
+  /** Pool de modèles demandé pour cette mission. Réduction seule, même trajet que `bounds`. */
+  readonly computePolicy?: unknown;
 }
 
 export interface AdmissionEvidence {
@@ -247,7 +261,17 @@ export class ObjectiveCoordinator {
     const { job, created } = await this.deps.scheduler.enqueue({
       kind: "start_mission",
       idempotencyKey: input.idempotencyKey,
-      payload: { title: input.title, objective: input.objective, goalId: input.goal.id },
+      payload: {
+        title: input.title,
+        objective: input.objective,
+        goalId: input.goal.id,
+        /*
+         * Omis quand absents : un `undefined` dans le payload jsonb deviendrait une CLÉ
+         * présente et nulle, que le schéma strict du gestionnaire refuserait.
+         */
+        ...(input.bounds === undefined ? {} : { bounds: input.bounds }),
+        ...(input.computePolicy === undefined ? {} : { computePolicy: input.computePolicy }),
+      },
       priority: priority.priority,
       ...(decision.admit ? {} : { runAt: new Date(now.getTime() + decision.retryAfterMs) }),
     });

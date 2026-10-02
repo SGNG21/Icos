@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
+import { requestedBoundsSchema } from "@/core/autonomy/bounds";
+import { requestedComputePolicySchema } from "@/core/autonomy/model-allowlist";
 import type { HighLevelGoal } from "@/core/contracts/high-level-goal";
 
 import { getContainer } from "@/server/container";
@@ -43,12 +45,27 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * CAPS ET POOL DE COMPTE DEMANDABLES DEPUIS L'INTAKE (verrou C5).
+ *
+ * Le mécanisme existait de bout en bout — `requestedBoundsSchema` -> payload du job ->
+ * `igniteAutonomousMission` -> colonnes `autonomous_mission_runtime` — mais AUCUN appelant ne
+ * pouvait l'alimenter : cette route n'acceptait pas le champ et l'admission le laissait
+ * tomber. Une restriction demandée par le propriétaire n'atteignait donc jamais le runtime,
+ * et la mission tournait au plafond de politique en silence.
+ *
+ * Les deux sont en RÉDUCTION SEULE et revalidés à l'exécution du job (le payload revient de
+ * la base en jsonb, donc c'est une donnée, pas une valeur typée). Demander plus que le
+ * plafond est rabattu et signalé, jamais accordé.
+ */
 const startAutonomousMissionBodySchema = z
   .object({
     title: z.string().trim().min(1),
     objective: z.string().trim().min(1),
     goalId: z.string(),
     idempotencyKey: z.string().trim().min(1).max(1000).optional(),
+    bounds: requestedBoundsSchema.optional(),
+    computePolicy: requestedComputePolicySchema.optional(),
   })
   .strict();
 
@@ -129,6 +146,10 @@ export async function POST(request: Request): Promise<Response> {
         idempotencyKey,
         title: parsed.data.title,
         objective: parsed.data.objective,
+        ...(parsed.data.bounds === undefined ? {} : { bounds: parsed.data.bounds }),
+        ...(parsed.data.computePolicy === undefined
+          ? {}
+          : { computePolicy: parsed.data.computePolicy }),
       });
       const { job, created } = {
         job: { id: admitted.jobId, missionId: admitted.missionId },
