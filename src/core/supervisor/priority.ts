@@ -29,6 +29,29 @@ export const PRIORITY_FACTORS = [
 ] as const;
 export type PriorityFactorName = (typeof PRIORITY_FACTORS)[number];
 
+/**
+ * Metadata keys under this prefix are SERVER-ASSERTED. The HTTP intake strips them from
+ * caller input (`stripUntrustedMetadata`), so only ICOS itself can write them.
+ *
+ * Classification reads nothing else. Without this, any caller holding `missions.write`
+ * could post `source: "cognitive_conversation"` and buy themselves class USER, base 90,
+ * at the top of the scheduler's ORDER BY — the band arithmetic is only as trustworthy as
+ * the label it operates on.
+ */
+export const TRUSTED_METADATA_PREFIX = "icos.";
+
+/**
+ * Removes every reserved key from metadata that arrived from outside ICOS. Call this at
+ * each trust boundary where caller-supplied metadata enters a goal.
+ */
+export function stripUntrustedMetadata(
+  metadata: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => !key.startsWith(TRUSTED_METADATA_PREFIX)),
+  );
+}
+
 /** `equals` omitted ⇒ the rule matches when the key is present and non-empty. */
 export interface ClassificationRule {
   readonly class: WorkClass;
@@ -66,13 +89,14 @@ export const DEFAULT_PRIORITY_POLICY: PriorityPolicy = {
     SELF_IMPROVEMENT: 20,
     RESEARCH: 5,
   },
+  /* Every key is under TRUSTED_METADATA_PREFIX: a class is asserted by ICOS, never by a caller. */
   classification: [
-    { class: "USER", when: { metadataKey: "source", equals: "cognitive_conversation" } },
-    { class: "SECURITY", when: { metadataKey: "domain", equals: "security" } },
-    { class: "REVENUE", when: { metadataKey: "domain", equals: "revenue" } },
-    { class: "MAINTENANCE", when: { metadataKey: "domain", equals: "maintenance" } },
-    { class: "SELF_IMPROVEMENT", when: { metadataKey: "source", equals: "self_development" } },
-    { class: "CLIENT", when: { metadataKey: "clientId" } },
+    { class: "USER", when: { metadataKey: "icos.source", equals: "cognitive_conversation" } },
+    { class: "SECURITY", when: { metadataKey: "icos.domain", equals: "security" } },
+    { class: "REVENUE", when: { metadataKey: "icos.domain", equals: "revenue" } },
+    { class: "MAINTENANCE", when: { metadataKey: "icos.domain", equals: "maintenance" } },
+    { class: "SELF_IMPROVEMENT", when: { metadataKey: "icos.source", equals: "self_development" } },
+    { class: "CLIENT", when: { metadataKey: "icos.clientId" } },
   ],
   defaultClass: "RESEARCH",
   weights: {
@@ -125,6 +149,31 @@ const numeric = (value: string | undefined): number | null => {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
+
+/**
+ * Rejects a policy whose own numbers break the band guarantee. The containment proof
+ * (|Σ nᵢwᵢ| ≤ Σwᵢ) needs every weight non-negative; one negative weight shrinks the
+ * denominator and lets the bonus exceed maxFactorBonus, crossing a 15-point band. Called
+ * at composition so a bad policy fails at wiring time, not as a silent mis-ordering.
+ */
+export function assertPriorityPolicyCoherent(policy: PriorityPolicy): void {
+  for (const factor of PRIORITY_FACTORS) {
+    const w = policy.weights[factor];
+    if (!(w >= 0) || !Number.isFinite(w)) {
+      throw new Error(`PRIORITY_POLICY_INCOHERENT: weight for ${factor} must be finite and >= 0`);
+    }
+  }
+  const bases = Object.values(policy.classBase).sort((a, b) => a - b);
+  const swing = 2 * policy.maxFactorBonus;
+  for (let i = 1; i < bases.length; i += 1) {
+    const gap = bases[i] - bases[i - 1];
+    if (gap !== 0 && gap <= swing) {
+      throw new Error(
+        `PRIORITY_POLICY_INCOHERENT: class bands ${bases[i - 1]}/${bases[i]} are ${gap} apart, which factors (swing ${swing}) can cross`,
+      );
+    }
+  }
+}
 
 export function classifyObjective(
   policy: PriorityPolicy,
@@ -207,7 +256,8 @@ export function scoreObjective(
     missing.push("cost");
   }
 
-  const clientId = goal.metadata.clientId;
+  // Reserved key only: a caller-supplied clientId must not buy client importance either.
+  const clientId = goal.metadata[`${TRUSTED_METADATA_PREFIX}clientId`];
   const clientWeight = clientId === undefined ? undefined : policy.clientWeights[clientId];
   if (clientWeight !== undefined && clientId !== undefined) {
     add("clientImportance", clientWeight * 2 - 1, clientId, `clientWeights[${clientId}]=${clientWeight}`);

@@ -6,6 +6,7 @@ import {
   MAX_BACKOFF_MS,
   type EnqueueScheduledJobInput,
   type ScheduledJob,
+  type ScheduledJobKind,
   type ScheduledJobRepository,
   type ScheduledJobState,
 } from "@/core/contracts/scheduler";
@@ -126,6 +127,14 @@ export class InMemoryScheduledJobRepository implements ScheduledJobRepository {
     }
     this.finish(job, "dead", error);
     return { ok: true, state: "dead" };
+  }
+
+  async countScheduledByKind(kind: ScheduledJobKind): Promise<number> {
+    let n = 0;
+    for (const job of this.jobs.values()) {
+      if (job.kind === kind && (job.state === "scheduled" || job.state === "running")) n += 1;
+    }
+    return n;
   }
 
   async getById(id: string): Promise<ScheduledJob | null> {

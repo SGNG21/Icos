@@ -30,6 +30,7 @@ const deps = (over: Record<string, unknown> = {}) => ({
   reviews: { listByMissionId: vi.fn(async () => []) },
   runtimes: { get: vi.fn(async () => null) },
   controlHolds: { isHeld: vi.fn(async () => false) },
+  visibility: { unconvertedVisible: true, isMissionVisible: vi.fn(async () => true) },
   now: () => NOW,
   ...over,
 });
@@ -67,7 +68,7 @@ describe("buildObjectiveReadModel", () => {
       goals: {
         list: vi.fn(async () => [
           {
-            goal: goal({ metadata: { source: "cognitive_conversation" } }),
+            goal: goal({ metadata: { "icos.source": "cognitive_conversation" } }),
             status: "pending",
             resultingMissionId: null,
             convertedAt: null,
@@ -116,6 +117,7 @@ describe("buildObjectiveReadModel", () => {
           },
         ]),
       },
+      runtimes: { get: vi.fn(async () => ({ state: "running" })) },
       missions: {
         findById: vi.fn(async () => ({ id: "m-1", status: "running" })),
         listTasks: vi.fn(async () => [
@@ -143,6 +145,7 @@ describe("buildObjectiveReadModel", () => {
           },
         ]),
       },
+      runtimes: { get: vi.fn(async () => ({ state: "running" })) },
       missions: {
         findById: vi.fn(async () => ({ id: "m-1", status: "running" })),
         listTasks: vi.fn(async () => [
@@ -213,7 +216,7 @@ describe("buildObjectiveReadModel", () => {
             convertedAt: null,
           },
           {
-            goal: goal({ id: "user", metadata: { source: "cognitive_conversation" } }),
+            goal: goal({ id: "user", metadata: { "icos.source": "cognitive_conversation" } }),
             status: "pending",
             resultingMissionId: null,
             convertedAt: null,
@@ -223,5 +226,104 @@ describe("buildObjectiveReadModel", () => {
     });
     const views = await buildObjectiveReadModel(d as never);
     expect(views.map((v) => v.objectiveId)).toEqual(["user", "research"]);
+  });
+});
+
+describe("buildObjectiveReadModel — visibility and bounds (review C1, C2, I1)", () => {
+  const records = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      goal: goal({ id: `g-${i}` }),
+      status: "converted",
+      resultingMissionId: `m-${i}`,
+      convertedAt: NOW.toISOString(),
+    }));
+
+  it("C1: hides an objective whose mission the reader may not see", async () => {
+    const d = deps({
+      goals: { list: vi.fn(async () => records(2)) },
+      missions: {
+        findById: vi.fn(async (id: string) => ({ id, status: "ready" })),
+        listTasks: vi.fn(async () => [{ taskId: "t", status: "queued", workerKind: null }]),
+      },
+      visibility: {
+        unconvertedVisible: false,
+        isMissionVisible: vi.fn(async (missionId: string) => missionId === "m-0"),
+      },
+    });
+    const views = await buildObjectiveReadModel(d as never);
+    expect(views.map((v) => v.objectiveId)).toEqual(["g-0"]);
+  });
+
+  it("C1: hides un-launched goals from a reader without global scope", async () => {
+    const d = deps({
+      goals: {
+        list: vi.fn(async () => [
+          { goal: goal({ id: "g-pending" }), status: "pending", resultingMissionId: null, convertedAt: null },
+        ]),
+      },
+      visibility: { unconvertedVisible: false, isMissionVisible: vi.fn(async () => true) },
+    });
+    expect(await buildObjectiveReadModel(d as never)).toEqual([]);
+  });
+
+  it("C1: a visibility check that throws hides the objective, it does not reveal it", async () => {
+    const d = deps({
+      goals: { list: vi.fn(async () => records(1)) },
+      missions: {
+        findById: vi.fn(async (id: string) => ({ id, status: "ready" })),
+        listTasks: vi.fn(async () => []),
+      },
+      visibility: {
+        unconvertedVisible: false,
+        isMissionVisible: vi.fn(async () => {
+          throw new Error("scope service down");
+        }),
+      },
+    });
+    expect(await buildObjectiveReadModel(d as never)).toEqual([]);
+  });
+
+  it("C2: applies a default row limit instead of loading every goal ever created", async () => {
+    const list = vi.fn(async (_filter?: { status?: string; limit?: number }) => records(5));
+    await buildObjectiveReadModel(deps({ goals: { list } }) as never);
+    const passed = list.mock.calls[0]?.[0];
+    expect(passed?.limit).toBeGreaterThan(0);
+    expect(passed?.limit).toBeLessThanOrEqual(200);
+  });
+
+  it("C2: never has more than a bounded number of objectives in flight at once", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const findById = vi.fn(async (id: string) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight -= 1;
+      return { id, status: "ready" };
+    });
+    const d = deps({
+      goals: { list: vi.fn(async () => records(40)) },
+      missions: { findById, listTasks: vi.fn(async () => []) },
+    });
+    await buildObjectiveReadModel(d as never, { limit: 40 });
+    expect(peak).toBeLessThanOrEqual(10);
+  });
+
+  it("I1: an unreadable control hold degrades, it never renders as 'not held'", async () => {
+    const d = deps({
+      goals: { list: vi.fn(async () => records(1)) },
+      missions: {
+        findById: vi.fn(async (id: string) => ({ id, status: "ready" })),
+        listTasks: vi.fn(async () => [{ taskId: "t", status: "queued", workerKind: null }]),
+      },
+      controlHolds: {
+        isHeld: vi.fn(async () => {
+          throw new Error("control store unreachable");
+        }),
+      },
+    });
+    const [view] = await buildObjectiveReadModel(d as never);
+    expect(view.state).toBe("DEGRADED");
+    expect(view.degraded?.unknown).toContain("controlHold");
   });
 });

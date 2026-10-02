@@ -46,7 +46,12 @@ describe("deriveObjectiveState", () => {
   it("EXECUTING when a task is running", () => {
     expect(
       deriveObjectiveState(
-        input({ missionId: "m", mission: { status: "running" }, tasks: [task("running")] }),
+        input({
+          missionId: "m",
+          mission: { status: "running" },
+          tasks: [task("running")],
+          runtime: { state: "running" },
+        }),
       ).state,
     ).toBe("EXECUTING");
   });
@@ -58,6 +63,7 @@ describe("deriveObjectiveState", () => {
           missionId: "m",
           mission: { status: "running" },
           tasks: [task("running"), task("review_pending")],
+          runtime: { state: "running" },
         }),
       ).state,
     ).toBe("REVIEWING");
@@ -70,6 +76,7 @@ describe("deriveObjectiveState", () => {
           missionId: "m",
           mission: { status: "running" },
           tasks: [task("queued")],
+          runtime: { state: "running" },
           tasksAwaitingRepair: 1,
         }),
       ).state,
@@ -83,6 +90,7 @@ describe("deriveObjectiveState", () => {
           missionId: "m",
           mission: { status: "running" },
           tasks: [task("succeeded"), task("succeeded")],
+          runtime: { state: "running" },
         }),
       ).state,
     ).toBe("DECISION_READY");
@@ -95,6 +103,7 @@ describe("deriveObjectiveState", () => {
           missionId: "m",
           mission: { status: "running" },
           tasks: [task("running")],
+          runtime: { state: "running" },
           pendingApproval: true,
         }),
       ).state,
@@ -115,6 +124,7 @@ describe("deriveObjectiveState", () => {
         missionId: "m",
         mission: { status: "running" },
         tasks: [task("running")],
+        runtime: { state: "running" },
         controlHeld: true,
       }),
     );
@@ -128,19 +138,6 @@ describe("deriveObjectiveState", () => {
     );
     expect(r.state).toBe("BLOCKED");
     expect(r.blockedReason).toBe("mission_blocked");
-  });
-
-  it("RECOVERING when the runtime says so", () => {
-    expect(
-      deriveObjectiveState(
-        input({
-          missionId: "m",
-          mission: { status: "running" },
-          tasks: [task("queued")],
-          runtime: { state: "recovering" },
-        }),
-      ).state,
-    ).toBe("RECOVERING");
   });
 
   it.each([
@@ -175,6 +172,7 @@ describe("deriveObjectiveState", () => {
         missionId: "m",
         mission: { status: "running" },
         tasks: [task("queued")],
+        runtime: { state: "running" },
         tasksAwaitingRepair: null,
       }),
     );
@@ -183,7 +181,86 @@ describe("deriveObjectiveState", () => {
   });
 
   it("is a pure function of its input", () => {
-    const i = input({ missionId: "m", mission: { status: "running" }, tasks: [task("running")] });
+    const i = input({
+      missionId: "m",
+      mission: { status: "running" },
+      tasks: [task("running")],
+      runtime: { state: "running" },
+    });
     expect(deriveObjectiveState(i)).toEqual(deriveObjectiveState(i));
+  });
+});
+
+describe("deriveObjectiveState — real runtime states (review C3)", () => {
+  const live = (over: Partial<ObjectiveStateInput> = {}) =>
+    input({ missionId: "m", mission: { status: "running" }, tasks: [task("queued")], ...over });
+
+  it("maps the runner's own `replanning` state to PLANNING", () => {
+    expect(deriveObjectiveState(live({ runtime: { state: "replanning" } })).state).toBe("PLANNING");
+  });
+
+  it("maps the runner's own `escalated` state to WAITING_FOR_HUMAN", () => {
+    expect(deriveObjectiveState(live({ runtime: { state: "escalated" } })).state).toBe(
+      "WAITING_FOR_HUMAN",
+    );
+  });
+
+  it("RECOVERING when the runtime lease has lapsed and a sweeper must reclaim it", () => {
+    const r = deriveObjectiveState(live({ runtime: { state: "running", leaseExpired: true } }));
+    expect(r.state).toBe("RECOVERING");
+  });
+
+  it("does not claim RECOVERING for a healthy owned runtime", () => {
+    expect(deriveObjectiveState(live({ runtime: { state: "running", leaseExpired: false } })).state)
+      .not.toBe("RECOVERING");
+  });
+
+  it("never invents a runtime state the runner cannot emit", () => {
+    // "recovering" is not in AutonomousRuntimeState; it must not be a magic string.
+    expect(deriveObjectiveState(live({ runtime: { state: "recovering" } })).state).not.toBe(
+      "RECOVERING",
+    );
+  });
+
+  it("DEGRADED when a running mission has no readable runtime", () => {
+    const r = deriveObjectiveState(
+      input({ missionId: "m", mission: { status: "running" }, tasks: [task("running")], runtime: null }),
+    );
+    expect(r.state).toBe("DEGRADED");
+    expect(r.unknown).toContain("runtime");
+  });
+
+  it("does not demand a runtime for a mission that is not running", () => {
+    const r = deriveObjectiveState(
+      input({ missionId: "m", mission: { status: "ready" }, tasks: [task("queued")], runtime: null }),
+    );
+    expect(r.state).toBe("DELEGATING");
+    expect(r.unknown).not.toContain("runtime");
+  });
+
+  it("control state that could not be read is unknown, never 'not held' (review I1)", () => {
+    const r = deriveObjectiveState(
+      input({
+        missionId: "m",
+        mission: { status: "ready" },
+        tasks: [task("queued")],
+        controlHeld: null,
+      }),
+    );
+    expect(r.unknown).toContain("controlHold");
+    expect(r.state).toBe("DEGRADED");
+  });
+
+  it("REPAIRING does not shadow a task that is already running again (review M4)", () => {
+    const r = deriveObjectiveState(
+      input({
+        missionId: "m",
+        mission: { status: "running" },
+        tasks: [task("running")],
+        runtime: { state: "running" },
+        tasksAwaitingRepair: 1,
+      }),
+    );
+    expect(r.state).toBe("EXECUTING");
   });
 });

@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
+import type { HighLevelGoal } from "@/core/contracts/high-level-goal";
+
 import { getContainer } from "@/server/container";
 import { zodDetails } from "@/server/http/errors";
 import { toErrorResponse } from "@/server/http/map-error";
@@ -98,36 +100,43 @@ export async function POST(request: Request): Promise<Response> {
        * launch at the default priority.
        */
       const stored = await container.goalRepository.getById(parsed.data.goalId);
-      const admitted = stored
-        ? await container.objectiveCoordinator.admit({
-            goal: stored.goal,
-            idempotencyKey,
-            title: parsed.data.title,
-            objective: parsed.data.objective,
-          })
-        : null;
+      /*
+       * EVERY launch goes through admission. A goalId naming no stored goal used to fall
+       * back to a raw enqueue at priority 0, which skipped both governors — a hole any
+       * caller could walk through by inventing an id. An unscored goal instead admits as
+       * the bare request it is: no server-asserted metadata, so the DEFAULT class (the
+       * lowest band), and it still counts against the portfolio.
+       */
+      const goal: HighLevelGoal = stored?.goal ?? {
+        id: parsed.data.goalId,
+        title: parsed.data.title,
+        objective: parsed.data.objective,
+        rawInput: `${parsed.data.title}: ${parsed.data.objective}`,
+        normalizedIntent: parsed.data.objective,
+        constraints: [],
+        successCriteria: [],
+        priority: 3,
+        riskLevel: "reversible",
+        allowedCapabilities: [],
+        forbiddenCapabilities: [],
+        humanApprovalPolicy: "if_risky",
+        metadata: {},
+        createdAt: new Date().toISOString(),
+      };
 
-      const { job, created } = admitted
-        ? {
-            job: {
-              id: admitted.jobId,
-              missionId: admitted.missionId,
-              payload: {} as Record<string, unknown>,
-            },
-            created: admitted.created,
-          }
-        : await container.scheduler.enqueue({
-            kind: "start_mission",
-            payload: {
-              title: parsed.data.title,
-              objective: parsed.data.objective,
-              ...(parsed.data.goalId ? { goalId: parsed.data.goalId } : {}),
-            },
-            idempotencyKey,
-          });
+      const admitted = await container.objectiveCoordinator.admit({
+        goal,
+        idempotencyKey,
+        title: parsed.data.title,
+        objective: parsed.data.objective,
+      });
+      const { job, created } = {
+        job: { id: admitted.jobId, missionId: admitted.missionId },
+        created: admitted.created,
+      };
       return json(
         {
-          missionId: job.missionId ?? (job.payload.missionId as string),
+          missionId: job.missionId,
           jobId: job.id,
           state: "scheduled",
           replayed: !created,

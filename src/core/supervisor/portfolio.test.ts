@@ -4,6 +4,7 @@ import { WORK_CLASSES, type WorkClass } from "./contracts";
 import {
   DEFAULT_PORTFOLIO_POLICY,
   allocate,
+  assertPortfolioPolicyCoherent,
   type PortfolioPolicy,
   type PortfolioState,
 } from "./portfolio";
@@ -70,22 +71,34 @@ describe("allocate", () => {
   });
 
   it("never starves a lower class: reserved slots are not takeable", () => {
-    // Fill the global pool with USER work, leaving only other classes' reservations.
-    const policy: PortfolioPolicy = DEFAULT_PORTFOLIO_POLICY;
-    const reservedElsewhere = WORK_CLASSES.filter((c) => c !== "USER").reduce(
-      (sum, c) => sum + policy.classes[c].reserved,
-      0,
-    );
+    const policy = DEFAULT_PORTFOLIO_POLICY;
+    // Load the pool with the two classes that can legitimately hold the most.
     const active = zeroed();
-    active.USER = policy.globalMaxConcurrent - reservedElsewhere;
+    active.USER = policy.classes.USER.maxConcurrent; // 4
+    active.CLIENT = policy.classes.CLIENT.maxConcurrent; // 4
+    active.REVENUE = policy.classes.REVENUE.maxConcurrent; // 2
 
-    const user = allocate(policy, state({ active }), { class: "USER", computeUnits: 1 }, NOW);
-    expect(user.admit).toBe(false);
-    if (user.admit) throw new Error("unreachable");
-    expect(user.reason).toBe("GLOBAL_CONCURRENCY");
+    // MAINTENANCE has run nothing: its reservation is a floor and must still admit it.
+    const reservedDraw = allocate(
+      policy,
+      state({ active }),
+      { class: "MAINTENANCE", computeUnits: 1 },
+      NOW,
+    );
+    expect(reservedDraw.admit).toBe(true);
 
-    const security = allocate(policy, state({ active }), { class: "SECURITY", computeUnits: 1 }, NOW);
-    expect(security.admit).toBe(true);
+    // Once MAINTENANCE is at its reservation it competes for the shared pool like anyone
+    // else, and the pool is gone.
+    active.MAINTENANCE = policy.classes.MAINTENANCE.reserved;
+    const pooledDraw = allocate(
+      policy,
+      state({ active }),
+      { class: "MAINTENANCE", computeUnits: 1 },
+      NOW,
+    );
+    expect(pooledDraw.admit).toBe(false);
+    if (pooledDraw.admit) throw new Error("unreachable");
+    expect(pooledDraw.reason).toBe("GLOBAL_CONCURRENCY");
   });
 
   it("reservations already consumed do not block the global pool", () => {
@@ -125,5 +138,75 @@ describe("allocate", () => {
       afterWindow,
     );
     expect(d.admit).toBe(true);
+  });
+});
+
+describe("allocate — reservations must not starve the only class with demand (review I5)", () => {
+  it("lets a class reach its own maxConcurrent when every other class is idle", () => {
+    const policy = DEFAULT_PORTFOLIO_POLICY;
+    const active = zeroed();
+    // Walk USER up to its advertised cap with nothing else running anywhere.
+    for (let n = 0; n < policy.classes.USER.maxConcurrent; n += 1) {
+      active.USER = n;
+      const d = allocate(policy, state({ active }), { class: "USER", computeUnits: 1 }, NOW);
+      expect({ n, admit: d.admit }).toEqual({ n, admit: true });
+    }
+    // And stops at it.
+    active.USER = policy.classes.USER.maxConcurrent;
+    const over = allocate(policy, state({ active }), { class: "USER", computeUnits: 1 }, NOW);
+    expect(over.admit).toBe(false);
+    if (over.admit) throw new Error("unreachable");
+    expect(over.reason).toBe("CLASS_CONCURRENCY");
+  });
+
+  it("admits a class drawing within its own reservation even when the pool is full", () => {
+    const policy = DEFAULT_PORTFOLIO_POLICY;
+    const active = zeroed();
+    active.USER = policy.classes.USER.maxConcurrent;
+    active.CLIENT = policy.classes.CLIENT.maxConcurrent;
+    active.REVENUE = policy.classes.REVENUE.maxConcurrent;
+    // SECURITY has run nothing and is inside its own reservation: it must still get in.
+    const d = allocate(policy, state({ active }), { class: "SECURITY", computeUnits: 1 }, NOW);
+    expect(d.admit).toBe(true);
+  });
+
+  it("still refuses a class that is beyond its reservation when the pool is exhausted", () => {
+    const policy = DEFAULT_PORTFOLIO_POLICY;
+    const active = zeroed();
+    for (const c of WORK_CLASSES) active[c] = policy.classes[c].maxConcurrent;
+    const d = allocate(policy, state({ active }), { class: "RESEARCH", computeUnits: 1 }, NOW);
+    expect(d.admit).toBe(false);
+  });
+
+  it("leaves a shared pool above the sum of reservations", () => {
+    const totalReserved = WORK_CLASSES.reduce(
+      (s, c) => s + DEFAULT_PORTFOLIO_POLICY.classes[c].reserved,
+      0,
+    );
+    expect(DEFAULT_PORTFOLIO_POLICY.globalMaxConcurrent).toBeGreaterThan(totalReserved);
+  });
+});
+
+describe("assertPortfolioPolicyCoherent (review M3)", () => {
+  it("accepts the shipped default", () => {
+    expect(() => assertPortfolioPolicyCoherent(DEFAULT_PORTFOLIO_POLICY)).not.toThrow();
+  });
+
+  it("refuses an over-subscribed pool that would deadlock every class", () => {
+    expect(() =>
+      assertPortfolioPolicyCoherent({ ...DEFAULT_PORTFOLIO_POLICY, globalMaxConcurrent: 2 }),
+    ).toThrow(/reserved/i);
+  });
+
+  it("refuses a reservation larger than the class's own cap", () => {
+    expect(() =>
+      assertPortfolioPolicyCoherent({
+        ...DEFAULT_PORTFOLIO_POLICY,
+        classes: {
+          ...DEFAULT_PORTFOLIO_POLICY.classes,
+          RESEARCH: { maxConcurrent: 1, reserved: 3, computeBudgetUnits: 100 },
+        },
+      }),
+    ).toThrow(/reserved/i);
   });
 });

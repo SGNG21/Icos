@@ -81,6 +81,13 @@ export class CanonicalGoalLauncher implements MissionGateway {
       approvedBy: r.approvedBy,
       ...(r.clientId ? { clientId: r.clientId } : {}),
       ...(r.projectId ? { projectId: r.projectId } : {}),
+      /*
+       * Reserved namespace (decision 0065): the priority governor classifies on these and
+       * on nothing else, because ICOS wrote them. The unprefixed keys above stay for the
+       * readers that already depend on them (cognitive operational state reads clientId).
+       */
+      "icos.source": "cognitive_conversation",
+      ...(r.clientId ? { "icos.clientId": r.clientId } : {}),
     };
     const goal = this.deps.goalNormalizer.normalize({
       title: p.title,

@@ -22,7 +22,11 @@ export interface ClassCaps {
 export interface PortfolioPolicy {
   readonly version: string;
   readonly classes: Readonly<Record<WorkClass, ClassCaps>>;
-  /** Must be >= the sum of every class's `reserved`, or the pool deadlocks. */
+  /**
+   * Must EXCEED the sum of every class's `reserved`, or there is no shared pool at all and
+   * the only class with demand is capped at its own reservation while idle classes hold
+   * the rest. `assertPortfolioPolicyCoherent` checks this.
+   */
   readonly globalMaxConcurrent: number;
   readonly windowMs: number;
   readonly deferBackoffMs: number;
@@ -39,7 +43,13 @@ export const DEFAULT_PORTFOLIO_POLICY: PortfolioPolicy = {
     SELF_IMPROVEMENT: { maxConcurrent: 2, reserved: 1, computeBudgetUnits: 150 },
     RESEARCH: { maxConcurrent: 1, reserved: 1, computeBudgetUnits: 100 },
   },
-  globalMaxConcurrent: 10,
+  /*
+   * 12, not 10: reservations total 9, so a 10-slot pool left ONE shared slot and USER —
+   * the class every conversation-launched goal lands in — saturated at 3 while six idle
+   * classes held seven slots for work nobody had asked for. A reservation is a floor, not
+   * a standing claim on a pool nobody else is using.
+   */
+  globalMaxConcurrent: 12,
   windowMs: 60 * 60_000,
   deferBackoffMs: 5 * 60_000,
 };
@@ -82,6 +92,29 @@ export type AllocationDecision =
       readonly evidence: AllocationEvidence;
     };
 
+/**
+ * Rejects a policy whose own numbers cannot be satisfied. Called at composition, not per
+ * allocation: a policy that over-subscribes its pool deadlocks EVERY class at once, and
+ * that must fail loudly at wiring time rather than look like a quiet capacity shortage.
+ */
+export function assertPortfolioPolicyCoherent(policy: PortfolioPolicy): void {
+  let totalReserved = 0;
+  for (const c of WORK_CLASSES) {
+    const caps = policy.classes[c];
+    if (caps.reserved > caps.maxConcurrent) {
+      throw new Error(
+        `PORTFOLIO_POLICY_INCOHERENT: ${c} reserved ${caps.reserved} exceeds its maxConcurrent ${caps.maxConcurrent}`,
+      );
+    }
+    totalReserved += caps.reserved;
+  }
+  if (policy.globalMaxConcurrent <= totalReserved) {
+    throw new Error(
+      `PORTFOLIO_POLICY_INCOHERENT: globalMaxConcurrent ${policy.globalMaxConcurrent} leaves no shared pool above reserved ${totalReserved}`,
+    );
+  }
+}
+
 export function allocate(
   policy: PortfolioPolicy,
   state: PortfolioState,
@@ -106,7 +139,15 @@ export function allocate(
   );
 
   const classSlots = caps.maxConcurrent - activeInClass;
-  const globalSlots = policy.globalMaxConcurrent - globalActive - reservedElsewhere;
+  /*
+   * A class drawing WITHIN its own reservation is never refused for global pressure: that
+   * is what reserving it means. Only draws ABOVE the reservation compete for the shared
+   * pool, and only the UNUSED part of another class's reservation is withheld from it.
+   */
+  const withinOwnReservation = activeInClass < caps.reserved;
+  const globalSlots = withinOwnReservation
+    ? policy.globalMaxConcurrent - globalActive
+    : policy.globalMaxConcurrent - globalActive - reservedElsewhere;
   const slotsAvailable = Math.min(classSlots, globalSlots);
 
   // A lapsed window has already refilled the budget; the caller resets `computeSpent`.

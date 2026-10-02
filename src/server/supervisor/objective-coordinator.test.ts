@@ -48,7 +48,7 @@ describe("ObjectiveCoordinator", () => {
     const c = new ObjectiveCoordinator(d);
 
     const r = await c.admit({
-      goal: goal({ metadata: { source: "cognitive_conversation" } }),
+      goal: goal({ metadata: { "icos.source": "cognitive_conversation" } }),
       idempotencyKey: "k-1",
       title: "t",
       objective: "o",
@@ -141,5 +141,70 @@ describe("ObjectiveCoordinator", () => {
       objective: "o",
       goalId: "g-abc",
     });
+  });
+});
+
+describe("ObjectiveCoordinator — the cap must actually cap (review I3, I6)", () => {
+  const pendingJobsOf = (classes: string[]) =>
+    classes.map((c, i) => ({
+      id: `job-${i}`,
+      kind: "start_mission" as const,
+      payload: { goalId: `pending-${i}`, workClass: c },
+    }));
+
+  it("I3: counts enqueued-but-not-yet-run launches, not only live missions", async () => {
+    /*
+     * A start_mission job that has not run yet has no mission row and its goal is still
+     * `pending`: counting only live missions let 20 approvals in one minute all admit.
+     */
+    const { enqueue, deps: d } = deps({
+      pendingLaunches: {
+        countByWorkClass: vi.fn(async () => ({ RESEARCH: 1 })),
+      },
+    });
+
+    const r = await new ObjectiveCoordinator(d).admit({
+      goal: goal({ id: "g-new" }),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+    });
+
+    expect(r.outcome).toBe("deferred");
+    if (r.outcome !== "deferred") throw new Error("unreachable");
+    expect(r.reason).toBe("CLASS_CONCURRENCY");
+    expect(r.evidence.allocation.activeInClass).toBe(1);
+    expect(enqueue.mock.calls[0][0].runAt).toBeDefined();
+  });
+
+  it("I3: a pending launch the coordinator cannot count degrades to refusing, not to admitting", async () => {
+    const { deps: d } = deps({
+      pendingLaunches: {
+        countByWorkClass: vi.fn(async () => {
+          throw new Error("scheduler unreadable");
+        }),
+      },
+    });
+    const r = await new ObjectiveCoordinator(d).admit({
+      goal: goal({ id: "g" }),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+    });
+    expect(r.outcome).toBe("deferred");
+  });
+
+  it("I6: asks the mission store only for the statuses that occupy a slot", async () => {
+    const list = vi.fn(async (_f?: { status?: string }) => []);
+    const { deps: d } = deps({ missions: { list } });
+    await new ObjectiveCoordinator(d).admit({
+      goal: goal(),
+      idempotencyKey: "k",
+      title: "t",
+      objective: "o",
+    });
+    // Every call must be filtered: an unfiltered list is a full table scan on a write path.
+    expect(list.mock.calls.length).toBeGreaterThan(0);
+    for (const [filter] of list.mock.calls) expect(filter?.status).toBeDefined();
   });
 });

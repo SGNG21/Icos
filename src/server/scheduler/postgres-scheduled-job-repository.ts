@@ -178,4 +178,13 @@ export class PostgresScheduledJobRepository implements ScheduledJobRepository {
     const rows = await this.db.select().from(scheduledJobs).where(eq(scheduledJobs.id, id)).limit(1);
     return rows[0] ? mapJob(rows[0]) : null;
   }
+
+  /** Counted in the database, never loaded into memory: this runs on an admission path. */
+  async countScheduledByKind(kind: ScheduledJobKind): Promise<number> {
+    const rows = await this.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(scheduledJobs)
+      .where(sql`${scheduledJobs.kind} = ${kind} and ${scheduledJobs.state} in ('scheduled','running')`);
+    return rows[0]?.n ?? 0;
+  }
 }

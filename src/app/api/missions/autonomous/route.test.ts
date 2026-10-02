@@ -282,3 +282,50 @@ describe("POST /api/missions/autonomous — P0: an ENQUEUE onto the one canonica
     expect(hijack.status).toBe(400);
   });
 });
+
+describe("POST /api/missions/autonomous — admission cannot be bypassed (review I4)", () => {
+  it("routes a goalId that names no stored goal through admission anyway, at the lowest band", async () => {
+    const f = install("operator");
+    const admit = vi.spyOn(f.container.objectiveCoordinator, "admit");
+
+    const res = await callRoute(authed, { title: "t", objective: "o", goalId: "does-not-exist" });
+
+    expect(res.status).toBe(202);
+    expect(admit).toHaveBeenCalledTimes(1);
+    const scored = await admit.mock.results[0].value;
+    // No stored goal means no server-asserted metadata, so the default class — never a
+    // free pass around the governor.
+    expect(scored.evidence.priority.class).toBe("RESEARCH");
+    expect(scored.evidence.allocation.policyVersion).toMatch(/^portfolio\//);
+  });
+
+  it("still scores a stored goal from its own record", async () => {
+    const f = install("operator");
+    await f.container.goalRepository.create(
+      {
+        id: "g-stored",
+        title: "t",
+        objective: "o",
+        rawInput: "o",
+        normalizedIntent: "o",
+        constraints: [],
+        successCriteria: [],
+        priority: 3,
+        riskLevel: "reversible",
+        allowedCapabilities: [],
+        forbiddenCapabilities: [],
+        humanApprovalPolicy: "if_risky",
+        metadata: { "icos.source": "cognitive_conversation" },
+        createdAt: new Date().toISOString(),
+      },
+      { goalId: "g-stored", missionTitle: "t", missionObjective: "o", tasks: [] },
+    );
+    const admit = vi.spyOn(f.container.objectiveCoordinator, "admit");
+
+    const res = await callRoute(authed, { title: "t", objective: "o", goalId: "g-stored" });
+
+    expect(res.status).toBe(202);
+    const scored = await admit.mock.results[0].value;
+    expect(scored.evidence.priority.class).toBe("USER");
+  });
+});

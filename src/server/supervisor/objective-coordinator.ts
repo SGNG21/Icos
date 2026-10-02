@@ -3,6 +3,7 @@ import type { HighLevelGoal } from "@/core/contracts/high-level-goal";
 import { WORK_CLASSES, type WorkClass } from "@/core/supervisor/contracts";
 import {
   DEFAULT_PRIORITY_POLICY,
+  assertPriorityPolicyCoherent,
   classifyObjective,
   scoreObjective,
   type PriorityPolicy,
@@ -11,6 +12,7 @@ import {
 import {
   DEFAULT_PORTFOLIO_POLICY,
   allocate,
+  assertPortfolioPolicyCoherent,
   type AllocationEvidence,
   type DeferReason,
   type PortfolioPolicy,
@@ -36,6 +38,15 @@ export interface ObjectiveCoordinatorDeps {
   readonly scheduler: Pick<SchedulerService, "enqueue">;
   readonly goals: Pick<GoalRepository, "list">;
   readonly missions: Pick<MissionRepository, "list">;
+  /**
+   * Launches that are enqueued but have not run yet. They have NO mission row and their
+   * goal is still `pending`, so counting live missions alone makes the cap advisory: a
+   * conversation approving twenty goals in a minute would see `active = 0` twenty times.
+   * Absent ⇒ the pending count is unknown, and an unknown count must not read as zero.
+   */
+  readonly pendingLaunches?: {
+    countByWorkClass(): Promise<Partial<Record<WorkClass, number>>>;
+  };
   readonly priorityPolicy?: PriorityPolicy;
   readonly portfolioPolicy?: PortfolioPolicy;
   readonly now?: () => Date;
@@ -87,7 +98,10 @@ const zeroedByClass = (): Record<WorkClass, number> =>
   Object.fromEntries(WORK_CLASSES.map((c) => [c, 0])) as Record<WorkClass, number>;
 
 export class ObjectiveCoordinator {
-  constructor(private readonly deps: ObjectiveCoordinatorDeps) {}
+  constructor(private readonly deps: ObjectiveCoordinatorDeps) {
+    assertPriorityPolicyCoherent(this.priorityPolicy);
+    assertPortfolioPolicyCoherent(this.portfolioPolicy);
+  }
 
   private get priorityPolicy(): PriorityPolicy {
     return this.deps.priorityPolicy ?? DEFAULT_PRIORITY_POLICY;
@@ -104,15 +118,20 @@ export class ObjectiveCoordinator {
    * model's UNKNOWN cost). Reporting 0 spent would be a fabricated measurement, so the
    * window simply starts now and the budget gate is inert until costs exist.
    */
-  private async observePortfolio(now: Date): Promise<PortfolioState> {
-    const [goals, missions] = await Promise.all([
+  private async observePortfolio(
+    now: Date,
+  ): Promise<{ state: PortfolioState; pendingCountable: boolean }> {
+    /*
+     * Filtered reads only. `missions.list()` unfiltered is a full table scan on a
+     * latency-sensitive write path; the port already accepts a status, so ask it once per
+     * status that occupies a slot rather than loading every mission ever run.
+     */
+    const [goals, ...missionsByStatus] = await Promise.all([
       this.deps.goals.list({ status: "converted" }),
-      this.deps.missions.list(),
+      ...[...ACTIVE_MISSION_STATUSES].map((status) => this.deps.missions.list({ status })),
     ]);
 
-    const activeMissionIds = new Set(
-      missions.filter((m) => ACTIVE_MISSION_STATUSES.has(m.status)).map((m) => m.id),
-    );
+    const activeMissionIds = new Set(missionsByStatus.flat().map((m) => m.id));
 
     const active = zeroedByClass();
     for (const record of goals) {
@@ -120,20 +139,53 @@ export class ObjectiveCoordinator {
       active[classifyObjective(this.priorityPolicy, record.goal).class] += 1;
     }
 
-    return { windowStartedAt: now, active, computeSpent: zeroedByClass() };
+    /*
+     * Add the launches already enqueued. Without them the cap counts only what has started
+     * and never what is about to, which is exactly the burst it exists to bound.
+     */
+    let pendingCountable = true;
+    if (this.deps.pendingLaunches) {
+      try {
+        const pending = await this.deps.pendingLaunches.countByWorkClass();
+        for (const c of WORK_CLASSES) active[c] += pending[c] ?? 0;
+      } catch {
+        // Unknown is not zero. Fail closed: the caller defers rather than over-admits.
+        pendingCountable = false;
+      }
+    }
+
+    return {
+      state: { windowStartedAt: now, active, computeSpent: zeroedByClass() },
+      pendingCountable,
+    };
   }
 
   async admit(input: AdmitInput): Promise<AdmissionResult> {
     const now = this.deps.now?.() ?? new Date();
 
     const priority = scoreObjective(this.priorityPolicy, input.goal, { now });
-    const state = await this.observePortfolio(now);
-    const decision = allocate(
+    const { state, pendingCountable } = await this.observePortfolio(now);
+    const allocated = allocate(
       this.portfolioPolicy,
       state,
       { class: priority.class, computeUnits: 1 },
       now,
     );
+    /*
+     * An uncountable pending queue means the observed load is a LOWER BOUND. Admitting on
+     * a lower bound is how a cap silently stops capping, so defer instead and let the
+     * scheduler bring the objective back when the queue is readable again.
+     */
+    const decision: typeof allocated =
+      allocated.admit && !pendingCountable
+        ? {
+            admit: false,
+            defer: true,
+            reason: "CLASS_CONCURRENCY",
+            retryAfterMs: this.portfolioPolicy.deferBackoffMs,
+            evidence: allocated.evidence,
+          }
+        : allocated;
 
     const evidence: AdmissionEvidence = { priority, allocation: decision.evidence };
 

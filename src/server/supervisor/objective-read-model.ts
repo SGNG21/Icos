@@ -70,9 +70,31 @@ export interface ObjectiveReadModelDeps {
    * whether a mission is held; it never decides, and never holds anything itself.
    */
   readonly controlHolds: { isHeld(missionId: string): Promise<boolean> };
+  /**
+   * Operational scope. A permission to READ the projection is not a permission to see
+   * EVERY objective: `/api/cockpit` resolves scope on every read and so must this.
+   * Fail closed — a visibility check that throws hides the row.
+   */
+  readonly visibility: {
+    /** A goal with no mission has no tasks to scope by: only a global reader may see it. */
+    readonly unconvertedVisible: boolean;
+    isMissionVisible(
+      missionId: string,
+      tasks: readonly { readonly taskId: string }[] | null,
+    ): Promise<boolean>;
+  };
   readonly priorityPolicy?: PriorityPolicy;
   readonly now?: () => Date;
 }
+
+/** Rows loaded when the caller names no limit. A read model is a dashboard, not an export. */
+export const DEFAULT_OBJECTIVE_LIMIT = 100;
+/**
+ * Objectives resolved at once. Each costs ~5 queries, so an unbounded `Promise.all` over
+ * every goal is a connection-pool exhaustion behind a single GET — degrading the whole
+ * app, not just this route.
+ */
+export const OBJECTIVE_CONCURRENCY = 8;
 
 const TERMINAL_TASK_STATUSES = new Set(["succeeded", "failed", "cancelled", "superseded"]);
 /** A verdict that sends work back is what puts an objective in REPAIRING. */
@@ -93,14 +115,14 @@ export async function buildObjectiveReadModel(
 ): Promise<ObjectiveView[]> {
   const now = deps.now?.() ?? new Date();
   const policy = deps.priorityPolicy ?? DEFAULT_PRIORITY_POLICY;
-  const records = await deps.goals.list({ limit: options.limit });
+  const records = await deps.goals.list({ limit: options.limit ?? DEFAULT_OBJECTIVE_LIMIT });
 
-  const views = await Promise.all(
-    records.map(async (record) => {
+  const resolve = async (record: (typeof records)[number]) => {
       const priority = scoreObjective(policy, record.goal, { now });
       const missionId = record.resultingMissionId;
 
       if (!missionId) {
+        if (!deps.visibility.unconvertedVisible) return null;
         const derived = deriveObjectiveState({
           goalStatus: record.status,
           missionId: null,
@@ -125,6 +147,10 @@ export async function buildObjectiveReadModel(
         soften(() => deps.runtimes.get(missionId)),
         soften(() => deps.controlHolds.isHeld(missionId)),
       ]);
+
+      // Fail closed: an unreadable scope, or one that says no, hides the row entirely.
+      const visible = await soften(() => deps.visibility.isMissionVisible(missionId, tasks));
+      if (visible !== true) return null;
 
       /*
        * Mission-level approval IS `mission.status === "awaiting_approval"` (see
@@ -155,7 +181,8 @@ export async function buildObjectiveReadModel(
         tasks: tasks ? tasks.map((t) => ({ status: t.status })) : null,
         runtime,
         pendingApproval,
-        controlHeld: controlHeld ?? false,
+        // null (unreadable) stays null: deriveObjectiveState degrades rather than assert "not held".
+        controlHeld,
         tasksAwaitingRepair,
       });
 
@@ -184,10 +211,19 @@ export async function buildObjectiveReadModel(
       };
 
       return { goal: record.goal, result: priority, view };
-    }),
-  );
+  };
 
-  return views.sort((a, b) => compareScored(a, b)).map((v) => v.view);
+  /*
+   * Bounded concurrency, not `Promise.all` over the whole page: the fan-out is ~5 queries
+   * per objective and the pool is shared with the rest of the application.
+   */
+  const resolved: NonNullable<Awaited<ReturnType<typeof resolve>>>[] = [];
+  for (let i = 0; i < records.length; i += OBJECTIVE_CONCURRENCY) {
+    const batch = await Promise.all(records.slice(i, i + OBJECTIVE_CONCURRENCY).map(resolve));
+    for (const item of batch) if (item !== null) resolved.push(item);
+  }
+
+  return resolved.sort((a, b) => compareScored(a, b)).map((v) => v.view);
 }
 
 function baseView(

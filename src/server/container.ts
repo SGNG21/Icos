@@ -7,6 +7,7 @@ import {
 import { InMemoryControlStore } from "@/server/control/in-memory-control-store";
 import { PostgresControlStore } from "@/server/control/postgres-control-store";
 import { installDispatchBackstop, RuntimeControlGuard } from "@/server/control/runtime-control";
+import { WORK_CLASSES } from "@/core/supervisor/contracts";
 import { ObjectiveCoordinator } from "@/server/supervisor/objective-coordinator";
 import { sql } from "drizzle-orm";
 
@@ -507,6 +508,20 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
       scheduler: schedulerService,
       goals: goalRepository,
       missions: mission,
+      pendingLaunches: {
+        /*
+         * Conservative on purpose: an enqueued `start_mission` has no mission row yet and
+         * its payload's class is not resolvable without loading each goal, so the whole
+         * pending queue is charged to the class being admitted. That can defer a launch
+         * that another class's backlog would not really have blocked — the wrong side to
+         * be wrong on, since the alternative is a cap that stops capping under a burst.
+         * Upgrade path: resolve each pending payload's goalId to its class.
+         */
+        countByWorkClass: async () => {
+          const pending = await scheduledJobs.countScheduledByKind("start_mission");
+          return Object.fromEntries(WORK_CLASSES.map((c) => [c, pending]));
+        },
+      },
     }),
     controlGuard,
     autonomousRuntime,
@@ -863,6 +878,20 @@ export async function buildPostgresContainer(
       scheduler: schedulerService,
       goals: goalRepository,
       missions: mission,
+      pendingLaunches: {
+        /*
+         * Conservative on purpose: an enqueued `start_mission` has no mission row yet and
+         * its payload's class is not resolvable without loading each goal, so the whole
+         * pending queue is charged to the class being admitted. That can defer a launch
+         * that another class's backlog would not really have blocked — the wrong side to
+         * be wrong on, since the alternative is a cap that stops capping under a burst.
+         * Upgrade path: resolve each pending payload's goalId to its class.
+         */
+        countByWorkClass: async () => {
+          const pending = await scheduledJobs.countScheduledByKind("start_mission");
+          return Object.fromEntries(WORK_CLASSES.map((c) => [c, pending]));
+        },
+      },
     }),
     controlGuard,
     autonomousRuntime,

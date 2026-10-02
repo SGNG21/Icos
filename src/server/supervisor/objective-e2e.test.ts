@@ -27,7 +27,7 @@ const userGoal: HighLevelGoal = {
   allowedCapabilities: [],
   forbiddenCapabilities: [],
   humanApprovalPolicy: "if_risky",
-  metadata: { source: "cognitive_conversation" },
+  metadata: { "icos.source": "cognitive_conversation" },
   createdAt: "2026-10-02T11:00:00.000Z",
 };
 
@@ -77,8 +77,9 @@ describe("SUPERVISOR_E2E", () => {
         goals: goals as never,
         missions: missions as never,
         reviews: { listByMissionId: async () => reviews },
-        runtimes: { get: async () => null },
+        runtimes: { get: async () => (missionStatus === "running" ? { state: "running" } : null) },
         controlHolds: { isHeld: async () => false },
+        visibility: { unconvertedVisible: true, isMissionVisible: async () => true },
         now: () => NOW,
       });
 
