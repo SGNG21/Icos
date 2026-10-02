@@ -718,14 +718,22 @@ export async function buildPostgresContainer(
    * `spend.mission` plafonne les complétions de mission par le budget du goal imputé,
    * `spend.overhead` mesure les sondes SANS plafond, par choix nommé.
    *
-   * `maxTotalTokensPerGoal` n'est pas renseigné : la table de prix est vide, donc le SEUL
-   * plafond réellement applicable serait un plafond de tokens, et il n'a aujourd'hui aucune
-   * variable d'environnement pour le porter (`src/config/env.ts` n'est pas de ce lot). Le
-   * résultat est visible et fermé, jamais silencieux : un goal sans budget est refusé
-   * (`NO_ENFORCEABLE_CAP`), un goal avec budget monétaire est refusé dès que sa fenêtre
-   * contient un appel non chiffré (`UNPRICED_USAGE_IN_WINDOW`).
+   * `maxTotalTokensPerGoal` vient de `ICOS_GOAL_MAX_TOTAL_TOKENS`. La table de prix étant
+   * vide, c'est le SEUL plafond réellement applicable aujourd'hui.
+   *
+   * Variable ABSENTE = aucun plafond de tokens, et le résultat est alors fermé et visible,
+   * jamais silencieux : un goal sans budget est refusé (`NO_ENFORCEABLE_CAP`) et un goal à
+   * budget monétaire est refusé dès que sa fenêtre contient un appel non chiffré
+   * (`UNPRICED_USAGE_IN_WINDOW`). Autrement dit : tant que le propriétaire n'a pas fourni
+   * soit un plafond de tokens, soit de vrais prix, une mission autonome ne dépense RIEN.
+   * C'est la contrepartie assumée d'un plafond qu'on refuse de simuler.
    */
-  const spend = composeSpendMeters({ db: handle.db });
+  const spend = composeSpendMeters({
+    db: handle.db,
+    ...(env.ICOS_GOAL_MAX_TOTAL_TOKENS === undefined
+      ? {}
+      : { maxTotalTokensPerGoal: env.ICOS_GOAL_MAX_TOTAL_TOKENS }),
+  });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(
     workerRegistryStore,

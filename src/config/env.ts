@@ -134,6 +134,17 @@ const envSchema = z.object({
    * non booléen : une faute de frappe échoue à la validation au lieu de désactiver en silence
    * une capacité que l'on croit active.
    */
+  /**
+   * Plafond de tokens par goal — LE SEUL plafond réellement applicable aujourd'hui, la table
+   * de prix étant vide (tout appel est donc UNPRICED et aucun plafond monétaire ne peut être
+   * déclaré satisfait).
+   *
+   * Absent = aucun plafond de tokens. Conséquence, fermée et visible, jamais silencieuse : un
+   * goal sans budget monétaire n'a alors RIEN d'applicable et ses complétions de mission sont
+   * refusées (`NO_ENFORCEABLE_CAP`). Renseigner cette variable est donc la condition pour
+   * qu'une mission autonome puisse dépenser quoi que ce soit.
+   */
+  ICOS_GOAL_MAX_TOTAL_TOKENS: optionalPositiveInteger,
   ICOS_SELF_DEVELOPMENT: z.preprocess(
     emptyAsUndefined,
     z.enum(["enabled", "disabled"]).optional(),

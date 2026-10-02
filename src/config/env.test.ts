@@ -89,3 +89,36 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ NODE_ENV: "staging" })).toThrow();
   });
 });
+
+describe("ICOS_GOAL_MAX_TOTAL_TOKENS", () => {
+  it("porte le seul plafond réellement applicable aujourd'hui", () => {
+    expect(loadEnv({ ICOS_GOAL_MAX_TOTAL_TOKENS: "50000" }).ICOS_GOAL_MAX_TOTAL_TOKENS).toBe(50_000);
+  });
+
+  it("absente, reste indéfinie — et NON zéro, qui serait un plafond de zéro token", () => {
+    expect(loadEnv({}).ICOS_GOAL_MAX_TOTAL_TOKENS).toBeUndefined();
+  });
+
+  it("refuse une valeur non exploitable au lieu de la coercer", () => {
+    for (const value of ["0", "-1", "abc", "1.5"]) {
+      expect(() => loadEnv({ ICOS_GOAL_MAX_TOTAL_TOKENS: value })).toThrow();
+    }
+  });
+});
+
+describe("ICOS_SELF_DEVELOPMENT", () => {
+  it("accepte uniquement les deux états explicites", () => {
+    expect(loadEnv({ ICOS_SELF_DEVELOPMENT: "enabled" }).ICOS_SELF_DEVELOPMENT).toBe("enabled");
+    expect(loadEnv({ ICOS_SELF_DEVELOPMENT: "disabled" }).ICOS_SELF_DEVELOPMENT).toBe("disabled");
+  });
+
+  it("absente = indéfinie, donc OFF, jamais activée par défaut", () => {
+    expect(loadEnv({}).ICOS_SELF_DEVELOPMENT).toBeUndefined();
+  });
+
+  it("une FAUTE DE FRAPPE échoue au lieu de désactiver en silence", () => {
+    // C'est la raison du z.enum plutôt qu'un booléen : « enbaled » ne doit pas vouloir dire off.
+    expect(() => loadEnv({ ICOS_SELF_DEVELOPMENT: "enbaled" })).toThrow();
+    expect(() => loadEnv({ ICOS_SELF_DEVELOPMENT: "true" })).toThrow();
+  });
+});
