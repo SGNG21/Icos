@@ -59,6 +59,19 @@ RESEARCH 5. Ten factors contribute a bonus in `[-7, +7]`.
 Band spacing (>= 15) exceeds the maximum factor swing (14). **Self-improvement cannot
 outrank user, client, revenue or security work by scoring well** — that is arithmetic, not
 a convention a future contributor must remember. Factors reorder *within* a class.
+`assertPriorityPolicyCoherent` refuses, at construction, any policy whose weights or band
+gaps would break the proof.
+
+### 1b. The class label is server-asserted, never caller-asserted
+
+Arithmetic over a label the submitter writes is not a guarantee. Classification therefore
+reads ONLY metadata keys under the reserved `icos.` prefix, which the HTTP goal intake
+strips from caller input (`stripUntrustedMetadata`). ICOS writes `icos.source` and
+`icos.clientId` at the conversation launch point; a goal posted over the API carries no
+reserved key and classifies as the default class — the lowest band.
+
+A submitter influences its own ordering only through `goal.priority` (1–5), which moves it
+within a band and never across one.
 
 ### 2. Absent evidence is named, never imputed
 
@@ -73,10 +86,24 @@ chose it.
 
 ### 3. The portfolio defers; it never rejects, and never starves
 
-Per-class `maxConcurrent`, `reserved` and `computeBudgetUnits`, plus a global cap. Only the
-*unused* part of another class's reservation is held back from the global pool — counting
-the whole reservation would deadlock the pool as soon as several classes were busy.
-`globalMaxConcurrent >= Σ reserved` is asserted by test.
+Per-class `maxConcurrent`, `reserved` and `computeBudgetUnits`, plus a global cap. Two rules
+keep reservations from becoming standing claims:
+
+- only the *unused* part of another class's reservation is withheld from the global pool —
+  counting the whole reservation would deadlock the pool as soon as several classes were
+  busy;
+- a class drawing **within its own reservation** is never refused for global pressure. That
+  is what reserving means. Without it, six idle classes held seven of ten slots and USER —
+  where every conversation-launched goal lands — saturated at 3 of its advertised 4.
+
+`globalMaxConcurrent` must EXCEED `Σ reserved`, so a shared pool always exists;
+`assertPortfolioPolicyCoherent` refuses a policy that violates it at construction.
+
+Load is counted from live missions **and from launches already enqueued**. A `start_mission`
+job that has not run yet has no mission row and its goal is still `pending`; counting
+missions alone made the cap advisory, and twenty approvals in a minute all observed zero
+load. A pending queue that cannot be read defers rather than admits: an unknown count is
+not a zero count.
 
 There is no reject outcome. Pressure becomes `runAt` on the same durable job, so the
 existing scheduler brings the work back and nothing new holds it.
@@ -96,7 +123,22 @@ behind, and there is no second source of truth to reconcile against the mission.
 
 Source truth that cannot be read yields `DEGRADED` with the field named in `unknown[]`. A
 mission id that does not resolve is **not** `RECEIVED`: "nothing was launched" and "the row
-is unreadable" are different facts.
+is unreadable" are different facts. The same applies to an unreadable control hold, which
+degrades rather than rendering as "not held".
+
+`RECOVERING` derives from a **lapsed runtime lease** — the actual condition the recovery
+sweepers reclaim. An earlier draft matched on a state string (`"recovering"`) that
+`AutonomousRuntimeState` never emits, making the state unreachable in production while its
+test asserted its own fixture. `RUNNER_STATES` is now mirrored in this module so a rename
+breaks a test instead of silently killing a branch.
+
+### 6. Reading the projection is not seeing everything in it
+
+Operational scope is resolved on every read and applied per objective, exactly as
+`/api/cockpit` does. `cockpit.read` is held by `viewer`, the lowest role; without scoping,
+that permission would have exposed every client's objective titles, worker assignments and
+reviewer notes to any account that could open the page. A scope check that throws hides the
+row.
 
 ## Consequences
 
@@ -104,6 +146,12 @@ is unreadable" are different facts.
   the order the scheduler claims its job in.
 - Removing `ObjectiveCoordinator` reverts launches to priority 0 and unbounded admission —
   i.e. exactly the behaviour before this decision. It is additive and reversible.
+- `ScheduledJobRepository` gains a read-only `countScheduledByKind`. The container's
+  `pendingLaunches` adapter charges the whole pending queue to the class being admitted,
+  because a job payload's class is not resolvable without loading each goal. That is
+  deliberately conservative: it can defer a launch another class's backlog would not truly
+  have blocked, which is the right side to be wrong on. Upgrade path: resolve each pending
+  payload's `goalId` to its class.
 - The read model reports `cost` as `UNKNOWN`, because no CORE3 execution record carries one
   (`task_execution_results` has no cost column). The budget gate in the portfolio governor
   is therefore inert until costs exist. Stating this is the point: a fabricated 0 would
