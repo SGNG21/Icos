@@ -1,3 +1,4 @@
+import { classifyRawObjective } from "@/core/chief/objective-classification";
 import type { GoalProposal } from "@/core/cognitive/contracts";
 import { HighLevelGoalSchema, type HighLevelGoal } from "@/core/contracts/high-level-goal";
 import type { GoalRepository } from "@/server/repositories/ports";
@@ -73,6 +74,27 @@ export class CanonicalGoalLauncher implements MissionGateway {
   ) {}
 
   async launch(p: GoalProposal, r: GoalLaunchRequest): Promise<GoalLaunch> {
+    /*
+     * WORK CLASS, SERVER-ASSERTED (decision 0065). This is the one point where the raw text
+     * of an approved proposal becomes a durable goal, so it is where the class is DERIVED —
+     * by `classifyRawObjective`, from the text and from nothing else. Nothing the payload
+     * carries is read: `p` arrives here through a cast, and a proposal that could name its
+     * own class would let any caller aim ICOS at modifying itself.
+     *
+     * Only SELF_IMPROVEMENT is promoted, and only outside a client scope: work approved FOR
+     * a client is client work whatever the sentence says. Every other outcome — CLIENT, and
+     * above all UNKNOWN — keeps the conversational provenance the launch already had. An
+     * objective that does not clearly classify is never guessed into self-modifying work.
+     *
+     * Title and objective are joined by a FULL STOP, not ": ". The classifier's proximity
+     * rules stop at `. ; ! ?`, so a colon would let a title run into the objective and read
+     * a signal that spans both: "Optimise la plaquette: ICOS doit rendre un PDF" classifies
+     * SELF_IMPROVEMENT when joined by a colon, UNKNOWN when joined as the two sentences it
+     * really is. They are two sentences.
+     */
+    const classified = classifyRawObjective(`${p.title}. ${p.objective}`);
+    const selfImprovement = classified.workClass === "SELF_IMPROVEMENT" && !r.clientId;
+
     const metadata: Record<string, string> = {
       source: "cognitive_conversation",
       conversationId: r.conversationId,
@@ -85,8 +107,11 @@ export class CanonicalGoalLauncher implements MissionGateway {
        * Reserved namespace (decision 0065): the priority governor classifies on these and
        * on nothing else, because ICOS wrote them. The unprefixed keys above stay for the
        * readers that already depend on them (cognitive operational state reads clientId).
+       *
+       * `icos.source` carries the CLASS; the unprefixed `source` above stays provenance —
+       * a self-improvement goal did still come from a conversation.
        */
-      "icos.source": "cognitive_conversation",
+      "icos.source": selfImprovement ? "self_development" : "cognitive_conversation",
       ...(r.clientId ? { "icos.clientId": r.clientId } : {}),
     };
     const goal = this.deps.goalNormalizer.normalize({
