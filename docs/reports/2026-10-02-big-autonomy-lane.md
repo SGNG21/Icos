@@ -109,4 +109,72 @@ and must not contain `probe|live|prod`, and the live base is `icos_n23_probe`.
 
 ## 7. Results
 
-(filled in as lanes land — see the sections appended below)
+### Gates (measured, not claimed)
+
+| Gate | Base (before any change) | After integration |
+|---|---|---|
+| typecheck | clean | clean |
+| lint | 0 errors / 280 warnings | 0 errors, same 280 pre-existing warnings |
+| unit suite | 219 files / 2925 tests | 240 files / 3162 tests |
+| integration suite (dedicated DB `icos_bigauto_test`) | 71 passed, 15 skipped / 540 passed, 125 skipped, exit 0 | identical: 71 passed, 15 skipped / 540 passed, 125 skipped, exit 0 |
+
+No pre-existing test was weakened, skipped or deleted. Three test assertions were **inverted or
+updated on purpose**, each because the change made the old assertion state something false:
+the cockpit's "escalations are unreadable" claim, its "escalated is an explicit gap" claim, and
+the production-services scheduler options shape. Each is recorded in its commit message.
+
+### INSTALLED vs AUTHORED — the distinction that matters
+
+An independent adversarial review (no CRITICAL, 7 HIGH) established that most of this lane is
+**authored and tested in isolation but has no production caller**. That is recorded here in the
+same words it was found in, because the alternative — letting an accepted decision assert a
+safety property the code lacks — is the defect that stops a team from checking.
+
+| Capability | State | Evidence |
+|---|---|---|
+| Chief Supervisor (Phase A) | **INSTALLED** | merged, reconciled against current central, gates green |
+| Namespace traversal fix | **INSTALLED** | single choke point, mutation-verified |
+| Client-less live state | **INSTALLED** | `IS NULL` read, first tests for that source |
+| Escalated work visible | **INSTALLED** | port + in-memory + loader + pipeline stage |
+| Self-development trigger | **INSTALLED, OWNER-GATED, DEFAULT OFF** | own timer; `ICOS_SELF_DEVELOPMENT=enabled` |
+| Spend meter (B1) | **AUTHORED, NOT INSTALLED** | no ledger constructed; no `BudgetCapResolver` exists; `goals.budget` still unread |
+| Model allowlist (B3) | **AUTHORED, NOT INSTALLED** | no caller outside its own test |
+| Runtime bounds (B2) | **AUTHORED, PARTLY INSTALLED** | resolver + clamp wired into `startAutonomousMission`, but no caller passes `input.bounds`, so not closed end to end |
+| 12 brains | **AUTHORED AND VALIDATED, NOT SEEDED** | `loadBrains` has no caller; `workforce_agents` still 0 |
+| Chief delegation / intake | **AUTHORED, NOT INSTALLED** | pure policy, no route or container wiring |
+
+Consequence, stated plainly: **B1 is not closed, B3 is not closed, B2 is not closed end to end,
+and the brains are not seeded.** A correct, tested mechanism exists for each.
+
+### Why no autonomous mission was launched
+
+The owner authorised a first controlled autonomous mission with a EUR 5 ceiling, and instructed
+that if a hard cap cannot actually be enforced it must not be claimed. It cannot:
+
+1. the spend meter has no production caller, so nothing accumulates spend at all;
+2. the price table ships EMPTY on purpose, because inventing an OmniRoute tariff would be a
+   fabrication — so even once installed, every call is UNPRICED and no monetary cap is
+   satisfiable. Only a token cap would be enforceable;
+3. four HIGH fail-open defects were found in the budget arithmetic before it was ever wired
+   (a zero price reading as priced; provider-billed reasoning tokens charged at zero while
+   reported as fully priced; a metered observation without a cost counting as free; and the
+   decorator metering non-completion requests, which would deny an attribution forever after a
+   single model-discovery call).
+
+Launching a paid mission under those conditions would have produced a false claim of enforcement.
+It was not launched. No live DB write, no deploy, no external side effect.
+
+### Next actions, in order
+
+1. Fix the four budget fail-opens (in progress on a repair lane) — required before anything under
+   `src/core/budget` or `src/server/budget` is wired to production.
+2. Install the meter: construct a ledger, implement a `BudgetCapResolver` over `goals.budget`,
+   wrap the five `fetchImpl` seams at construction.
+3. Obtain real OmniRoute prices from the owner and fill the price table, with provenance. Until
+   then only a token cap is enforceable and that is what must gate a first mission.
+4. Seed the brains AND wire `WorkforceComputePort.requestFor` to a CORE3 call site — seeding
+   alone yields twelve rows the dispatcher ignores.
+5. Carry requested bounds from the intake into `startAutonomousMission.input.bounds`, closing B2
+   end to end.
+6. Only then consider the first controlled autonomous mission, gated on a token cap and a
+   bounded model allowlist.

@@ -22,7 +22,6 @@ import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
 import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recovery";
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
-import type { AutonomyRecoverySweepResult } from "@/server/autonomy/autonomy-recovery-sweeper";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 
@@ -264,6 +263,62 @@ export function composeAutonomyRuntime(container: Container): {
   };
 }
 
+/**
+ * Self-development runs on its OWN timer, and deliberately NOT inside `sweepAll`.
+ *
+ * `sweepAll` awaits its entries sequentially and the recovery scheduler refuses the next tick
+ * while a sweep is in flight. The FIRST entry is the durable job queue (`start_mission`, worker
+ * probes, supervisor observations). `advance()` drives a whole mission to settlement with a
+ * blocking poll bounded by `settleTimeoutMs` — one hour by default. Sharing the sweep would
+ * therefore let self-improvement starve, for up to an hour, the production work it exists to
+ * improve, and would hang `stop()` for the same duration.
+ *
+ * Shortening that timeout is NOT an alternative: on deadline the coordinator concludes the
+ * mission with whatever has settled, so a short budget would manufacture premature conclusions.
+ *
+ * This adds a TIMER, not an authority: the coordinator remains the only self-development
+ * authority and Postgres remains the source of truth.
+ *
+ * ponytail: failures on this path are swallowed (a bare interval has no failure channel, unlike
+ * sweepAll which aggregates them under a name). Upgrade path: report through the same sweep
+ * result once self-development has a non-blocking, resumable advance.
+ */
+export function createSelfDevelopmentScheduler(
+  selfDevelopment: GovernedSelfDevelopmentCoordinator,
+  intervalMs: number,
+): ProductionServiceScheduler {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let inFlight = false;
+  return {
+    start() {
+      if (timer) return;
+      timer = setInterval(() => {
+        /* Jamais deux avancées concurrentes : une seule amélioration à la fois. */
+        if (inFlight) return;
+        inFlight = true;
+        void selfDevelopment
+          .advance()
+          .catch(() => undefined)
+          .finally(() => {
+            inFlight = false;
+          });
+      }, intervalMs);
+      timer.unref?.();
+    },
+    async stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      /*
+       * On n'ATTEND PAS l'avancée en cours : elle peut durer une heure et bloquerait l'arrêt du
+       * processus. Le travail est durable (état de mission en Postgres) ; une avancée interrompue
+       * est reprise par les passes de reprise comme n'importe quelle mission interrompue.
+       */
+    },
+  };
+}
+
 function createRecoveryScheduler(
   container: Container,
   options: { intervalMs: number; selfDevelopment: boolean },
@@ -334,7 +389,7 @@ function createRecoveryScheduler(
       })
     : null;
 
-  return new AutonomyRecoveryScheduler(
+  const sweeps = new AutonomyRecoveryScheduler(
     sweepAll([
       ["autonomy-and-scheduler", sweepWithScheduler(recovery, durableScheduler)],
       ...(runtimeRecovery ? [["runtime-recovery", runtimeRecovery] as const] : []),
@@ -354,54 +409,24 @@ function createRecoveryScheduler(
       ...(container.db
         ? [["cognitive-launch-recovery", cognitiveLaunchRecoverySweeper(container)] as const]
         : []),
-      /*
-       * THE ONLY production caller of governed self-development ("Améliore ICOS"). The
-       * coordinator was composed but never invoked by anything, so the self-improvement loop
-       * existed and could not start. It is attached to the SAME lifecycle timer rather than a
-       * second scheduler: no new authority.
-       *
-       * OPT-IN, and absent means off. Putting ICOS's self-modification on a 30 s timer is the
-       * largest autonomy increase in the system, so it stays the owner's switch
-       * (`ICOS_SELF_DEVELOPMENT=enabled`), never a default acquired by deployment.
-       */
-      ...(options.selfDevelopment
-        ? [
-            [
-              "self-development",
-              {
-                async sweep(): Promise<AutonomyRecoverySweepResult> {
-                  const idle: AutonomyRecoverySweepResult = {
-                    discovered: 0,
-                    attempted: 0,
-                    succeeded: 0,
-                    failed: 0,
-                    failures: [],
-                  };
-                  const outcome = await selfDevelopment.advance();
-                  /* No candidate is the normal idle tick: nothing discovered, nothing attempted. */
-                  /* L'union n'a pas de clé commune : on la discrimine par présence. */
-                  if ("status" in outcome) return idle;
-                  /*
-                   * `policy_denied`, `gate_rejected` and `human_decision_required` are the
-                   * governance WORKING, not errors: they are attempted-but-not-succeeded, and
-                   * are deliberately NOT reported as `failed`, which is reserved for a thrown
-                   * fault (sweepAll catches those). attempted > succeeded + failed is the signal.
-                   */
-                  return {
-                    discovered: 1,
-                    attempted: 1,
-                    succeeded: outcome.finalState === "integrated" ? 1 : 0,
-                    failed: 0,
-                    failures: [],
-                  };
-                },
-              },
-            ] as const,
-          ]
-        : []),
     ]),
     options,
   );
+
+  if (!options.selfDevelopment) return sweeps;
+
+  /* Deux timers, une seule façade de cycle de vie. */
+  const improvement = createSelfDevelopmentScheduler(selfDevelopment, options.intervalMs);
+  return {
+    start() {
+      sweeps.start();
+      improvement.start();
+    },
+    async stop() {
+      await improvement.stop();
+      await sweeps.stop();
+    },
+  };
 }
 
 /**

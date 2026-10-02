@@ -53,7 +53,13 @@ Twelve durable brains fan out to N missions, N tasks, N ephemeral workers and, t
 OmniRoute, potentially dozens of parallel model paths. A "pool of N Nemotron lines" is
 **compute capacity**, never N cognitive authorities.
 
-## Decision 3 — the twelve brains are seeded onto the existing workforce schema. No new schema.
+## Decision 3 — the twelve brains belong on the existing workforce schema. No new schema.
+
+> **STATUS — DATA AUTHORED AND VALIDATED, NOT SEEDED.** `loadBrains` has no caller, so
+> `workforce_agents` is still 0 rows. The twelve brains parse cleanly against the existing
+> schema and their authority invariants are tested, but nothing inserts them, and a separate
+> known gap means seeding alone would not make them load-bearing: `WorkforceComputePort.requestFor`
+> also has no CORE3 call site, so twelve seeded rows would be twelve rows the dispatcher ignores.
 
 The twelve canonical brains are Chief, Planner, Architect, Builder, Reviewer, Recovery,
 Research, Business, Delivery, Growth, Memory, Evolution.
@@ -107,9 +113,22 @@ at all, so the meter could not reach it and its spend was unmeterable. An option
 seam to a genuine 5/5. The lesson is recorded rather than quietly edited away: a seam assumed
 uniform was not, and a budget claimed over an unreachable call site would have been a false claim.
 
-Decision: enforcement is **one decorator of shape `typeof fetch`**, installed where those
-adapters are constructed. Not five meters, and not a sixth OmniRoute client. The same seam
-carries the per-mission model allowlist, so one mechanism serves two policies.
+Decision: enforcement is **one decorator of shape `typeof fetch`**, to be installed where those
+adapters are constructed. Not five meters, and not a sixth OmniRoute client. The same seam is
+intended to carry the per-mission model allowlist, so one mechanism serves two policies.
+
+> **STATUS — AUTHORED, NOT INSTALLED.** An independent adversarial review established that the
+> decorator has **no production caller**: no ledger is constructed in `container.ts` or
+> `production-services.ts`, no `BudgetCapResolver` implementation exists, and therefore nothing
+> reads `goals.budget`. The model allowlist likewise has no caller outside its own test. So as of
+> this commit **blocker B1 is NOT closed and B3 is NOT closed end to end** — a mechanism for
+> closing them has been authored and tested in isolation. `goals.budget` remains unenforced,
+> exactly as before this lane.
+>
+> This paragraph exists because the first draft of this decision asserted the installation in the
+> present tense. That was false, and an accepted decision asserting a safety property the code
+> does not have is a worse defect than the missing wiring: it is the thing that makes a team stop
+> checking. Corrected rather than quietly edited.
 
 Enforcement is fail-closed, and the following are invariants, not preferences:
 
@@ -128,8 +147,10 @@ Enforcement is fail-closed, and the following are invariants, not preferences:
 - metering reads usage from `response.clone()` and never consumes the caller's body.
 
 **If a hard monetary cap is not demonstrably enforceable, ICOS does not claim it is.** A
-token cap plus a bounded model allowlist is the honest fallback, and is what gates the first
-autonomous mission.
+token cap plus a bounded model allowlist is the intended honest fallback. To be explicit, since
+the first draft overstated this too: **no mission is gated on anything today.** Until the meter
+is installed and a resolver reads `goals.budget`, the first autonomous mission must not be
+launched at all.
 
 ## Decision 5 — bounds may only ever narrow
 
@@ -150,6 +171,19 @@ disable Policy, bypass approvals, modify credentials, weaken auth or security, d
 irreversible changes, spend beyond policy, declare its own review independent, or merge changes
 that fail gates. The Evolution brain therefore holds no deployment, credential or
 permission-changing tool grant, and no autonomy level above Builder.
+
+## Decision 7 — self-development gets its own timer, never the shared sweep
+
+`sweepAll` awaits its entries sequentially and the recovery scheduler refuses a new tick while a
+sweep is in flight, and its FIRST entry is the durable job queue. `advance()` blocks on a settle
+poll bounded by one hour. Attaching self-development to that chain would let self-improvement
+starve, for up to an hour, the production work it exists to improve, and would hang shutdown for
+the same period. Shortening the settle timeout is not an alternative: on deadline the coordinator
+concludes with whatever has settled, so a short budget manufactures premature conclusions.
+
+Self-development therefore runs on its own timer, with a non-overlap guard, and shutdown does not
+wait for an advance in flight (the work is durable; an interrupted advance is recovered like any
+interrupted mission). This adds a timer, not an authority.
 
 ## Consequences
 
