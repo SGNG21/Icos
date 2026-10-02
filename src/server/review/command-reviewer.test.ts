@@ -13,12 +13,21 @@ const ran = (over: Partial<NonInteractiveProcessResult> = {}): NonInteractivePro
   timedOut: false,
   durationMs: 1,
   truncated: false,
+  confinement: "none" as const,
+  networkEnforced: false,
   ...over,
 });
 
 const input = {
   mission: { id: "m1", title: "t", objective: "o", status: "running" },
-  missionTask: { id: "mt1", missionId: "m1", title: "t", dependsOn: [], status: "running", taskId: "task-1" },
+  missionTask: {
+    id: "mt1",
+    missionId: "m1",
+    title: "t",
+    dependsOn: [],
+    status: "running",
+    taskId: "task-1",
+  },
   task: { id: "task-1", title: "t", description: undefined },
   executionResult: { taskId: "task-1", workflowId: "wf-1", outcome: "success" },
   artifacts: [],
@@ -95,7 +104,9 @@ describe("CommandReviewer", () => {
     const shape = vi
       .fn()
       .mockResolvedValueOnce(ran({ stdout: "I think it is fine, honestly" }))
-      .mockResolvedValueOnce(ran({ stdout: JSON.stringify({ decision: "APPROVE", reasons: ["ok"] }) }));
+      .mockResolvedValueOnce(
+        ran({ stdout: JSON.stringify({ decision: "APPROVE", reasons: ["ok"] }) }),
+      );
     await expect(reviewer(shape as never).review(input)).resolves.toMatchObject({
       decision: "APPROVE",
     });
@@ -141,9 +152,9 @@ describe("CommandReviewer", () => {
 
   it("NEVER surfaces the agent's stderr: it routinely carries paths and key fragments", async () => {
     await expect(
-      reviewer(async () => ran({ exitCode: 1, stderr: "Authorization: Bearer sk-live-abc" })).review(
-        input,
-      ),
+      reviewer(async () =>
+        ran({ exitCode: 1, stderr: "Authorization: Bearer sk-live-abc" }),
+      ).review(input),
     ).rejects.toThrow(/^QUALITY_REVIEWER_PROVIDER_EXIT:1$/);
   });
 

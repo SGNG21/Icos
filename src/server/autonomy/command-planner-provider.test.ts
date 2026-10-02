@@ -50,6 +50,8 @@ function provider(
     timedOut: result.timedOut ?? false,
     durationMs: 5,
     truncated: false,
+    confinement: "none" as const,
+    networkEnforced: false,
   }));
 
   return {
@@ -74,7 +76,9 @@ describe("M12 command planner provider", () => {
     });
 
     expect(out).toBe(VALID_PLAN);
-    const spec = (p.run.mock.calls as unknown as Array<[{ command: string; args: string[] }]>)[0]![0];
+    const spec = (
+      p.run.mock.calls as unknown as Array<[{ command: string; args: string[] }]>
+    )[0]![0];
     expect(spec.command).toBe("/opt/agent-cli");
     /* One prompt: canonical policy FIRST, untrusted mission data second. */
     const prompt = spec.args.find((a) => a.includes("SYSTEM POLICY"))!;
@@ -165,9 +169,9 @@ describe("M12 command planner provider", () => {
       /COMMAND_INVALID/,
     );
     /* Without the placeholder the agent would be launched with no prompt at all. */
-    expect(() =>
-      parsePlannerCommand(JSON.stringify({ command: "x", args: ["--go"] })),
-    ).toThrow(/\{\{prompt\}\}/);
+    expect(() => parsePlannerCommand(JSON.stringify({ command: "x", args: ["--go"] }))).toThrow(
+      /\{\{prompt\}\}/,
+    );
 
     expect(
       parsePlannerCommand(JSON.stringify({ command: "/opt/agent", args: ["-z", "{{prompt}}"] })),

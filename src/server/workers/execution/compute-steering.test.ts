@@ -149,6 +149,8 @@ describe("decision 0054 — the routed reviewer model is the one that reviews", 
     timedOut: false,
     durationMs: 1,
     truncated: false,
+    confinement: "none" as const,
+    networkEnforced: false,
   });
   const input = (reviewerCompute?: ReviewInput["reviewerCompute"]) =>
     ({

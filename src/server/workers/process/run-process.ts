@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 import { childEnvironment, parseEnvPassthrough } from "./child-environment";
+import {
+  networkEnforced,
+  seatbeltProfile,
+  type SandboxMechanism,
+  type SandboxPolicy,
+} from "./sandbox-profile";
 
 /**
  * THE non-interactive process runner (M6.3).
@@ -55,6 +62,25 @@ export interface NonInteractiveProcessSpec {
   timeoutMs: number;
   /** Per-stream cap. Default 1 MiB. */
   maxOutputBytes?: number;
+  /**
+   * CONFINEMENT RÉEL DU DISQUE ET DU RÉSEAU (verrou C8).
+   *
+   * Absent = aucun bac à sable, comme avant. Présent = le processus est lancé SOUS
+   * `sandbox-exec` avec un profil `(deny default)` : il ne voit que son worktree, son HOME
+   * jetable et les chemins système, et n'a de réseau que si la politique l'accorde.
+   *
+   * `cwd` n'a jamais été une barrière ; ceci en est une, appliquée par le noyau.
+   */
+  sandbox?: SandboxPolicy;
+  /**
+   * Que faire si le mécanisme de bac à sable est indisponible (autre OS, binaire retiré).
+   *
+   * `required` (défaut quand `sandbox` est fourni) REFUSE de lancer : une exécution
+   * annoncée confinée qui ne l'est pas est pire qu'un échec, parce que l'audit mentirait.
+   * `best-effort` lance quand même et le RÉSULTAT le dit (`confinement: "none"`), ce qui
+   * laisse un déploiement non-macOS fonctionner sans jamais prétendre être isolé.
+   */
+  confinement?: "required" | "best-effort";
 }
 
 export interface NonInteractiveProcessResult {
@@ -67,6 +93,14 @@ export interface NonInteractiveProcessResult {
   durationMs: number;
   /** True when either stream hit `maxOutputBytes`. Evidence, not a verdict. */
   truncated: boolean;
+  /**
+   * CE QUI A RÉELLEMENT CONFINÉ ce processus. Pour l'audit, et pour que personne n'ait à
+   * déduire la sécurité d'une exécution de la configuration qu'on croit avoir appliquée.
+   * `"none"` veut dire : rien ne l'a confiné.
+   */
+  confinement: SandboxMechanism;
+  /** Le réseau a-t-il été refusé PAR L'OS ? Faux dès qu'un endpoint est nécessaire. */
+  networkEnforced: boolean;
 }
 
 export type NonInteractiveRunner = (
@@ -76,6 +110,53 @@ export type NonInteractiveRunner = (
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 /** Grace between SIGTERM and SIGKILL: a chance to flush, not a chance to linger. */
 export const KILL_GRACE_MS = 2_000;
+
+/** `sandbox-exec` : présent sur macOS, absent ailleurs. Résolu une fois par processus. */
+export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+
+/**
+ * LA DÉCISION DE CONFINEMENT, pure et donc testable sans retirer `sandbox-exec` de l'hôte.
+ *
+ * Elle porte la propriété qui rend l'audit fiable : un bac à sable DEMANDÉ mais
+ * INDISPONIBLE refuse de lancer. Une exécution annoncée confinée qui ne l'est pas ferait
+ * mentir la trace, et une trace qui ment est pire que pas de trace.
+ */
+export function decideConfinement(
+  wantsSandbox: boolean,
+  available: boolean,
+  mode: "required" | "best-effort" = "required",
+): { mechanism: SandboxMechanism; refuse: boolean } {
+  if (!wantsSandbox) return { mechanism: "none", refuse: false };
+  if (available) return { mechanism: "seatbelt", refuse: false };
+  return { mechanism: "none", refuse: mode === "required" };
+}
+
+function sandboxAvailable(): boolean {
+  try {
+    return process.platform === "darwin" && existsSync(SANDBOX_EXEC);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enveloppe argv dans `sandbox-exec -p <profil>`.
+ *
+ * `-p` prend le profil en ARGUMENT, pas par un fichier : un fichier temporaire serait un
+ * chemin de plus à créer, à autoriser dans le profil lui-même, et à nettoyer — trois
+ * occasions de laisser une porte ouverte. Et comme on n'utilise pas de shell, le profil
+ * n'est jamais réinterprété.
+ */
+function confine(
+  command: string,
+  args: readonly string[],
+  policy: SandboxPolicy,
+): { command: string; args: string[] } {
+  return {
+    command: SANDBOX_EXEC,
+    args: ["-p", seatbeltProfile(policy), command, ...args],
+  };
+}
 
 export const runNonInteractive: NonInteractiveRunner = (spec) =>
   new Promise<NonInteractiveProcessResult>((resolve) => {
@@ -87,6 +168,31 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
     let stdout = "";
     let stderr = "";
 
+    /*
+     * CONFINEMENT, décidé AVANT le spawn. Un bac à sable demandé mais indisponible ne
+     * lance RIEN : une exécution annoncée confinée qui ne l'est pas ferait mentir l'audit,
+     * et un audit qui ment est pire que pas d'audit.
+     */
+    const wantsSandbox = spec.sandbox !== undefined;
+    const confinement: SandboxMechanism = wantsSandbox && sandboxAvailable() ? "seatbelt" : "none";
+    if (wantsSandbox && confinement === "none" && (spec.confinement ?? "required") === "required") {
+      return resolve({
+        stdout: "",
+        stderr: "SANDBOX_UNAVAILABLE: aucun mécanisme de confinement sur cette plateforme",
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        durationMs: 0,
+        truncated: false,
+        confinement: "none",
+        networkEnforced: false,
+      });
+    }
+    const launch =
+      confinement === "seatbelt" && spec.sandbox
+        ? confine(spec.command, spec.args ?? [], spec.sandbox)
+        : { command: spec.command, args: [...(spec.args ?? [])] };
+
     /* Calculé AVANT le spawn : l'enfant n'hérite que de ce qui est explicitement autorisé. */
     const env: Record<string, string> = childEnvironment({
       passthrough:
@@ -94,7 +200,7 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
       ...(spec.env ? { overlay: spec.env } : {}),
     });
 
-    const child = spawn(spec.command, [...(spec.args ?? [])], {
+    const child = spawn(launch.command, launch.args, {
       cwd: spec.cwd,
       /*
        * Le dépôt AUGMENTE `NodeJS.ProcessEnv` pour exiger `NODE_ENV` : c'est une contrainte
@@ -128,6 +234,10 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
         timedOut,
         durationMs: Date.now() - startedAt,
         truncated,
+        confinement,
+        /* Faux dès qu'un endpoint est requis : Seatbelt ne filtre pas par nom d'hôte. */
+        networkEnforced:
+          confinement === "seatbelt" && spec.sandbox ? networkEnforced(spec.sandbox) : false,
       });
     };
 
