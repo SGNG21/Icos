@@ -795,12 +795,18 @@ describe("allocate", () => {
     expect(d.retryAfterMs).toBe(DEFAULT_PORTFOLIO_POLICY.windowMs / 2);
   });
 
+  it("keeps the global pool at least as large as the sum of reservations", () => {
+    // Over-subscribed reservations would deadlock the pool for every class at once.
+    const totalReserved = WORK_CLASSES.reduce(
+      (sum, c) => sum + DEFAULT_PORTFOLIO_POLICY.classes[c].reserved,
+      0,
+    );
+    expect(DEFAULT_PORTFOLIO_POLICY.globalMaxConcurrent).toBeGreaterThanOrEqual(totalReserved);
+  });
+
   it("never starves a lower class: reserved slots are not takeable", () => {
     // Fill the global pool with USER work, leaving only other classes' reservations.
-    const policy: PortfolioPolicy = {
-      ...DEFAULT_PORTFOLIO_POLICY,
-      globalMaxConcurrent: 8,
-    };
+    const policy: PortfolioPolicy = DEFAULT_PORTFOLIO_POLICY;
     const reservedElsewhere = WORK_CLASSES.filter((c) => c !== "USER").reduce(
       (sum, c) => sum + policy.classes[c].reserved,
       0,
