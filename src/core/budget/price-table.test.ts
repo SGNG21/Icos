@@ -52,10 +52,41 @@ describe("priceUsage", () => {
     });
   });
 
-  it("ne facture pas les tokens au-delà de prompt+completion faute de prix pour eux", () => {
+  it("REFUSE de chiffrer quand le fournisseur facture plus que prompt+completion", () => {
+    // Correction d'une assertion qui bénissait un défaut : chiffrer 1 000 000 de tokens sur
+    // 2 000 000 facturés rendait `{COST, 3}` et `unpricedCalls: 0`, donc un plafond monétaire
+    // déclaré satisfait sur un total sous-évalué de moitié. Faute de prix pour le reste,
+    // le coût n'est pas prouvable : UNPRICED.
     const table = { "test/model": entry() };
     const withExtra = priceUsage(table, "test/model", usage(1_000_000, 0, 2_000_000));
-    expect(withExtra).toEqual({ kind: "COST", currency: BUDGET_CURRENCY, amount: 3 });
+    expect(withExtra.kind).toBe(UNPRICED);
+  });
+
+  it("rend UNPRICED sur une consommation de raisonnement réaliste", () => {
+    // 1k prompt + 1k completion mais 60k tokens facturés : 58k tokens de raisonnement/cache
+    // sans prix propre. Les chiffrer à 0 EUR sous-évaluerait le total d'un ordre de grandeur.
+    const table = { "test/model": entry() };
+    const outcome = priceUsage(table, "test/model", usage(1_000, 1_000, 60_000));
+    expect(outcome.kind).toBe(UNPRICED);
+    if (outcome.kind !== UNPRICED) throw new Error("attendu UNPRICED");
+    expect(outcome.reason.length).toBeGreaterThan(0);
+  });
+
+  it("n'exige pas de total_tokens déclaré pour chiffrer un appel ordinaire", () => {
+    const table = { "test/model": entry() };
+    expect(priceUsage(table, "test/model", usage(1_000_000, 0))).toEqual({
+      kind: "COST",
+      currency: BUDGET_CURRENCY,
+      amount: 3,
+    });
+  });
+
+  it("NE REND PAS GRATUIT un modèle dont la ligne de prix est un placeholder à 0", () => {
+    // Une ligne remplie à 0 (placeholder, faute de frappe) rendait `{COST, 0}` : le modèle
+    // devenait gratuit pour toujours et aucun plafond monétaire ne pouvait plus mordre.
+    const placeholder = { "test/model": entry({ promptPerMillion: 0, completionPerMillion: 0 }) };
+    const outcome = priceUsage(placeholder, "test/model", usage(1_000_000, 1_000_000));
+    expect(outcome.kind).toBe(UNPRICED);
   });
 
   it.each([
@@ -71,6 +102,8 @@ describe("priceUsage", () => {
 
   it.each([
     ["prix négatif", entry({ promptPerMillion: -1 })],
+    ["prix de prompt nul", entry({ promptPerMillion: 0 })],
+    ["prix de complétion nul", entry({ completionPerMillion: 0 })],
     ["prix non fini", entry({ completionPerMillion: Number.NaN })],
     ["prix infini", entry({ promptPerMillion: Number.POSITIVE_INFINITY })],
     ["provenance vide", entry({ provenance: "  " })],

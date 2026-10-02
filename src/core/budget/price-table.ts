@@ -53,7 +53,13 @@ function entryDefect(key: string, entry: PriceEntry): string | null {
     ["promptPerMillion", entry.promptPerMillion],
     ["completionPerMillion", entry.completionPerMillion],
   ] as const) {
-    if (!Number.isFinite(value) || value < 0 || value > MAX_PRICE_PER_MILLION) {
+    /*
+     * Un tarif doit être STRICTEMENT positif. Un 0 n'est pas un prix : c'est un placeholder
+     * ou une faute de frappe, et l'accepter rendrait le modèle gratuit pour toujours tout en
+     * le comptant comme chiffré — donc plus aucun plafond monétaire ne mordrait. Une entrée
+     * à 0 est inutilisable : elle rend UNPRICED, pas « gratuit ».
+     */
+    if (!Number.isFinite(value) || value <= 0 || value > MAX_PRICE_PER_MILLION) {
       return `${label} invalide`;
     }
   }
@@ -63,9 +69,10 @@ function entryDefect(key: string, entry: PriceEntry): string | null {
 }
 
 /**
- * Chiffre une consommation mesurée. Seuls prompt et completion sont facturés : les tokens
- * au-delà (raisonnement, cache) n'ont pas de prix propre dans cette table, donc on ne leur
- * en invente pas un.
+ * Chiffre une consommation mesurée. Cette table ne connaît que deux tarifs : prompt et
+ * completion. Quand le fournisseur facture PLUS que prompt + completion (tokens de
+ * raisonnement, tokens de cache), le reste n'a pas de prix ici — et on ne lui en invente pas
+ * un, pas même 0. Le coût de l'appel n'est alors pas prouvable : UNPRICED.
  */
 export function priceUsage(table: PriceTable, modelId: string, usage: TokenUsage): CostOutcome {
   const entry = Object.prototype.hasOwnProperty.call(table, modelId) ? table[modelId] : undefined;
@@ -75,6 +82,21 @@ export function priceUsage(table: PriceTable, modelId: string, usage: TokenUsage
 
   const defect = entryDefect(modelId, entry);
   if (defect) return { kind: UNPRICED, modelId, reason: `entrée de prix inutilisable : ${defect}` };
+
+  /*
+   * `usage` garde le total du fournisseur, c'est lui qui facture (voir usage.ts). Un total
+   * supérieur à la somme signifie que des tokens facturés n'ont aucun tarif dans cette table :
+   * les chiffrer à 0 sous-évaluerait le total d'un ordre de grandeur sur un modèle à
+   * raisonnement, tout en affichant `unpricedCalls: 0`.
+   */
+  const billedWithoutPrice = usage.totalTokens - (usage.promptTokens + usage.completionTokens);
+  if (billedWithoutPrice > 0) {
+    return {
+      kind: UNPRICED,
+      modelId,
+      reason: `${billedWithoutPrice} tokens facturés sans tarif (total ${usage.totalTokens} > prompt+completion)`,
+    };
+  }
 
   const amount =
     (usage.promptTokens * entry.promptPerMillion) / TOKENS_PER_PRICE_UNIT +
