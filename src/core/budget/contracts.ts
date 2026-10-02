@@ -107,6 +107,20 @@ export interface Attribution {
   readonly missionId?: string;
   readonly goalId?: string;
   readonly brainId?: string;
+  /**
+   * BUDGET DE CONVERSATION (décision du propriétaire : deux portées distinctes).
+   *
+   * Parler à ICOS — comprendre une intention, retrouver du contexte, répondre — n'est PAS
+   * du travail de goal, et doit pouvoir avoir lieu sans qu'aucun goal existe. Ce trafic a
+   * donc son propre plafond, par conversation, et il ne doit JAMAIS entamer le budget
+   * d'exécution d'un goal. Dès qu'une parole devient une demande de TRAVAIL, un Goal est
+   * créé et tout ce qui suit passe sur le budget du goal.
+   *
+   * Dernier dans la précédence de {@link attributionKey}, délibérément : si une imputation
+   * portait les deux, c'est le budget le plus STRICT (le goal) qui gagne. L'ambiguïté se
+   * résout vers la contrainte, jamais vers la permission.
+   */
+  readonly conversationId?: string;
 }
 
 /** Décompte de tokens mesuré. `totalTokens >= promptTokens + completionTokens`. */
@@ -179,6 +193,8 @@ export function attributionKey(attribution: Attribution | null | undefined): str
     ["goal", attribution.goalId],
     ["mission", attribution.missionId],
     ["brain", attribution.brainId],
+    /* Dernier : une imputation qui porte AUSSI un goal retombe sur le budget du goal. */
+    ["conversation", attribution.conversationId],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
       return `${label}=${encodeURIComponent(value.trim())}`;
@@ -218,6 +234,8 @@ export function attributionFromKey(key: string): Attribution | null {
       return { missionId: value };
     case "brain":
       return { brainId: value };
+    case "conversation":
+      return { conversationId: value };
     default:
       return null;
   }

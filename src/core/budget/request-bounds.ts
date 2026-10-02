@@ -36,8 +36,20 @@
  * Sortie maximale quand l'appelant n'en déclare aucune. Ce n'est pas « la bonne valeur » :
  * c'est le plafond au-delà duquel ICOS refuse de laisser un appelant muet dépenser. Le
  * plafond du goal reste ce qui décide réellement — celui-ci borne seulement l'INCONNU.
+ *
+ * POURQUOI 8 192 ET NON 2 048. Le premier choix était 2 048, et il était trop bas pour le
+ * seul appelant muet qui compte : le planificateur, qui demande un PLAN DE MISSION en JSON
+ * structuré. Un plan d'une vingtaine de tâches avec leurs descriptions dépasse 2 048 tokens,
+ * le fournisseur le coupe, et un JSON coupé est un JSON invalide — donc une mission qui ne
+ * démarre jamais, pour une raison qui n'a rien à voir avec le budget. La panne était fermée
+ * et bruyante (`OUTPUT_TRUNCATED`), mais c'était quand même une panne qu'on s'infligeait.
+ *
+ * Le coût de monter : on RÉSERVE davantage par appel, donc un goal à petit plafond de tokens
+ * se voit refuser plus tôt. C'est le bon côté sur lequel se tromper — un refus se voit et se
+ * corrige, un dépassement se découvre sur la facture — et `ICOS_MAX_OUTPUT_TOKENS` est le
+ * levier pour les deux sens.
  */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 2_048;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 
 /**
  * Marge pour les tokens que le gabarit de conversation du fournisseur ajoute lui-même

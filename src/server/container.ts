@@ -327,6 +327,17 @@ export interface Container {
   autonomousRuntime: AutonomousMissionRuntimeRepository;
   autonomousPlanner?: AutonomousMissionPlanner;
   /**
+   * LE COMPTEUR DE CONVERSATION (décision du propriétaire : deux portées de budget).
+   *
+   * Exposé sur le conteneur parce que le moteur cognitif est composé AILLEURS
+   * (`cognitiveRuntimeFor`), à partir du conteneur : sans ce champ, le seul moyen de le
+   * mesurer serait de recomposer les compteurs là-bas, donc d'avoir deux journaux.
+   *
+   * Absent = aucune base, donc aucun compteur durable : le moteur retombe sur `fetch` et
+   * la conversation n'est pas mesurée. C'est le conteneur en mémoire, qui ne dépense rien.
+   */
+  conversationFetch?: typeof fetch;
+  /**
    * POLITIQUE BORNÉE d'une mission autonome (P0-E/P0-F) : le plafond du déploiement et
    * le pool de compute que le système autorise, résolus UNE fois ici et transportés tels
    * quels jusqu'à l'allumage (`igniteAutonomousMission` -> `startAutonomousMission`).
@@ -734,6 +745,12 @@ export async function buildPostgresContainer(
     ...(env.ICOS_GOAL_MAX_TOTAL_TOKENS === undefined
       ? {}
       : { maxTotalTokensPerGoal: env.ICOS_GOAL_MAX_TOTAL_TOKENS }),
+    ...(env.ICOS_CONVERSATION_MAX_TOTAL_TOKENS === undefined
+      ? {}
+      : { maxTotalTokensPerConversation: env.ICOS_CONVERSATION_MAX_TOTAL_TOKENS }),
+    ...(env.ICOS_MAX_OUTPUT_TOKENS === undefined
+      ? {}
+      : { maxOutputTokens: env.ICOS_MAX_OUTPUT_TOKENS }),
   });
   const llmReviewer = buildLlmReviewer(env, spend.mission);
   if (!llmReviewer) {
@@ -994,6 +1011,7 @@ export async function buildPostgresContainer(
     controlGuard,
     autonomousRuntime,
     autonomousPlanner: buildAutonomousPlanner(env, spend.mission),
+    conversationFetch: spend.conversation,
     autonomyPolicy: buildAutonomyCompositionPolicy(env),
     improvementProposalProvider: buildImprovementProposalProvider(env),
     conversationService,

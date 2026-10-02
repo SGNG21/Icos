@@ -131,12 +131,18 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
     this.label = `omniroute:${model}`;
   }
 
-  static fromEnv(env: NodeJS.ProcessEnv = process.env): CognitionEngine {
+  /**
+   * `fetchImpl` est LA COUTURE DU BUDGET DE CONVERSATION. Sans elle, le moteur émettait sur
+   * `globalThis.fetch` : chaque réponse d'ICOS — texte comme voix — était invisible au
+   * journal, sans réservation et sans borne de sortie. La composition lui passe
+   * `spend.conversation`, qui plafonne PAR CONVERSATION et ne touche à aucun budget de goal.
+   */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, fetchImpl?: typeof fetch): CognitionEngine {
     const base = env.OMNIROUTE_BASE_URL;
     const key = env.OMNIROUTE_API_KEY;
     const model = env.ICOS_COGNITIVE_MODEL ?? env.ICOS_CEO_MODEL;
     if (!base || !key || !model) return new NotConnectedCognitionEngine();
-    return new OmniRouteCognitionEngine(base.replace(/\/+$/, ""), key, model);
+    return new OmniRouteCognitionEngine(base.replace(/\/+$/, ""), key, model, fetchImpl ?? fetch);
   }
 
   async think(input: CognitionInput, signal: AbortSignal): Promise<CognitionOutput> {

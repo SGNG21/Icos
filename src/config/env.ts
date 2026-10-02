@@ -158,6 +158,29 @@ const envSchema = z.object({
    * qu'une mission autonome puisse dépenser quoi que ce soit.
    */
   ICOS_GOAL_MAX_TOTAL_TOKENS: optionalPositiveInteger,
+  /**
+   * PLAFOND DU BUDGET DE CONVERSATION, en tokens, PAR CONVERSATION (décision du
+   * propriétaire : deux portées de budget distinctes).
+   *
+   * Parler à ICOS n'est pas du travail de goal et ne doit jamais entamer le budget
+   * d'exécution d'un goal. Absent = `DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS`, qui est une
+   * borne réelle et non une absence de borne : ICOS doit pouvoir parler sur un déploiement
+   * par défaut, mais jamais sans limite.
+   */
+  ICOS_CONVERSATION_MAX_TOTAL_TOKENS: optionalPositiveInteger,
+  /**
+   * SORTIE MAXIMALE imposée à un appel de complétion qui n'en déclare aucune (verrou C1).
+   *
+   * Le plafond est écrit DANS la requête et il est réservé avant l'émission, donc il borne
+   * réellement la dépense. Il a un coût : une réponse STRUCTURÉE plus longue que ce plafond
+   * est tronquée par le fournisseur, et un JSON tronqué est un JSON invalide. Le
+   * planificateur le signale alors en `INVALID_RESPONSE` — bruyant et récupérable, jamais un
+   * plan silencieusement amputé — mais c'est une panne de disponibilité, et c'est pourquoi
+   * ce levier existe : un déploiement qui planifie de grosses missions doit pouvoir le lever.
+   *
+   * Absent = `DEFAULT_MAX_OUTPUT_TOKENS`.
+   */
+  ICOS_MAX_OUTPUT_TOKENS: optionalPositiveInteger,
   /*
    * PLAFOND DE DÉPLOIEMENT des bornes d'UNE mission autonome (P0-E). Ces quatre valeurs
    * étaient codées en dur (100 cycles / 60 min / 5 replans / 3 cycles de stagnation) ;

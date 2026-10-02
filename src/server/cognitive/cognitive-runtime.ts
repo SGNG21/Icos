@@ -16,6 +16,7 @@ import { rememberSchema } from "@/core/cognitive/contracts";
 import { isScopeChange, type ContextResolution } from "@/core/cognitive/client-resolution";
 import { maxSensitivityFor } from "@/core/cognitive/context-selection";
 import { governOutcome } from "@/core/cognitive/turn-policy";
+import { runWithAttribution } from "@/server/budget/attribution-context";
 import type { z } from "zod";
 
 import type { CognitionEngine } from "./cognition";
@@ -257,13 +258,27 @@ export class CognitiveRuntime {
       await conversations.saveSnapshot(snapshot);
       turn = { ...turn, contextSnapshotId: snapshot.id };
 
-      const thought = await this.deps.engine.think(
-        {
-          userText: textOf(turn),
-          context: renderContext(snapshot),
-          conversationTitle: conversation.title,
-        },
-        abort.signal,
+      /*
+       * PORTÉE DU BUDGET DE CONVERSATION (décision du propriétaire : deux portées).
+       *
+       * Comprendre une intention et formuler une réponse n'est PAS du travail de goal et
+       * doit pouvoir avoir lieu sans qu'aucun goal existe. L'imputation est donc la
+       * CONVERSATION, et comme `attributionKey` range `conversation=…` dans une autre
+       * fenêtre que `goal=…`, ce trafic ne peut ni consommer ni contourner le budget
+       * d'exécution d'un goal — c'est une conséquence de la clé, pas une règle à respecter.
+       *
+       * Dès que la parole devient une demande de TRAVAIL, un Goal est créé et tout ce qui
+       * suit (planification, tâches, workers, relectures) passe sur le budget du goal.
+       */
+      const thought = await runWithAttribution({ conversationId }, () =>
+        this.deps.engine.think(
+          {
+            userText: textOf(turn),
+            context: renderContext(snapshot),
+            conversationTitle: conversation.title,
+          },
+          abort.signal,
+        ),
       );
       const governed = governOutcome(thought.result);
       const done = await conversations.completeTurn(actor.tenantId, turn, {

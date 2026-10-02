@@ -201,6 +201,12 @@ export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | nu
   let runtime = cache.get(container);
   if (!runtime) {
     runtime = buildCognitiveRuntime(container.db, {
+      /*
+       * Le moteur émet à travers le COMPTEUR DE CONVERSATION : plafonné par conversation,
+       * strictement séparé du budget d'exécution d'un goal. Avant, il émettait sur le
+       * `fetch` global — chaque réponse d'ICOS, texte comme voix, était hors compteur.
+       */
+      engine: OmniRouteCognitionEngine.fromEnv(process.env, container.conversationFetch),
       missions: new CanonicalGoalLauncher(container),
       // Live mission state for the CURRENT stage: READ-ONLY use of CORE3's repository.
       // Reading a status is not executing anything, so it is safe to compose here —

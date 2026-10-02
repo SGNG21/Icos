@@ -58,6 +58,36 @@ export const SPEND_LEDGER_TENANT_ID = "icos-holding";
 export const UNCAPPED_OVERHEAD: BudgetCapResolver = async () => ({ kind: "UNCAPPED" });
 
 /**
+ * PLAFOND PAR DÉFAUT DU BUDGET DE CONVERSATION, en tokens, PAR CONVERSATION.
+ *
+ * Pourquoi un défaut et pas un refus. Les frais opérationnels sont `UNCAPPED` parce que les
+ * plafonner transformerait un budget épuisé en panne de flotte ; une conversation, elle,
+ * doit être BORNÉE — c'est la décision du propriétaire — mais la borner par l'absence d'une
+ * variable d'environnement ferait qu'ICOS refuserait de parler sur un déploiement par
+ * défaut. Un défaut généreux reste une borne ; l'absence de borne n'en est pas une.
+ *
+ * 200 000 tokens : plusieurs heures de dialogue nourri sur une même conversation, et très
+ * en-dessous de ce qu'une boucle emballée consommerait avant d'être remarquée.
+ */
+export const DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS = 200_000;
+
+/**
+ * LE PLAFOND DE CONVERSATION. Une seule dimension, les TOKENS : la table de prix est vide,
+ * donc un plafond monétaire ne serait satisfiable par aucun appel (voir `decide`).
+ *
+ * Il est PAR CONVERSATION et non global, pour la même raison que le budget d'exécution est
+ * par goal : un plafond global ferait qu'une conversation bavarde fermerait la bouche d'ICOS
+ * pour toutes les autres.
+ */
+export function conversationCaps(maxTotalTokens: number): BudgetCapResolver {
+  return async (attribution) =>
+    attribution?.conversationId
+      ? { kind: "CAPPED", maxTotalTokens }
+      : /* Hors conversation identifiée, rien à plafonner et rien à autoriser. */
+        { kind: "CAPPED" };
+}
+
+/**
  * Pas de base de données = aucun `goals.budget` lisible = aucun plafond établi. `CAPPED`
  * sans limite, donc `decide` refuse en `NO_ENFORCEABLE_CAP`. L'absence de base ne devient
  * JAMAIS « pas de budget » : elle devient « budget invérifiable », donc refus.
@@ -133,6 +163,8 @@ export interface ComposeSpendOptions extends Omit<SpendLedgerSelection, "caps"> 
    * donc ses appels sont refusés. Voir `goal-budget-cap-resolver.ts`.
    */
   readonly maxTotalTokensPerGoal?: number;
+  /** Plafond de tokens d'UNE conversation. Défaut : {@link DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS}. */
+  readonly maxTotalTokensPerConversation?: number;
   /** Le `fetch` réellement émetteur. Injectable pour les tests, jamais muet en production. */
   readonly inner?: typeof fetch;
   /** Durée du bail des réservations de mission. Défaut : celui du magasin. */
@@ -146,6 +178,13 @@ export interface SpendMeters {
   readonly mission: typeof fetch;
   /** Frais opérationnels : sans plafond par choix nommé, et enregistrés sans imputation. */
   readonly overhead: typeof fetch;
+  /**
+   * CONVERSATION : parler à ICOS, comprendre une intention, retrouver du contexte, répondre.
+   * Plafonné PAR CONVERSATION, et strictement séparé du budget d'exécution d'un goal : ce
+   * trafic ne peut ni le consommer ni le contourner, parce que sa fenêtre est une autre clé
+   * d'imputation (`conversation=…` au lieu de `goal=…`).
+   */
+  readonly conversation: typeof fetch;
 }
 
 /** LE plafond du travail de mission, en un seul endroit : `goals.budget` + plafond de tokens. */
@@ -207,6 +246,9 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
    * Avec une base, la réservation est OBLIGATOIRE : le contrôle pré-vol seul laissait partir
    * le premier appel d'un goal (fenêtre vide) sans aucune borne de sortie.
    */
+  const conversationTokens =
+    options.maxTotalTokensPerConversation ?? DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS;
+
   const reservations = options.db
     ? composeSpendReservations({
         db: options.db,
@@ -214,6 +256,15 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
         ...(options.maxTotalTokensPerGoal === undefined
           ? {}
           : { maxTotalTokensPerGoal: options.maxTotalTokensPerGoal }),
+        ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
+      })
+    : undefined;
+
+  const conversationReservations = options.db
+    ? new PostgresSpendReservations({
+        db: options.db,
+        tenantId: options.tenantId ?? SPEND_LEDGER_TENANT_ID,
+        caps: conversationCaps(conversationTokens),
         ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
       })
     : undefined;
@@ -233,6 +284,23 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
      */
     overhead: meteredFetch(inner, {
       ledger: createSpendLedger({ ...selection, caps: UNCAPPED_OVERHEAD }),
+    }),
+    /*
+     * CONVERSATION. Même mécanique que la mission — imputation ambiante, réservation avant
+     * dispatch, sortie bornée — mais une AUTRE clé et un AUTRE plafond. L'isolation n'est
+     * pas une règle qu'on applique : c'est la conséquence de `attributionKey`, qui range
+     * `conversation=…` et `goal=…` dans deux fenêtres qui ne se rencontrent jamais.
+     */
+    conversation: meteredFetch(inner, {
+      ledger: ambientlyAttributed(
+        createSpendLedger({ ...selection, caps: conversationCaps(conversationTokens) }),
+      ),
+      ...(conversationReservations
+        ? { reservations: ambientlyReserved(conversationReservations) }
+        : {}),
+      ...(options.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: options.maxOutputTokens }),
     }),
   };
 }

@@ -19,7 +19,8 @@ import {
  */
 
 interface OmniRouteChatResponse {
-  choices?: Array<{ message?: { content?: unknown } }>;
+  /** `finish_reason` distingue une réponse COMPLÈTE d'une réponse COUPÉE au plafond. */
+  choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
 }
 
 export interface OmniRouteAutonomousMissionPlannerOptions {
@@ -73,6 +74,17 @@ export class OmniRouteCompletionProvider implements PlannerCompletionProvider {
       payload = (await response.json()) as OmniRouteChatResponse;
     } catch {
       throw plannerError(PlannerFailureCode.INVALID_RESPONSE);
+    }
+
+    /*
+     * TRONCATURE, DITE PAR SON NOM (verrou C1). La couture de budget écrit un `max_tokens`
+     * explicite dans chaque complétion ; un plan plus long en revient donc COUPÉ, et un
+     * JSON coupé est un JSON invalide. Le signaler comme « réponse invalide » enverrait
+     * chercher un défaut de prompt alors que la cause est un plafond — celui que
+     * `ICOS_MAX_OUTPUT_TOKENS` lève. On échoue fermé, mais on échoue en disant la vérité.
+     */
+    if (payload.choices?.[0]?.finish_reason === "length") {
+      throw plannerError(PlannerFailureCode.OUTPUT_TRUNCATED);
     }
 
     const content = payload.choices?.[0]?.message?.content;

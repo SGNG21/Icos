@@ -52,6 +52,16 @@ export enum PlannerFailureCode {
   INVALID_TIMEOUT = "INVALID_TIMEOUT",
   /** Provider response missing or empty content */
   INVALID_RESPONSE = "INVALID_RESPONSE",
+  /**
+   * The provider stopped because it hit the OUTPUT LIMIT (`finish_reason: "length"`).
+   *
+   * Distinct from INVALID_RESPONSE on purpose. Since the budget seam writes an explicit
+   * `max_tokens` into every completion (lock C1), a plan longer than that limit comes back
+   * TRUNCATED, and truncated JSON is invalid JSON. Reporting that as "the model answered
+   * badly" would send an operator hunting a prompt bug when the real cause is a ceiling
+   * they can raise with `ICOS_MAX_OUTPUT_TOKENS`. Naming the real cause is the whole point.
+   */
+  OUTPUT_TRUNCATED = "OUTPUT_TRUNCATED",
   /** Command planner provider exited with non-zero */
   PROVIDER_EXIT = "PROVIDER_EXIT",
   /** Command planner command config invalid JSON */
@@ -138,13 +148,13 @@ export function extractSchemaDiagnostics(error: z.ZodError): SchemaValidationDia
   diagnostics.missingFields = [...new Set(diagnostics.missingFields)];
   diagnostics.unexpectedFields = [...new Set(diagnostics.unexpectedFields)];
   diagnostics.typeMismatches = diagnostics.typeMismatches.filter(
-    (v, i, a) => a.findIndex((t) => t.path === v.path) === i
+    (v, i, a) => a.findIndex((t) => t.path === v.path) === i,
   );
   diagnostics.enumMismatches = diagnostics.enumMismatches.filter(
-    (v, i, a) => a.findIndex((t) => t.path === v.path && t.received === v.received) === i
+    (v, i, a) => a.findIndex((t) => t.path === v.path && t.received === v.received) === i,
   );
   diagnostics.arrayObjectMismatches = diagnostics.arrayObjectMismatches.filter(
-    (v, i, a) => a.findIndex((t) => t.path === v.path) === i
+    (v, i, a) => a.findIndex((t) => t.path === v.path) === i,
   );
 
   return diagnostics;
@@ -221,10 +231,7 @@ export const LEGACY_BACKEND_AMBIGUOUS = `${PLANNER_ERROR_PREFIX}BACKEND_AMBIGUOU
  * Checks if an error is a legacy INVALID_OUTPUT (shape failure that is retryable).
  */
 export function isLegacyRetryableError(error: Error): boolean {
-  return (
-    error.message === LEGACY_INVALID_OUTPUT ||
-    error.message === LEGACY_INVALID_RESPONSE
-  );
+  return error.message === LEGACY_INVALID_OUTPUT || error.message === LEGACY_INVALID_RESPONSE;
 }
 
 /**
@@ -308,7 +315,10 @@ function normalizeProviderResponse(content: string): string {
   }
 
   // Unknown wrapper or wrong structure - fail closed
-  throw plannerError(PlannerFailureCode.WRAPPER_NORMALIZATION_FAILED, `Unknown provider response envelope`);
+  throw plannerError(
+    PlannerFailureCode.WRAPPER_NORMALIZATION_FAILED,
+    `Unknown provider response envelope`,
+  );
 }
 
 /**
@@ -322,11 +332,7 @@ function normalizeProviderResponse(content: string): string {
 export interface PlannerCompletionProvider {
   /** A short, stable name for diagnostics. Never a routing key. */
   readonly name: string;
-  complete(input: {
-    system: string;
-    user: string;
-    signal: AbortSignal;
-  }): Promise<string>;
+  complete(input: { system: string; user: string; signal: AbortSignal }): Promise<string>;
 }
 
 function sanitizePlanContext(tasks: MissionTask[]): Array<{
@@ -359,12 +365,12 @@ export class CanonicalAutonomousMissionPlanner implements AutonomousMissionPlann
   private readonly timeoutMs: number;
 
   constructor(options: CanonicalMissionPlannerOptions) {
-      if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
-        throw plannerError(PlannerFailureCode.INVALID_TIMEOUT);
-      }
-      this.provider = options.provider;
-      this.timeoutMs = options.timeoutMs;
+    if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+      throw plannerError(PlannerFailureCode.INVALID_TIMEOUT);
     }
+    this.provider = options.provider;
+    this.timeoutMs = options.timeoutMs;
+  }
 
   /**
    * How many times one planning request may be put to the provider.
@@ -396,10 +402,15 @@ export class CanonicalAutonomousMissionPlanner implements AutonomousMissionPlann
     throw lastShapeError;
   }
 
-  private async planOnce(input: Parameters<AutonomousMissionPlanner["plan"]>[0]): Promise<MissionPlan> {
+  private async planOnce(
+    input: Parameters<AutonomousMissionPlanner["plan"]>[0],
+  ): Promise<MissionPlan> {
     const controller = new AbortController();
     const abort = () => controller.abort(input.signal?.reason);
-    const timeout = setTimeout(() => controller.abort(plannerError(PlannerFailureCode.TIMEOUT)), this.timeoutMs);
+    const timeout = setTimeout(
+      () => controller.abort(plannerError(PlannerFailureCode.TIMEOUT)),
+      this.timeoutMs,
+    );
 
     input.signal?.addEventListener("abort", abort, { once: true });
 
