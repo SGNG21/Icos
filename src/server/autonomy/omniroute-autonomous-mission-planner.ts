@@ -107,11 +107,17 @@ export class OmniRouteAutonomousMissionPlanner implements AutonomousMissionPlann
   }
 }
 
+/**
+ * `fetchImpl` est la couture du COMPTEUR DE DÉPENSE : le conteneur y passe le `fetch` mesuré
+ * de la couture « mission », plafonné par le budget du goal imputé (voir
+ * `server/budget/compose-spend.ts`). Absent = le `fetch` global, comportement d'avant.
+ */
 export function createOmniRouteAutonomousMissionPlanner(
   env: Pick<
     Env,
     "OMNIROUTE_BASE_URL" | "OMNIROUTE_API_KEY" | "ICOS_PLANNER_MODEL" | "ICOS_PLANNER_TIMEOUT_MS"
   >,
+  fetchImpl?: typeof fetch,
 ): AutonomousMissionPlanner | undefined {
   const plannerRequested =
     env.ICOS_PLANNER_MODEL !== undefined || env.ICOS_PLANNER_TIMEOUT_MS !== undefined;
@@ -129,5 +135,6 @@ export function createOmniRouteAutonomousMissionPlanner(
     apiKey: env.OMNIROUTE_API_KEY,
     model: env.ICOS_PLANNER_MODEL,
     timeoutMs: env.ICOS_PLANNER_TIMEOUT_MS ?? 30_000,
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
 }

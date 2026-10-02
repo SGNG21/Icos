@@ -2,6 +2,8 @@ import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
+import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
+
 import { runWithAttribution } from "./attribution-context";
 import {
   composeSpendMeters,
@@ -229,5 +231,62 @@ describe("createSpendLedger — durable quand il y a une base", () => {
   it("choisit le journal en mémoire quand il n'y en a pas", () => {
     const ledger = createSpendLedger({ caps: UNCAPPED_OVERHEAD });
     expect(ledger).toBeInstanceOf(InMemorySpendLedger);
+  });
+});
+
+/**
+ * LA PREUVE DE L'INSTALLATION : la fabrique que `container.ts` appelle (avec, en
+ * production, `spend.mission`) produit bien un planificateur dont le moindre appel passe par
+ * le compteur. C'est ce chemin — fabrique -> provider OmniRoute -> `meteredFetch` -> journal
+ * -> `decide` — qui applique `goals.budget`.
+ *
+ * Ce qui reste prouvé par LECTURE seulement : `buildPostgresContainer` passe réellement
+ * `spend.mission` ici, parce que monter ce conteneur exige une base de données.
+ */
+describe("couture planificateur — la fabrique du conteneur émet à travers le compteur", () => {
+  const plannerEnv = {
+    OMNIROUTE_BASE_URL: "https://provider.test",
+    OMNIROUTE_API_KEY: "clef-de-test",
+    ICOS_PLANNER_MODEL: "test/model",
+    ICOS_PLANNER_TIMEOUT_MS: 1_000,
+  };
+
+  const planInput = {
+    mission: {
+      id: "mission-1",
+      title: "M",
+      objective: "O",
+      status: "planning" as const,
+      createdAt: new Date("2026-10-02T12:00:00.000Z"),
+      updatedAt: new Date("2026-10-02T12:00:00.000Z"),
+    },
+    tasks: [],
+    reason: "initial" as const,
+  };
+
+  it("n'atteint PAS le fournisseur quand le goal imputé n'a aucun plafond applicable", async () => {
+    const db = new FakeDb({});
+    const { fetchImpl, calls } = provider();
+    const meters = composeSpendMeters({ db, inner: fetchImpl });
+    const planner = createOmniRouteAutonomousMissionPlanner(plannerEnv, meters.mission);
+
+    await expect(
+      runWithAttribution({ goalId: "g1" }, () => planner!.plan(planInput)),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+    expect(db.goalLookups).toEqual(["g1"]);
+  });
+
+  it("atteint le fournisseur quand le goal a un plafond applicable non épuisé", async () => {
+    const db = new FakeDb({ g1: null });
+    const { fetchImpl, calls } = provider();
+    const meters = composeSpendMeters({ db, maxTotalTokensPerGoal: 1_000, inner: fetchImpl });
+    const planner = createOmniRouteAutonomousMissionPlanner(plannerEnv, meters.mission);
+
+    /* La réponse du faux fournisseur n'est pas un plan : seule compte l'émission de l'appel. */
+    await runWithAttribution({ goalId: "g1" }, () => planner!.plan(planInput)).catch(() => undefined);
+
+    expect(calls).toEqual(["https://provider.test/v1/chat/completions"]);
+    expect(db.rows[0].goal_id).toBe("g1");
   });
 });

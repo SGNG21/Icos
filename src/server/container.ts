@@ -178,6 +178,7 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
+import { composeSpendMeters } from "@/server/budget/compose-spend";
 import {
   CanonicalAutonomousMissionPlanner,
   type PlannerCompletionProvider,
@@ -419,11 +420,20 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
      */
     activeAssignments: () => dispatchAttempts.listActiveWorkerAssignments(),
   });
+  /*
+   * COMPTEUR DE DÉPENSE — conteneur EN MÉMOIRE. Aucune base, donc aucun `goals.budget`
+   * persisté à appliquer : le journal en mémoire est choisi, et ce qu'il signifie est
+   * assumé — la dépense est oubliée au redémarrage. C'est cohérent avec ce conteneur, qui
+   * est en mémoire de bout en bout, et ce n'est PAS un repli d'une base indisponible.
+   * Seule la couture des frais opérationnels est câblée ici : ce conteneur ne monte aucun
+   * planificateur OmniRoute (`autonomousPlanner: undefined`), donc aucune dépense de mission.
+   */
+  const spend = composeSpendMeters();
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(
     workerRegistryStore,
     workerRegistration,
-    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector() },
+    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector(spend.overhead) },
   );
   // AI Selection Engine (Phase 8B) - now uses worker registry via adapter
   const baseCatalog = new AIResourceCatalog();
@@ -701,11 +711,26 @@ export async function buildPostgresContainer(
         ),
       ),
   });
+  /*
+   * COMPTEUR DE DÉPENSE — conteneur POSTGRESQL. C'est ICI que `goals.budget` devient une
+   * contrainte exécutée : journal durable `spend_ledger` (migration 0055) et plafonds lus
+   * dans `goals`. Deux coutures, deux politiques (voir `budget/compose-spend.ts`) :
+   * `spend.mission` plafonne les complétions de mission par le budget du goal imputé,
+   * `spend.overhead` mesure les sondes SANS plafond, par choix nommé.
+   *
+   * `maxTotalTokensPerGoal` n'est pas renseigné : la table de prix est vide, donc le SEUL
+   * plafond réellement applicable serait un plafond de tokens, et il n'a aujourd'hui aucune
+   * variable d'environnement pour le porter (`src/config/env.ts` n'est pas de ce lot). Le
+   * résultat est visible et fermé, jamais silencieux : un goal sans budget est refusé
+   * (`NO_ENFORCEABLE_CAP`), un goal avec budget monétaire est refusé dès que sa fenêtre
+   * contient un appel non chiffré (`UNPRICED_USAGE_IN_WINDOW`).
+   */
+  const spend = composeSpendMeters({ db: handle.db });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(
     workerRegistryStore,
     workerRegistration,
-    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector() },
+    { adapters: buildWorkerProbeAdapters(), selectProbe: buildModelProbeSelector(spend.overhead) },
   );
   const baseCatalog = new AIResourceCatalog();
   const aiResourceCatalog = new AdaptedAIResourceCatalog(workerRegistry, baseCatalog);
@@ -895,7 +920,7 @@ export async function buildPostgresContainer(
     }),
     controlGuard,
     autonomousRuntime,
-    autonomousPlanner: buildAutonomousPlanner(env),
+    autonomousPlanner: buildAutonomousPlanner(env, spend.mission),
     improvementProposalProvider: buildImprovementProposalProvider(env),
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
@@ -1132,7 +1157,16 @@ function buildImprovementProposalProvider(env: Env): PlannerCompletionProvider |
   });
 }
 
-function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined {
+/**
+ * `missionFetch` est le `fetch` MESURÉ de la couture « mission » (compteur de dépense,
+ * verrou B1) : plafonné par `goals.budget` du goal imputé par la portée d'allumage. Il ne
+ * concerne que le planificateur OmniRoute ; un planificateur de commande est un processus
+ * local, il n'émet aucun appel facturé.
+ */
+function buildAutonomousPlanner(
+  env: Env,
+  missionFetch?: typeof fetch,
+): AutonomousMissionPlanner | undefined {
   const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
   /*
    * `ICOS_PLANNER_MODEL` is what SELECTS the OmniRoute planner — the OmniRoute base URL and
@@ -1158,7 +1192,7 @@ function buildAutonomousPlanner(env: Env): AutonomousMissionPlanner | undefined 
     });
   }
 
-  return createOmniRouteAutonomousMissionPlanner(env);
+  return createOmniRouteAutonomousMissionPlanner(env, missionFetch);
 }
 
 function buildWorkerExecutor(env: Env): {
@@ -1202,9 +1236,9 @@ function buildWorkerExecutor(env: Env): {
  * authority the HTTP probe exists to remove, and a missing gateway credential is not a
  * reason to hand a model probe the server's environment and an agent's toolset.
  */
-function buildModelProbeSelector(): (
-  worker: WorkerRegistryEntry,
-) => OmniRouteHttpWorkerProbe | null | undefined {
+function buildModelProbeSelector(
+  overheadFetch?: typeof fetch,
+): (worker: WorkerRegistryEntry) => OmniRouteHttpWorkerProbe | null | undefined {
   const env = loadEnv();
   const probe =
     env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY
@@ -1212,6 +1246,13 @@ function buildModelProbeSelector(): (
           baseUrl: env.OMNIROUTE_BASE_URL,
           credential: env.OMNIROUTE_API_KEY,
           timeoutMs: env.ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS,
+          /*
+           * Mesuré, et SANS PLAFOND par choix nommé (`UNCAPPED_OVERHEAD`) : sonder la santé
+           * d'un worker n'est pas de la dépense de mission. Ces appels partent d'un minuteur,
+           * sans goal, et les plafonner sous le budget d'un goal ferait d'un budget épuisé
+           * une panne de flotte. La ligne est quand même écrite au journal, non imputée.
+           */
+          ...(overheadFetch ? { fetch: overheadFetch } : {}),
         })
       : null;
 
