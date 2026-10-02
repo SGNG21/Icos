@@ -12,7 +12,7 @@ import type { ClassifiedObjective, EscalationKind } from "./objective-classifica
  * OmniRoute respectively; this module has no path to any of them.
  *
  * It deliberately does NOT import the workforce: `src/core/workforce/delegation.ts`
- * `planDelegation` is the AGENT-level authority (a supervisor's direct reports, a
+ * `planDelegation` (core/workforce) is the AGENT-level authority (a supervisor's direct reports, a
  * `WorkAssignment` per request). This is the OBJECTIVE-level shape above it, over the
  * minimal `BrainDescriptor` view below, so the brain registry can be adapted onto it at
  * integration without this policy depending on its storage.
@@ -165,7 +165,7 @@ const byBrainId = (a: { brainId: string }, b: { brainId: string }) =>
 const cap = (level: AutonomyLevel, ceiling: AutonomyLevel): AutonomyLevel =>
   (level < ceiling ? level : ceiling) as AutonomyLevel;
 
-export function planDelegation(
+export function planObjectiveDelegation(
   objective: ClassifiedObjective,
   brains: readonly BrainDescriptor[],
   limits: DelegationLimits,

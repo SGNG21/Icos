@@ -97,8 +97,15 @@ every completion and ICOS discards it — `grep -rn 'prompt_tokens' src` matches
 unrelated file.
 
 There are five OmniRoute completion call sites (`cognition.ts`, the autonomous mission planner,
-the reviewer, `compute-fleet.ts`, the CEO client). Every one of them takes an injectable
-`fetchImpl: typeof fetch` defaulting to global fetch.
+the reviewer, `compute-fleet.ts`, the CEO client).
+
+**Correction to this decision's first draft:** it stated that all five already took an injectable
+`fetchImpl: typeof fetch`. That was wrong, and the spend-meter lane caught it. Four did;
+`omniroute-ceo-client.ts` called the global `fetch` directly at two sites with no injection point
+at all, so the meter could not reach it and its spend was unmeterable. An optional
+`typeof fetch` constructor parameter was added there (no existing caller changes), bringing the
+seam to a genuine 5/5. The lesson is recorded rather than quietly edited away: a seam assumed
+uniform was not, and a budget claimed over an unreachable call site would have been a false claim.
 
 Decision: enforcement is **one decorator of shape `typeof fetch`**, installed where those
 adapters are constructed. Not five meters, and not a sixth OmniRoute client. The same seam
@@ -111,6 +118,12 @@ Enforcement is fail-closed, and the following are invariants, not preferences:
 - a money cap with any `UNPRICED` usage in its window **denies**, because an unpriced total
   cannot be proven to sit under a money cap;
 - a token cap is always enforceable and must work with no price table at all;
+- the shipped price table is EMPTY by deliberate choice, because writing an OmniRoute tariff
+  from memory would be a fabrication. **Consequence, which must be stated and not glossed: until
+  the owner fills the table from a real invoice or tariff page, every call is UNPRICED, so NO
+  monetary cap is satisfiable and only a token cap is enforceable.** That is the honest state of
+  the system, not a bug, and it is why the first autonomous mission is gated on a token cap plus
+  a bounded model allowlist rather than on a euro ceiling;
 - a response with no parseable usage (streaming) records `UNMETERED` truthfully, never `0`;
 - metering reads usage from `response.clone()` and never consumes the caller's body.
 

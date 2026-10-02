@@ -5,7 +5,7 @@ import {
   DELEGATION_SHAPES,
   FORBIDDEN_CAPABILITY,
   INDEPENDENT_REVIEW_CAPABILITY,
-  planDelegation,
+  planObjectiveDelegation,
   type BrainDescriptor,
   type DelegationLimits,
 } from "./delegation";
@@ -39,14 +39,14 @@ const LIMITS: DelegationLimits = { maxParallelAssignments: 10, maxAutonomyLevel:
 
 const SELF_IMPROVEMENT = classifyRawObjective("Améliore ICOS.");
 
-const expectOk = (outcome: ReturnType<typeof planDelegation>) => {
+const expectOk = (outcome: ReturnType<typeof planObjectiveDelegation>) => {
   if (!outcome.ok) throw new Error(`expected a plan, got refusals ${outcome.refusals.join(",")}`);
   return outcome.plan;
 };
 
 describe("chief delegation — self-improvement fan-out", () => {
   it("routes Améliore ICOS to the Evolution brain first, then fans out", () => {
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
     expect(plan.workClass).toBe("SELF_IMPROVEMENT");
     expect(plan.assignments[0]).toMatchObject({ role: "EVOLUTION", wave: 0 });
     expect(
@@ -59,19 +59,19 @@ describe("chief delegation — self-improvement fan-out", () => {
   });
 
   it("names the independent reviewer in a later wave than every implementer", () => {
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS));
     expect(plan.review.brainId).toBe("b-reviewer");
     expect(plan.review.wave).toBeGreaterThan(Math.max(...plan.assignments.map((a) => a.wave)));
   });
 
   it("is deterministic: same inputs, same plan", () => {
-    const a = planDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS);
-    const b = planDelegation(SELF_IMPROVEMENT, [...fullFleet()].reverse(), LIMITS);
+    const a = planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), LIMITS);
+    const b = planObjectiveDelegation(SELF_IMPROVEMENT, [...fullFleet()].reverse(), LIMITS);
     expect(a).toEqual(b);
   });
 
   it("refuses an objective that did not classify", () => {
-    const outcome = planDelegation(
+    const outcome = planObjectiveDelegation(
       classifyRawObjective("Quelle heure est-il ?"),
       fullFleet(),
       LIMITS,
@@ -86,14 +86,14 @@ describe("chief delegation — only active brains, and absences are reported", (
     const fleet = fullFleet().map((b) =>
       b.brainId === "b-builder" ? { ...b, status: "suspended" as const } : b,
     );
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.assignments.map((a) => a.brainId)).not.toContain("b-builder");
     expect(plan.excludedBrains).toEqual([{ brainId: "b-builder", status: "suspended" }]);
   });
 
   it("reports an unmet capability instead of back-filling an arbitrary brain", () => {
     const fleet = fullFleet().filter((b) => b.brainId !== "b-research");
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.unmetNeeds).toEqual([
       { stage: "RESEARCH", capability: "research", reason: "NO_ACTIVE_BRAIN_WITH_CAPABILITY" },
     ]);
@@ -107,7 +107,7 @@ describe("chief delegation — only active brains, and absences are reported", (
 
   it("refuses when no active brain can take any part of the work", () => {
     const fleet = fullFleet().map((b) => ({ ...b, status: "retired" as const }));
-    const outcome = planDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
+    const outcome = planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.refusals).toContain("NO_ELIGIBLE_BRAIN");
@@ -125,14 +125,14 @@ describe("chief delegation — reviewer independence is owner policy", () => {
           ? { ...b, capabilities: [...b.capabilities, INDEPENDENT_REVIEW_CAPABILITY] }
           : b,
       );
-    const outcome = planDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
+    const outcome = planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.refusals).toEqual(["REVIEWER_NOT_INDEPENDENT"]);
   });
 
   it("refuses when nobody at all declares the review capability", () => {
     const fleet = fullFleet().filter((b) => b.brainId !== "b-reviewer");
-    const outcome = planDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
+    const outcome = planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.refusals).toEqual(["NO_INDEPENDENT_REVIEWER"]);
   });
@@ -146,7 +146,7 @@ describe("chief delegation — reviewer independence is owner policy", () => {
           : b,
       );
     /* one parallel slot: b-memory ends up queued, not assigned — still not independent */
-    const outcome = planDelegation(SELF_IMPROVEMENT, fleet, {
+    const outcome = planObjectiveDelegation(SELF_IMPROVEMENT, fleet, {
       maxParallelAssignments: 1,
       maxAutonomyLevel: 3,
     });
@@ -158,7 +158,7 @@ describe("chief delegation — reviewer independence is owner policy", () => {
     const fleet = fullFleet().map((b) =>
       b.brainId === "b-builder" ? { ...b, reviewPolicy: "always" as const } : b,
     );
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.assignments.find((a) => a.brainId === "b-builder")?.reviewRequired).toBe(true);
     expect(plan.assignments.find((a) => a.brainId === "b-research")?.reviewRequired).toBe(false);
   });
@@ -167,7 +167,7 @@ describe("chief delegation — reviewer independence is owner policy", () => {
 describe("chief delegation — over-subscription defers, never drops", () => {
   it("defers the overflow of an overall parallelism limit and keeps every stage", () => {
     const plan = expectOk(
-      planDelegation(SELF_IMPROVEMENT, fullFleet(), {
+      planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), {
         maxParallelAssignments: 2,
         maxAutonomyLevel: 3,
       }),
@@ -196,7 +196,7 @@ describe("chief delegation — over-subscription defers, never drops", () => {
         capabilities: [INDEPENDENT_REVIEW_CAPABILITY],
       }),
     ];
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     expect(plan.assignments.filter((a) => a.brainId === "b-omni")).toHaveLength(1);
     expect(plan.deferred).toEqual([
       expect.objectContaining({
@@ -211,13 +211,13 @@ describe("chief delegation — over-subscription defers, never drops", () => {
 describe("chief delegation — no authority escalation", () => {
   it("never assigns a brain an autonomy level above its own", () => {
     const fleet = fullFleet().map((b) => ({ ...b, autonomyLevel: 1 as const }));
-    const plan = expectOk(planDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
+    const plan = expectOk(planObjectiveDelegation(SELF_IMPROVEMENT, fleet, LIMITS));
     for (const a of [...plan.assignments, plan.review]) expect(a.autonomyLevel).toBe(1);
   });
 
   it("never assigns above the ceiling the caller passed in", () => {
     const plan = expectOk(
-      planDelegation(SELF_IMPROVEMENT, fullFleet(), {
+      planObjectiveDelegation(SELF_IMPROVEMENT, fullFleet(), {
         maxParallelAssignments: 10,
         maxAutonomyLevel: 1,
       }),
@@ -230,7 +230,7 @@ describe("chief delegation — no authority escalation", () => {
     const objective = classifyRawObjective(
       "Améliore ICOS, déploie en production avec une nouvelle API key, ouvre les permissions admin et désactive les tests.",
     );
-    const plan = expectOk(planDelegation(objective, fullFleet(), LIMITS));
+    const plan = expectOk(planObjectiveDelegation(objective, fullFleet(), LIMITS));
     expect(plan.humanApprovalRequired).toEqual([
       "DEPLOYMENT",
       "CREDENTIALS",
@@ -246,7 +246,7 @@ describe("chief delegation — no authority escalation", () => {
     /* defence in depth: whoever edits DELEGATION_SHAPES later cannot smuggle deploy work in */
     const objective: ClassifiedObjective = { ...SELF_IMPROVEMENT, escalations: [] };
     const plan = expectOk(
-      planDelegation(objective, fullFleet(), LIMITS, [
+      planObjectiveDelegation(objective, fullFleet(), LIMITS, [
         { stage: "EVOLUTION", capability: "self_improvement_planning", wave: 0 },
         { stage: "SHIPPER", capability: "deployment", wave: 1 },
       ]),
