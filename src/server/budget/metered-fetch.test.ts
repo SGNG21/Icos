@@ -219,6 +219,51 @@ describe("meteredFetch — vérité de la mesure", () => {
   });
 });
 
+describe("meteredFetch — ne mesure que les complétions", () => {
+  const MODELS_URL = "https://omniroute.invalid/v1/models";
+  const MODELS_BODY = { object: "list", data: [{ id: "auto/best-chat" }] };
+
+  it("N'ENREGISTRE RIEN pour une requête qui n'est pas une complétion", async () => {
+    // `OmniRouteCeoClient.resolveModel` fait GET /v1/models par le MÊME fetch injecté.
+    // Cette réponse est un 2xx JSON sans `usage` : l'enregistrer UNMETERED condamnait
+    // l'imputation entière dès la découverte des modèles, sans décroissance ni remise à zéro.
+    const ledger = new FakeLedger();
+    const response = await meteredFetch(async () => jsonResponse(MODELS_BODY), { ledger })(
+      MODELS_URL,
+      { headers: { Authorization: "Bearer x" } },
+    );
+    expect(ledger.recorded).toHaveLength(0);
+    await expect(response.json()).resolves.toEqual(MODELS_BODY);
+  });
+
+  it("reconnaît la complétion quelle que soit la forme de `input`", async () => {
+    for (const input of [
+      URL_UNDER_TEST,
+      new URL(URL_UNDER_TEST),
+      new Request(URL_UNDER_TEST, { method: "POST" }),
+    ]) {
+      const ledger = new FakeLedger();
+      await meteredFetch(async () => jsonResponse(COMPLETION_BODY), { ledger })(input, chatInit());
+      expect(ledger.recorded).toHaveLength(1);
+    }
+  });
+
+  it("enregistre QUAND MÊME UNMETERED pour une complétion en flux", async () => {
+    // Garde-fou contre la sur-correction : une complétion dont la consommation est illisible
+    // est une vraie dépense qu'ICOS n'a pas pu mesurer. La laisser passer silencieusement
+    // rouvrirait le trou que ce module ferme.
+    const ledger = new FakeLedger();
+    await meteredFetch(
+      async () =>
+        new Response("data: {}\n\ndata: [DONE]\n\n", {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      { ledger },
+    )(URL_UNDER_TEST, chatInit());
+    expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "NON_JSON_BODY" });
+  });
+});
+
 describe("meteredFetch — ne corrompt pas le journal", () => {
   it("n'enregistre rien sur une réponse non 2xx et la rend inchangée", async () => {
     const ledger = new FakeLedger();
