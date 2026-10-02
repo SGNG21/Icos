@@ -82,19 +82,49 @@ export async function POST(request: Request): Promise<Response> {
 
     const callerKey = request.headers.get("idempotency-key")?.trim() || parsed.data.idempotencyKey;
     try {
-      const { job, created } = await container.scheduler.enqueue({
-        kind: "start_mission",
-        payload: {
-          title: parsed.data.title,
-          objective: parsed.data.objective,
-          ...(parsed.data.goalId ? { goalId: parsed.data.goalId } : {}),
-        },
-        /* Scoped to the caller: one user's key can never replay another user's mission. */
-        /* Hashed: any caller key fits the scheduler's key length, and none is stored verbatim. */
-        idempotencyKey: `${RESERVED_KEY_PREFIX}${access.session.user.id}:${createHash("sha256")
-          .update(callerKey ?? randomUUID())
-          .digest("hex")}`,
-      });
+      /* Scoped to the caller: one user's key can never replay another user's mission. */
+      /* Hashed: any caller key fits the scheduler's key length, and none is stored verbatim. */
+      const idempotencyKey = `${RESERVED_KEY_PREFIX}${access.session.user.id}:${createHash("sha256")
+        .update(callerKey ?? randomUUID())
+        .digest("hex")}`;
+
+      /*
+       * Objective admission (decision 0065): the goal is SCORED and the portfolio is
+       * consulted before the EXISTING start_mission job is enqueued. A deferred admission
+       * still returns 202 with a durable job and mission id — the scheduler brings it back.
+       *
+       * A goalId that names no stored goal falls back to the plain enqueue: there is
+       * nothing to score, and inventing a goal to score would be worse than ordering the
+       * launch at the default priority.
+       */
+      const stored = await container.goalRepository.getById(parsed.data.goalId);
+      const admitted = stored
+        ? await container.objectiveCoordinator.admit({
+            goal: stored.goal,
+            idempotencyKey,
+            title: parsed.data.title,
+            objective: parsed.data.objective,
+          })
+        : null;
+
+      const { job, created } = admitted
+        ? {
+            job: {
+              id: admitted.jobId,
+              missionId: admitted.missionId,
+              payload: {} as Record<string, unknown>,
+            },
+            created: admitted.created,
+          }
+        : await container.scheduler.enqueue({
+            kind: "start_mission",
+            payload: {
+              title: parsed.data.title,
+              objective: parsed.data.objective,
+              ...(parsed.data.goalId ? { goalId: parsed.data.goalId } : {}),
+            },
+            idempotencyKey,
+          });
       return json(
         {
           missionId: job.missionId ?? (job.payload.missionId as string),
