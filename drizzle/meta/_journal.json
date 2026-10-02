@@ -365,6 +365,13 @@
       "when": 1791232006287,
       "tag": "0054_client_context",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1791232007287,
+      "tag": "0055_spend_ledger",
+      "breakpoints": true
     }
   ]
 }
