@@ -50,6 +50,22 @@ export const EVOLUTION_BRAIN_ID = "brain-evolution";
 /** Load order: a supervisor always precedes its reports (the FK needs that). */
 export const BRAIN_IDS: readonly string[] = brainsData.map((b) => b.agentId);
 
+/**
+ * The roles the twelve brains REUSE, deduplicated. A PRECONDITION of seeding, not a product
+ * of it: `workforce_agents` has an FK on (tenant_id, role_id, role_version) and governance
+ * refuses a role that is not `active`, so each of these must be registered, certified by an
+ * independent human and activated BEFORE a brain can exist. A seeder never certifies a role
+ * for itself — a certification is a human act with test evidence behind it.
+ */
+export const BRAIN_ROLES: readonly { roleId: string; version: string }[] = [
+  ...new Map(
+    brainsData.map((b) => [
+      `${b.roleId}@${b.roleVersion}`,
+      { roleId: b.roleId, version: b.roleVersion },
+    ]),
+  ).values(),
+];
+
 export interface BrainSeedContext {
   /** No tenant context -> no tenant operation: the caller supplies the tenant. */
   tenantId: string;
