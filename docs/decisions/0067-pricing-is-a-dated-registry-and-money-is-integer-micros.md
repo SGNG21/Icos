@@ -15,7 +15,7 @@ silently before, because differing filenames merge with no conflict. **Re-check 
 
 A monetary budget is only as trustworthy as its prices. The previous state was honest but thin: a
 single flat `price-table.ts`, deliberately empty, where an entry carried a `provenance` and an
-`asOf` string and nothing prevented an undated or永-fresh price from being hand-written into the
+`asOf` string and nothing prevented an undated or never-expiring price from being hand-written into the
 literal. That is the shape in which a wrong number quietly becomes a number someone budgets
 against.
 
