@@ -138,24 +138,55 @@ export function scopeCovers(
   );
 }
 
+const MAX_NAMESPACE_DECODE_PASSES = 2;
+
 /**
- * Un segment `..` ferait d'un namespace un faux descendant : `a/b/../escape` commence bien par
- * `a/b/` alors qu'il en sort. La comparaison étant purement préfixielle, la traversée est
- * refusée ici — l'unique point de passage de `memoryScopeWithin` et `namespaceAllowed` — et non
- * chez chaque appelant. Fail closed : un namespace non traversable n'est jamais « contenu ».
+ * Produit l'identité canonique comparée par les contrôles de namespace. Deux décodages suffisent
+ * à révéler l'encodage double ; un `%` résiduel reste ambigu et ferme donc l'autorisation. Les
+ * antislashs sont des séparateurs potentiels, et `..` est toujours refusé plutôt que résolu.
  */
-function traverses(namespace: string): boolean {
-  return namespace.split("/").includes("..");
+function canonicalNamespace(namespace: string): string | null {
+  let decoded = namespace;
+  for (let pass = 0; pass < MAX_NAMESPACE_DECODE_PASSES; pass += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      return null;
+    }
+  }
+  if (decoded.includes("%")) return null;
+
+  const separated = decoded.normalize("NFC").replace(/\\/g, "/");
+  const withoutBoundarySeparators = separated.replace(/^\/|\/$/g, "");
+  const segments = withoutBoundarySeparators.split("/");
+  const canonical: string[] = [];
+  for (const segment of segments) {
+    if (segment.trim().length === 0 || segment === "..") return null;
+    if (segment !== ".") canonical.push(segment);
+  }
+  return canonical.length > 0 ? canonical.join("/") : null;
 }
 
-/** Namespace containment: `a/b` is within `a`; `*` holds everything; `..` never contained. */
+function canonicalNamespaces(namespaces: readonly string[]): string[] | null {
+  const canonical: string[] = [];
+  for (const namespace of namespaces) {
+    const normalized = canonicalNamespace(namespace);
+    if (normalized === null) return null;
+    canonical.push(normalized);
+  }
+  return canonical;
+}
+
+/** Namespace containment: `a/b` is within `a`; `*` holds everything; traversal never is. */
 function namespacesWithin(child: readonly string[], parent: readonly string[]): boolean {
-  if (child.some(traverses)) return false;
-  if (parent.includes(ALL)) return true;
-  return child.every(
-    (c) =>
-      c !== ALL &&
-      parent.some((p) => !traverses(p) && (c === p || c.startsWith(`${p}/`))),
+  const canonicalChild = canonicalNamespaces(child);
+  const canonicalParent = canonicalNamespaces(parent);
+  if (canonicalChild === null || canonicalParent === null) return false;
+  if (canonicalParent.includes(ALL)) return true;
+  return canonicalChild.every(
+    (c) => c !== ALL && canonicalParent.some((p) => c === p || c.startsWith(`${p}/`)),
   );
 }
 
