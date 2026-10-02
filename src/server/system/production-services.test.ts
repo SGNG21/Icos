@@ -5,7 +5,8 @@ import type { Container } from "@/server/container";
 import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
 import { COMPUTE_HEALTH_OBSERVATION } from "@/server/proactive/compose";
 import { enqueueObservation } from "@/server/proactive/observations";
-import { startProductionServices } from "@/server/system/production-services";
+import { modelAllowlist } from "@/core/autonomy/model-allowlist";
+import { autonomyIgniteDeps, startProductionServices } from "@/server/system/production-services";
 import {
   enqueueWorkerProbeSweep,
   nextOccurrenceAt,
@@ -344,5 +345,47 @@ describe("production services bootstrap", () => {
     );
 
     await services.stop();
+  });
+});
+describe("autonomyIgniteDeps — le câblage de la politique bornée", () => {
+  /*
+   * LE CÂBLAGE EST LA LIVRAISON (P0-E/P0-F). Ce test échoue si quelqu'un retire
+   * `container.autonomyPolicy` de l'allumage : le plafond configuré et le pool de
+   * compute autorisé n'auraient alors plus aucun appelant, donc n'appliqueraient rien.
+   */
+  it("transporte le plafond ET le pool de compute du conteneur jusqu'à l'allumage", () => {
+    const policy = {
+      options: { maxCycles: 20, maxRuntimeMs: 1_800_000, maxStagnationCycles: 2, maxReplans: 2 },
+      systemModelAllowlist: modelAllowlist(["cheap-model"]),
+      plannerCompute: { modelId: "cheap-model", providerId: "omniroute" },
+    };
+
+    const deps = autonomyIgniteDeps(
+      {
+        mission: {} as never,
+        autonomousRuntime: {} as never,
+        autonomousPlanner: undefined,
+        autonomyPolicy: policy,
+      } as unknown as Container,
+      {} as never,
+    );
+
+    expect(deps.options).toEqual(policy.options);
+    expect(deps.systemModelAllowlist).toEqual(policy.systemModelAllowlist);
+    expect(deps.plannerCompute).toEqual(policy.plannerCompute);
+  });
+
+  it("reste fermé sans planificateur : jamais un plan inventé", async () => {
+    const deps = autonomyIgniteDeps(
+      {
+        mission: {} as never,
+        autonomousRuntime: {} as never,
+        autonomousPlanner: undefined,
+        autonomyPolicy: {},
+      } as unknown as Container,
+      {} as never,
+    );
+
+    await expect(deps.planner.plan({} as never)).rejects.toThrow("AUTONOMY_PLANNER_UNAVAILABLE");
   });
 });

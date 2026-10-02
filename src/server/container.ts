@@ -15,7 +15,15 @@ import { agentSchema, agentActionSchema, taskSchema } from "@/core/contracts";
 import { AIResourceCatalogPort } from "@/core/contracts/ai-selection";
 import { AIResourceCatalog } from "@/server/services/ai-selection/ai-resource-catalog";
 import type { Agent, AgentAction, Task } from "@/core/contracts";
-import { loadEnv, resolveAuthConfig, type AuthConfig, type Env } from "@/config/env";
+import {
+  loadEnv,
+  resolveAuthConfig,
+  resolveAutonomyBounds,
+  resolveSystemModelAllowlist,
+  type AuthConfig,
+  type Env,
+} from "@/config/env";
+import type { AutonomyCompositionPolicy } from "@/server/usecases/start-autonomous-mission";
 import { AuthenticationService } from "@/server/auth/authentication-service";
 import { createBetterAuth, type IcosBetterAuth } from "@/server/auth/better-auth";
 import { BetterAuthHttpGateway } from "@/server/auth/http-gateway";
@@ -304,6 +312,16 @@ export interface Container {
   autonomousRuntime: AutonomousMissionRuntimeRepository;
   autonomousPlanner?: AutonomousMissionPlanner;
   /**
+   * POLITIQUE BORNÉE d'une mission autonome (P0-E/P0-F) : le plafond du déploiement et
+   * le pool de compute que le système autorise, résolus UNE fois ici et transportés tels
+   * quels jusqu'à l'allumage (`igniteAutonomousMission` -> `startAutonomousMission`).
+   *
+   * Requis, et `{}` est une valeur légitime qui signifie « les valeurs par défaut
+   * historiques » : sans ce champ, les modules de politique n'auraient toujours aucun
+   * appelant, et une politique sans appelant n'applique rien.
+   */
+  autonomyPolicy: AutonomyCompositionPolicy;
+  /**
    * The COMPUTE behind proposing an improvement (M14), configured exactly like the planner's.
    * Kept separate from the planner itself because a proposer runs INSIDE the repository it is
    * proposing about, and a planner does not.
@@ -536,6 +554,8 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     controlGuard,
     autonomousRuntime,
     autonomousPlanner: undefined,
+    /* Backend mémoire : aucun env résolu, donc exactement les valeurs par défaut. */
+    autonomyPolicy: {},
     improvementProposalProvider: undefined,
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
@@ -929,6 +949,7 @@ export async function buildPostgresContainer(
     controlGuard,
     autonomousRuntime,
     autonomousPlanner: buildAutonomousPlanner(env, spend.mission),
+    autonomyPolicy: buildAutonomyCompositionPolicy(env),
     improvementProposalProvider: buildImprovementProposalProvider(env),
     conversationService,
     ceoService: new CeoApplicationService(conversationService, missionService),
@@ -1201,6 +1222,33 @@ function buildAutonomousPlanner(
   }
 
   return createOmniRouteAutonomousMissionPlanner(env, missionFetch);
+}
+
+/**
+ * Résout la POLITIQUE BORNÉE du déploiement (P0-E/P0-F).
+ *
+ * Le conteneur est le seul endroit qui connaisse à la fois la configuration et le compute
+ * réellement composé ; c'est donc ici que la politique est arrêtée, puis transportée
+ * sans être reconstruite nulle part ailleurs.
+ *
+ * `plannerCompute.modelId` est `ICOS_PLANNER_MODEL` et rien d'autre : c'est la variable
+ * qui SÉLECTIONNE le planificateur OmniRoute (voir `buildAutonomousPlanner`), donc le
+ * modèle que la planification utilisera vraiment. Un planificateur de PROCESSUS LOCAL
+ * n'annonce aucun modèle : sous un goal au pool restreint, il est alors irrésoluble et
+ * REFUSÉ — fermé par défaut, jamais un laissez-passer.
+ *
+ * Le fournisseur est la passerelle configurée, nommée comme le transport se nomme
+ * lui-même (`OmniRouteCompletionProvider.name === "omniroute"`).
+ */
+export function buildAutonomyCompositionPolicy(env: Env): AutonomyCompositionPolicy {
+  return {
+    options: resolveAutonomyBounds(env),
+    systemModelAllowlist: resolveSystemModelAllowlist(env),
+    plannerCompute: {
+      ...(env.ICOS_PLANNER_MODEL !== undefined ? { modelId: env.ICOS_PLANNER_MODEL } : {}),
+      providerId: "omniroute",
+    },
+  };
 }
 
 function buildWorkerExecutor(env: Env): {
