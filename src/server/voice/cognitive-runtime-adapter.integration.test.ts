@@ -150,6 +150,58 @@ describe("voice -> cognitive runtime (canonical adapter)", () => {
     ).rejects.toMatchObject({ name: "CognitiveUnavailableError" });
   });
 
+  /**
+   * ACCEPTANCE B DE P0-P : TEXTE -> VOIX -> TEXTE -> VOIX, sans perdre le contexte.
+   *
+   * La garantie ne vient pas d'une synchronisation entre deux systèmes : il n'y en a qu'UN.
+   * La voix n'a pas de cerveau à elle — l'adaptateur appelle le MÊME Cognitive Runtime, sur
+   * la MÊME conversation, donc le contexte est partagé par construction et non par recopie.
+   * Ce test le vérifie contre une vraie base plutôt que de le déduire du graphe d'appel.
+   */
+  it("V6 — une conversation alterne TEXTE et VOIX sans perdre son contexte", async () => {
+    const rt = runtimeWith(new ScriptedCognitionEngine(() => answer("ok")));
+    const adapter = new CognitiveRuntimeVoiceAdapter(rt, () => ["owner"]);
+
+    /* 1. TEXTE : la conversation naît du chemin clavier. */
+    const conversation = await rt.createConversation(ME, { title: "Mixte" });
+    await rt.submitTurn(ME, conversation.id, { text: "premier, au clavier", idempotencyKey: "t1" });
+
+    /* 2. VOIX : le même utilisateur reprend CETTE conversation à la voix. */
+    const spoken = await adapter.submitTurn(
+      turn({ conversationId: conversation.id, text: "deuxième, à la voix" }),
+      new AbortController().signal,
+    );
+    expect(spoken.conversationId).toBe(conversation.id);
+    await collect(spoken.events);
+
+    /* 3. TEXTE de nouveau, puis 4. VOIX de nouveau. */
+    await rt.submitTurn(ME, conversation.id, {
+      text: "troisième, au clavier",
+      idempotencyKey: "t2",
+    });
+    const spokenAgain = await adapter.submitTurn(
+      turn({ conversationId: conversation.id, text: "quatrième, à la voix" }),
+      new AbortController().signal,
+    );
+    await collect(spokenAgain.events);
+
+    /*
+     * UNE seule conversation, et les quatre tours utilisateur dans l'ORDRE. Rien n'a été
+     * dupliqué dans une conversation « voix » parallèle, et rien n'a été perdu en changeant
+     * de modalité : c'est exactement ce que « le contexte reste continu » veut dire.
+     */
+    const state = await rt.resume(ME, conversation.id);
+    const said = state.turns
+      .filter((t) => t.role === "user")
+      .map((t) => t.content.parts.map((part) => part.text).join(""));
+    expect(said).toEqual([
+      "premier, au clavier",
+      "deuxième, à la voix",
+      "troisième, au clavier",
+      "quatrième, à la voix",
+    ]);
+  });
+
   it("V5 — aborting the stream (barge-in) cancels through the runtime but never un-accepts the turn", async () => {
     const rt = runtimeWith(
       new ScriptedCognitionEngine(async (_input, signal) => {
