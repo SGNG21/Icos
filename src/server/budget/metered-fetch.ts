@@ -1,0 +1,144 @@
+import {
+  UNMETERED,
+  type Attribution,
+  type DenyReason,
+  type SpendDecision,
+  type UsageOutcome,
+} from "@/core/budget/contracts";
+import { readUsage } from "@/core/budget/usage";
+
+import type { SpendLedgerPort } from "./ports";
+
+/**
+ * LE point d'application du budget (verrou d'autonomie B1).
+ *
+ * Les cinq appels de complétion OmniRoute passent tous par une valeur typée `typeof fetch`
+ * (`fetchImpl` / `doFetch`), injectable. Un seul décorateur de cette forme les mesure donc
+ * tous, sans toucher une ligne d'aucun des cinq appelants. C'est la raison d'être de ce
+ * fichier : il n'y a qu'UN compteur, pas cinq.
+ *
+ * Invariants :
+ * - le refus arrive AVANT `inner` : un appel refusé n'est jamais émis ;
+ * - la réponse rendue est l'objet de `inner`, intact et entièrement lisible — la mesure lit
+ *   un `clone()` ;
+ * - une erreur ou une annulation de l'appelant remonte telle quelle et n'écrit rien ;
+ * - une réponse sans consommation lisible est enregistrée UNMETERED, jamais 0.
+ */
+
+const DENIED_ERROR_NAME = "BudgetDeniedError";
+
+/** Levée AVANT l'appel, quand le journal refuse la dépense. Une seule erreur typée. */
+export class BudgetDeniedError extends Error {
+  readonly name = DENIED_ERROR_NAME;
+  readonly reason: DenyReason;
+  constructor(decision: Extract<SpendDecision, { kind: "DENY" }>) {
+    super(`BUDGET_DENIED:${decision.reason} ${decision.detail}`);
+    this.reason = decision.reason;
+  }
+}
+
+/**
+ * Levée quand l'appel a réussi mais que le journal n'a pas pu enregistrer la dépense.
+ * On échoue bruyamment : avaler l'erreur ferait du compteur un compteur ouvert, c'est-à-dire
+ * exactement le défaut que ce lot ferme. La réponse de `inner` n'a pas été consommée.
+ */
+export class BudgetLedgerError extends Error {
+  readonly name = "BudgetLedgerError";
+  constructor(cause: unknown) {
+    super("BUDGET_LEDGER_UNAVAILABLE", { cause });
+  }
+}
+
+export interface MeteredFetchDeps {
+  readonly ledger: SpendLedgerPort;
+  /** Imputation des appels passant par CE décorateur. Absente = appel non attribué. */
+  readonly attribution?: Attribution;
+  readonly now?: () => Date;
+}
+
+const JSON_CONTENT_TYPE = /^application\/(\w+\+)?json\b/i;
+
+/** Le modèle demandé, quand le corps de requête est une chaîne JSON (les cinq appelants). */
+function requestedModel(init: RequestInit | undefined): string | undefined {
+  /*
+   * Plafond assumé : on ne lit que `init.body` sous forme de chaîne. Un `Request` ou un flux
+   * en entrée laisse le modèle inconnu — donc UNPRICED, donc fermé. Aucun des cinq appelants
+   * n'est dans ce cas.
+   */
+  if (typeof init?.body !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(init.body);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      const model = (parsed as { model?: unknown }).model;
+      if (typeof model === "string" && model.trim().length > 0) return model;
+    }
+  } catch {
+    /* Corps non JSON : le modèle reste inconnu. */
+  }
+  return undefined;
+}
+
+/**
+ * Lit la consommation sur un CLONE. Un corps qui n'est pas annoncé JSON n'est même pas
+ * cloné : lire un flux SSE jusqu'au bout attendrait la fin de la complétion et casserait
+ * le streaming de l'appelant.
+ */
+async function observe(response: Response): Promise<{ usage: UsageOutcome; model?: string }> {
+  if (!JSON_CONTENT_TYPE.test(response.headers.get("content-type") ?? "")) {
+    return { usage: { kind: UNMETERED, reason: "NON_JSON_BODY" } };
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return { usage: { kind: UNMETERED, reason: "NON_JSON_BODY" } };
+  }
+
+  const usage = readUsage(payload);
+  /* Le modèle rapporté par la réponse est celui qui a réellement tourné, donc qui facture. */
+  const reported =
+    typeof payload === "object" && payload !== null
+      ? (payload as { model?: unknown }).model
+      : undefined;
+  return {
+    usage,
+    ...(typeof reported === "string" && reported.trim().length > 0 ? { model: reported } : {}),
+  };
+}
+
+export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeof fetch {
+  const attribution = deps.attribution ?? null;
+  const now = deps.now ?? (() => new Date());
+
+  const metered: typeof fetch = async (input, init) => {
+    const decision = await deps.ledger.checkBudget(attribution);
+    if (decision.kind === "DENY") throw new BudgetDeniedError(decision);
+
+    /* Erreur réseau, annulation, délai dépassé : rien à mesurer, rien à écrire. */
+    const response = await inner(input, init);
+
+    /*
+     * Une réponse non 2xx n'a pas de consommation et n'est pas facturée : on n'écrit AUCUNE
+     * observation. Enregistrer un UNMETERED ici empoisonnerait la fenêtre au premier 429 et
+     * bloquerait le système pour une erreur transitoire.
+     */
+    if (!response.ok) return response;
+
+    const observed = await observe(response);
+    try {
+      await deps.ledger.record({
+        modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
+        usage: observed.usage,
+        attribution,
+        at: now().toISOString(),
+      });
+    } catch (cause) {
+      throw new BudgetLedgerError(cause);
+    }
+
+    return response;
+  };
+
+  return metered;
+}
