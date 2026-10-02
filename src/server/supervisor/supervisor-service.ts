@@ -13,6 +13,8 @@ import type { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/w
 
 import type { CapabilityRouter } from "@/server/routing/capability-router";
 import { complexityFromRisk } from "@/core/workers/compute-routing";
+import { higherComplexity } from "@/core/workforce/compute";
+import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute";
 
 import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
@@ -65,6 +67,14 @@ export class SupervisorService {
      * every production composition site.
      */
     private readonly controlGuard?: Pick<RuntimeControlGuard, "dispatch">,
+    /**
+     * The digital workforce's compute port (decisions 0057 §integration, 0066). Optional: when
+     * absent — every construction before this one — dispatch routes exactly as it did, because
+     * `forTask` is the only thing that reads a brain assignment. When present, a brain may
+     * raise the difficulty, add the worker capabilities its skill declares, or hold the
+     * dispatch for a missing human approval. It can do nothing else, and never names a model.
+     */
+    private readonly workforceCompute?: WorkforceTaskCompute,
   ) {}
 
   private async admissionHeld(missionId: string): Promise<boolean> {
@@ -80,9 +90,11 @@ export class SupervisorService {
    * MissionTask and not from planner output held in memory. That is the whole
    * point of M4: the value that survived the restart is the value that routes.
    */
-  private async routeReadyTask(
-    missionTask: { taskId: string; workerKind?: string | null },
-  ): Promise<{
+  private async routeReadyTask(missionTask: {
+    missionId: string;
+    taskId: string;
+    workerKind?: string | null;
+  }): Promise<{
     blocked: boolean;
     /** Back-pressure: nothing routable NOW, for reasons that end by themselves. */
     deferred?: boolean;
@@ -91,12 +103,34 @@ export class SupervisorService {
     reason?: string;
     routingDecision?: Record<string, unknown>;
   }> {
+    /*
+     * PLANE 5 ASKS, PLANE 4 ROUTES (decision 0066). THE call site of
+     * `WorkforceComputePort.requestFor`: when a brain assignment is waiting for this mission
+     * task, what the workforce asks for joins what the canonical Task asks for. The two can
+     * only compose UPWARDS — union of capabilities, stricter difficulty — so a brain never
+     * widens a requirement, and no model or model hint reaches the router.
+     */
+    const brain =
+      (await this.workforceCompute?.forTask(missionTask.missionId, missionTask.taskId)) ?? null;
+    if (brain?.approvalPending) {
+      /*
+       * A required approval that is not given means CORE3 must not dispatch. Deferred, not
+       * blocked: a human approving ends the hold by itself, exactly like a provider cooldown.
+       */
+      return { blocked: false, deferred: true, reason: "WORKFORCE_APPROVAL_PENDING" };
+    }
+
     if (!this.capabilityRouter) {
       return { blocked: false };
     }
 
     const canonicalTask = await this.taskRepository.getById(missionTask.taskId);
-    const requiredCapabilities = canonicalTask?.requiredCapabilities ?? [];
+    const requiredCapabilities = [
+      ...new Set([
+        ...(canonicalTask?.requiredCapabilities ?? []),
+        ...(brain?.workerCapabilities ?? []),
+      ]),
+    ];
 
     /*
      * WHAT must be done, never WHO does it (decision 0054): the planner's canonical Task says
@@ -111,7 +145,10 @@ export class SupervisorService {
       {
         role: "writer",
         taskType: requiredCapabilities[0],
-        complexity: complexityFromRisk(canonicalTask?.riskClass),
+        complexity: higherComplexity(
+          complexityFromRisk(canonicalTask?.riskClass),
+          brain?.complexity,
+        ),
         risk: canonicalTask?.riskClass,
         repositoryMutation: (canonicalTask?.allowedFileScope?.length ?? 0) > 0,
         correctionAttempt: 0,

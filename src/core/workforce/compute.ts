@@ -29,6 +29,14 @@ const ORDER: readonly TaskComplexity[] = ["low", "medium", "high"];
 const higher = (a: TaskComplexity, b: TaskComplexity) =>
   ORDER.indexOf(a) >= ORDER.indexOf(b) ? a : b;
 
+/**
+ * The STRICTER of two difficulties; a missing second one never lowers the first. Used where a
+ * brain assignment and a canonical Task both state a difficulty: the bar may only go up.
+ */
+export function higherComplexity(a: TaskComplexity, b?: TaskComplexity): TaskComplexity {
+  return b ? higher(a, b) : a;
+}
+
 export function computeRequestFor(input: {
   skill: SkillDefinition;
   role?: Pick<AgentRole, "roleId">;
