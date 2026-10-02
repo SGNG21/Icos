@@ -179,9 +179,16 @@ describe("plafonds d'autonomie configurables (P0-E)", () => {
 describe("pool de compute autorisé par le SYSTÈME (P0-F)", () => {
   it("absent = NON RESTREINT, état explicite et comportement d'avant", () => {
     expect(resolveSystemModelAllowlist(loadEnv({}))).toEqual(MODEL_ALLOWLIST_UNRESTRICTED);
-    expect(resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "" }))).toEqual(
-      MODEL_ALLOWLIST_UNRESTRICTED,
-    );
+  });
+
+  it("une liste PRÉSENTE mais VIDE refuse de démarrer au lieu d'autoriser tout", () => {
+    /*
+     * Un gabarit émettant `ICOS_AUTONOMY_ALLOWED_MODELS=` veut dire « aucun », pas « tous ».
+     * L'assertion précédente traitait la chaîne vide comme une absence et bénissait donc
+     * « vide ⇒ TOUS les modèles » : le repli permissif que ce lot existe pour supprimer.
+     */
+    expect(() => loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "" })).toThrow();
+    expect(() => loadEnv({ ICOS_AUTONOMY_ALLOWED_PROVIDERS: "" })).toThrow();
   });
 
   it("une liste déclarée borne le système, et elle seule", () => {

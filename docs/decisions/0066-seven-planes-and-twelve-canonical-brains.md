@@ -21,6 +21,18 @@ bounded self-improvement objective. The risk in building toward that is not diff
 duplication: every plane of this architecture already has an owner, and a second owner for any
 of them would be worse than the missing feature.
 
+## STATUS NOTICE — read this before any claim below
+
+The status paragraphs in this decision were written at two earlier commits and an independent
+review found them **no longer a coherent description of HEAD**. They are left in place as a record
+of what was true when written; the authoritative, commit-pinned status lives in
+`docs/reports/2026-10-02-big-autonomy-lane.md` under "Status at a pinned commit".
+
+Specifically superseded: the claims that `loadBrains`, the spend meter and the model allowlist
+have no production caller (all three are now wired), and the claim that budget and the per-mission
+model allowlist "share one enforcement point" — they do NOT. Budget is enforced at the OmniRoute
+fetch seam; the allowlist is enforced in `startAutonomousMission`. Two seams, two mechanisms.
+
 ## Decision 1 — the architecture normalizes to seven planes, each with exactly one authority
 
 | Plane | Authority | Owns |

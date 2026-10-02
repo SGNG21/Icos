@@ -59,7 +59,11 @@ principal. The engineering is done; the authority is deliberately not ours to as
    existing brain is reported `already-present` and never overwritten, because a seeder must not
    silently reset durable governed state.
 
-After that the brains are load-bearing immediately, because the dispatch seam is already live.
+After that the dispatch seam is live, so a brain CAN influence a real dispatch. It is not yet
+load-bearing end to end: nothing in production creates a workforce assignment, so
+`forTask` finds none and the dispatch is unchanged. An independent review flagged the
+earlier wording here as self-contradictory, since the residual gap below says exactly that.
+The honest statement is: wired, tested, and not yet traversed.
 
 ## Residual gaps, recorded not hidden
 

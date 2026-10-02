@@ -187,8 +187,25 @@ const envSchema = z.object({
    * Déclarer des fournisseurs sans modèles refuse de démarrer : « seulement ces
    * fournisseurs, tous modèles » n'est pas exprimable dans une liste d'autorisation.
    */
-  ICOS_AUTONOMY_ALLOWED_MODELS: z.preprocess(emptyAsUndefined, z.string().optional()),
-  ICOS_AUTONOMY_ALLOWED_PROVIDERS: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /*
+   * CES DEUX-LÀ NE TRAITENT PAS LA CHAÎNE VIDE COMME UNE ABSENCE.
+   *
+   * Pour une liste d'AUTORISATION, `FOO=` est ambigu : un gabarit de déploiement qui l'émet
+   * veut presque toujours dire « aucun modèle », alors que l'absence veut dire « non
+   * restreint ». Les confondre transformait un gabarit vide en « TOUS les modèles autorisés »
+   * — exactement le repli permissif que ce lot existe pour supprimer. Une valeur présente mais
+   * vide REFUSE donc de démarrer, au lieu de choisir à la place de l'opérateur.
+   *
+   * Conséquence assumée : ces deux variables ne figurent pas, vides, dans `.env.example`.
+   */
+  ICOS_AUTONOMY_ALLOWED_MODELS: z
+    .string()
+    .min(1, "ICOS_AUTONOMY_ALLOWED_MODELS vide : ambigu, l'omettre pour « non restreint »")
+    .optional(),
+  ICOS_AUTONOMY_ALLOWED_PROVIDERS: z
+    .string()
+    .min(1, "ICOS_AUTONOMY_ALLOWED_PROVIDERS vide : ambigu, l'omettre pour « non restreint »")
+    .optional(),
   ICOS_SELF_DEVELOPMENT: z.preprocess(
     emptyAsUndefined,
     z.enum(["enabled", "disabled"]).optional(),
