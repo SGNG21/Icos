@@ -30,6 +30,39 @@ describe("SchedulerService.enqueue", () => {
     ).rejects.toThrow("SCHEDULER_IDEMPOTENCY_CONFLICT");
   });
 
+  /* P0-E: l'admission est le point de DÉCLARATION des plafonds d'une mission. */
+  it("admits the caps and the compute pool a goal requests, verbatim", async () => {
+    const { job } = await service().enqueue({
+      kind: "start_mission",
+      payload: {
+        ...start,
+        bounds: { maxRuntimeMs: 1_800_000, maxCycles: 20, maxReplans: 2 },
+        computePolicy: { allowedModels: ["cheap-model"] },
+      },
+      idempotencyKey: "bounded",
+    });
+
+    expect(job.payload.bounds).toEqual({ maxRuntimeMs: 1_800_000, maxCycles: 20, maxReplans: 2 });
+    expect(job.payload.computePolicy).toEqual({ allowedModels: ["cheap-model"] });
+  });
+
+  it("refuses an out-of-contract cap at admission rather than at execution", async () => {
+    await expect(
+      service().enqueue({
+        kind: "start_mission",
+        payload: { ...start, bounds: { maxCycles: 0 } },
+        idempotencyKey: "k",
+      }),
+    ).rejects.toThrow("SCHEDULER_INVALID_JOB");
+    await expect(
+      service().enqueue({
+        kind: "start_mission",
+        payload: { ...start, bounds: { maxThings: 3 } },
+        idempotencyKey: "k",
+      }),
+    ).rejects.toThrow("SCHEDULER_INVALID_JOB");
+  });
+
   it("schedules wake_mission for an existing mission id", async () => {
     const { job } = await service().enqueue({
       kind: "wake_mission",

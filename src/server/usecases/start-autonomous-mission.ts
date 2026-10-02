@@ -8,6 +8,14 @@ import {
   type RuntimeBounds,
 } from "@/core/autonomy/bounds";
 import {
+  decideModel,
+  narrowModelAllowlist,
+  resolveModelAllowlist,
+  type MissionModelAllowlist,
+  type ModelCandidate,
+  type RequestedComputePolicy,
+} from "@/core/autonomy/model-allowlist";
+import {
   AutonomousMissionRunner,
   type AutonomousMissionPlanner,
   type AutonomousSupervisor,
@@ -44,18 +52,46 @@ import {
  *     attempt is clamped and reported in `clampedBounds`. Re-igniting an
  *     existing runtime reuses its persisted caps and ignores the request —
  *     the runner enforces `runtime.max*`, not these options;
+ *   - pool de compute: un goal PEUT restreindre les modèles/fournisseurs de sa mission
+ *     (`input.computePolicy`), et seulement les restreindre. La demande est réduite
+ *     contre le pool autorisé par le système (`deps.systemModelAllowlist`); un id que
+ *     le système n'autorisait pas est REFUSÉ, jamais accordé, et l'allumage échoue
+ *     avant tout effet de bord. Voir `assertComputePermitted`;
  *   - fail-closed: an unavailable planner surfaces as a thrown planner error,
  *     never an implicit empty plan or false success;
  *   - idempotency: re-igniting an existing runtime is safe — createIfAbsent is a
  *     no-op and the runner resumes the persisted runtime instead of resetting
  *     counters.
  */
-export interface StartAutonomousMissionDeps {
+/**
+ * Ce que la COMPOSITION (le conteneur) sait et que l'allumage doit appliquer : le
+ * plafond du déploiement et le pool de compute que le système autorise. Un seul type,
+ * transporté tel quel par `igniteAutonomousMission`, pour qu'aucun maillon n'ait à
+ * reconstruire la politique — ni à en inventer une.
+ */
+export interface AutonomyCompositionPolicy {
+  /** Plafond du déploiement. Absent = `AUTONOMY_BOUNDS_CEILING`, comme avant. */
+  options?: AutonomousMissionRunnerOptions;
+
+  /**
+   * Pool de compute autorisé PAR LE SYSTÈME. Absent devient l'état explicite
+   * `unrestricted` à l'unique frontière prévue pour ça (`resolveModelAllowlist`).
+   */
+  systemModelAllowlist?: MissionModelAllowlist;
+
+  /**
+   * Le compute que ce processus utilisera RÉELLEMENT pour planifier (le modèle
+   * configuré, et le fournisseur qui le sert). Absent / sans modèle = irrésoluble :
+   * sous un pool restreint, c'est un REFUS, jamais un laissez-passer.
+   */
+  plannerCompute?: Partial<ModelCandidate>;
+}
+
+export interface StartAutonomousMissionDeps extends AutonomyCompositionPolicy {
   missions: Pick<MissionRepository, "findById" | "listTasks" | "applyPlan" | "replacePlan">;
   runtimeRepository: AutonomousMissionRuntimeRepository;
   supervisor: AutonomousSupervisor;
   planner: AutonomousMissionPlanner;
-  options?: AutonomousMissionRunnerOptions;
   now?: () => Date;
 }
 
@@ -68,6 +104,12 @@ export interface StartAutonomousMissionInput {
    * so omitting `bounds` entirely is byte-identical to the previous behaviour.
    */
   bounds?: RequestedBounds;
+
+  /**
+   * Pool de compute demandé par CE goal. Il ne peut que RÉDUIRE le pool système :
+   * demander un modèle ou un fournisseur hors de celui-ci refuse l'allumage.
+   */
+  computePolicy?: RequestedComputePolicy;
 }
 
 const DEFAULT_OPTIONS: AutonomousMissionRunnerOptions = AUTONOMY_BOUNDS_CEILING;
@@ -84,6 +126,9 @@ export async function startAutonomousMission(
    * injected (tighter) deployment configuration can never be widened either.
    */
   const resolved = input.bounds ? resolveBounds(input.bounds, ceilingOf(baseOptions)) : null;
+
+  /* Avant tout effet de bord : une politique de compute refusée n'allume rien. */
+  assertComputePermitted(deps, input.computePolicy);
 
   const mission = await deps.missions.findById(input.missionId);
   if (!mission) {
@@ -124,6 +169,54 @@ export async function startAutonomousMission(
   }
 
   return result;
+}
+
+/**
+ * LA COUTURE D'APPLICATION du pool de compute (P0-F).
+ *
+ * C'est ici que le modèle d'une mission est arrêté : le planificateur est construit une
+ * fois pour le processus (`container.ts`), donc le modèle qu'il utilisera est connu, et
+ * cet allumage est le seul passage obligé avant qu'il ne serve. Trois états, jamais deux :
+ *
+ *   - pool système `unrestricted` et aucune politique de goal -> rien n'est vérifié,
+ *     comportement d'avant au bit près ;
+ *   - pool borné (par le système, par le goal, ou par les deux) -> le modèle configuré
+ *     doit y figurer, SINON REFUS ;
+ *   - un id demandé par le goal que le système n'autorisait pas -> REFUS nommé. Jamais
+ *     accordé, jamais rogné en silence.
+ *
+ * Aucun repli permissif : `?? ""` ci-dessous est un repli REFUSANT (`MODEL_ID_INVALID`),
+ * exigé par « un modèle irrésoluble sous un goal restreint est refusé ». Le sélecteur à
+ * deux états dont le repli est permissif est précisément le fail-open déjà livré deux fois
+ * ici.
+ */
+function assertComputePermitted(
+  deps: AutonomyCompositionPolicy,
+  requested: RequestedComputePolicy | undefined,
+): void {
+  const narrowed = narrowModelAllowlist(
+    resolveModelAllowlist(deps.systemModelAllowlist),
+    requested,
+  );
+
+  if (narrowed.refused.length > 0) {
+    throw new Error(`START_AUTONOMOUS_MISSION_COMPUTE_REFUSED:${narrowed.refused.join(",")}`);
+  }
+
+  if (narrowed.allowlist.mode === "unrestricted") {
+    return;
+  }
+
+  const decision = decideModel(narrowed.allowlist, {
+    modelId: deps.plannerCompute?.modelId ?? "",
+    ...(deps.plannerCompute?.providerId !== undefined
+      ? { providerId: deps.plannerCompute.providerId }
+      : {}),
+  });
+
+  if (!decision.allowed) {
+    throw new Error(`START_AUTONOMOUS_MISSION_COMPUTE_REFUSED:${decision.reason}`);
+  }
 }
 
 function ceilingOf(options: AutonomousMissionRunnerOptions): RuntimeBounds {

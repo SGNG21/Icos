@@ -14,6 +14,8 @@ import { CombinedAutonomyRecoverySweeper } from "@/server/autonomy/combined-auto
 import { loadEnv } from "@/config/env";
 import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
+import type { AutonomousSupervisor } from "@/server/autonomy/autonomous-mission-runner";
+import type { IgniteAutonomousMissionDeps } from "@/server/usecases/ignite-autonomous-mission";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
 import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
 import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
@@ -79,6 +81,34 @@ const PROCESS_SIGNALS: ProductionServiceSignals = {
  * Nothing here is test-only. `createRecoveryScheduler` calls it, and so does the
  * certification proof.
  */
+/**
+ * Les dépendances d'allumage, composées UNE fois pour les deux chemins qui allument une
+ * mission autonome (le job durable `start_mission` et la chaîne d'auto-développement).
+ *
+ * C'est ici que `container.autonomyPolicy` ENTRE dans l'allumage : sans ce transport, le
+ * plafond configuré et le pool de compute autorisé n'auraient aucun appelant et
+ * n'appliqueraient rien. Un seul endroit, donc un seul test à tenir.
+ *
+ * Fail closed sans planificateur : la mission reste `running` et la reprise retentera la
+ * planification une fois configurée — jamais un faux succès, jamais un plan inventé.
+ */
+export function autonomyIgniteDeps(
+  container: Container,
+  supervisor: AutonomousSupervisor,
+): IgniteAutonomousMissionDeps {
+  return {
+    missions: container.mission,
+    runtimeRepository: container.autonomousRuntime,
+    supervisor,
+    planner: container.autonomousPlanner ?? {
+      async plan() {
+        throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
+      },
+    },
+    ...container.autonomyPolicy,
+  };
+}
+
 export function composeAutonomyRuntime(container: Container): {
   supervisor: SupervisorService;
   qualityControl: QualityControlService;
@@ -183,17 +213,7 @@ export function composeAutonomyRuntime(container: Container): {
   const selfDevelopmentChain = new SelfDevelopmentChain({
     backlog,
     goals: container.goalRepository,
-    ignite: {
-      missions: container.mission,
-      runtimeRepository: container.autonomousRuntime,
-      supervisor,
-      planner: container.autonomousPlanner ?? {
-        async plan() {
-          /* Fail closed: never invent a plan for work ICOS proposed to itself. */
-          throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
-        },
-      },
-    },
+    ignite: autonomyIgniteDeps(container, supervisor),
   });
 
   /*
@@ -343,21 +363,9 @@ function createRecoveryScheduler(
 
   // Durable Scheduler (ADR-0025): the same timer only triggers a consultation of the
   // durable job table; PostgreSQL stays the source of truth.
-  const planner = container.autonomousPlanner;
   const proactive = composeProactiveSupervisor(container);
   const handlers = createSchedulerHandlers({
-    ignite: {
-      missions: container.mission,
-      runtimeRepository: container.autonomousRuntime,
-      supervisor,
-      // Fail closed without a planner: the mission stays `running` and recovery keeps
-      // retrying planning once configured (never a false success).
-      planner: planner ?? {
-        async plan() {
-          throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
-        },
-      },
-    },
+    ignite: autonomyIgniteDeps(container, supervisor),
     missions: container.mission,
     wakeup,
     /*
