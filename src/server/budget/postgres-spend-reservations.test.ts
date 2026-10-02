@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Attribution, BudgetCap } from "@/core/budget/contracts";
 
-import type { BudgetCapResolver, SpendEntry } from "./ports";
+import type { BudgetCapResolver, SettleEntry } from "./ports";
 import { PostgresSpendReservations, type TxCapable } from "./postgres-spend-reservations";
 
 /**
@@ -21,13 +21,17 @@ const dialect = new PgDialect();
 const G1: Attribution = { goalId: "g1" };
 const TOKENS: BudgetCap = { kind: "CAPPED", maxTotalTokens: 1_000 };
 
-const entry = (total: number): SpendEntry => ({
+/*
+ * AUCUNE `attribution` : `SettleEntry` la retire du type (verrou C2). Un solde ne peut plus
+ * DÉSIGNER son budget — il hérite de celui de sa réservation. Ce test ne « n'en fournit pas » :
+ * il ne PEUT pas en fournir, et c'est la preuve la plus solide qu'aucune redirection n'existe.
+ */
+const entry = (total: number): SettleEntry => ({
   modelId: "test/model",
   usage: {
     kind: "METERED",
     usage: { promptTokens: total, completionTokens: 0, totalTokens: total },
   },
-  attribution: G1,
   at: "2026-10-02T00:00:00.000Z",
 });
 
@@ -43,6 +47,11 @@ class FakeTxDb {
     private readonly held = 0,
     private readonly settled = true,
     private readonly fail?: Error,
+    /* La ligne de réservation telle que la base la rendrait. `null` = introuvable. */
+    private readonly row: { attribution_key: string; state: string } | null = {
+      attribution_key: "goal=g1",
+      state: "OPEN",
+    },
   ) {}
 
   private readonly execute = async (query: SQL): Promise<unknown> => {
@@ -51,6 +60,8 @@ class FakeTxDb {
     this.params.push(params);
     if (this.fail) throw this.fail;
     if (text.includes("sum(reserved_tokens)")) return [{ held: String(this.held) }];
+    if (text.includes("select attribution_key")) return this.row === null ? [] : [this.row];
+    if (text.includes("from spend_reservations")) return this.row === null ? [] : [this.row];
     if (text.includes("from spend_ledger")) return [];
     if (text.includes("update spend_reservations")) return this.settled ? [{ id: "r1" }] : [];
     return [];
@@ -147,38 +158,125 @@ describe("PostgresSpendReservations — forme et fermeture", () => {
     expect(db.sqlSeen.some((s) => s.includes("insert into spend_reservations"))).toBe(false);
   });
 
-  it("écrit la dépense RÉELLE au journal AVANT de clore, et dit le reliquat", async () => {
+  it("AUTHENTIFIE puis VERROUILLE avant d'écrire la moindre ligne au journal", async () => {
+    /*
+     * L'ordre EST la propriété (verrou C2). L'ancien ordre écrivait au journal en premier,
+     * avec l'imputation de l'appelant, et n'authentifiait qu'après : une dépense réservée sur
+     * un goal pouvait être imputée à un autre. Et comme `settle` ne prenait aucun verrou, il
+     * pouvait s'intercaler entre les deux lectures de `reserve` et faire disparaître la
+     * dépense des deux côtés.
+     */
+    const db = new FakeTxDb();
+    await store(db).settle({ id: "r1", ownerToken: "o1", reservedTokens: 1_000 }, entry(400));
+    expect(db.sqlSeen[0]).toContain("select attribution_key");
+    expect(db.sqlSeen[1]).toContain("pg_advisory_xact_lock");
+    expect(db.sqlSeen[2]).toContain("select attribution_key");
+    expect(db.sqlSeen[3]).toContain("insert into spend_ledger");
+    expect(db.sqlSeen[4]).toContain("update spend_reservations");
+  });
+
+  it("verrouille la MÊME clé que `reserve` : un seul domaine de sérialisation", async () => {
+    const db = new FakeTxDb();
+    await store(db).settle({ id: "r1", ownerToken: "o1", reservedTokens: 10 }, entry(5));
+    expect(db.params[1]).toEqual(["icos.budget:default|goal=g1"]);
+  });
+
+  it("impute la dépense à la RÉSERVATION, et rend le reliquat", async () => {
     const db = new FakeTxDb();
     const outcome = await store(db).settle(
       { id: "r1", ownerToken: "o1", reservedTokens: 1_000 },
       entry(400),
     );
-    expect(db.sqlSeen[0]).toContain("insert into spend_ledger");
-    expect(db.sqlSeen[1]).toContain("update spend_reservations");
+    /* `attribution_key` du journal = celui de la ligne de réservation, pas un choix d'appelant. */
+    const ledger = db.params[db.sqlSeen.findIndex((t) => t.includes("insert into spend_ledger"))];
+    expect(ledger?.[2]).toBe("goal=g1");
     expect(outcome).toEqual({
       reservedTokens: 1_000,
       actualTokens: 400,
       releasedTokens: 600,
       overrunTokens: 0,
       closed: true,
+      attributedTo: { goalId: "g1" },
+      unauthenticated: false,
     });
   });
 
+  it("une réservation RÉSERVÉE SUR UN AUTRE GOAL n'est pas soldable ici", async () => {
+    /*
+     * « réserver goal A -> solder goal B = refusé », prouvé là où c'est décidé : le solde lit
+     * la clé DE LA LIGNE. Ici la ligne dit `goal=autre`, donc la dépense va à `goal=autre`,
+     * quoi que l'appelant croie solder. Rediriger est inexprimable.
+     */
+    const db = new FakeTxDb(0, true, undefined, { attribution_key: "goal=autre", state: "OPEN" });
+    const outcome = await store(db).settle(
+      { id: "r1", ownerToken: "o1", reservedTokens: 10 },
+      entry(5),
+    );
+    const ledger = db.params[db.sqlSeen.findIndex((t) => t.includes("insert into spend_ledger"))];
+    expect(ledger?.[2]).toBe("goal=autre");
+    expect(outcome.attributedTo).toEqual({ goalId: "autre" });
+  });
+
   it("ENREGISTRE QUAND MÊME la dépense d'une réservation qu'il ne peut plus clore", async () => {
-    /* Bail expiré ou mauvais jeton : l'appel a coûté de vrais tokens, les taire serait un blanchiment. */
+    /* Bail expiré : l'appel a coûté de vrais tokens, les taire serait un blanchiment. */
     const db = new FakeTxDb(0, false);
     const outcome = await store(db).settle(
-      { id: "r1", ownerToken: "périmé", reservedTokens: 100 },
+      { id: "r1", ownerToken: "o1", reservedTokens: 100 },
       entry(500),
     );
-    expect(db.sqlSeen[0]).toContain("insert into spend_ledger");
+    expect(db.sqlSeen.some((t) => t.includes("insert into spend_ledger"))).toBe(true);
     expect(outcome).toMatchObject({ closed: false, overrunTokens: 400, actualTokens: 500 });
+  });
+
+  it("une réservation INTROUVABLE est enregistrée NON IMPUTÉE, jamais sur un budget deviné", async () => {
+    const db = new FakeTxDb(0, false, undefined, null);
+    const outcome = await store(db).settle(
+      { id: "forgé", ownerToken: "mauvais", reservedTokens: 100 },
+      entry(500),
+    );
+    const ledger = db.params[db.sqlSeen.findIndex((t) => t.includes("insert into spend_ledger"))];
+    expect(ledger?.[2]).toBe("UNATTRIBUTED");
+    expect(outcome).toMatchObject({ unauthenticated: true, closed: false, attributedTo: null });
+    /* Rien n'est clos : on n'a pas authentifié, donc on ne touche aucune ligne. */
+    expect(db.sqlSeen.some((t) => t.includes("update spend_reservations"))).toBe(false);
   });
 
   it("solde sous le jeton de FENCING du porteur et son propre tenant", async () => {
     const db = new FakeTxDb();
     await store(db).settle({ id: "r1", ownerToken: "o1", reservedTokens: 10 }, entry(5));
-    expect(db.sqlSeen[1]).toContain("owner_token");
-    expect(db.params[1]).toEqual(["r1", "default", "o1"]);
+    const i = db.sqlSeen.findIndex((t) => t.includes("update spend_reservations"));
+    expect(db.sqlSeen[i]).toContain("owner_token");
+    expect(db.params[i]).toEqual(["r1", "default", "o1"]);
+  });
+
+  it("PROLONGE un bail vivant, sous le verrou et sous le jeton de fencing", async () => {
+    const db = new FakeTxDb();
+    expect(await store(db).renew({ id: "r1", ownerToken: "o1", reservedTokens: 10 })).toBe(true);
+    expect(db.sqlSeen[0]).toContain("select attribution_key");
+    expect(db.sqlSeen[1]).toContain("pg_advisory_xact_lock");
+    expect(db.sqlSeen[2]).toContain("set lease_until");
+    expect(db.sqlSeen[2]).toContain("owner_token");
+  });
+
+  it("ne RESSUSCITE jamais un bail déjà échu : le budget a pu être réattribué", async () => {
+    const db = new FakeTxDb();
+    await store(db).renew({ id: "r1", ownerToken: "o1", reservedTokens: 10 });
+    /* La condition est dans le SQL, donc appliquée par l'horloge de PostgreSQL, pas la nôtre. */
+    expect(db.sqlSeen[2]).toContain("lease_until > now()");
+    expect(db.sqlSeen[2]).toContain("state = 'OPEN'");
+  });
+
+  it("une réservation introuvable ne se prolonge pas", async () => {
+    const db = new FakeTxDb(0, true, undefined, null);
+    expect(await store(db).renew({ id: "r1", ownerToken: "o1", reservedTokens: 10 })).toBe(false);
+    expect(db.sqlSeen.some((t) => t.includes("set lease_until"))).toBe(false);
+  });
+
+  it("REND un engagement sans écrire la moindre dépense", async () => {
+    const db = new FakeTxDb();
+    expect(await store(db).release({ id: "r1", ownerToken: "o1", reservedTokens: 10 })).toBe(true);
+    expect(db.sqlSeen.some((t) => t.includes("spend_ledger"))).toBe(false);
+    /* 'EXPIRED' et non 'SETTLED' : aucune ligne de journal ne lui correspond. */
+    expect(db.sqlSeen[2]).toContain("'EXPIRED'");
   });
 });

@@ -83,8 +83,26 @@ export function ambientlyAttributed(ledger: SpendLedgerPort): SpendLedgerPort {
   };
 }
 
+/**
+ * Même raison que {@link ambientlyAttributed}, pour les RÉSERVATIONS : le conteneur est monté
+ * une fois pour le processus, bien avant qu'un goal existe, donc l'imputation d'une réservation
+ * ne peut venir que de la portée en cours. Hors de toute portée elle vaut `null`, et le
+ * résolveur de plafond refuse — l'absence n'est pas blanchie en « non plafonné ».
+ *
+ * `settle`, `renew` et `release` passent inchangés : ils s'authentifient sur la LIGNE de la
+ * réservation, pas sur une imputation, ce qui est exactement le verrou C2.
+ */
+export function ambientlyReserved(port: SpendReservationPort): SpendReservationPort {
+  return {
+    reserve: (_attribution, requestedTokens) => port.reserve(currentAttribution(), requestedTokens),
+    settle: (reservation, entry) => port.settle(reservation, entry),
+    renew: (reservation) => port.renew(reservation),
+    release: (reservation) => port.release(reservation),
+  };
+}
+
 export interface SpendLedgerSelection {
-  readonly db?: SqlExec | undefined;
+  readonly db?: (SqlExec & TxCapable) | undefined;
   readonly tenantId?: string;
   readonly caps: BudgetCapResolver;
 }
@@ -117,6 +135,10 @@ export interface ComposeSpendOptions extends Omit<SpendLedgerSelection, "caps"> 
   readonly maxTotalTokensPerGoal?: number;
   /** Le `fetch` réellement émetteur. Injectable pour les tests, jamais muet en production. */
   readonly inner?: typeof fetch;
+  /** Durée du bail des réservations de mission. Défaut : celui du magasin. */
+  readonly leaseMs?: number;
+  /** Sortie maximale imposée à un appelant qui n'en déclare aucune (verrou C1). */
+  readonly maxOutputTokens?: number;
 }
 
 export interface SpendMeters {
@@ -175,11 +197,40 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
     ? goalCapsFor(options.db, options.maxTotalTokensPerGoal)
     : NO_GOAL_SOURCE;
 
+  /*
+   * RÉSERVATION AVANT DISPATCH SUR LA COUTURE DE MISSION (verrou C1).
+   *
+   * Sans base il n'y a aucune réservation possible, ET aucun `goals.budget` lisible : la
+   * couture de mission tombe sur `NO_GOAL_SOURCE`, qui REFUSE tout appel imputé. Le mode sans
+   * réservation n'est donc jamais un mode permissif ici — c'est un mode où rien ne passe.
+   *
+   * Avec une base, la réservation est OBLIGATOIRE : le contrôle pré-vol seul laissait partir
+   * le premier appel d'un goal (fenêtre vide) sans aucune borne de sortie.
+   */
+  const reservations = options.db
+    ? composeSpendReservations({
+        db: options.db,
+        ...(options.tenantId ? { tenantId: options.tenantId } : {}),
+        ...(options.maxTotalTokensPerGoal === undefined
+          ? {}
+          : { maxTotalTokensPerGoal: options.maxTotalTokensPerGoal }),
+        ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
+      })
+    : undefined;
+
   return {
     mission: meteredFetch(inner, {
       ledger: ambientlyAttributed(createSpendLedger({ ...selection, caps: goalCaps })),
+      ...(reservations ? { reservations: ambientlyReserved(reservations) } : {}),
+      ...(options.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: options.maxOutputTokens }),
     }),
-    /* Aucune imputation transmise : ces lignes tombent dans la fenêtre non imputée. */
+    /*
+     * Aucune imputation transmise : ces lignes tombent dans la fenêtre non imputée. Aucune
+     * réservation non plus — cette couture est `UNCAPPED` par choix nommé, donc il n'y a
+     * rien à engager, et un aller-retour en base par sonde de santé serait du coût pur.
+     */
     overhead: meteredFetch(inner, {
       ledger: createSpendLedger({ ...selection, caps: UNCAPPED_OVERHEAD }),
     }),

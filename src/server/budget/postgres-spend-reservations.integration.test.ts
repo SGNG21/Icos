@@ -10,7 +10,7 @@ import {
   PostgresSpendReservations,
   type PostgresSpendReservationsOptions,
 } from "./postgres-spend-reservations";
-import type { BudgetCapResolver, ReserveOutcome, SpendEntry, SpendReservation } from "./ports";
+import type { BudgetCapResolver, ReserveOutcome, SettleEntry, SpendReservation } from "./ports";
 
 /**
  * LA PREUVE DU VERROU P0-D, contre une vraie base PostgreSQL (migration 0056).
@@ -46,13 +46,14 @@ const CAP = 1_000;
 /** Table de prix VIDE : la seule configuration honnête aujourd'hui, donc plafond en tokens. */
 const tokenCap: BudgetCapResolver = async () => ({ kind: "CAPPED", maxTotalTokens: CAP });
 
-const entry = (total: number, attribution: Attribution | null = G1): SpendEntry => ({
+/* AUCUNE `attribution` : `SettleEntry` la retire du type (verrou C2). Un solde ne DÉSIGNE
+   plus son budget, il hérite de celui de sa réservation. */
+const entry = (total: number): SettleEntry => ({
   modelId: "test/model",
   usage: {
     kind: "METERED",
     usage: { promptTokens: total, completionTokens: 0, totalTokens: total },
   },
-  attribution,
   at: "2026-10-02T00:00:00.000Z",
 });
 
@@ -262,8 +263,14 @@ describe("spend_reservations — réservation atomique par goal (migration 0056)
       const usurped: SpendReservation = { ...r.reservation, ownerToken: "jeton-étranger" };
       const settlement = await store.settle(usurped, entry(50));
       expect(settlement.closed).toBe(false);
-      /* La dépense réelle est au journal : elle n'est jamais conditionnée au jeton. */
+      /*
+       * La dépense réelle est au journal, ET SUR LE BON GOAL. Le jeton gouverne la CLÔTURE,
+       * pas l'IMPUTATION : imputer cette ligne en NON IMPUTÉE ferait sous-compter g1, c'est-
+       * à-dire rouvrirait un trou de budget en croyant en fermer un.
+       */
       expect((await ledger().windowFor(G1)).totalTokens).toBe(50);
+      expect(settlement.attributedTo).toEqual(G1);
+      expect(settlement.unauthenticated).toBe(false);
       /* Et la réservation reste engagée : seul son porteur légitime peut la rendre. */
       expect(await openTokens()).toBe(500);
     });
@@ -306,6 +313,158 @@ describe("spend_reservations — réservation atomique par goal (migration 0056)
       /* Idempotent, et l'autorisation était déjà acquise avant son passage. */
       expect(await reservations().expireStale()).toBe(0);
       expect(await reservations().reserve(G1, 1_000)).toMatchObject({ kind: "RESERVED" });
+    });
+  });
+
+  /**
+   * VERROU C2 — RÉSERVE ET SOLDE DANS UN SEUL DOMAINE DE SÉRIALISATION.
+   *
+   * Le défaut : `settle()` ne prenait AUCUN verrou. `reserve()` lit la dépense (journal) PUIS
+   * les engagements (réservations) — deux instantanés distincts en READ COMMITTED. Un solde
+   * qui s'intercale entre les deux a déjà ajouté sa ligne au journal (après la 1re lecture)
+   * et déjà retiré son engagement (avant la 2de) : la dépense DISPARAÎT des deux côtés et la
+   * réservation suivante se croit seule sur un budget vide.
+   */
+  describe("C2 — réserve et solde partagent UN domaine de sérialisation", () => {
+    it("un solde ne peut pas faire DISPARAÎTRE la dépense entre les deux lectures de reserve", async () => {
+      /*
+       * On met la course sous pression plutôt que de l'espérer : des cycles
+       * réserver -> solder tournent EN MÊME TEMPS que des réservations, en boucle. Si la
+       * fenêtre de disparition existe, elle finit par s'ouvrir, et l'invariant la révèle.
+       * Mutation vérifiée : en retirant `this.lock` de `settle`, ce test échoue.
+       */
+      const store = reservations({ leaseMs: 60_000 });
+      const CYCLES = 24;
+
+      const churn = async () => {
+        for (let i = 0; i < CYCLES; i += 1) {
+          const r = await store.reserve(G1, 50);
+          if (r.kind !== "RESERVED") continue;
+          await store.settle(r.reservation, entry(50));
+        }
+      };
+      /* Quatre fils de churn, tous sur LE MÊME goal, donc tous sur le même plafond. */
+      await Promise.all([churn(), churn(), churn(), churn()]);
+
+      /*
+       * L'INVARIANT : la dépense committée ne dépasse jamais le plafond. Chaque cycle solde
+       * exactement ce qu'il a réservé, donc dès que le total atteint 1 000 plus aucune
+       * réservation ne peut être accordée. Sans verrou partagé, des réservations passent sur
+       * une fenêtre qui a « perdu » des soldes, et le total le dépasse.
+       */
+      const window = await ledger().windowFor(G1);
+      expect(window.totalTokens).toBeLessThanOrEqual(CAP);
+    });
+
+    it("le solde impute à la RÉSERVATION, et un ID inconnu n'impute à personne", async () => {
+      const store = reservations();
+      const r = await store.reserve(G1, 100);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+
+      const good = await store.settle(r.reservation, entry(10));
+      expect(good.attributedTo).toEqual(G1);
+      expect((await ledger().windowFor(G1)).totalTokens).toBe(10);
+
+      /* Réservation FORGÉE : aucune ligne, donc aucun budget à désigner. */
+      const forged = await store.settle(
+        { id: "jamais-réservé", ownerToken: "inventé", reservedTokens: 999 },
+        entry(777),
+      );
+      expect(forged).toMatchObject({ unauthenticated: true, closed: false, attributedTo: null });
+      /* La dépense existe — mais g1 n'a pas payé pour elle. */
+      expect((await ledger().windowFor(G1)).totalTokens).toBe(10);
+      expect((await ledger().windowFor(null)).totalTokens).toBe(777);
+    });
+
+    it("réserver sur g1 et solder NE PEUT PAS charger g2 : c'est inexprimable", async () => {
+      const store = reservations();
+      const r = await store.reserve(G1, 100);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      await store.settle(r.reservation, entry(60));
+
+      /* Le budget de g2 est intact : rien n'a pu y être redirigé. */
+      expect((await ledger().windowFor({ goalId: "g2" })).totalTokens).toBe(0);
+      expect((await ledger().windowFor(G1)).totalTokens).toBe(60);
+    });
+  });
+
+  /**
+   * VERROU C3 — LE BAIL SE PROLONGE TANT QUE L'APPEL VIT, ET SE REND QUAND IL MEURT.
+   *
+   * Le défaut : l'expiration libérait le budget alors que l'appel pouvait encore tourner, sans
+   * aucun moyen de prolonger. Un plafond nominal de 1 000 pouvait donc en autoriser 2 000.
+   */
+  describe("C3 — prolongation, reddition et fencing du bail", () => {
+    it("PROLONGE un bail vivant : l'appel qui dure garde son engagement", async () => {
+      /* 120 ms : assez court pour expirer pendant le test, assez long pour être prolongé. */
+      const store = reservations({ leaseMs: 120 });
+      const r = await store.reserve(G1, 1_000);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+
+      for (let i = 0; i < 3; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        expect(await store.renew(r.reservation)).toBe(true);
+      }
+
+      /* 180 ms après la réservation, bien au-delà du bail initial : toujours engagé. */
+      expect(await openTokens()).toBe(1_000);
+      expect(await reservations().reserve(G1, 1)).toMatchObject({
+        kind: "DENY",
+        reason: "RESERVATION_EXCEEDS_CAP",
+      });
+    });
+
+    it("ne RESSUSCITE pas un bail échu : le budget a pu être réattribué", async () => {
+      const store = reservations({ leaseMs: 20 });
+      const r = await store.reserve(G1, 1_000);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      /* Un autre porteur a pu prendre tout le budget entre-temps : c'est le cas qu'on simule. */
+      expect(await reservations().reserve(G1, 1_000)).toMatchObject({ kind: "RESERVED" });
+      expect(await store.renew(r.reservation)).toBe(false);
+      /* Pas de double allocation : le total engagé reste au plafond, pas à deux fois. */
+      expect(await openTokens()).toBe(1_000);
+    });
+
+    it("un JETON DE FENCING étranger ne prolonge ni ne rend", async () => {
+      const store = reservations({ leaseMs: 60_000 });
+      const r = await store.reserve(G1, 500);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      const usurped: SpendReservation = { ...r.reservation, ownerToken: "étranger" };
+
+      expect(await store.renew(usurped)).toBe(false);
+      expect(await store.release(usurped)).toBe(false);
+      expect(await openTokens()).toBe(500);
+      /* Le porteur légitime, lui, peut toujours les deux. */
+      expect(await store.renew(r.reservation)).toBe(true);
+      expect(await store.release(r.reservation)).toBe(true);
+    });
+
+    it("REND l'engagement sans écrire la moindre dépense, et le budget redevient réservable", async () => {
+      const store = reservations({ leaseMs: 60_000 });
+      const r = await store.reserve(G1, 1_000);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      expect(await reservations().reserve(G1, 1)).toMatchObject({ kind: "DENY" });
+
+      expect(await store.release(r.reservation)).toBe(true);
+      /* Aucune ligne de journal : il n'y a pas eu de dépense. */
+      expect((await ledger().windowFor(G1)).calls).toBe(0);
+      expect(await openTokens()).toBe(0);
+      expect(await reservations().reserve(G1, 1_000)).toMatchObject({ kind: "RESERVED" });
+    });
+
+    it("rendre deux fois, ou rendre ce qui est déjà soldé, ne rend rien de plus", async () => {
+      const store = reservations({ leaseMs: 60_000 });
+      const r = await store.reserve(G1, 100);
+      if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      expect(await store.release(r.reservation)).toBe(true);
+      expect(await store.release(r.reservation)).toBe(false);
+
+      const r2 = await store.reserve(G1, 100);
+      if (r2.kind !== "RESERVED") throw new Error("attendu RESERVED");
+      await store.settle(r2.reservation, entry(10));
+      expect(await store.release(r2.reservation)).toBe(false);
     });
   });
 

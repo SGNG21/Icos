@@ -89,6 +89,16 @@ export const DENY_REASONS = [
   "UNPRICED_RESERVATION",
   /** Les deux orthographes du plafond monétaire sont fournies : on ne devine pas laquelle. */
   "AMBIGUOUS_MONEY_CAP",
+  /**
+   * La requête ne peut pas se voir écrire une limite de sortie, donc sa consommation n'a
+   * aucune majoration connue AVANT émission : rien à réserver, donc rien à autoriser.
+   */
+  "UNBOUNDED_REQUEST",
+  /**
+   * Le bail de la réservation a été perdu PENDANT l'appel (prolongation refusée) : le budget
+   * engagé a pu être réattribué, donc continuer dépenserait une seconde fois le même plafond.
+   */
+  "RESERVATION_LEASE_LOST",
 ] as const;
 export type DenyReason = (typeof DENY_REASONS)[number];
 
@@ -175,4 +185,40 @@ export function attributionKey(attribution: Attribution | null | undefined): str
     }
   }
   return UNATTRIBUTED;
+}
+
+/**
+ * INVERSE de {@link attributionKey}. Sert au SOLDE d'une réservation (verrou C2) : la ligne
+ * de réservation ne stocke que la clé, et c'est pourtant elle — pas l'appelant — qui dit à
+ * quel budget la dépense revient.
+ *
+ * Exact par construction : `attributionKey` ne retient JAMAIS qu'UN champ (goal, puis
+ * mission, puis brain), donc la clé contient tout ce que la clé encodait. Elle ne restitue
+ * pas les champs de REPORTING que l'appelant avait pu fournir en plus ; c'est pourquoi
+ * `settle` préfère l'imputation de l'appelant quand sa clé est IDENTIQUE, et ne retombe sur
+ * celle-ci que lorsqu'elles diffèrent, c'est-à-dire exactement quand il y a redirection.
+ *
+ * `attributionKey(attributionFromKey(k)) === k` pour toute clé produite par `attributionKey`.
+ */
+export function attributionFromKey(key: string): Attribution | null {
+  const separator = key.indexOf("=");
+  if (separator < 1) return null; /* UNATTRIBUTED, ou une clé qu'on n'a pas écrite. */
+  const label = key.slice(0, separator);
+  let value: string;
+  try {
+    value = decodeURIComponent(key.slice(separator + 1));
+  } catch {
+    return null; /* Encodage cassé : on n'invente pas une imputation. */
+  }
+  if (value.length === 0) return null;
+  switch (label) {
+    case "goal":
+      return { goalId: value };
+    case "mission":
+      return { missionId: value };
+    case "brain":
+      return { brainId: value };
+    default:
+      return null;
+  }
 }

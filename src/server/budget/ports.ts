@@ -58,6 +58,18 @@ export interface SpendReservation {
   readonly reservedTokens: number;
 }
 
+/**
+ * Ce qu'un appelant sait d'une dépense au moment de solder : le modèle, la consommation
+ * mesurée, l'instant. PAS l'imputation (verrou C2).
+ *
+ * `SpendEntry` porte une `attribution` fournie par l'appelant. Au solde, c'est une
+ * REDIRECTION : rien n'empêchait de réserver sur le goal A puis d'imputer la dépense au
+ * goal B, et le plafond de A n'aurait jamais bougé. L'imputation d'un solde est donc
+ * désormais celle de la RÉSERVATION, relue en base sous le même verrou, et le type la rend
+ * INEXPRIMABLE côté appelant — pas seulement « ignorée par l'implémentation actuelle ».
+ */
+export type SettleEntry = Omit<SpendEntry, "attribution">;
+
 export type ReserveOutcome =
   | { readonly kind: "RESERVED"; readonly reservation: SpendReservation }
   | { readonly kind: "DENY"; readonly reason: DenyReason; readonly detail: string };
@@ -70,6 +82,16 @@ export interface SettlementOutcome extends Settlement {
    * pas de l'état de sa réservation.
    */
   readonly closed: boolean;
+  /**
+   * L'imputation RÉELLEMENT écrite au journal, relue depuis la ligne de réservation sous le
+   * verrou. `null` = l'ID de réservation est inconnu : la dépense est alors enregistrée NON
+   * IMPUTÉE, parce qu'on ne peut ni l'inventer ni la taire. C'est ce champ qui rend observable
+   * qu'aucune redirection n'a eu lieu.
+   */
+  readonly attributedTo: Attribution | null;
+  /** `true` = aucune ligne ne porte cet ID dans ce tenant. Un mauvais JETON ne met pas ceci
+   * à `true` : la dépense reste imputée à son goal, elle n'est simplement pas close. */
+  readonly unauthenticated: boolean;
 }
 
 /**
@@ -87,7 +109,29 @@ export interface SpendReservationPort {
 
   /**
    * Solde la réservation sur la consommation RÉELLE : écrit l'observation au journal, rend le
-   * reliquat non consommé et dit le dépassement éventuel.
+   * reliquat non consommé et dit le dépassement éventuel. L'imputation est celle de la
+   * réservation, JAMAIS une imputation fournie ici — voir {@link SettleEntry}.
    */
-  settle(reservation: SpendReservation, entry: SpendEntry): Promise<SettlementOutcome>;
+  settle(reservation: SpendReservation, entry: SettleEntry): Promise<SettlementOutcome>;
+
+  /**
+   * PROLONGE le bail d'une réservation VIVANTE (verrou C3). Un appel de complétion qui dure
+   * plus longtemps que `leaseMs` verrait sinon son propre engagement cesser d'être compté
+   * alors qu'il dépense encore : le plafond autoriserait alors une seconde fois le même
+   * budget. Le battement de cœur est tenu par l'appelant, qui est le seul à savoir que son
+   * appel est encore vivant.
+   *
+   * Un bail DÉJÀ ÉCHU n'est jamais ressuscité : le budget qu'il tenait a pu être réattribué
+   * entre-temps, et le rallonger ferait exister deux fois la même allocation. Rendre `false`
+   * dit à l'appelant qu'il n'est plus propriétaire de son engagement.
+   */
+  renew(reservation: SpendReservation): Promise<boolean>;
+
+  /**
+   * REND un engagement sans aucune dépense (verrou C3) : erreur réseau, réponse non 2xx,
+   * annulation. Sans lui le budget resterait engagé jusqu'à l'échéance du bail, donc une
+   * rafale d'erreurs gèlerait le goal pour dix minutes. N'écrit RIEN au journal : il n'y a
+   * pas eu de dépense à enregistrer.
+   */
+  release(reservation: SpendReservation): Promise<boolean>;
 }

@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 
-import { attributionKey, type Attribution } from "@/core/budget/contracts";
+import { attributionFromKey, attributionKey, type Attribution } from "@/core/budget/contracts";
 import { decideReservation, settleReservation } from "@/core/budget/spend";
 import type {
   ReserveOutcome,
+  SettleEntry,
   SettlementOutcome,
-  SpendEntry,
   SpendReservation,
   SpendReservationPort,
 } from "./ports";
@@ -110,17 +110,7 @@ export class PostgresSpendReservations implements SpendReservationPort {
     const key = attributionKey(attribution);
     try {
       return await this.options.db.transaction(async (tx) => {
-        /*
-         * LE point de sérialisation. Sans lui, deux transactions somment les mêmes lignes
-         * OPEN, aucune ne voit l'insertion de l'autre, et les deux sont accordées.
-         * ponytail: `hashtext` rend un int4, donc deux imputations peuvent collisionner et
-         * s'attendre pour rien — un coût de DÉBIT, jamais de justesse. Passer à
-         * `hashtextextended` (int8, comme `dispatch-attempt-repository.ts`) si la contention
-         * devient mesurable.
-         */
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${`icos.budget:${this.tenantId}|${key}`}))`,
-        );
+        await this.lock(tx, key);
 
         /* Dépense RÉELLE : relue depuis le journal et repliée par l'autorité unique. */
         const window = await this.ledgerOn(tx).windowFor(attribution);
@@ -174,31 +164,173 @@ export class PostgresSpendReservations implements SpendReservationPort {
   }
 
   /**
-   * UNE transaction : l'observation RÉELLE est écrite au journal et la réservation est close
-   * ensemble. Si la transaction échoue, rien n'a eu lieu et le bail expirera de lui-même —
-   * l'issue sûre, puisqu'un engagement encore compté ne fait que RESTREINDRE la dépense.
+   * LE point de sérialisation, pris par CHACUNE des quatre opérations (verrou C2).
    *
+   * Sans lui dans `reserve`, deux transactions somment les mêmes lignes OPEN, aucune ne voit
+   * l'insertion de l'autre, et les deux sont accordées (write skew).
+   *
+   * Et sans lui dans `settle`, c'est pire et c'était le défaut : `reserve` lit la dépense
+   * (journal) PUIS les engagements (réservations), en READ COMMITTED, donc en deux instantanés
+   * différents. Un `settle` qui s'intercale entre les deux lectures a déjà ajouté sa ligne au
+   * journal — mais APRÈS la première lecture — et a déjà retiré son engagement — AVANT la
+   * seconde. La dépense disparaît des deux côtés et la réservation suivante se croit seule.
+   * Mesuré sur un plafond de 1 000 : 1 900 engagés. Le verrou rend la paire de lectures
+   * atomique vis-à-vis de tout solde, ce qu'aucune contrainte SQL ne sait exprimer.
+   *
+   * `renew` et `release` le prennent aussi : une opération du même domaine qui n'entrerait pas
+   * dans la même sérialisation serait précisément le trou qu'on vient de fermer, à retrouver
+   * plus tard.
+   *
+   * ponytail: `hashtext` rend un int4, donc deux imputations peuvent collisionner et s'attendre
+   * pour rien — un coût de DÉBIT, jamais de justesse. Passer à `hashtextextended` (int8, comme
+   * `dispatch-attempt-repository.ts`) si la contention devient mesurable.
+   */
+  private async lock(tx: SqlExec, key: string): Promise<void> {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`icos.budget:${this.tenantId}|${key}`}))`,
+    );
+  }
+
+  /**
+   * UNE transaction, SOUS LE VERROU, et dans cet ordre : authentifier, puis écrire.
+   *
+   * ── CE QUI ÉTAIT CASSÉ (verrou C2) ──────────────────────────────────────────────────────
+   * L'observation était écrite au journal AVANT que la réservation soit authentifiée, avec
+   * l'imputation FOURNIE PAR L'APPELANT. Réserver sur le goal A puis solder en déclarant le
+   * goal B imputait donc la dépense à B : le plafond de A ne bougeait pas, et A pouvait
+   * réserver indéfiniment. L'imputation d'un solde vient désormais de la LIGNE DE RÉSERVATION,
+   * relue ici sous le verrou ; le type `SettleEntry` rend l'autre inexprimable.
+   *
+   * ── CE QUI N'A PAS CHANGÉ, ET POURQUOI ──────────────────────────────────────────────────
    * L'écriture au journal n'est PAS conditionnée à la clôture : une réservation dont le bail a
    * expiré pendant l'appel a quand même coûté de vrais tokens, et les taire serait précisément
    * le blanchiment que ce lot interdit. `closed: false` le dit au lieu de le cacher.
+   *
+   * Une réservation dont l'ID est INCONNU ne fait pas non plus disparaître la dépense : elle
+   * est enregistrée NON IMPUTÉE. On ne peut ni deviner son budget, ni l'offrir à celui que
+   * l'appelant désigne — c'est exactement la redirection qu'on ferme. `unauthenticated: true`
+   * le rend observable. Un id CONNU présenté avec un mauvais jeton, lui, est bien imputé à son
+   * goal (la dépense est réelle) mais n'est PAS clos : voir {@link locate}.
    */
-  async settle(reservation: SpendReservation, entry: SpendEntry): Promise<SettlementOutcome> {
+  async settle(reservation: SpendReservation, entry: SettleEntry): Promise<SettlementOutcome> {
     return this.options.db.transaction(async (tx) => {
-      await this.ledgerOn(tx).record(entry);
-      const closed = (await tx.execute(sql`
+      /*
+       * On ne connaît pas encore la clé : on authentifie d'abord pour l'apprendre, puis on
+       * verrouille, puis on RELIT sous le verrou. Deux allers-retours, parce que la clé de
+       * verrou est précisément ce que la ligne porte. La première lecture ne décide de rien.
+       */
+      const probe = await this.locate(tx, reservation.id);
+      if (probe !== null) await this.lock(tx, probe.key);
+      const row = probe === null ? null : await this.locate(tx, reservation.id);
+
+      const attribution = row === null ? null : attributionFromKey(row.key);
+      await this.ledgerOn(tx).record({ ...entry, attribution });
+
+      const closed =
+        row === null
+          ? []
+          : ((await tx.execute(sql`
+              update spend_reservations
+                 set state = 'SETTLED', closed_at = now()
+               where id = ${reservation.id}
+                 and tenant_id = ${this.tenantId}
+                 and owner_token = ${reservation.ownerToken}
+                 and state = 'OPEN'
+              returning id
+            `)) as unknown as Row[]);
+
+      return {
+        ...settleReservation(reservation.reservedTokens, entry.usage),
+        closed: closed.length === 1,
+        attributedTo: attribution,
+        unauthenticated: row === null,
+      };
+    });
+  }
+
+  /**
+   * La ligne de CETTE réservation dans CE tenant, quel que soit son état et QUEL QUE SOIT le
+   * jeton présenté.
+   *
+   * Pourquoi le jeton de fencing n'est PAS un prédicat ici. Deux questions distinctes ont été
+   * confondues par le défaut d'origine :
+   *
+   *   « à QUEL BUDGET cette dépense revient-elle ? »  -> la LIGNE, par son id. Jamais
+   *     l'appelant : c'est exactement la redirection que C2 ferme. Et jamais le jeton non
+   *     plus — un porteur dont le jeton a tourné a quand même dépensé sur SON goal, et
+   *     enregistrer cette dépense en NON IMPUTÉE ferait silencieusement sous-compter ce goal,
+   *     c'est-à-dire rouvrirait un trou de budget en croyant en fermer un.
+   *
+   *   « a-t-il le droit de CLORE cet engagement ? »   -> le JETON, prédicat de l'UPDATE, donc
+   *     appliqué par PostgreSQL et jamais en mémoire. Un mauvais jeton ne clôt rien.
+   *
+   * Un id INCONNU reste non imputable : il n'y a aucune ligne d'où lire le budget, et on n'en
+   * invente pas une.
+   */
+  private async locate(tx: SqlExec, id: string): Promise<{ key: string } | null> {
+    const rows = (await tx.execute(sql`
+      select attribution_key
+        from spend_reservations
+       where id = ${id}
+         and tenant_id = ${this.tenantId}
+    `)) as unknown as Row[];
+    const row = rows[0];
+    return row === undefined ? null : { key: String(row.attribution_key) };
+  }
+
+  /**
+   * PROLONGE un bail VIVANT (verrou C3). `lease_until > now()` est la condition qui compte :
+   * un bail déjà échu n'est pas prolongé mais REFUSÉ, parce que le budget qu'il tenait a pu
+   * être réattribué à une autre réservation entre-temps. Le ressusciter ferait exister deux
+   * fois la même allocation — exactement la double-allocation que C3 interdit — alors que le
+   * refus la rend visible à l'appelant, qui peut abandonner son appel.
+   *
+   * Toutes les comparaisons de temps sont celles de PostgreSQL : aucune horloge de processus
+   * ne peut allonger un bail.
+   */
+  async renew(reservation: SpendReservation): Promise<boolean> {
+    return this.options.db.transaction(async (tx) => {
+      const probe = await this.locate(tx, reservation.id);
+      if (probe === null) return false;
+      await this.lock(tx, probe.key);
+      const rows = (await tx.execute(sql`
         update spend_reservations
-           set state = 'SETTLED', closed_at = now()
+           set lease_until = now() + (${this.leaseMs} * interval '1 millisecond')
+         where id = ${reservation.id}
+           and tenant_id = ${this.tenantId}
+           and owner_token = ${reservation.ownerToken}
+           and state = 'OPEN'
+           and lease_until > now()
+        returning id
+      `)) as unknown as Row[];
+      return rows.length === 1;
+    });
+  }
+
+  /**
+   * REND un engagement sans dépense (verrou C3). N'écrit RIEN au journal : il n'y a pas eu de
+   * dépense. Sans cette opération, une erreur réseau immobiliserait le budget jusqu'à
+   * l'échéance du bail, et une rafale d'erreurs gèlerait le goal entier sans avoir rien
+   * dépensé — un refus de service produit par le mécanisme censé protéger la dépense.
+   *
+   * L'état choisi est 'EXPIRED' et non 'SETTLED' : aucune ligne de journal ne lui correspond,
+   * et prétendre le contraire fausserait toute réconciliation ultérieure.
+   */
+  async release(reservation: SpendReservation): Promise<boolean> {
+    return this.options.db.transaction(async (tx) => {
+      const probe = await this.locate(tx, reservation.id);
+      if (probe === null) return false;
+      await this.lock(tx, probe.key);
+      const rows = (await tx.execute(sql`
+        update spend_reservations
+           set state = 'EXPIRED', closed_at = now()
          where id = ${reservation.id}
            and tenant_id = ${this.tenantId}
            and owner_token = ${reservation.ownerToken}
            and state = 'OPEN'
         returning id
       `)) as unknown as Row[];
-
-      return {
-        ...settleReservation(reservation.reservedTokens, entry.usage),
-        closed: closed.length === 1,
-      };
+      return rows.length === 1;
     });
   }
 

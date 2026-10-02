@@ -5,9 +5,14 @@ import {
   type SpendDecision,
   type UsageOutcome,
 } from "@/core/budget/contracts";
+import {
+  boundCompletionBody,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  type BoundedRequest,
+} from "@/core/budget/request-bounds";
 import { readUsage } from "@/core/budget/usage";
 
-import type { SpendLedgerPort } from "./ports";
+import type { SpendLedgerPort, SpendReservation, SpendReservationPort } from "./ports";
 
 /**
  * LE point d'application du budget (verrou d'autonomie B1).
@@ -28,6 +33,12 @@ import type { SpendLedgerPort } from "./ports";
  */
 
 const DENIED_ERROR_NAME = "BudgetDeniedError";
+
+/**
+ * Deux minutes : nettement sous le bail de dix minutes du magasin de réservations, donc un
+ * appel lent est prolongé quatre fois avant que son propre engagement puisse expirer.
+ */
+export const DEFAULT_HEARTBEAT_MS = 2 * 60 * 1_000;
 
 /** Levée AVANT l'appel, quand le journal refuse la dépense. Une seule erreur typée. */
 export class BudgetDeniedError extends Error {
@@ -56,6 +67,25 @@ export interface MeteredFetchDeps {
   /** Imputation des appels passant par CE décorateur. Absente = appel non attribué. */
   readonly attribution?: Attribution;
   readonly now?: () => Date;
+  /**
+   * RÉSERVATION AVANT DISPATCH (verrou C1). Présent, il remplace le contrôle pré-vol par un
+   * engagement atomique : aucune complétion ne part sans que sa majoration de consommation
+   * soit déjà retirée du plafond du goal.
+   *
+   * Absent, le décorateur garde le contrôle pré-vol seul. Ce n'est PAS un repli permissif :
+   * c'est le mode de la couture des FRAIS OPÉRATIONNELS, qui est `UNCAPPED` par choix nommé
+   * (voir `compose-spend.ts`) et pour laquelle il n'y a donc rien à engager. Toute couture
+   * plafonnée doit le fournir, et `composeSpendMeters` ne monte plus la couture `mission`
+   * sans lui.
+   */
+  readonly reservations?: SpendReservationPort;
+  /** Sortie maximale imposée aux appelants muets. Voir {@link DEFAULT_MAX_OUTPUT_TOKENS}. */
+  readonly maxOutputTokens?: number;
+  /**
+   * Période du battement de cœur qui prolonge le bail (verrou C3). Doit être nettement
+   * inférieure au bail du magasin de réservations, sinon le bail expire entre deux battements.
+   */
+  readonly heartbeatMs?: number;
 }
 
 const JSON_CONTENT_TYPE = /^application\/(\w+\+)?json\b/i;
@@ -131,11 +161,48 @@ async function observe(response: Response): Promise<{ usage: UsageOutcome; model
   };
 }
 
+/**
+ * Prolonge le bail tant que l'appel vit, et ANNULE l'appel si le bail est perdu (verrou C3).
+ *
+ * Perdre le bail signifie que l'engagement ne compte plus pour personne : une autre
+ * réservation a pu recevoir le même budget. Continuer à dépenser dessus ferait exister deux
+ * fois le même plafond — précisément la double allocation que C3 interdit. On ne peut pas
+ * dé-dépenser ce qui est déjà parti, mais on peut cesser d'en produire, et le dire.
+ */
+function heartbeat(
+  reservations: SpendReservationPort,
+  reservation: SpendReservation,
+  periodMs: number,
+): { signal: AbortSignal; stop: () => void; lost: () => boolean } {
+  const controller = new AbortController();
+  let lost = false;
+  const timer = setInterval(() => {
+    void reservations.renew(reservation).then(
+      (renewed) => {
+        if (renewed) return;
+        lost = true;
+        controller.abort(new Error("RESERVATION_LEASE_LOST"));
+      },
+      () => {
+        /* Prolongation invérifiable = bail présumé perdu. Fermé par défaut. */
+        lost = true;
+        controller.abort(new Error("RESERVATION_LEASE_LOST"));
+      },
+    );
+  }, periodMs);
+  /* Ne jamais retenir le processus en vie pour un battement de cœur. */
+  timer.unref?.();
+  return { signal: controller.signal, stop: () => clearInterval(timer), lost: () => lost };
+}
+
 export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeof fetch {
   const attribution = deps.attribution ?? null;
   const now = deps.now ?? (() => new Date());
+  const outputCeiling = deps.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
 
-  const metered: typeof fetch = async (input, init) => {
+  /** Contrôle pré-vol seul : aucune réservation à tenir, donc rien à solder ni à rendre. */
+  const unreserved: typeof fetch = async (input, init) => {
     const decision = await deps.ledger.checkBudget(attribution);
     if (decision.kind === "DENY") throw new BudgetDeniedError(decision);
 
@@ -172,5 +239,88 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     return response;
   };
 
-  return metered;
+  const reservations = deps.reservations;
+  if (reservations === undefined) return unreserved;
+
+  /**
+   * RÉSERVER, BORNER, ÉMETTRE, SOLDER (verrou C1).
+   *
+   * L'ordre est la propriété. Le premier appel d'un goal ne « passe » plus parce que son
+   * historique est vide : il doit tenir dans le plafond AVEC sa propre majoration, retirée du
+   * budget AVANT que la requête touche le réseau. Et c'est `reserve()` — sérialisé en
+   * PostgreSQL — qui le retire, donc W premiers appels simultanés ne peuvent pas s'accorder
+   * chacun le budget entier.
+   */
+  const reserved: typeof fetch = async (input, init) => {
+    /* Les requêtes non facturantes du même seam gardent le contrôle pré-vol, sans engagement. */
+    if (!isCompletionRequest(input)) return unreserved(input, init);
+
+    const bounded: BoundedRequest = boundCompletionBody(init?.body, outputCeiling);
+    if (bounded.kind === "UNBOUNDABLE") {
+      /* Pas de majoration connue = rien à réserver = rien à autoriser. */
+      throw new BudgetDeniedError({
+        kind: "DENY",
+        reason: "UNBOUNDED_REQUEST",
+        detail: bounded.detail,
+      });
+    }
+
+    const outcome = await reservations.reserve(attribution, bounded.reservedTokens);
+    if (outcome.kind === "DENY") throw new BudgetDeniedError(outcome);
+    const { reservation } = outcome;
+
+    const beat = heartbeat(reservations, reservation, heartbeatMs);
+    const callerSignal = init?.signal;
+    let response: Response;
+    try {
+      response = await inner(input, {
+        ...init,
+        /* La limite de sortie RÉELLEMENT émise, celle qui a été réservée. */
+        body: bounded.body,
+        signal: callerSignal ? AbortSignal.any([callerSignal, beat.signal]) : beat.signal,
+      });
+    } catch (cause) {
+      /*
+       * Rien n'est parti, ou rien n'est revenu : l'engagement est RENDU immédiatement. Sans
+       * cela une rafale d'erreurs réseau gèlerait le budget du goal jusqu'à l'échéance des
+       * baux — un refus de service produit par le mécanisme censé protéger la dépense.
+       */
+      await reservations.release(reservation).catch(() => undefined);
+      if (beat.lost()) {
+        throw new BudgetDeniedError({
+          kind: "DENY",
+          reason: "RESERVATION_LEASE_LOST",
+          detail: "bail de réservation perdu pendant l'appel : appel interrompu",
+        });
+      }
+      throw cause;
+    } finally {
+      beat.stop();
+    }
+
+    /* Non 2xx : pas de consommation facturée, donc l'engagement est rendu, pas soldé. */
+    if (!response.ok) {
+      await reservations.release(reservation).catch(() => undefined);
+      return response;
+    }
+
+    const observed = await observe(response);
+    try {
+      /*
+       * Le solde n'accepte AUCUNE imputation (verrou C2) : celle du journal est relue depuis
+       * la ligne de réservation, sous le même verrou que `reserve`.
+       */
+      await reservations.settle(reservation, {
+        modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
+        usage: observed.usage,
+        at: now().toISOString(),
+      });
+    } catch (cause) {
+      throw new BudgetLedgerError(cause);
+    }
+
+    return response;
+  };
+
+  return reserved;
 }
