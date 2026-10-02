@@ -3,10 +3,13 @@
 import { useCallback, useState } from "react";
 
 import { isReal, MISSING_LABEL, type Truth } from "@/features/cockpit/truth";
+// Type-only: erased at compile time, so the server-side loader never enters this bundle.
+import type { ObjectiveLine } from "@/features/mobile/load";
 import {
   MISSION_STATUS_CSS,
   MISSION_STATUS_LABEL,
   SECTION_LABEL,
+  STATE_OF_MISSING,
   WORKER_HEALTH_CSS,
   type ActivityRow,
   type MobileHomeModel,
@@ -38,8 +41,21 @@ export interface MobileHomeProps {
     };
     roles: string[];
   };
-  model: MobileHomeModel;
+  /**
+   * `objectives` rides on the model rather than in `MobileHomeModel`, which `buildMobileHome`
+   * owns. Optional so that a caller which did not read the objective read model cannot
+   * silently present its absence as "no objectives": see `OBJECTIVES_NOT_PROVIDED`.
+   */
+  model: MobileHomeModel & { objectives?: Section<ObjectiveLine> };
 }
+
+/** A model assembled without the objective read model states so, rather than showing none. */
+const OBJECTIVES_NOT_PROVIDED: Section<ObjectiveLine> = {
+  state: STATE_OF_MISSING.unknown,
+  items: [],
+  reason: "Le modèle de lecture des objectifs n'a pas été fourni à cette page.",
+  requirement: null,
+};
 
 /** Single-tenant ICOS runs on Paris time; fixing it keeps server and client markup identical. */
 const DATE_TIME = new Intl.DateTimeFormat("fr-FR", {
@@ -203,6 +219,7 @@ export function MobileHome({ session, model }: MobileHomeProps) {
 
   const activeMission = model.activeMission.items[0];
   const workforce = model.workforce.items[0];
+  const objectives = model.objectives ?? OBJECTIVES_NOT_PROVIDED;
 
   return (
     <main className={styles.page}>
@@ -309,6 +326,70 @@ export function MobileHome({ session, model }: MobileHomeProps) {
               </div>
               <DegradedNote section={model.activeMission} />
             </article>
+          )}
+
+          {/*
+           * The objective read model (decision 0065) answers "what is ICOS doing?" without
+           * the reader knowing a worker, a worktree or a model name. It had no front end at
+           * all; this is it. Same cards as the mission above — one style system, no new one.
+           */}
+          <h3 className={styles.sectionTitle} style={{ marginTop: 20 }}>
+            Objectifs d&apos;ICOS
+          </h3>
+          <SectionState section={objectives} empty="Aucun objectif enregistré dans ICOS." />
+          <DegradedNote section={objectives} />
+          {objectives.items.length > 0 && (
+            <div className={styles.missionsList}>
+              {objectives.items.map((objective) => (
+                <article key={objective.id} className={styles.missionCard}>
+                  <header className={styles.missionCardHeader}>
+                    <h4 className={styles.missionCardTitle}>{objective.title}</h4>
+                    {/* State as WORDS: no tone class, so nothing here is said by colour alone. */}
+                    <span className={styles.missionCardStatus}>{objective.state}</span>
+                  </header>
+                  <div className={styles.missionCardMeta}>
+                    <div className={styles.missionCardField}>
+                      <span className={styles.missionCardLabel}>Phase</span>
+                      <span className={styles.missionCardValue}>{objective.phase}</span>
+                    </div>
+                    <div className={styles.missionCardField}>
+                      <span className={styles.missionCardLabel}>Progression</span>
+                      <span className={styles.missionCardValue}>
+                        <TruthText truth={objective.progress} />
+                      </span>
+                    </div>
+                    <div className={styles.missionCardField}>
+                      <span className={styles.missionCardLabel}>Dernier résultat</span>
+                      <span className={styles.missionCardValue}>
+                        <TruthText truth={objective.result} />
+                      </span>
+                    </div>
+                    {/*
+                     * Shown even though it is always a hole today: the owner must see that
+                     * ICOS cannot tell him what a run cost, not be left to assume it was free.
+                     */}
+                    <div className={styles.missionCardField}>
+                      <span className={styles.missionCardLabel}>Coût</span>
+                      <span className={styles.missionCardValue}>
+                        <TruthText truth={objective.cost} />
+                      </span>
+                    </div>
+                    {objective.humanDecisionRequired && (
+                      <div className={`${styles.missionCardField} ${styles.attention}`}>
+                        <span className={styles.missionCardLabel}>⚠ Décision humaine requise</span>
+                        <span className={styles.missionCardValue}>OUI</span>
+                      </div>
+                    )}
+                    {objective.blockedReason && (
+                      <div className={`${styles.missionCardField} ${styles.attention}`}>
+                        <span className={styles.missionCardLabel}>⚠ Blocage</span>
+                        <span className={styles.missionCardValue}>{objective.blockedReason}</span>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
           )}
         </section>
 
