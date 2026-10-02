@@ -7,6 +7,7 @@ import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omnir
 import { runWithAttribution } from "./attribution-context";
 import {
   composeSpendMeters,
+  composeSpendReservations,
   createSpendLedger,
   SPEND_LEDGER_TENANT_ID,
   UNCAPPED_OVERHEAD,
@@ -293,9 +294,87 @@ describe("couture planificateur — la fabrique du conteneur émet à travers le
     const planner = createOmniRouteAutonomousMissionPlanner(plannerEnv, meters.mission);
 
     /* La réponse du faux fournisseur n'est pas un plan : seule compte l'émission de l'appel. */
-    await runWithAttribution({ goalId: "g1" }, () => planner!.plan(planInput)).catch(() => undefined);
+    await runWithAttribution({ goalId: "g1" }, () => planner!.plan(planInput)).catch(
+      () => undefined,
+    );
 
     expect(calls).toEqual(["https://provider.test/v1/chat/completions"]);
     expect(db.rows[0].goal_id).toBe("g1");
+  });
+});
+
+describe("composeSpendReservations — MÊME plafond que la couture mission", () => {
+  /**
+   * Le faux `execute` ci-dessus, plus la somme des engagements et une transaction factice.
+   * Il ne simule PAS la concurrence : l'atomicité est une propriété de PostgreSQL et elle est
+   * prouvée dans `postgres-spend-reservations.integration.test.ts`. Ce qui est prouvé ici,
+   * c'est le CÂBLAGE — quel plafond, quelle clé tenant, quelle imputation.
+   */
+  const txDb = (goals: Record<string, number | null> = {}) => {
+    const db = new FakeDb(goals);
+    const exec: SqlExec = {
+      async execute(query: SQL) {
+        const { sql: text } = dialect.sqlToQuery(query);
+        if (/pg_advisory_xact_lock/.test(text)) return [];
+        if (/sum\(reserved_tokens\)/.test(text)) {
+          const held = db.rows
+            .filter((r) => r.reserved_tokens !== undefined)
+            .reduce((sum, r) => sum + Number(r.reserved_tokens), 0);
+          return [{ held: String(held) }];
+        }
+        return db.execute(query);
+      },
+    };
+    return Object.assign(exec, {
+      goalLookups: db.goalLookups,
+      rows: db.rows,
+      transaction: <T>(fn: (tx: SqlExec) => Promise<T>) => fn(exec),
+    });
+  };
+
+  it("réserve sous le budget du goal, donc refuse un goal sans plafond applicable", async () => {
+    const db = txDb({});
+    const store = composeSpendReservations({ db });
+    expect(await store.reserve({ goalId: "g1" }, 100)).toMatchObject({
+      kind: "DENY",
+      reason: "NO_ENFORCEABLE_CAP",
+    });
+    expect(db.goalLookups).toEqual(["g1"]);
+  });
+
+  it("accorde sous le plafond de TOKENS du propriétaire, sans aucun prix", async () => {
+    const store = composeSpendReservations({
+      db: txDb({ g1: null }),
+      maxTotalTokensPerGoal: 1_000,
+    });
+    expect(await store.reserve({ goalId: "g1" }, 1_000)).toMatchObject({ kind: "RESERVED" });
+  });
+
+  it("refuse une demande qui dépasse le plafond du goal, sans la rogner", async () => {
+    const store = composeSpendReservations({
+      db: txDb({ g1: null }),
+      maxTotalTokensPerGoal: 1_000,
+    });
+    expect(await store.reserve({ goalId: "g1" }, 1_001)).toMatchObject({
+      kind: "DENY",
+      reason: "RESERVATION_EXCEEDS_CAP",
+    });
+  });
+
+  it("refuse un appel NON IMPUTÉ : pas d'imputation, pas de budget à engager", async () => {
+    const store = composeSpendReservations({
+      db: txDb({ g1: null }),
+      maxTotalTokensPerGoal: 1_000,
+    });
+    expect(await store.reserve(null, 10)).toMatchObject({ kind: "DENY" });
+  });
+
+  it("écrit sous la MÊME clé tenant que le journal", async () => {
+    const db = txDb({ g1: null });
+    await composeSpendReservations({ db, maxTotalTokensPerGoal: 1_000 }).reserve(
+      { goalId: "g1" },
+      10,
+    );
+    expect(db.rows.at(-1)?.tenant_id).toBe(SPEND_LEDGER_TENANT_ID);
   });
 });
