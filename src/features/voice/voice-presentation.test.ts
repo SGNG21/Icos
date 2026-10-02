@@ -8,6 +8,7 @@ import {
   type VoiceAction,
   type VoiceUiState,
 } from "./voice-client";
+import { VOICE_PHASES } from "./voice-session-machine";
 import {
   PHASE,
   decisionOutcome,
@@ -19,7 +20,6 @@ import {
   proposalCards,
   relativeTime,
   userMessage,
-  voicePhase,
 } from "./voice-presentation";
 
 const server = (message: ServerMessage): VoiceAction => ({ type: "server", message });
@@ -44,77 +44,32 @@ const ready = run([
   }),
 ]);
 
-describe("voicePhase: every phase comes from protocol state", () => {
-  it("walks one real turn through its phases", () => {
-    expect(voicePhase(initialVoiceState, false)).toBe("CONNECTING");
-    expect(voicePhase(ready, false)).toBe("IDLE");
-    const talking = run([{ type: "talk", turnId: "t-1" }], ready);
-    expect(voicePhase(talking, false)).toBe("LISTENING");
-    const sent = run(
-      [
-        server({ type: "transcript", turnId: "t-1", final: false, rev: 1, text: "bon" }),
-        { type: "stop_talking" },
-      ],
-      talking,
-    );
-    expect(voicePhase(sent, false)).toBe("TRANSCRIBING");
-    const accepted = run(
-      [server({ type: "turn_accepted", turnId: "t-1", conversationId: "c" })],
-      sent,
-    );
-    expect(voicePhase(accepted, false)).toBe("THINKING");
-    const answered = run(
-      [server({ type: "response_final", turnId: "t-1", text: "Oui." })],
-      accepted,
-    );
-    expect(voicePhase(answered, false)).toBe("THINKING"); // text only: no audio playing
-    expect(voicePhase(answered, true)).toBe("SPEAKING"); // only when audio really plays
-    const done = run(
-      [server({ type: "turn_metrics", metrics: { turnId: "t-1" } as never })],
-      answered,
-    );
-    expect(voicePhase(done, false)).toBe("IDLE");
+/*
+ * La dérivation de phase a quitté ce module : elle appartient désormais à
+ * `voice-session-machine.ts`, seule autorité, avec ses propres preuves (dont « jamais
+ * LISTENING sans micro ouvert »). Ce qui est resté ici est l'HABILLAGE, testé ci-dessous ;
+ * garder une seconde dérivation sous test aurait recréé exactement la divergence qu'on
+ * vient de supprimer.
+ */
+describe("PHASE: chaque phase de la machine a un libellé, un ton et une aide", () => {
+  it("couvre les DIX phases, sans trou", () => {
+    expect(Object.keys(PHASE).sort()).toEqual([...VOICE_PHASES].sort());
   });
 
-  it("reports interruption, link loss and errors", () => {
-    const speaking = run(
-      [
-        { type: "talk", turnId: "t-1" },
-        { type: "stop_talking" },
-        server({ type: "turn_accepted", turnId: "t-1", conversationId: "c" }),
-        { type: "interrupt" },
-      ],
-      ready,
-    );
-    expect(voicePhase(speaking, false)).toBe("INTERRUPTED");
-    expect(voicePhase(run([{ type: "link", link: "reconnecting" }], ready), false)).toBe(
-      "RECONNECTING",
-    );
-    expect(voicePhase(run([{ type: "link", link: "offline" }], ready), false)).toBe("OFFLINE");
-    expect(voicePhase(run([{ type: "link", link: "unavailable" }], ready), false)).toBe("ERROR");
-    const dropped = run(
-      [
-        { type: "talk", turnId: "t-2" },
-        server({
-          type: "error",
-          code: "TURN_DROPPED",
-          retryable: false,
-          turnId: "t-2",
-          audioLost: true,
-          message: "m",
-        }),
-        { type: "stop_talking" },
-      ],
-      ready,
-    );
-    expect(voicePhase(dropped, false)).toBe("ERROR");
-  });
-
-  it("every phase has a label and a tone", () => {
-    for (const meta of Object.values(PHASE)) {
-      expect(meta.label).not.toBe("");
-      expect(meta.tone).toBeTruthy();
+  it("aucune aide ne demande encore de toucher le micro pour parler", () => {
+    /*
+     * La session est CONTINUE : un texte qui réclamerait un geste entre deux tours serait
+     * une régression d'interface même avec un code juste.
+     */
+    for (const [phase, meta] of Object.entries(PHASE)) {
+      expect(meta.hint, phase).not.toMatch(/touchez le micro/i);
     }
+  });
+
+  it("dit explicitement comment ouvrir quand la voix est fermée, et comment interrompre", () => {
+    expect(PHASE.OFF.hint).toMatch(/Touchez pour ouvrir/i);
+    expect(PHASE.ICOS_SPEAKING.hint).toMatch(/interrompre/i);
+    expect(PHASE.LISTENING.hint).toMatch(/quand vous voulez/i);
   });
 });
 
@@ -130,8 +85,8 @@ describe("regressions from the mobile walkthrough", () => {
     );
     expect(refused.turns).toEqual([]);
     expect(refused.talkingTurnId).toBeNull();
-    expect(voicePhase(refused, false)).toBe("ERROR");
-    expect(voicePhase(run([{ type: "clear_error" }], refused), false)).toBe("IDLE");
+    /* L'erreur est effaçable : c'est elle que la phase lisait, et elle disparaît bien. */
+    expect(run([{ type: "clear_error" }], refused).error).toBeNull();
   });
 
   it("never discards a turn that already reached ICOS", () => {
@@ -160,9 +115,8 @@ describe("regressions from the mobile walkthrough", () => {
       ],
       ready,
     );
-    expect(voicePhase(dropped, false)).toBe("ERROR");
     const reconnected = run([server(readyMessage)], dropped);
-    expect(voicePhase(reconnected, false)).toBe("IDLE"); // ready clears the error
+    expect(reconnected.error).toBeNull(); // un `ready` efface l'erreur
   });
 });
 
@@ -185,7 +139,6 @@ describe("independent review regressions", () => {
       ready,
     );
     expect(s.turns[0].state).toBe("failed");
-    expect(voicePhase(s, false)).toBe("ERROR");
     expect(userMessage(s.error!.code)).toMatch(/pas confirmé/);
     expect(userMessage("COGNITIVE_ERROR")).toMatch(/bien enregistré/); // mid-answer path
   });
@@ -196,7 +149,6 @@ describe("independent review regressions", () => {
       ready,
     );
     expect(s.link).toBe("unavailable");
-    expect(voicePhase(s, false)).toBe("ERROR");
   });
 
   it("M3: one card per mission — only its latest update is drawn", () => {

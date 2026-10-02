@@ -2,7 +2,6 @@
 
 import {
   Activity,
-  ArrowUp,
   AudioLines,
   Brain,
   CircleAlert,
@@ -46,21 +45,51 @@ import {
   proposalCards,
   relativeTime,
   userMessage,
-  voicePhase,
   type MissionCard,
   type ProposalCard,
   type Tone,
   type VoicePhase,
 } from "@/features/voice/voice-presentation";
 
+import { createVad } from "@/features/voice/vad";
+import {
+  initialSessionState,
+  inactivityExpired,
+  micIsCapturing,
+  reduceVoiceSession,
+  voicePhase,
+  type VoiceSessionEvent,
+} from "@/features/voice/voice-session-machine";
+import { NO_WAKE_WORD_DETECTOR, wakeWordStatus } from "@/features/voice/wake-word";
+
 import styles from "./voice.module.css";
 
 /**
- * Mobile-first voice client (decision 0061). Tap to talk, tap again to send.
- * Talking while ICOS speaks is a barge-in: local playback stops at once and
- * the server interrupts the answer. Every state shown is derived from the
- * protocol (voice-presentation.ts); nothing is simulated.
+ * CLIENT VOCAL CONTINU, PENSÉ POUR LE TÉLÉPHONE (P0-P).
+ *
+ * UN SEUL BOUTON. Un appui ouvre la session : le micro s'ouvre UNE fois et reste ouvert.
+ * À partir de là, c'est le VAD LOCAL (`features/voice/vad.ts`) qui découpe les tours, donc
+ * on parle, ICOS répond, et l'écoute reprend TOUTE SEULE. Un second appui ferme tout.
+ *
+ * AVANT : le micro s'ouvrait et se fermait à chaque tour, il fallait donc recliquer entre
+ * chaque phrase — l'inverse de ce qu'on attend d'un assistant vocal.
+ *
+ * BARGE-IN : parler pendant qu'ICOS parle coupe la lecture LOCALEMENT, tout de suite, et
+ * interrompt la réponse côté serveur. On n'attend jamais qu'il ait fini.
+ *
+ * CE QUE CE COMPOSANT NE DÉCIDE PAS. La phase affichée vient de
+ * `voice-session-machine.ts`, qui est pure et testée : `LISTENING` n'est retournable que si
+ * le micro est RÉELLEMENT ouvert et le transport RÉELLEMENT prêt. Ce fichier ne fait que
+ * rapporter des faits (micro ouvert, lien prêt, audio en lecture) — il ne peut pas afficher
+ * une écoute qui n'a pas lieu.
  */
+
+/**
+ * L'horloge, hors du composant. Ces appels viennent du tap audio, jamais d'un rendu, mais
+ * une fonction déclarée dans le corps du composant est traitée comme du rendu par la règle
+ * de pureté — et elle a raison de ne pas pouvoir faire la différence.
+ */
+const nowMs = () => Date.now();
 
 const SAMPLE_RATE = 16_000;
 const FRAME_MS = 100;
@@ -70,16 +99,16 @@ const HEARTBEAT_MS = 15_000;
 const TAP_WORKLET_URL = "/icos-voice-tap.js";
 
 const PHASE_ICON: Record<VoicePhase, ReactNode> = {
+  OFF: <Mic aria-hidden />,
   CONNECTING: <LoaderCircle aria-hidden />,
-  IDLE: <CircleCheck aria-hidden />,
   LISTENING: <Mic aria-hidden />,
-  TRANSCRIBING: <AudioLines aria-hidden />,
+  USER_SPEAKING: <AudioLines aria-hidden />,
   THINKING: <Brain aria-hidden />,
-  SPEAKING: <AudioLines aria-hidden />,
+  ICOS_SPEAKING: <AudioLines aria-hidden />,
   INTERRUPTED: <CirclePause aria-hidden />,
   RECONNECTING: <RefreshCw aria-hidden />,
+  DEGRADED: <WifiOff aria-hidden />,
   ERROR: <TriangleAlert aria-hidden />,
-  OFFLINE: <WifiOff aria-hidden />,
 };
 
 const TONE_ICON: Record<Tone, ReactNode> = {
@@ -250,26 +279,53 @@ export function VoiceClient() {
     stateRef.current = state;
   }, [state]);
 
+  /*
+   * L'ÉTAT DE SESSION, séparé de l'état des TOURS. `voiceReducer` sait ce que chaque tour
+   * est devenu ; celui-ci sait si le micro est ouvert et ce que la session est en train de
+   * faire. C'est lui qui porte la phase affichée, parce qu'il est le seul à connaître les
+   * faits dont dépend la véracité (micro réellement ouvert, transport réellement prêt).
+   */
+  const [session, rawSessionDispatch] = useReducer(reduceVoiceSession, initialSessionState);
+  const sessionRef = useRef(session);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+  /*
+   * Le miroir est mis à jour SYNCHRONEMENT : le tap audio tourne hors de React et lit cet
+   * état des dizaines de fois par seconde. Attendre un rendu lui ferait voir un état périmé
+   * et, concrètement, rater le début d'un barge-in.
+   */
+  const sessionDispatch = useCallback((event: VoiceSessionEvent) => {
+    sessionRef.current = reduceVoiceSession(sessionRef.current, event);
+    rawSessionDispatch(event);
+  }, []);
+
   const ws = useRef<WebSocket | null>(null);
-  const session = useRef<{ sessionId: string | null; conversationId: string | null }>({
+  /** Identité TRANSPORT de la session serveur (reprise après reconnexion). */
+  const wire = useRef<{ sessionId: string | null; conversationId: string | null }>({
     sessionId: null,
     conversationId: null,
   });
   /** Output + capture graph, created once on the first tap. */
   const audio = useRef<{ ctx: AudioContext; tap: Promise<AudioWorkletNode> } | null>(null);
-  /** The utterance being captured: its mic stream lives only this long. */
-  const capture = useRef<{
+  /**
+   * LE MICRO DE LA SESSION. Ouvert UNE fois à l'ouverture, fermé UNE fois à la fermeture.
+   * C'est le changement central : avant, il vivait le temps d'un tour, donc chaque phrase
+   * demandait un clic.
+   */
+  const mic = useRef<{ stream: MediaStream; source: MediaStreamAudioSourceNode } | null>(null);
+  /** L'énoncé en cours. Créé par le VAD au début d'une parole, clos à la fin. */
+  const turn = useRef<{
     turnId: string;
-    stream: MediaStream;
-    source: MediaStreamAudioSourceNode;
     pending: Float32Array[];
     buffered: number;
     seq: number;
   } | null>(null);
+  /** Le découpage en tours, local : aucun octet ne part avant qu'une parole commence. */
+  const vad = useRef(createVad());
   /** Turns silenced locally, updated at the moment of the tap (not after a render). */
   const silenced = useRef(new Set<string>());
   const lastAudioTurn = useRef<string | null>(null);
-  const talkingTurn = useRef<string | null>(null);
   const playback = useRef({
     sources: new Set<AudioBufferSourceNode>(),
     nextAt: 0,
@@ -277,6 +333,27 @@ export function VoiceClient() {
     generation: 0,
   });
   const [speaking, setSpeaking] = useState(false);
+  /*
+   * Miroir synchrone de `speaking`. Le tap audio doit savoir, AU MOMENT où la première
+   * syllabe arrive, si ICOS est en train de parler — c'est ce qui distingue un barge-in
+   * d'un tour ordinaire. Un état React lui arriverait un rendu trop tard.
+   */
+  const speakingRef = useRef(false);
+  /**
+   * Dit à la machine de session qu'ICOS commence ou cesse de parler. La FIN est ce qui
+   * ramène automatiquement à l'écoute : c'est la boucle qui rend la conversation continue.
+   */
+  const setIcosSpeaking = useCallback(
+    (value: boolean) => {
+      if (speakingRef.current === value) return;
+      speakingRef.current = value;
+      setSpeaking(value);
+      sessionDispatch(
+        value ? { type: "ICOS_AUDIO_STARTED" } : { type: "ICOS_AUDIO_ENDED", at: nowMs() },
+      );
+    },
+    [sessionDispatch],
+  );
   /** Durable proposals of this conversation; the server record, never local guesswork. */
   const [proposals, setProposals] = useState<ProposalCard[]>([]);
   const [deciding, setDeciding] = useState<string | null>(null);
@@ -298,7 +375,7 @@ export function VoiceClient() {
    * reconnect nothing in the socket replays the proposals — so recovery is this read.
    */
   const refreshProposals = useCallback(async () => {
-    const conversationId = session.current.conversationId;
+    const conversationId = wire.current.conversationId;
     if (!conversationId) return;
     // Several refreshes can be in flight (ready, an event, a decision). A slower
     // earlier read must never repaint over a newer one: mission status is evidence.
@@ -321,7 +398,7 @@ export function VoiceClient() {
   /** The human decision. Launch happens server-side before the response returns. */
   const decide = useCallback(
     async (refId: string, decision: "approve" | "reject") => {
-      const conversationId = session.current.conversationId;
+      const conversationId = wire.current.conversationId;
       if (!conversationId) return;
       setDeciding(refId);
       try {
@@ -364,61 +441,70 @@ export function VoiceClient() {
     }
     p.sources.clear();
     p.nextAt = 0;
-    setSpeaking(false);
-  }, []);
+    setIcosSpeaking(false);
+  }, [setIcosSpeaking]);
 
-  /** Close the mic now: link lost, offline, or cancelled. Never keeps recording unseen. */
+  /**
+   * Ferme le micro MAINTENANT : lien perdu, hors ligne, session arrêtée. Jamais
+   * d'enregistrement qui continue sans que l'écran le dise — `MIC_CLOSED` retire aussitôt
+   * la phase d'écoute, donc l'indicateur ne peut pas rester allumé sur un micro fermé.
+   */
   const releaseMic = useCallback(() => {
-    const turnId = talkingTurn.current;
-    talkingTurn.current = null;
-    const c = capture.current;
-    if (c) {
-      c.source.disconnect();
-      c.stream.getTracks().forEach((track) => track.stop());
+    const open = turn.current;
+    turn.current = null;
+    vad.current.reset();
+    const m = mic.current;
+    if (m) {
+      m.source.disconnect();
+      m.stream.getTracks().forEach((track) => track.stop());
     }
-    capture.current = null;
-    if (turnId) dispatch({ type: "discard_turn", turnId });
-  }, []);
+    mic.current = null;
+    sessionDispatch({ type: "MIC_CLOSED" });
+    if (open) dispatch({ type: "discard_turn", turnId: open.turnId });
+  }, [sessionDispatch]);
 
-  const play = useCallback((turnId: string, data: string) => {
-    const ctx = audio.current?.ctx;
-    if (!ctx || silenced.current.has(turnId)) return;
-    lastAudioTurn.current = turnId;
-    const p = playback.current;
-    const generation = p.generation;
-    const bytes = base64ToBytes(data);
-    // Decode in arrival order; a stop in the meantime bumps the generation.
-    p.chain = p.chain
-      .then(() => ctx.decodeAudioData(bytes.buffer.slice(0) as ArrayBuffer))
-      .then((buffer) => {
-        if (
-          generation !== p.generation ||
-          silenced.current.has(turnId) ||
-          !mayPlay(stateRef.current, turnId)
-        ) {
-          return;
-        }
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        const at = Math.max(ctx.currentTime, p.nextAt);
-        source.start(at);
-        p.nextAt = at + buffer.duration;
-        p.sources.add(source);
-        setSpeaking(true);
-        source.onended = () => {
-          p.sources.delete(source);
-          if (p.sources.size === 0) setSpeaking(false);
-        };
-      })
-      .catch(() => {
-        dispatch({
-          type: "local_error",
-          code: "PLAYBACK",
-          message: "un extrait audio n'a pas pu être lu",
+  const play = useCallback(
+    (turnId: string, data: string) => {
+      const ctx = audio.current?.ctx;
+      if (!ctx || silenced.current.has(turnId)) return;
+      lastAudioTurn.current = turnId;
+      const p = playback.current;
+      const generation = p.generation;
+      const bytes = base64ToBytes(data);
+      // Decode in arrival order; a stop in the meantime bumps the generation.
+      p.chain = p.chain
+        .then(() => ctx.decodeAudioData(bytes.buffer.slice(0) as ArrayBuffer))
+        .then((buffer) => {
+          if (
+            generation !== p.generation ||
+            silenced.current.has(turnId) ||
+            !mayPlay(stateRef.current, turnId)
+          ) {
+            return;
+          }
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          const at = Math.max(ctx.currentTime, p.nextAt);
+          source.start(at);
+          p.nextAt = at + buffer.duration;
+          p.sources.add(source);
+          setIcosSpeaking(true);
+          source.onended = () => {
+            p.sources.delete(source);
+            if (p.sources.size === 0) setIcosSpeaking(false);
+          };
+        })
+        .catch(() => {
+          dispatch({
+            type: "local_error",
+            code: "PLAYBACK",
+            message: "un extrait audio n'a pas pu être lu",
+          });
         });
-      });
-  }, []);
+    },
+    [setIcosSpeaking],
+  );
 
   // --- transport --------------------------------------------------------------
   useEffect(() => {
@@ -437,12 +523,15 @@ export function VoiceClient() {
           JSON.stringify({
             type: "hello",
             device: standalone ? "pwa" : "browser",
-            turnMode: "push_to_talk",
+            /*
+             * `auto_vad` DIT LA VÉRITÉ AU SERVEUR : c'est bien le client qui segmente les
+             * tours, avec son VAD local. En `push_to_talk` le serveur attendrait un geste
+             * humain qui n'existe plus, et sa fin d'énoncé ne voudrait plus rien dire.
+             */
+            turnMode: "auto_vad",
             language: navigator.language || "fr-FR",
-            ...(session.current.sessionId ? { sessionId: session.current.sessionId } : {}),
-            ...(session.current.conversationId
-              ? { conversationId: session.current.conversationId }
-              : {}),
+            ...(wire.current.sessionId ? { sessionId: wire.current.sessionId } : {}),
+            ...(wire.current.conversationId ? { conversationId: wire.current.conversationId } : {}),
           }),
         );
         beat = setInterval(() => send({ type: "heartbeat" }), HEARTBEAT_MS);
@@ -456,15 +545,15 @@ export function VoiceClient() {
         }
         if (message.type === "ready") {
           attempt = 0;
-          session.current = {
+          sessionDispatch({ type: "LINK", link: "ready" });
+          wire.current = {
             sessionId: message.sessionId,
             conversationId: message.conversationId,
           };
           // Recovery: a reconnect gets its mission state back from the record, not the socket.
           void refreshProposals();
         }
-        if (message.type === "turn_accepted")
-          session.current.conversationId = message.conversationId;
+        if (message.type === "turn_accepted") wire.current.conversationId = message.conversationId;
         // A proposal was created or advanced: the authority is the record, so re-read it.
         if (message.type === "response_event") void refreshProposals();
         if (message.type === "playback_stop") {
@@ -485,9 +574,11 @@ export function VoiceClient() {
         // instead of retrying something that configuration alone can fix.
         if (event.code === 1011 && event.reason) {
           dispatch({ type: "local_error", code: event.reason, message: event.reason });
+          sessionDispatch({ type: "FATAL", message: userMessage(event.reason) });
           return dispatch({ type: "link", link: "unavailable" });
         }
         dispatch({ type: "link", link: "reconnecting" });
+        sessionDispatch({ type: "LINK", link: "reconnecting" });
         // A refused upgrade looks like any drop (1006): after a few, ask HTTP why.
         // The probe carries the SOCKET's own permission, so a 403 here really is
         // the socket's 403 — see src/app/api/voice/status/route.ts.
@@ -499,6 +590,7 @@ export function VoiceClient() {
                 closed = true;
                 clearTimeout(retry);
                 dispatch({ type: "link", link: "unavailable" });
+                sessionDispatch({ type: "FATAL", message: "accès voix refusé" });
                 dispatch({ type: "local_error", code: "FORBIDDEN", message: "accès voix refusé" });
               }
             },
@@ -512,10 +604,14 @@ export function VoiceClient() {
     const onOffline = () => {
       releaseMic();
       dispatch({ type: "link", link: "offline" });
+      sessionDispatch({ type: "LINK", link: "offline" });
     };
     const onOnline = () => {
       const socket = ws.current;
-      if (socket?.readyState === WebSocket.OPEN) return dispatch({ type: "link", link: "ready" });
+      if (socket?.readyState === WebSocket.OPEN) {
+        sessionDispatch({ type: "LINK", link: "ready" });
+        return dispatch({ type: "link", link: "ready" });
+      }
       if (socket?.readyState === WebSocket.CONNECTING) return;
       clearTimeout(retry);
       connect();
@@ -530,10 +626,31 @@ export function VoiceClient() {
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       ws.current?.close();
-      capture.current?.stream.getTracks().forEach((track) => track.stop());
+      mic.current?.stream.getTracks().forEach((track) => track.stop());
       void audio.current?.ctx.close();
     };
-  }, [play, send, stopPlayback, releaseMic, refreshProposals]);
+  }, [play, send, stopPlayback, releaseMic, refreshProposals, sessionDispatch]);
+
+  /*
+   * POLITIQUE D'INACTIVITÉ. Une pause entre deux phrases ne ferme JAMAIS la session —
+   * `inactivityExpired` n'est vrai qu'au repos, jamais pendant qu'on parle ni pendant
+   * qu'ICOS répond. Un micro ouvert qu'on a oublié, en revanche, finit par se fermer.
+   */
+  useEffect(() => {
+    if (!session.sessionRequested) return;
+    const timer = setInterval(() => {
+      if (inactivityExpired(sessionRef.current, nowMs())) {
+        sessionDispatch({ type: "INACTIVITY_TIMEOUT" });
+        releaseMic();
+      }
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [session.sessionRequested, sessionDispatch, releaseMic]);
+
+  /* Le micro doit suivre la session, y compris quand elle se ferme toute seule. */
+  useEffect(() => {
+    if (!session.sessionRequested && mic.current) releaseMic();
+  }, [session.sessionRequested, releaseMic]);
 
   // --- microphone --------------------------------------------------------------
   /** Must start synchronously inside the tap: iOS only unlocks audio there. */
@@ -560,33 +677,77 @@ export function VoiceClient() {
   };
 
   const sendFrame = (ctx: AudioContext) => {
-    const c = capture.current;
-    if (!c || c.buffered === 0) return;
-    const samples = new Float32Array(c.buffered);
+    const t = turn.current;
+    if (!t || t.buffered === 0) return;
+    const samples = new Float32Array(t.buffered);
     let at = 0;
-    for (const chunk of c.pending) {
+    for (const chunk of t.pending) {
       samples.set(chunk, at);
       at += chunk.length;
     }
-    c.pending = [];
-    c.buffered = 0;
+    t.pending = [];
+    t.buffered = 0;
     const pcm = toPcm16(samples, ctx.sampleRate, SAMPLE_RATE);
     send({
       type: "audio",
-      turnId: c.turnId,
-      seq: c.seq++,
+      turnId: t.turnId,
+      seq: t.seq++,
       encoding: "pcm16",
       sampleRate: SAMPLE_RATE,
       data: bytesToBase64(new Uint8Array(pcm.buffer)),
     });
   };
 
+  /**
+   * LE CŒUR DE LA SESSION CONTINUE. Le tap audio appelle ceci en permanence tant que la
+   * session est ouverte ; c'est le VAD LOCAL qui décide où commence et où finit un tour.
+   *
+   * Aucun octet ne part tant qu'une parole n'a pas commencé : les trames de silence sont
+   * poussées dans le VAD et jetées. Ce qui est envoyé, c'est un énoncé, pas le micro.
+   */
   const onSamples = (ctx: AudioContext, samples: Float32Array) => {
-    const c = capture.current;
-    if (!c) return;
-    c.pending.push(samples);
-    c.buffered += samples.length;
-    if (c.buffered >= (ctx.sampleRate * FRAME_MS) / 1000) sendFrame(ctx);
+    if (!micIsCapturing(sessionRef.current)) return;
+    const event = vad.current.push(samples, ctx.sampleRate);
+
+    if (event === "SPEECH_START") beginTurn(ctx, samples);
+    else if (turn.current) {
+      turn.current.pending.push(samples);
+      turn.current.buffered += samples.length;
+      if (turn.current.buffered >= (ctx.sampleRate * FRAME_MS) / 1000) sendFrame(ctx);
+    }
+
+    if (event === "SPEECH_END") endTurn(ctx);
+  };
+
+  /**
+   * Début d'énoncé. Si ICOS parle, c'est un BARGE-IN : on coupe sa voix localement et tout
+   * de suite (sans attendre l'aller-retour serveur), puis on lui dit de s'arrêter.
+   */
+  const beginTurn = (ctx: AudioContext, first: Float32Array) => {
+    const turnId = newTurnId();
+    sessionDispatch({ type: "SPEECH_START", at: nowMs() });
+    if (speakingRef.current) {
+      silenceCurrent();
+      send({ type: "interrupt" });
+      dispatch({ type: "interrupt" });
+      /* La coupure est effective : la machine peut passer de INTERRUPTED à la capture. */
+      sessionDispatch({ type: "PLAYBACK_STOPPED" });
+    }
+    turn.current = { turnId, pending: [first], buffered: first.length, seq: 0 };
+    dispatch({ type: "talk", turnId });
+    send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_START" });
+  };
+
+  /** Fin d'énoncé : on vide le tampon pour ne pas couper le dernier mot, puis on valide. */
+  const endTurn = (ctx: AudioContext) => {
+    const t = turn.current;
+    sessionDispatch({ type: "SPEECH_END", at: nowMs() });
+    if (!t) return;
+    sendFrame(ctx);
+    turn.current = null;
+    dispatch({ type: "stop_talking" });
+    send({ type: "turn", turnId: t.turnId, signal: "VOICE_ACTIVITY_END" });
+    send({ type: "turn", turnId: t.turnId, signal: "TURN_COMMIT" });
   };
 
   /** Silence whatever ICOS is saying, locally and at once. */
@@ -596,59 +757,71 @@ export function VoiceClient() {
     stopPlayback();
   };
 
-  const startTalking = async () => {
+  /**
+   * OUVRE LA SESSION : le micro s'ouvre UNE fois et reste ouvert. Tout ce qui suit —
+   * détection de parole, tours, barge-in, retour à l'écoute — se fait sans un geste de plus.
+   *
+   * `ensureAudio()` est appelé SYNCHRONEMENT dans le geste : iOS ne débloque l'audio que là,
+   * donc un `await` avant lui rendrait la lecture muette sur iPhone.
+   */
+  const openMic = async () => {
     try {
-      const { ctx, tap } = ensureAudio(); // synchronous part of the tap
+      const { ctx, tap } = ensureAudio(); // partie synchrone du geste
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Micro indisponible : ouvrez ICOS en HTTPS (origine sécurisée).");
       }
-      const turnId = newTurnId();
-      silenceCurrent(); // barge-in: local silence is immediate
-      talkingTurn.current = turnId;
-      dispatch({ type: "talk", turnId });
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
+          /* L'annulation d'écho est ce qui permet le barge-in : sans elle, la voix d'ICOS
+             dans le haut-parleur réveillerait le VAD et ICOS se couperait lui-même. */
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
-      if (talkingTurn.current !== turnId) {
-        stream.getTracks().forEach((track) => track.stop()); // sent before the mic opened
+      if (!sessionRef.current.sessionRequested) {
+        /* Fermée pendant que la permission s'affichait : on ne laisse pas une piste ouverte. */
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
       const source = ctx.createMediaStreamSource(stream);
       source.connect(await tap);
-      capture.current = { turnId, stream, source, pending: [], buffered: 0, seq: 0 };
-      // The server hears about the turn only once the mic is really open.
-      send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_START" });
+      vad.current.reset();
+      mic.current = { stream, source };
+      sessionDispatch({ type: "MIC_OPENED", at: nowMs() });
+      /*
+       * SURVEILLANCE DE LA PERMISSION. Une permission révoquée en cours de session termine
+       * la piste sans erreur : sans cet écouteur, l'écran continuerait d'afficher une écoute
+       * qui n'existe plus — exactement le mensonge que ce lot interdit.
+       */
+      for (const track of stream.getTracks()) {
+        track.onended = () =>
+          sessionDispatch({ type: "MIC_DENIED", message: "micro coupé ou permission retirée" });
+      }
     } catch (error) {
-      const turnId = talkingTurn.current;
-      talkingTurn.current = null;
-      if (turnId) dispatch({ type: "discard_turn", turnId });
+      const message = error instanceof Error ? error.message : "micro refusé";
+      sessionDispatch({ type: "MIC_DENIED", message });
       dispatch({
         type: "local_error",
         code: window.isSecureContext ? "MICROPHONE" : "INSECURE_CONTEXT",
-        message: error instanceof Error ? error.message : "micro refusé",
+        message,
       });
     }
   };
 
-  const stopTalking = () => {
-    const turnId = talkingTurn.current;
-    talkingTurn.current = null;
-    const c = capture.current;
-    if (c && audio.current) sendFrame(audio.current.ctx); // don't clip the last word
-    if (c) {
-      c.source.disconnect();
-      c.stream.getTracks().forEach((track) => track.stop()); // mic indicator off
+  /** LE BOUTON UNIQUE. Un appui ouvre, un appui ferme. Il n'y en a pas d'autre. */
+  const toggleSession = () => {
+    const wasOpen = sessionRef.current.sessionRequested;
+    sessionDispatch({ type: "TOGGLE_SESSION", at: nowMs() });
+    if (wasOpen) {
+      /* Fermeture : la voix d'ICOS s'arrête avec le micro, sinon elle parlerait seule. */
+      silenceCurrent();
+      send({ type: "cancel" });
+      releaseMic();
+      return;
     }
-    capture.current = null;
-    dispatch({ type: "stop_talking" });
-    if (!turnId) return;
-    send({ type: "turn", turnId, signal: "VOICE_ACTIVITY_END" });
-    send({ type: "turn", turnId, signal: "TURN_COMMIT" });
+    void openMic();
   };
 
   const resend = (turnId: string) => send({ type: "turn", turnId, signal: "TURN_COMMIT" });
@@ -659,16 +832,12 @@ export function VoiceClient() {
     send({ type: "interrupt" });
   };
 
-  const cancelTalking = () => {
-    releaseMic();
-    send({ type: "cancel" }); // the server drops the uncommitted utterance
-  };
-
-  const phase = voicePhase(state, speaking);
+  /* LA phase affichée vient de la machine pure : elle seule connaît micro et transport. */
+  const phase = voicePhase(session);
   const meta = PHASE[phase];
-  const talking = state.talkingTurnId !== null;
-  const canTalk = state.link === "ready";
+  const sessionOpen = session.sessionRequested;
   const canInterrupt = speaking || !!activeTurn(state);
+  const wakeWord = wakeWordStatus(session.wakeWord, NO_WAKE_WORD_DETECTOR);
   const [diagnostics, setDiagnostics] = useState(false);
   const diagnosticsButton = useRef<HTMLButtonElement>(null);
   const diagnosticsClose = useRef<HTMLButtonElement>(null);
@@ -686,11 +855,9 @@ export function VoiceClient() {
   const shownMissions = latestMissionEvents(state.turns);
   const lastAnswer = state.turns.findLast((t) => t.state === "done" && t.icos)?.icos;
 
-  const micLabel = talking
-    ? "Envoyer le message"
-    : phase === "SPEAKING"
-      ? "Interrompre ICOS et parler"
-      : "Parler à ICOS";
+  const micLabel = sessionOpen
+    ? "Fermer la conversation vocale"
+    : "Ouvrir une conversation vocale avec ICOS";
 
   return (
     <main className={styles.root}>
@@ -825,6 +992,34 @@ export function VoiceClient() {
         {lastAnswer ? `ICOS : ${plainText(lastAnswer)}` : ""}
       </p>
 
+      {/*
+        MOT-CLÉ « ICOS » — OFF par défaut, et honnête sur ce qu'il fait.
+        Aucun moteur local n'est fourni dans cette version : l'interrupteur existe, l'état
+        est réel, et l'explication dit qu'il ne détecte rien plutôt que de le laisser croire.
+        Il est désactivé tant qu'aucun moteur n'est installé — un interrupteur qu'on peut
+        armer sans effet est un mensonge d'interface.
+      */}
+      <section className={styles.wakeWord} aria-label="Activation par mot-clé">
+        <label className={styles.wakeWordRow}>
+          <span className={styles.wakeWordLabel}>Mot-clé « {wakeWord.phrase} »</span>
+          <input
+            type="checkbox"
+            checked={wakeWord.enabled}
+            disabled={!wakeWord.available}
+            onChange={(event) =>
+              sessionDispatch({
+                type: "WAKE_WORD_MODE",
+                mode: event.target.checked ? "ARMED" : "OFF",
+              })
+            }
+          />
+          <span aria-hidden="true">{wakeWord.enabled ? "ON" : "OFF"}</span>
+        </label>
+        <p className={styles.wakeWordHint} role="status" aria-live="polite">
+          {wakeWord.explanation}
+        </p>
+      </section>
+
       <footer className={styles.dock} data-tone={meta.tone}>
         <div className={styles.phase} role="status" aria-live="polite">
           <span className={styles.phaseLabel}>
@@ -847,38 +1042,43 @@ export function VoiceClient() {
             Stop
           </button>
         </div>
+        {/*
+          LE BOUTON UNIQUE. Un appui ouvre la conversation, un appui la ferme. Il n'y a plus
+          de bouton « parler » : entre deux tours, il n'y a rien à toucher. Grand, centré,
+          et au pouce — c'est la cible principale sur un téléphone tenu d'une main.
+        */}
         <button
           type="button"
           className={styles.mic}
           data-phase={phase}
-          disabled={!canTalk}
-          onClick={talking ? stopTalking : startTalking}
+          data-open={sessionOpen}
+          onClick={toggleSession}
+          aria-pressed={sessionOpen}
           aria-label={micLabel}
         >
-          {talking ? (
-            <ArrowUp aria-hidden />
-          ) : phase === "SPEAKING" ? (
+          {phase === "ICOS_SPEAKING" || phase === "USER_SPEAKING" ? (
             <span className={styles.bars} aria-hidden="true">
               <span />
               <span />
               <span />
               <span />
             </span>
+          ) : sessionOpen ? (
+            <Square aria-hidden />
           ) : (
             <Mic aria-hidden />
           )}
         </button>
         <div className={`${styles.side} ${styles.sideEnd}`}>
-          <button
-            type="button"
-            className={styles.secondary}
-            onClick={cancelTalking}
-            disabled={!talking}
-            aria-label="Annuler l'enregistrement"
-          >
-            <X aria-hidden />
-            Annuler
-          </button>
+          {/*
+            L'ÉTAT DU MICRO, TOUJOURS VISIBLE, et dérivé du fait que la piste est réellement
+            ouverte — jamais de l'intention de l'ouvrir. Une capture invisible est impossible
+            à produire : `micIsCapturing` est la même source que la phase.
+          */}
+          <span className={styles.secondary} role="status" aria-live="polite">
+            <Mic aria-hidden />
+            {micIsCapturing(session) ? "Micro ouvert" : "Micro fermé"}
+          </span>
         </div>
       </footer>
 

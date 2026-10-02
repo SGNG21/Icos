@@ -3,7 +3,8 @@ import { z } from "zod";
 import { REF_KINDS, REF_STATUSES, type RefKind, type RefStatus } from "@/core/cognitive/contracts";
 import { MissionEventPayloadSchema, type MissionEventPayload } from "@/core/voice/contracts";
 
-import type { VoiceTurnView, VoiceUiState } from "./voice-client";
+import type { VoiceTurnView } from "./voice-client";
+import type { VoicePhase as MachinePhase } from "./voice-session-machine";
 
 /**
  * What the phone shows (decision 0056): every visual state is derived from
@@ -11,65 +12,43 @@ import type { VoiceTurnView, VoiceUiState } from "./voice-client";
  * without a browser.
  */
 
-export type VoicePhase =
-  | "CONNECTING"
-  | "IDLE"
-  | "LISTENING"
-  | "TRANSCRIBING"
-  | "THINKING"
-  | "SPEAKING"
-  | "INTERRUPTED"
-  | "RECONNECTING"
-  | "ERROR"
-  | "OFFLINE";
+/**
+ * LA PHASE AFFICHÉE EST CELLE DE LA MACHINE DE SESSION — une seule autorité.
+ *
+ * Il y en avait deux : une phase dérivée ici des messages serveur, et (depuis P0-P) celle
+ * de `voice-session-machine.ts`. Deux dérivations de « où en est la voix » finissent
+ * toujours par diverger, et c'est l'écran qui ment en premier. Celle de la machine gagne,
+ * parce que c'est la seule qui connaisse les faits qui comptent pour la véracité : le micro
+ * est-il RÉELLEMENT ouvert, le transport est-il RÉELLEMENT prêt.
+ *
+ * Ce module ne garde donc que l'HABILLAGE : un libellé, une aide, un ton.
+ */
+export type { VoicePhase } from "./voice-session-machine";
 
 /** Locked Control Center tones: colour is never the only channel (icon + word too). */
 export type Tone = "flow" | "ok" | "critical" | "autonomy" | "warn" | "unknown";
 
-export const PHASE: Record<VoicePhase, { label: string; hint: string; tone: Tone }> = {
-  CONNECTING: { label: "Connexion", hint: "Connexion sécurisée à ICOS…", tone: "unknown" },
-  IDLE: { label: "Prêt", hint: "Touchez le micro pour parler", tone: "ok" },
-  LISTENING: { label: "À l'écoute", hint: "Parlez, puis touchez pour envoyer", tone: "flow" },
-  TRANSCRIBING: {
-    label: "Transcription",
-    hint: "ICOS finalise ce que vous avez dit",
-    tone: "flow",
-  },
+/**
+ * Les aides décrivent la session CONTINUE : plus aucune ne demande de toucher le micro
+ * pour parler, parce qu'il n'y a plus de clic entre deux tours. Un texte qui demanderait
+ * encore un geste inutile serait une régression d'interface même si le code est juste.
+ */
+export const PHASE: Record<MachinePhase, { label: string; hint: string; tone: Tone }> = {
+  OFF: { label: "Voix fermée", hint: "Touchez pour ouvrir une conversation", tone: "unknown" },
+  CONNECTING: { label: "Ouverture", hint: "Connexion sécurisée et micro…", tone: "unknown" },
+  LISTENING: { label: "À l'écoute", hint: "Parlez quand vous voulez", tone: "flow" },
+  USER_SPEAKING: { label: "Vous parlez", hint: "ICOS écoute", tone: "flow" },
   THINKING: { label: "Réflexion", hint: "ICOS prépare sa réponse", tone: "autonomy" },
-  SPEAKING: { label: "ICOS parle", hint: "Touchez le micro pour l'interrompre", tone: "autonomy" },
-  INTERRUPTED: { label: "Interrompu", hint: "Touchez le micro pour reprendre", tone: "warn" },
-  RECONNECTING: { label: "Reconnexion", hint: "Le lien avec ICOS est rétabli…", tone: "warn" },
+  ICOS_SPEAKING: { label: "ICOS parle", hint: "Parlez pour l'interrompre", tone: "autonomy" },
+  INTERRUPTED: { label: "Interrompu", hint: "ICOS s'est tu, allez-y", tone: "warn" },
+  RECONNECTING: {
+    label: "Reconnexion",
+    hint: "Le lien se rétablit, ne raccrochez pas…",
+    tone: "warn",
+  },
+  DEGRADED: { label: "Amoindri", hint: "", tone: "warn" },
   ERROR: { label: "Problème", hint: "", tone: "critical" },
-  OFFLINE: { label: "Hors ligne", hint: "Vérifiez votre connexion réseau", tone: "critical" },
 };
-
-/** The single phase the screen shows, from the reducer state and the real playback flag. */
-export function voicePhase(state: VoiceUiState, speaking: boolean): VoicePhase {
-  if (state.link === "offline") return "OFFLINE";
-  if (state.link === "unavailable") return "ERROR";
-  if (state.link === "reconnecting") return "RECONNECTING";
-  if (state.link === "connecting") return "CONNECTING";
-  if (state.talkingTurnId) return "LISTENING";
-  if (speaking) return "SPEAKING";
-  const last = state.turns.at(-1);
-  if (!last) return state.error ? "ERROR" : "IDLE";
-  switch (last.state) {
-    case "listening":
-      // Sent, but ICOS has not accepted it yet: the final transcript is being made.
-      return "TRANSCRIBING";
-    case "thinking":
-    case "answering":
-      return "THINKING";
-    case "interrupted":
-      return "INTERRUPTED";
-    case "dropped":
-    case "failed":
-      // Only while the problem is current; the turn itself keeps its badge.
-      return state.error ? "ERROR" : "IDLE";
-    case "done":
-      return "IDLE";
-  }
-}
 
 /**
  * User-facing French for protocol and local error codes. The code itself is

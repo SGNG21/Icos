@@ -926,3 +926,41 @@
   opacity: 0.6;
   cursor: progress;
 }
+
+/*
+ * MOT-CLÉ « ICOS » — le réglage, pas une commande. Posé au-dessus du bouton unique, assez
+ * discret pour ne pas concurrencer la cible principale, assez visible pour qu'on sache que
+ * l'écoute permanente existe et qu'elle est éteinte.
+ */
+.wakeWord {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+}
+
+.wakeWordRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* 44px : cible tactile minimale, pour que le réglage se touche au pouce. */
+  min-height: 44px;
+}
+
+.wakeWordLabel {
+  flex: 1;
+}
+
+.wakeWordHint {
+  margin: 0;
+  opacity: 0.7;
+}
+
+/*
+ * LE BOUTON UNIQUE, ouvert. Le repère visuel « une session est en cours » doit survivre à
+ * un écran lu en plein soleil d'une seule main : c'est un anneau, pas seulement une teinte.
+ */
+.mic[data-open="true"] {
+  box-shadow: 0 0 0 4px color-mix(in oklab, currentColor 35%, transparent);
+}
