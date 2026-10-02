@@ -137,8 +137,18 @@ export type { DurableMemory } from "@/core/context/durable-memory";
 
 import type { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
 
+/** A goal plus the columns `rowToGoal` drops: the read model needs lineage, not just intent. */
+export interface GoalRecord {
+  goal: HighLevelGoal;
+  status: string;
+  resultingMissionId: string | null;
+  convertedAt: string | null;
+}
+
 export interface GoalRepository {
   create(goal: HighLevelGoal, preview: GoalPlanPreview): Promise<void>;
+  /** Newest first. Read-only; no new table, these are existing columns. */
+  list(filter?: { status?: string; limit?: number }): Promise<GoalRecord[]>;
   getById(goalId: string): Promise<{ goal: HighLevelGoal; preview: GoalPlanPreview } | null>;
   updateStatus(goalId: string, status: string): Promise<void>;
   setConverted(goalId: string, missionId: string): Promise<void>;

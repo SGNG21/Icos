@@ -1,8 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 
 import type { HighLevelGoal, GoalPlanPreview } from "@/core/contracts/high-level-goal";
 import type { Database } from "@/server/database/client";
-import type { GoalRepository } from "@/server/repositories/ports";
+import type { GoalRecord, GoalRepository } from "@/server/repositories/ports";
 import { auditEntries, goals, goalPreviews } from "@/server/database/schema";
 import { auditToRow, rowToGoal, goalToRow, goalPreviewToRow, rowToGoalPreview } from "@/server/database/mappers";
 
@@ -36,6 +36,20 @@ export class PostgresGoalRepository implements GoalRepository {
       await tx.insert(goalPreviews).values(previewRow);
       await tx.insert(auditEntries).values(auditToRow(auditEntry));
     });
+  }
+
+  async list(filter?: { status?: string; limit?: number }): Promise<GoalRecord[]> {
+    const base = this.db.select().from(goals);
+    const scoped = filter?.status === undefined ? base : base.where(eq(goals.status, filter.status));
+    const ordered = scoped.orderBy(desc(goals.createdAt), asc(goals.id));
+    const rows = await (filter?.limit === undefined ? ordered : ordered.limit(filter.limit));
+
+    return rows.map((row) => ({
+      goal: rowToGoal(row),
+      status: row.status,
+      resultingMissionId: row.resultingMissionId ?? null,
+      convertedAt: row.convertedAt ? row.convertedAt.toISOString() : null,
+    }));
   }
 
   async getById(goalId: string): Promise<{ goal: HighLevelGoal; preview: GoalPlanPreview } | null> {
