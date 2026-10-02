@@ -280,3 +280,65 @@ than a visible skip.
 run and re-run the full suite, or convert those files deliberately, one at a time, verifying each
 actually passes rather than merely stops skipping. Until then, treat "integration green" as
 covering 74 of 87 files, and do not read it as covering auth or audit append-only.
+
+## 10. Status at a pinned commit, and the second independent review
+
+An independent reviewer — **Codex CLI, `gpt-5.6-sol`, reasoning effort `max`**, run read-only and
+sandboxed, i.e. a different model family from every implementer — reviewed the whole branch and
+returned **1 CRITICAL, 7 HIGH: DO NOT INTEGRATE.** That verdict stands. This section is the
+authoritative status; the status paragraphs inside decision 0066 are superseded.
+
+### Status at `b739284`
+
+| Capability | State | Honest limit |
+|---|---|---|
+| Chief Supervisor | INSTALLED | — |
+| Namespace traversal (canonical identity) | INSTALLED | reviewer found it sound |
+| Client-less live state | INSTALLED | — |
+| Escalated work visible | INSTALLED | — |
+| Self-development trigger | INSTALLED, owner-gated, default OFF | runs on its own timer |
+| Price registry | INSTALLED, EMPTY by design | undated legacy entries still representable |
+| Spend metering | INSTALLED on the planner seam only | **first call under a money cap is ALLOWED** |
+| Reservation / settlement | AUTHORED + PROVEN IN ISOLATION, **no production caller** | reserve/settle not mutually serialised |
+| Runtime caps | INSTALLED via the scheduler payload | unreachable from normal intake; not persisted for replan |
+| Reduce-only compute policy | INSTALLED at initial planning | not enforced at replan, task routing or review |
+| 12 brains | SEEDER + CORE3 SEAM WIRED, **0 rows** | roles are draft; seeding needs a human principal |
+| "Ameliore ICOS" intake | INSTALLED | lexical proximity, so semantically overbroad |
+
+### What the reviewer found that my own reporting had understated
+
+1. **CRITICAL - the first billable call is authorized.** `checkBudget` evaluates only the
+   HISTORICAL window, so an empty window passes `decide()`; price and usage are discovered only
+   after the provider has answered, and the planner sends no output-token limit. With a money cap
+   and an empty registry, call one is allowed and already paid for. The reservation mechanism that
+   would fix this has NO production caller. I did report that limit, but then described P0-D as
+   "proven", which reads as enforced. It is proven in isolation and **not enforced**.
+2. **HIGH - `settle()` is not serialised with `reserve()`** and authenticates the reservation
+   AFTER writing to the ledger, trusting caller-supplied attribution and reserved amount. Spend
+   can vanish between the two protected reads (1,900 committed under a 1,000 cap), and a
+   settlement can be charged to a different goal than the one reserved.
+3. **HIGH - lease expiry releases budget while the call may still be running**, with no renewal,
+   so a nominal 1,000 ceiling can authorise 2,000. Expiry-as-a-predicate was presented as a
+   feature; without renewal it is a hole.
+4. **HIGH - an empty allowlist env value became UNRESTRICTED**, and a test blessed it: the exact
+   permissive-fallback shape this lane existed to eliminate. **Fixed:** present-but-empty now
+   refuses to boot, omitted still means unrestricted, and `.env.example` no longer ships those
+   variables empty.
+5. **HIGH - caps and compute policy are unreachable from normal intake** and are not persisted
+   across replan/wake, so a restriction can be silently lost on restart.
+6. **HIGH - multiple live brain assignments**: dispatch takes the lexicographically first, so a
+   stricter assignment (extra capability, human approval) can be bypassed.
+7. **HIGH - portfolio admission is check-then-enqueue**, so concurrent admissions can exceed a
+   class ceiling of one.
+8. **MEDIUM - my own decisions contradicted the code.** 0066 still claimed three capabilities had
+   no callers, and that budget and the allowlist share one enforcement point (they do not - two
+   seams). 0068 said brains were "load-bearing immediately" while admitting production creates no
+   assignments. Both corrected in place with a status notice rather than a silent edit.
+
+### Consequence
+
+**This branch is NOT integration-ready.** It is a certified set of lane commits with a written-down
+defect list - materially better than where the lane started, but the budget enforcement story must
+not be described as closed. A token cap plus a bounded model allowlist becomes genuinely
+enforceable only once the reservation port has a production caller on every billable seam.
+
