@@ -1,5 +1,7 @@
 import {
   BUDGET_CURRENCY,
+  eurToMicros,
+  MICROS_PER_EUR,
   UNMETERED,
   UNPRICED,
   type BudgetCap,
@@ -16,6 +18,15 @@ import {
  * `decide` est un contrôle PRÉ-vol : on l'appelle avant d'émettre l'appel suivant, et un
  * plafond atteint refuse cet appel. Fermé par défaut : tout ce qui ne peut pas être prouvé
  * sous le plafond est refusé, y compris un total non chiffré ou non mesuré.
+ *
+ * ── POURQUOI `decide` SEUL NE BORNE RIEN (verrou P0-D) ──────────────────────────────────
+ * Un contrôle pré-vol autorise d'après ce qui est DÉJÀ enregistré. W appelants simultanés
+ * lisent donc la même fenêtre et obtiennent W autorisations : la borne croît avec le nombre
+ * de workers (mesuré : 2 workers -> 10 tokens au-delà, 16 -> 150). `decideReservation`
+ * ferme ça en ajoutant le terme qui manquait — les tokens DÉJÀ ENGAGÉS par les appels en
+ * vol — pour que la somme (dépensé + engagé + demandé) soit comparée au plafond. Ce fichier
+ * reste PUR : la simultanéité, elle, se règle en PostgreSQL
+ * (`src/server/budget/postgres-spend-reservations.ts`), jamais en mémoire de processus.
  */
 
 export interface SpendObservation {
@@ -135,19 +146,60 @@ const deny = (reason: DenyReason, detail: string): SpendDecision => ({
   detail,
 });
 
+type CappedBudget = Extract<BudgetCap, { kind: "CAPPED" }>;
+
+/**
+ * LE SEUL endroit du dépôt qui connaît l'unité du plafond monétaire. Deux orthographes
+ * existent le temps de la migration (voir `BudgetCap`) ; les fournir toutes les deux est
+ * un refus, pas un arbitrage silencieux.
+ */
+type MoneyCapMicros =
+  | { readonly kind: "NONE" }
+  | { readonly kind: "MICROS"; readonly micros: number }
+  | { readonly kind: "AMBIGUOUS" }
+  | { readonly kind: "INVALID"; readonly detail: string };
+
+export function moneyCapMicros(cap: CappedBudget): MoneyCapMicros {
+  if (cap.maxCostMicros !== undefined && cap.maxAmount !== undefined) {
+    return { kind: "AMBIGUOUS" };
+  }
+  if (cap.maxCostMicros !== undefined) {
+    return Number.isSafeInteger(cap.maxCostMicros) && cap.maxCostMicros > 0
+      ? { kind: "MICROS", micros: cap.maxCostMicros }
+      : { kind: "INVALID", detail: `maxCostMicros inexploitable : ${String(cap.maxCostMicros)}` };
+  }
+  if (cap.maxAmount !== undefined) {
+    /* Conversion de FRONTIÈRE : au-delà, plus aucun flottant n'est comparé. */
+    const micros = eurToMicros(cap.maxAmount);
+    return micros !== null && micros > 0
+      ? { kind: "MICROS", micros }
+      : { kind: "INVALID", detail: `maxAmount inexploitable : ${String(cap.maxAmount)}` };
+  }
+  return { kind: "NONE" };
+}
+
+/**
+ * Dépense accumulée en micros ENTIERS, ARRONDIE VERS LE HAUT. `window.amount` vient de la
+ * table de prix, qui est en EUR flottants (couche gelée, hors de ce lot) : la seule
+ * conversion honnête est donc celle qui ne peut pas faire DISPARAÎTRE une fraction de micro.
+ */
+const spentMicros = (window: SpendWindow) => Math.ceil(window.amount * MICROS_PER_EUR);
+
 export function decide(window: SpendWindow, cap: BudgetCap): SpendDecision {
   /* UNCAPPED est un choix explicite du propriétaire : on ne le contredit pas. */
   if (cap.kind === "UNCAPPED") return { kind: "ALLOW" };
 
-  const hasMoneyCap = cap.maxAmount !== undefined;
+  const money = moneyCapMicros(cap);
+  if (money.kind === "AMBIGUOUS") {
+    return deny("AMBIGUOUS_MONEY_CAP", "maxAmount ET maxCostMicros fournis : plafond ambigu");
+  }
+  if (money.kind === "INVALID") return deny("INVALID_CAP", money.detail);
+
   const hasTokenCap = cap.maxTotalTokens !== undefined;
-  if (!hasMoneyCap && !hasTokenCap) {
-    return deny("NO_ENFORCEABLE_CAP", "plafond CAPPED sans maxAmount ni maxTotalTokens");
+  if (money.kind === "NONE" && !hasTokenCap) {
+    return deny("NO_ENFORCEABLE_CAP", "plafond CAPPED sans maxCostMicros ni maxTotalTokens");
   }
 
-  if (cap.maxAmount !== undefined && !(Number.isFinite(cap.maxAmount) && cap.maxAmount > 0)) {
-    return deny("INVALID_CAP", `maxAmount inexploitable : ${String(cap.maxAmount)}`);
-  }
   if (
     cap.maxTotalTokens !== undefined &&
     !(Number.isSafeInteger(cap.maxTotalTokens) && cap.maxTotalTokens > 0)
@@ -174,21 +226,116 @@ export function decide(window: SpendWindow, cap: BudgetCap): SpendDecision {
     );
   }
 
-  if (cap.maxAmount !== undefined) {
+  if (money.kind === "MICROS") {
     /* Le blanchiment interdit : 0 EUR comptabilisé n'est pas 0 EUR dépensé. */
     if (window.unpricedCalls > 0) {
       return deny(
         "UNPRICED_USAGE_IN_WINDOW",
-        `${window.unpricedCalls} appel(s) sans prix dans la fenêtre : total non prouvable sous ${cap.maxAmount} ${window.currency}`,
+        `${window.unpricedCalls} appel(s) sans prix dans la fenêtre : total non prouvable sous ${money.micros} micro-${window.currency}`,
       );
     }
-    if (window.amount >= cap.maxAmount) {
+    if (spentMicros(window) >= money.micros) {
       return deny(
         "MONEY_CAP_REACHED",
-        `${window.amount} ${window.currency} dépensés pour un plafond de ${cap.maxAmount}`,
+        `${spentMicros(window)} micro-${window.currency} dépensés pour un plafond de ${money.micros}`,
       );
     }
   }
 
   return { kind: "ALLOW" };
+}
+
+/**
+ * RÉSERVATION AVANT DISPATCH (verrou P0-D), partie PURE.
+ *
+ * `heldTokens` = somme des tokens des réservations VIVANTES de la même imputation, c'est-à-dire
+ * les appels déjà autorisés mais pas encore soldés. C'est le terme qui manquait à `decide` :
+ * sans lui, W appelants simultanés comparent tous le même « déjà dépensé » au plafond et
+ * obtiennent tous un feu vert.
+ *
+ * Trois propriétés non négociables :
+ *   1. REFUS, JAMAIS ROGNAGE. Une réservation qui ne tient pas est refusée en entier. Rien ne
+ *      part avec un montant réduit en silence.
+ *   2. HÉRITE DE TOUTES LES FERMETURES DU PRÉ-VOL. Elle appelle `decide`, l'autorité unique :
+ *      fenêtre non mesurée, saturée ou plafond invalide refusent une réservation comme un appel.
+ *   3. UN PLAFOND MONÉTAIRE SANS PRIX FERME. Une réservation est exprimée en TOKENS ; la
+ *      convertir en euros demanderait un prix, et la table de prix est vide (lot X3). On ne
+ *      fabrique pas ce prix : `UNPRICED_RESERVATION`. Un budget en TOKENS SEULS, lui, reste
+ *      pleinement applicable — le prix en euros n'est pas un prérequis de l'autonomie.
+ */
+export function decideReservation(
+  window: SpendWindow,
+  heldTokens: number,
+  requestedTokens: number,
+  cap: BudgetCap,
+): SpendDecision {
+  if (!(Number.isSafeInteger(requestedTokens) && requestedTokens > 0)) {
+    return deny("INVALID_RESERVATION", `tokens demandés inexploitables : ${requestedTokens}`);
+  }
+  if (!(Number.isSafeInteger(heldTokens) && heldTokens >= 0)) {
+    return deny("UNUSABLE_WINDOW", `total des réservations vivantes inexploitable : ${heldTokens}`);
+  }
+  /* UNCAPPED est un choix explicite : il n'y a rien à ne pas dépasser. */
+  if (cap.kind === "UNCAPPED") return { kind: "ALLOW" };
+
+  const preflight = decide(window, cap);
+  if (preflight.kind === "DENY") return preflight;
+
+  if (moneyCapMicros(cap).kind === "MICROS") {
+    return deny(
+      "UNPRICED_RESERVATION",
+      `réservation de ${requestedTokens} tokens non chiffrable sous un plafond monétaire`,
+    );
+  }
+
+  /* `decide` a déjà validé `maxTotalTokens` ; sans lui il n'y aurait rien à appliquer. */
+  if (cap.maxTotalTokens === undefined) {
+    return deny("NO_ENFORCEABLE_CAP", "aucun plafond de tokens à réserver contre");
+  }
+
+  const committed = window.totalTokens + heldTokens + requestedTokens;
+  if (!Number.isSafeInteger(committed)) {
+    return deny("UNUSABLE_WINDOW", "le total engagé n'est plus un entier exact");
+  }
+  if (committed > cap.maxTotalTokens) {
+    return deny(
+      "RESERVATION_EXCEEDS_CAP",
+      `${window.totalTokens} dépensés + ${heldTokens} réservés + ${requestedTokens} demandés ` +
+        `= ${committed} pour un plafond de ${cap.maxTotalTokens}`,
+    );
+  }
+  return { kind: "ALLOW" };
+}
+
+/** Ce qu'un solde a réellement coûté, rendu et dépassé. Rien n'est caché ni arrondi. */
+export interface Settlement {
+  readonly reservedTokens: number;
+  /** `null` = consommation NON MESURÉE. Jamais un 0 de substitution. */
+  readonly actualTokens: number | null;
+  readonly releasedTokens: number;
+  /** > 0 quand l'appel a consommé plus que réservé. Enregistré, jamais masqué. */
+  readonly overrunTokens: number;
+}
+
+/**
+ * SOLDE SUR LA CONSOMMATION RÉELLE. Le reliquat non consommé est rendu au goal, et un
+ * DÉPASSEMENT est dit plutôt que caché — la réservation borne ce qu'on autorise à partir,
+ * pas ce que le fournisseur a réellement facturé.
+ *
+ * Consommation NON MESURÉE : rien n'est libéré, parce qu'on ne sait pas ce qui a été consommé.
+ * La ligne UNMETERED écrite au journal rend de surcroît la fenêtre du goal non prouvable, donc
+ * `decide` refuse ensuite TOUT appel de ce goal : l'issue est strictement plus stricte qu'une
+ * libération, et c'est voulu.
+ */
+export function settleReservation(reservedTokens: number, usage: UsageOutcome): Settlement {
+  if (usage.kind === UNMETERED) {
+    return { reservedTokens, actualTokens: null, releasedTokens: 0, overrunTokens: 0 };
+  }
+  const actualTokens = usage.usage.totalTokens;
+  return {
+    reservedTokens,
+    actualTokens,
+    releasedTokens: Math.max(0, reservedTokens - actualTokens),
+    overrunTokens: Math.max(0, actualTokens - reservedTokens),
+  };
 }

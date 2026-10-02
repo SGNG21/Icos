@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
-import type { Attribution } from "@/core/budget/contracts";
+import { MICROS_PER_EUR, type Attribution } from "@/core/budget/contracts";
 import { decide, emptyWindow } from "@/core/budget/spend";
 
 import { createGoalBudgetCapResolver, GOAL_BUDGET_UNITS_PER_EUR } from "./goal-budget-cap-resolver";
@@ -47,7 +47,7 @@ describe("createGoalBudgetCapResolver — un budget NULL n'est ni sans plafond n
   it("ne rend JAMAIS UNCAPPED pour un budget NULL", async () => {
     const { cap } = await resolve([{ budget: null }]);
     expect(cap.kind).toBe("CAPPED");
-    expect(cap.kind === "CAPPED" && cap.maxAmount).toBeUndefined();
+    expect(cap.kind === "CAPPED" && cap.maxCostMicros).toBeUndefined();
     /* Ni 0, ni null, ni undefined déguisé en plafond. */
     expect(cap).toEqual({ kind: "CAPPED" });
   });
@@ -70,16 +70,38 @@ describe("createGoalBudgetCapResolver — un budget NULL n'est ni sans plafond n
 describe("createGoalBudgetCapResolver — l'unité est une hypothèse à source unique", () => {
   it("convertit via la seule constante d'unité", async () => {
     const { cap } = await resolve([{ budget: 12.5 }]);
-    expect(cap).toEqual({ kind: "CAPPED", maxAmount: 12.5 / GOAL_BUDGET_UNITS_PER_EUR });
+    expect(cap).toEqual({
+      kind: "CAPPED",
+      maxCostMicros: (12.5 / GOAL_BUDGET_UNITS_PER_EUR) * MICROS_PER_EUR,
+    });
   });
 
   it("lit une valeur rendue en texte par le pilote sans la perdre", async () => {
     const { cap } = await resolve([{ budget: "12.5" }]);
-    expect(cap).toMatchObject({ maxAmount: 12.5 / GOAL_BUDGET_UNITS_PER_EUR });
+    expect(cap).toMatchObject({
+      maxCostMicros: (12.5 / GOAL_BUDGET_UNITS_PER_EUR) * MICROS_PER_EUR,
+    });
   });
 
   it("l'hypothèse d'unité est documentée et vaut 1 (EUR) aujourd'hui", () => {
     expect(GOAL_BUDGET_UNITS_PER_EUR).toBe(1);
+  });
+
+  it("ne rend JAMAIS un plafond monétaire flottant : c'est un ENTIER de micro-euros", async () => {
+    /* P0-C : la frontière des unités est ici, et elle ne laisse passer que des entiers. */
+    for (const budget of [12.5, 0.000_001, 1e6, "3.33"]) {
+      const { cap } = await resolve([{ budget }]);
+      if (cap.kind !== "CAPPED" || cap.maxCostMicros === undefined)
+        throw new Error("attendu CAPPED");
+      expect(Number.isInteger(cap.maxCostMicros)).toBe(true);
+      expect(cap).not.toHaveProperty("maxAmount");
+    }
+  });
+
+  it("un budget plus petit qu'un micro-euro REFUSE au lieu de s'arrondir à zéro", async () => {
+    const { cap } = await resolve([{ budget: 1e-9 }], G1, 5_000);
+    expect(cap).toMatchObject({ maxCostMicros: 0 });
+    expect(decide(emptyWindow(), cap)).toMatchObject({ kind: "DENY", reason: "INVALID_CAP" });
   });
 });
 
@@ -102,7 +124,7 @@ describe("createGoalBudgetCapResolver — fermé par défaut", () => {
 
   it("un budget 0 persisté REFUSE, il n'est pas « corrigé » en absence de plafond", async () => {
     const { cap } = await resolve([{ budget: 0 }], G1, 5_000);
-    expect(cap).toMatchObject({ maxAmount: 0 });
+    expect(cap).toMatchObject({ maxCostMicros: 0 });
     expect(decide(emptyWindow(), cap)).toMatchObject({ kind: "DENY", reason: "INVALID_CAP" });
   });
 

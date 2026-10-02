@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { BUDGET_CURRENCY, UNMETERED, UNPRICED, type BudgetCap } from "./contracts";
-import { accumulate, decide, emptyWindow, type SpendObservation } from "./spend";
+import { BUDGET_CURRENCY, MICROS_PER_EUR, UNMETERED, UNPRICED, type BudgetCap } from "./contracts";
+import {
+  accumulate,
+  decide,
+  decideReservation,
+  emptyWindow,
+  settleReservation,
+  type SpendObservation,
+} from "./spend";
 
 const metered = (prompt: number, completion: number, amount?: number): SpendObservation => ({
   modelId: "test/model",
@@ -16,6 +23,12 @@ const metered = (prompt: number, completion: number, amount?: number): SpendObse
   ...(amount === undefined
     ? { cost: { kind: UNPRICED, modelId: "test/model", reason: "table vide" } as const }
     : { cost: { kind: "COST", currency: BUDGET_CURRENCY, amount } as const }),
+});
+
+const usageOf = (prompt: number, completion: number) => ({
+  promptTokens: prompt,
+  completionTokens: completion,
+  totalTokens: prompt + completion,
 });
 
 const unmeteredCall: SpendObservation = {
@@ -213,5 +226,171 @@ describe("decide", () => {
     const d = decide(windowOf(unmeteredCall), capped({ maxAmount: 1 }));
     if (d.kind !== "DENY") throw new Error("attendu DENY");
     expect(d.detail.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("decide — argent en micro-euros ENTIERS (P0-C)", () => {
+  it("applique un plafond exprimé en micros, sans aucun flottant de plafond", () => {
+    const w = windowOf(metered(100, 100, 4));
+    expect(decide(w, capped({ maxCostMicros: 10 * MICROS_PER_EUR }))).toEqual({ kind: "ALLOW" });
+    expect(decide(w, capped({ maxCostMicros: 4 * MICROS_PER_EUR }))).toMatchObject({
+      kind: "DENY",
+      reason: "MONEY_CAP_REACHED",
+    });
+  });
+
+  it("les deux orthographes décident à l'identique (l'ancienne est normalisée)", () => {
+    const w = windowOf(metered(100, 100, 4));
+    expect(decide(w, capped({ maxAmount: 10 }))).toEqual(
+      decide(w, capped({ maxCostMicros: 10 * MICROS_PER_EUR })),
+    );
+    expect(decide(w, capped({ maxAmount: 4 }))).toEqual(
+      decide(w, capped({ maxCostMicros: 4 * MICROS_PER_EUR })),
+    );
+  });
+
+  it("refuse les deux orthographes à la fois plutôt que d'en deviner une", () => {
+    expect(
+      decide(emptyWindow(), capped({ maxAmount: 10, maxCostMicros: 20 * MICROS_PER_EUR })),
+    ).toMatchObject({ kind: "DENY", reason: "AMBIGUOUS_MONEY_CAP" });
+  });
+
+  it("ARRONDIT LA DÉPENSE VERS LE HAUT : un arrondi ne peut pas cacher une dépense", () => {
+    /* 0,0000005 EUR -> 1 micro, pas 0 : la fraction de micro n'est jamais blanchie. */
+    const w = windowOf(metered(1, 1, 0.000_000_5));
+    expect(decide(w, capped({ maxCostMicros: 1 }))).toMatchObject({
+      kind: "DENY",
+      reason: "MONEY_CAP_REACHED",
+    });
+  });
+
+  it.each([
+    ["nul", 0],
+    ["négatif", -5],
+    ["non entier", 1.5],
+    ["non fini", Number.NaN],
+  ])("refuse un plafond en micros %s", (_label, maxCostMicros) => {
+    expect(decide(emptyWindow(), capped({ maxCostMicros }))).toMatchObject({
+      kind: "DENY",
+      reason: "INVALID_CAP",
+    });
+  });
+
+  it("un budget en TOKENS SEULS reste pleinement applicable sans aucun prix", () => {
+    /* Le prix en euros n'est pas un prérequis de l'autonomie. */
+    expect(decide(windowOf(metered(10, 10)), capped({ maxTotalTokens: 1_000 }))).toEqual({
+      kind: "ALLOW",
+    });
+  });
+});
+
+describe("decideReservation — réservation AVANT dispatch (P0-D)", () => {
+  const TOKENS = capped({ maxTotalTokens: 1_000 });
+
+  it("autorise une réservation qui tient dans le reste", () => {
+    expect(decideReservation(windowOf(metered(400, 0)), 100, 400, TOKENS)).toEqual({
+      kind: "ALLOW",
+    });
+  });
+
+  it("autorise une réservation qui remplit EXACTEMENT le plafond", () => {
+    expect(decideReservation(emptyWindow(), 0, 1_000, TOKENS)).toEqual({ kind: "ALLOW" });
+  });
+
+  it("compte les réservations VIVANTES des autres appelants, pas seulement le dépensé", () => {
+    /* 400 dépensés + 500 déjà réservés ailleurs + 200 demandés = 1100 > 1000. */
+    expect(decideReservation(windowOf(metered(400, 0)), 500, 200, TOKENS)).toMatchObject({
+      kind: "DENY",
+      reason: "RESERVATION_EXCEEDS_CAP",
+    });
+    /* Sans la prise en compte des réservations, les 200 passeraient : c'est le défaut P0-D. */
+    expect(decideReservation(windowOf(metered(400, 0)), 0, 200, TOKENS)).toEqual({ kind: "ALLOW" });
+  });
+
+  it("REFUSE au lieu de rogner : rien ne part avec un montant réduit en silence", () => {
+    const d = decideReservation(emptyWindow(), 0, 1_001, TOKENS);
+    if (d.kind !== "DENY") throw new Error("attendu DENY");
+    expect(d.reason).toBe("RESERVATION_EXCEEDS_CAP");
+    expect(d.detail).toContain("1001");
+  });
+
+  it.each([
+    ["nul", 0],
+    ["négatif", -1],
+    ["non entier", 10.5],
+    ["non fini", Number.POSITIVE_INFINITY],
+  ])("refuse un montant demandé %s", (_label, requested) => {
+    expect(decideReservation(emptyWindow(), 0, requested, TOKENS)).toMatchObject({
+      kind: "DENY",
+      reason: "INVALID_RESERVATION",
+    });
+  });
+
+  it("refuse un total de réservations déjà inexploitable", () => {
+    expect(decideReservation(emptyWindow(), Number.NaN, 10, TOKENS)).toMatchObject({
+      kind: "DENY",
+      reason: "UNUSABLE_WINDOW",
+    });
+  });
+
+  it("hérite de TOUTES les fermetures du pré-vol (non mesuré, saturé, plafond invalide)", () => {
+    expect(decideReservation(windowOf(unmeteredCall), 0, 1, TOKENS)).toMatchObject({
+      kind: "DENY",
+      reason: "UNMETERED_USAGE_IN_WINDOW",
+    });
+    expect(decideReservation({ ...emptyWindow(), saturated: true }, 0, 1, TOKENS)).toMatchObject({
+      kind: "DENY",
+      reason: "UNUSABLE_WINDOW",
+    });
+    expect(decideReservation(emptyWindow(), 0, 1, capped({}))).toMatchObject({
+      kind: "DENY",
+      reason: "NO_ENFORCEABLE_CAP",
+    });
+  });
+
+  it("FERME un plafond MONÉTAIRE dont le prix est inconnu : jamais un prix inventé", () => {
+    expect(
+      decideReservation(emptyWindow(), 0, 100, capped({ maxCostMicros: 10 * MICROS_PER_EUR })),
+    ).toMatchObject({ kind: "DENY", reason: "UNPRICED_RESERVATION" });
+  });
+
+  it("UNCAPPED reste UNCAPPED : une réservation valide passe", () => {
+    expect(decideReservation(emptyWindow(), 0, 10, { kind: "UNCAPPED" })).toEqual({
+      kind: "ALLOW",
+    });
+    /* Mais un montant absurde reste un montant absurde, même sans plafond. */
+    expect(decideReservation(emptyWindow(), 0, 0, { kind: "UNCAPPED" })).toMatchObject({
+      kind: "DENY",
+      reason: "INVALID_RESERVATION",
+    });
+  });
+});
+
+describe("settleReservation — solde sur la consommation RÉELLE", () => {
+  it("rend le reliquat non consommé", () => {
+    expect(settleReservation(1_000, { kind: "METERED", usage: usageOf(300, 200) })).toEqual({
+      reservedTokens: 1_000,
+      actualTokens: 500,
+      releasedTokens: 500,
+      overrunTokens: 0,
+    });
+  });
+
+  it("DIT le dépassement au lieu de le cacher", () => {
+    expect(settleReservation(100, { kind: "METERED", usage: usageOf(300, 200) })).toEqual({
+      reservedTokens: 100,
+      actualTokens: 500,
+      releasedTokens: 0,
+      overrunTokens: 400,
+    });
+  });
+
+  it("une consommation NON MESURÉE ne libère RIEN : l'absence n'est pas un zéro", () => {
+    expect(settleReservation(1_000, { kind: UNMETERED, reason: "USAGE_ABSENT" })).toEqual({
+      reservedTokens: 1_000,
+      actualTokens: null,
+      releasedTokens: 0,
+      overrunTokens: 0,
+    });
   });
 });

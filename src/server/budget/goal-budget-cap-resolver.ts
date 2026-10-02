@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import type { BudgetCap } from "@/core/budget/contracts";
+import { eurToMicros, type BudgetCap } from "@/core/budget/contracts";
 
 import type { BudgetCapResolver } from "./ports";
 import type { SqlExec } from "./postgres-spend-ledger";
@@ -24,6 +24,16 @@ import type { SqlExec } from "./postgres-spend-ledger";
  *    {@link GOAL_BUDGET_UNITS_PER_EUR}. Rien dans le dépôt ne dit si la colonne est en euros
  *    ou en centimes — ni la colonne, ni le schéma Zod, ni l'API, ni `core/supervisor/priority.ts`
  *    qui s'en sert comme d'une simple échelle. Le propriétaire corrige en UN endroit.
+ *
+ *    CE FICHIER EST LA FRONTIÈRE DES UNITÉS (P0-C). `goals.budget` est un `doublePrecision`
+ *    NULLABLE sans unité déclarée : c'est, en l'état, une valeur d'ORIGINE INCONNUE, gardée
+ *    LISIBLE pour compatibilité ascendante et rien de plus. Elle est convertie ICI, une seule
+ *    fois, en MICRO-EUROS ENTIERS (`maxCostMicros`) ; aucune couche en aval ne compare plus
+ *    jamais un flottant monétaire. Un budget qu'on ne peut pas exprimer en entier n'est PAS
+ *    traité comme une absence de plafond : il devient un plafond INVALIDE, donc un refus nommé.
+ *    Et comme la table de prix est vide, un plafond monétaire reste AUJOURD'HUI inapplicable :
+ *    `decide` le refuse en `UNPRICED_USAGE_IN_WINDOW` et une réservation en
+ *    `UNPRICED_RESERVATION`. On ne prétend donc nulle part que `goals.budget` est appliqué.
  *
  * 3. UN PLAFOND DE TOKENS DOIT ÊTRE EXPRIMABLE. La table de prix (`ICOS_PRICE_TABLE`) est
  *    VIDE, donc tout appel est UNPRICED et aucun plafond MONÉTAIRE ne peut être déclaré
@@ -100,9 +110,14 @@ export function createGoalBudgetCapResolver(
      * plafond : `decide` les refuse en `INVALID_CAP`, donc rien ne part. C'est le résultat
      * voulu, et il est visible dans le motif du refus.
      */
+    /*
+     * Conversion de frontière, une seule fois. Un budget illisible ou non fini ne devient
+     * pas une absence de plafond : `NaN` n'est pas un entier sûr, donc `decide` le refuse en
+     * `INVALID_CAP` — un refus nommé plutôt qu'un plafond disparu.
+     */
     return {
       kind: "CAPPED",
-      maxAmount: Number(budget) / GOAL_BUDGET_UNITS_PER_EUR,
+      maxCostMicros: eurToMicros(Number(budget) / GOAL_BUDGET_UNITS_PER_EUR) ?? Number.NaN,
       ...tokenCap,
     };
   };

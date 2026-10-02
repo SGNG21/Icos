@@ -1,5 +1,11 @@
-import type { Attribution, BudgetCap, SpendDecision, UsageOutcome } from "@/core/budget/contracts";
-import type { SpendWindow } from "@/core/budget/spend";
+import type {
+  Attribution,
+  BudgetCap,
+  DenyReason,
+  SpendDecision,
+  UsageOutcome,
+} from "@/core/budget/contracts";
+import type { Settlement, SpendWindow } from "@/core/budget/spend";
 
 /**
  * Port du compteur de dépense (verrou d'autonomie B1).
@@ -43,3 +49,45 @@ export interface SpendLedgerPort {
  * créer un port à une seule méthode pour cela n'apporterait rien.
  */
 export type BudgetCapResolver = (attribution: Attribution | null) => Promise<BudgetCap>;
+
+/** Un engagement de tokens accordé AVANT dispatch. `ownerToken` est le jeton de clôture. */
+export interface SpendReservation {
+  readonly id: string;
+  /** Jeton de fencing : seul son porteur peut solder cette réservation. */
+  readonly ownerToken: string;
+  readonly reservedTokens: number;
+}
+
+export type ReserveOutcome =
+  | { readonly kind: "RESERVED"; readonly reservation: SpendReservation }
+  | { readonly kind: "DENY"; readonly reason: DenyReason; readonly detail: string };
+
+/** Ce que le solde a réellement fait, y compris quand la réservation avait déjà expiré. */
+export interface SettlementOutcome extends Settlement {
+  /**
+   * `false` = la réservation n'était plus OPEN (bail expiré, ou déjà soldée). La dépense
+   * RÉELLE est enregistrée au journal dans tous les cas : la vérité d'une dépense ne dépend
+   * pas de l'état de sa réservation.
+   */
+  readonly closed: boolean;
+}
+
+/**
+ * RÉSERVATION PUIS SOLDE (verrou P0-D). Ce port n'est PAS un second journal : la dépense
+ * réelle reste celle de {@link SpendLedgerPort}, et seules les réservations VIVANTES sont
+ * comptées ici. Il existe parce qu'un contrôle pré-vol ne borne qu'« un appel par appelant
+ * simultané », donc rien du tout quand on multiplie les workers.
+ */
+export interface SpendReservationPort {
+  /**
+   * Engage `requestedTokens` sur le budget de l'imputation, ATOMIQUEMENT. Une réservation qui
+   * ferait franchir le plafond est REFUSÉE en entier — jamais rognée en silence.
+   */
+  reserve(attribution: Attribution | null, requestedTokens: number): Promise<ReserveOutcome>;
+
+  /**
+   * Solde la réservation sur la consommation RÉELLE : écrit l'observation au journal, rend le
+   * reliquat non consommé et dit le dépassement éventuel.
+   */
+  settle(reservation: SpendReservation, entry: SpendEntry): Promise<SettlementOutcome>;
+}

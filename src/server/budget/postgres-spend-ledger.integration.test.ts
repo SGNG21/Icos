@@ -328,7 +328,8 @@ describe("spend_ledger (base de test locale, migration 0055)", () => {
     it("un budget persisté devient un plafond monétaire, insatisfiable sans prix", async () => {
       await seedGoal("g1", 42.5);
       const caps = createGoalBudgetCapResolver({ db: ctx.handle.db });
-      expect(await caps(G1)).toEqual({ kind: "CAPPED", maxAmount: 42.5 });
+      /* Converti UNE fois, à la frontière, en micro-euros ENTIERS (P0-C). */
+      expect(await caps(G1)).toEqual({ kind: "CAPPED", maxCostMicros: 42_500_000 });
       const l = ledger(TENANT, caps, {});
       await l.record(metered(10));
       expect(await l.checkBudget(G1)).toMatchObject({

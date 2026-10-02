@@ -372,6 +372,13 @@
       "when": 1791232007287,
       "tag": "0055_spend_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1791232008287,
+      "tag": "0056_spend_reservations",
+      "breakpoints": true
     }
   ]
 }

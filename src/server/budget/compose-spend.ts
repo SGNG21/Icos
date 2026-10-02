@@ -2,8 +2,9 @@ import { currentAttribution } from "./attribution-context";
 import { createGoalBudgetCapResolver } from "./goal-budget-cap-resolver";
 import { InMemorySpendLedger } from "./in-memory-spend-ledger";
 import { meteredFetch } from "./metered-fetch";
-import type { BudgetCapResolver, SpendLedgerPort } from "./ports";
+import type { BudgetCapResolver, SpendLedgerPort, SpendReservationPort } from "./ports";
 import { PostgresSpendLedger, type SqlExec } from "./postgres-spend-ledger";
+import { PostgresSpendReservations, type TxCapable } from "./postgres-spend-reservations";
 
 /**
  * COMPOSITION du compteur de dépense : ce fichier choisit le journal et LE PLAFOND PAR
@@ -125,17 +126,53 @@ export interface SpendMeters {
   readonly overhead: typeof fetch;
 }
 
+/** LE plafond du travail de mission, en un seul endroit : `goals.budget` + plafond de tokens. */
+function goalCapsFor(db: SqlExec, maxTotalTokensPerGoal: number | undefined): BudgetCapResolver {
+  return createGoalBudgetCapResolver({
+    db,
+    ...(maxTotalTokensPerGoal === undefined ? {} : { maxTotalTokensPerGoal }),
+  });
+}
+
+export interface ComposeSpendReservationsOptions {
+  /** Doit savoir ouvrir une TRANSACTION : l'atomicité est en PostgreSQL, pas en mémoire. */
+  readonly db: SqlExec & TxCapable;
+  readonly tenantId?: string;
+  readonly maxTotalTokensPerGoal?: number;
+  readonly leaseMs?: number;
+}
+
+/**
+ * Le magasin de RÉSERVATIONS du travail de mission, sous EXACTEMENT le même plafond que le
+ * compteur `mission` ci-dessus — une seule politique, pas deux.
+ *
+ * À quoi il sert, et pourquoi il n'est pas branché ici. Réserver demande un montant de tokens
+ * que seul le DISPATCHEUR connaît (ce qu'il accepte au maximum de payer pour une tâche) ;
+ * `meteredFetch` ne l'a pas, et il n'y a pas de montant honnête à deviner à sa place. Le point
+ * de branchement est donc la couture de dispatch, qui appartient à d'autres lots. Ce fichier
+ * fournit l'objet prêt à l'emploi, avec sa politique de plafond déjà résolue.
+ *
+ * Pas de variante en mémoire : la propriété que ce port existe pour garantir est une propriété
+ * de PostgreSQL. Une implémentation en mémoire en serait une imitation plus faible, et la
+ * brancher par défaut rouvrirait exactement le trou qu'on ferme.
+ */
+export function composeSpendReservations(
+  options: ComposeSpendReservationsOptions,
+): SpendReservationPort {
+  return new PostgresSpendReservations({
+    db: options.db,
+    tenantId: options.tenantId ?? SPEND_LEDGER_TENANT_ID,
+    caps: goalCapsFor(options.db, options.maxTotalTokensPerGoal),
+    ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
+  });
+}
+
 export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMeters {
   const inner = options.inner ?? ((input, init) => globalThis.fetch(input, init));
   const selection = { db: options.db, ...(options.tenantId ? { tenantId: options.tenantId } : {}) };
 
   const goalCaps = options.db
-    ? createGoalBudgetCapResolver({
-        db: options.db,
-        ...(options.maxTotalTokensPerGoal === undefined
-          ? {}
-          : { maxTotalTokensPerGoal: options.maxTotalTokensPerGoal }),
-      })
+    ? goalCapsFor(options.db, options.maxTotalTokensPerGoal)
     : NO_GOAL_SOURCE;
 
   return {
