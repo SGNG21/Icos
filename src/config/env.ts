@@ -181,6 +181,18 @@ const envSchema = z.object({
    * Absent = `DEFAULT_MAX_OUTPUT_TOKENS`.
    */
   ICOS_MAX_OUTPUT_TOKENS: optionalPositiveInteger,
+  /**
+   * NOMS DE VARIABLES que les workers externes ont le droit d'hériter, séparés par des
+   * virgules, EN PLUS de la liste blanche de plateforme (`child-environment.ts`).
+   *
+   * Un processus enfant n'hérite plus de `process.env` : il voyait auparavant
+   * `DATABASE_URL` et toutes les clés d'API, ce qui faisait de tout agent CLI un pair de
+   * confiance du serveur. Ouvrir une variable ici est donc une décision de déploiement,
+   * explicite et nommée — jamais un défaut.
+   *
+   * Exemple : `ICOS_WORKER_ENV_PASSTHROUGH=ANTHROPIC_API_KEY,NVIDIA_API_KEY`
+   */
+  ICOS_WORKER_ENV_PASSTHROUGH: z.string().optional(),
   /*
    * PLAFOND DE DÉPLOIEMENT des bornes d'UNE mission autonome (P0-E). Ces quatre valeurs
    * étaient codées en dur (100 cycles / 60 min / 5 replans / 3 cycles de stagnation) ;

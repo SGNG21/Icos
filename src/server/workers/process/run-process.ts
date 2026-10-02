@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { childEnvironment, parseEnvPassthrough } from "./child-environment";
+
 /**
  * THE non-interactive process runner (M6.3).
  *
@@ -30,15 +32,26 @@ export interface NonInteractiveProcessSpec {
   /** Working directory. For a writer this is its ISOLATED workspace. */
   cwd?: string;
   /**
-   * Variables overlaid on the inherited environment.
+   * Variables posées NOMMÉMENT sur l'environnement de l'enfant.
    *
-   * Inheriting is required, not lazy: a real CLI worker needs HOME and PATH to
-   * find its own configuration and credentials. The consequence is that the child
-   * can see this process's secrets, so a worker command is as trusted as the
-   * server — and neither the spec nor the captured output may ever be logged
-   * wholesale.
+   * ISOLATION DES SECRETS (verrou C8). L'enfant n'hérite PLUS de `process.env`. Il reçoit
+   * une liste blanche de variables de plateforme (`child-environment.ts`), ce que le
+   * déploiement a explicitement ouvert via `ICOS_WORKER_ENV_PASSTHROUGH`, et ce que
+   * l'appelant pose ici. Avant, il voyait tout : `DATABASE_URL`, les clés d'API, les
+   * identifiants d'authentification — « a worker command is as trusted as the server »
+   * était écrit en toutes lettres dans ce fichier, et ce n'est pas une propriété qu'on peut
+   * accorder à un exécutable tiers.
+   *
+   * CE QUE CELA NE RÉSOUT PAS : un agent CLI lit aussi ses identifiants sur le DISQUE
+   * (`~/.claude`, `~/.codex`). L'isolation du système de fichiers demande un bac à sable.
    */
   env?: Record<string, string>;
+  /**
+   * Noms SUPPLÉMENTAIRES hérités du parent, en plus de la liste blanche de plateforme.
+   * Absent = `ICOS_WORKER_ENV_PASSTHROUGH` du processus. Fournir `[]` n'hérite que la
+   * plateforme — c'est le mode le plus strict et il reste exprimable.
+   */
+  envPassthrough?: readonly string[];
   timeoutMs: number;
   /** Per-stream cap. Default 1 MiB. */
   maxOutputBytes?: number;
@@ -74,9 +87,21 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
     let stdout = "";
     let stderr = "";
 
+    /* Calculé AVANT le spawn : l'enfant n'hérite que de ce qui est explicitement autorisé. */
+    const env: Record<string, string> = childEnvironment({
+      passthrough:
+        spec.envPassthrough ?? parseEnvPassthrough(process.env.ICOS_WORKER_ENV_PASSTHROUGH),
+      ...(spec.env ? { overlay: spec.env } : {}),
+    });
+
     const child = spawn(spec.command, [...(spec.args ?? [])], {
       cwd: spec.cwd,
-      env: spec.env ? { ...process.env, ...spec.env } : process.env,
+      /*
+       * Le dépôt AUGMENTE `NodeJS.ProcessEnv` pour exiger `NODE_ENV` : c'est une contrainte
+       * sur l'environnement de CE processus, pas sur celui qu'on compose pour un enfant,
+       * qui peut légitimement ne pas en avoir. D'où la conversion, à cet unique endroit.
+       */
+      env: env as NodeJS.ProcessEnv,
       // No stdin: nothing can block waiting for a human.
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
