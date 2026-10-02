@@ -14,6 +14,25 @@
 export const BUDGET_CURRENCY = "EUR" as const;
 export type BudgetCurrency = typeof BUDGET_CURRENCY;
 
+/**
+ * UNITÉ CANONIQUE DE L'ARGENT : le MICRO-EUR ENTIER.
+ *
+ * Pourquoi des micros et pas des centimes : un appel de complétion coûte couramment
+ * 1,65e-4 EUR (voir `postgres-spend-ledger.integration.test.ts`). En centimes, chaque appel
+ * s'arrondirait à 0 et un plafond ne serait jamais atteint — un blanchiment par arrondi.
+ * Le micro-euro est donc la plus petite unité qui reste ENTIÈRE sur un vrai appel.
+ *
+ * Il n'y a qu'UNE unité mineure dans ce dépôt. Pas de centimes à côté.
+ */
+export const MICROS_PER_EUR = 1_000_000;
+
+/** EUR flottant -> micros entiers, au plus proche. Conversion de FRONTIÈRE uniquement. */
+export function eurToMicros(amount: number): number | null {
+  if (!Number.isFinite(amount)) return null;
+  const micros = Math.round(amount * MICROS_PER_EUR);
+  return Number.isSafeInteger(micros) ? micros : null;
+}
+
 /** Consommation réelle inconnue ou invérifiable. Jamais 0. */
 export const UNMETERED = "UNMETERED" as const;
 export type Unmetered = typeof UNMETERED;
@@ -59,6 +78,17 @@ export const DENY_REASONS = [
   "INVALID_CAP",
   /** Accumulateur dans un état non exploitable (débordement, non fini). */
   "UNUSABLE_WINDOW",
+  /** La réservation demandée ferait franchir le plafond : refusée, jamais rognée en silence. */
+  "RESERVATION_EXCEEDS_CAP",
+  /** Montant de réservation inexploitable (non entier, nul, négatif, non fini). */
+  "INVALID_RESERVATION",
+  /**
+   * Plafond MONÉTAIRE et prix du modèle inconnu : une réservation en tokens ne peut pas être
+   * prouvée sous un plafond en euros. Fermé par défaut — le prix n'est pas inventé.
+   */
+  "UNPRICED_RESERVATION",
+  /** Les deux orthographes du plafond monétaire sont fournies : on ne devine pas laquelle. */
+  "AMBIGUOUS_MONEY_CAP",
 ] as const;
 export type DenyReason = (typeof DENY_REASONS)[number];
 
@@ -89,12 +119,27 @@ export type CostOutcome =
 /**
  * Plafond de dépense. `UNCAPPED` doit être choisi explicitement : l'absence de plafond
  * n'est jamais déduite d'un champ manquant.
+ *
+ * DEUX CONCEPTS TYPÉS, UNE SEULE UNITÉ CHACUN :
+ *   - `maxTotalTokens` : entier, TOUJOURS applicable, aucun prix requis. C'est le seul
+ *     plafond réellement appliqué aujourd'hui (la table de prix est vide) et il doit rester
+ *     suffisant à lui seul : le prix en euros ne doit JAMAIS être un prérequis de l'autonomie.
+ *   - `maxCostMicros` : plafond monétaire en MICRO-EUR ENTIERS ({@link MICROS_PER_EUR}).
+ *     Jamais de flottant pour de l'argent à l'intérieur : la conversion se fait à la frontière
+ *     (le résolveur qui lit `goals.budget`), et tout ce qui est en aval compare des entiers.
  */
 export type BudgetCap =
   | { readonly kind: "UNCAPPED" }
   | {
       readonly kind: "CAPPED";
-      /** Plafond monétaire en `BUDGET_CURRENCY`. */
+      /** Plafond monétaire en micro-euros ENTIERS. Unité canonique. */
+      readonly maxCostMicros?: number;
+      /**
+       * @deprecated Ancienne orthographe : montant FLOTTANT en `BUDGET_CURRENCY`. Conservée
+       * pour compatibilité ascendante le temps que les appelants hors de ce lot passent à
+       * `maxCostMicros` ; `decide` la normalise en micros en UN seul endroit
+       * ({@link moneyCapMicros}). Fournir les deux est un refus `AMBIGUOUS_MONEY_CAP`.
+       */
       readonly maxAmount?: number;
       readonly maxTotalTokens?: number;
     };
@@ -104,20 +149,30 @@ export type SpendDecision =
   | { readonly kind: "DENY"; readonly reason: DenyReason; readonly detail: string };
 
 /**
- * Clé d'imputation stable. `goal=`/`mission=` préfixent chaque champ pour qu'une valeur
+ * Clé d'imputation stable. `goal=`/`mission=` préfixent le champ pour qu'une valeur
  * contenant le séparateur ne puisse pas se faire passer pour un autre champ.
+ *
+ * UN SEUL BUDGET POUR TOUT L'ARBRE D'UN GOAL (verrou P0-B). La clé est le GOAL SEUL dès
+ * qu'un goal est imputé — jamais `goal+mission`, jamais `goal+brain`. C'est le cœur de la
+ * propriété : une tâche, un worker, un relecteur, une reprise, une replanification et une
+ * SECONDE MISSION sur le même goal tombent tous dans la MÊME fenêtre. Concaténer les champs
+ * (l'ancien comportement) donnait à chaque mission, et à chaque brain, une copie neuve du
+ * budget du goal : multiplier les workers multipliait le budget. La précédence le rend
+ * désormais INEXPRIMABLE, et pas seulement « non utilisé par les appelants actuels ».
+ *
+ * Hors goal, la clé retombe sur la mission puis sur le brain : l'imputation la plus précise
+ * dont on dispose, jamais une invention.
  */
 export function attributionKey(attribution: Attribution | null | undefined): string {
   if (!attribution) return UNATTRIBUTED;
-  const parts: string[] = [];
   for (const [label, value] of [
-    ["mission", attribution.missionId],
     ["goal", attribution.goalId],
+    ["mission", attribution.missionId],
     ["brain", attribution.brainId],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
-      parts.push(`${label}=${encodeURIComponent(value.trim())}`);
+      return `${label}=${encodeURIComponent(value.trim())}`;
     }
   }
-  return parts.length === 0 ? UNATTRIBUTED : parts.join("|");
+  return UNATTRIBUTED;
 }

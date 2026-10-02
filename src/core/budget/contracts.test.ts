@@ -44,6 +44,24 @@ describe("budget contracts", () => {
     expect(attributionKey({ missionId: "m1" })).not.toBe(attributionKey({ goalId: "m1" }));
   });
 
+  it("UN SEUL budget pour tout l'arbre du goal : la clé est le goal SEUL", () => {
+    // P0-B. Deux missions, deux brains, un même goal : une seule fenêtre, donc un seul budget.
+    const goalOnly = attributionKey({ goalId: "g1" });
+    expect(attributionKey({ goalId: "g1", missionId: "m1" })).toBe(goalOnly);
+    expect(attributionKey({ goalId: "g1", missionId: "m2" })).toBe(goalOnly);
+    expect(attributionKey({ goalId: "g1", missionId: "m2", brainId: "b9" })).toBe(goalOnly);
+    expect(goalOnly).toBe("goal=g1");
+  });
+
+  it("retombe sur la mission puis le brain quand aucun goal n'est imputé", () => {
+    expect(attributionKey({ missionId: "m1", brainId: "b1" })).toBe("mission=m1");
+    expect(attributionKey({ brainId: "b1" })).toBe("brain=b1");
+  });
+
+  it("deux goals distincts ne partagent JAMAIS de fenêtre", () => {
+    expect(attributionKey({ goalId: "g1" })).not.toBe(attributionKey({ goalId: "g2" }));
+  });
+
   it("ne laisse pas une valeur fuir d'un champ vers un autre", () => {
     // Sans séparateur échappé, {missionId:"a|b"} et {missionId:"a",goalId:"b"} collisionnent.
     expect(attributionKey({ missionId: "a|goal=b" })).not.toBe(
