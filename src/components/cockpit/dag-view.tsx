@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Maximize2, Route, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
@@ -26,7 +27,12 @@ export function DagView({
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [view, setView] = useState({ x: PAD, y: PAD, k: 1 });
-  const [selected, setSelected] = useState<string | null>(dag.criticalPath.at(-1) ?? null);
+  // The critical path holds UNFINISHED work only, so it is empty once a mission is done —
+  // and a done mission is precisely the one whose result the reader came for. Fall back to
+  // the first node so the inspector (and its link to the result) is never absent.
+  const [selected, setSelected] = useState<string | null>(
+    dag.criticalPath.at(-1) ?? dag.nodes[0]?.id ?? null,
+  );
   const [criticalOnly, setCriticalOnly] = useState(false);
   const byId = useMemo(() => new Map(dag.nodes.map((n) => [n.id, n])), [dag]);
   // The viewBox tracks the element's real pixel size so nodes draw at 1:1.
@@ -273,6 +279,23 @@ function Inspector({
       <h3>{node.title}</h3>
       <ToneBadge tone={NODE_TONE[node.status]} label={nodeLabel(node.status)} />
       {node.onCriticalPath && <span className="cx-chip">critical path</span>}
+
+      {/*
+       * `/tasks/[id]` is the ONLY page that renders `execution.result`, and it keys on the
+       * CANONICAL task id (`taskId`), not on the mission-task id used inside this graph.
+       * Without this link a finished result exists in ICOS and no click reaches it.
+       * `cx-btn` is the cockpit's own control style and already grows to a 44px touch
+       * target on phones, where the SVG stage is hidden and this aside is what remains.
+       */}
+      <p>
+        <Link
+          className="cx-btn"
+          href={`/tasks/${node.taskId}`}
+          aria-label={`Open the task page of ${node.title}`}
+        >
+          Open task page
+        </Link>
+      </p>
 
       <dl className="cx-kv">
         <dt>Canonical status</dt>

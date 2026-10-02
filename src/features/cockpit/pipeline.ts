@@ -138,7 +138,7 @@ export function buildPipeline(
       label: "Escalated to a human",
       count: missing<number>(
         "not_available",
-        "Escalated quality-control jobs are not listable (listPending excludes them).",
+        "Escalated jobs are listable (PostgresQualityControlRepository.listEscalated) but no cockpit source reads them yet: `qualityJobs` is built from listPending, which excludes them because it is also a recovery input.",
       ),
       tone: "unknown" as Tone,
       note: "Needs a human decision",
@@ -146,10 +146,15 @@ export function buildPipeline(
     {
       key: "settlement",
       label: "Settlement",
+      /*
+       * Settlement IS integrated at this base (defect 36 is an ancestor of HEAD):
+       * `QualityControlService.runRecoverySweep` calls `settleAccepted`, implemented by both
+       * repositories. What is missing is a READABLE COUNT — it returns how many tasks it
+       * settled and persists no tally — so the stage stays a stated gap rather than a zero.
+       */
       count: missing<number>(
         "not_connected",
-        "Per-task DAG settlement is on the CORE3 defect-36 branch, not integrated here.",
-        "CORE3 defect 36",
+        "Per-task DAG settlement runs here (QualityControlService → settleAccepted) but publishes no readable counter, so no number is shown.",
       ),
       tone: "unknown" as Tone,
       note: "Mission-level outcome is visible in Missions",

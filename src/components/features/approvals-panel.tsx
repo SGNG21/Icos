@@ -99,8 +99,8 @@ export function ApprovalsPanel({ initialActions, agents }: ApprovalsPanelProps) 
       </div>
 
       <p className="approvals-note">
-        Décisions simulées et non persistantes. Le décideur tracé est l’utilisateur de votre
-        session authentifiée. Aucune action externe n’est exécutée.
+        Décisions simulées et non persistantes. Le décideur tracé est l’utilisateur de votre session
+        authentifiée. Aucune action externe n’est exécutée.
       </p>
 
       {error ? (
@@ -110,7 +110,17 @@ export function ApprovalsPanel({ initialActions, agents }: ApprovalsPanelProps) 
       ) : null}
 
       {actions.length === 0 ? (
-        <p className="approvals-empty">Aucune action en attente d’approbation.</p>
+        /*
+         * NON CONNECTÉE, pas « vide ». `ActionRepository` n'expose que des lectures : aucun
+         * chemin de code ne crée de ligne `actions`, donc cette file ne PEUT pas se remplir.
+         * Afficher « aucune action » apprendrait au propriétaire que le calme veut dire que
+         * rien ne l'attend, alors que les vraies escalades passent ailleurs.
+         */
+        <p className="approvals-empty" role="status">
+          <strong>NON CONNECTÉE</strong> — aucun chemin de code ne crée d’action à approuver : cette
+          file ne peut pas se remplir, donc son silence ne signifie pas « rien ne vous attend ». Les
+          vraies demandes arrivent en propositions dans la conversation.
+        </p>
       ) : (
         <ul className="approvals-list">
           {actions.map((action) => {

@@ -697,6 +697,27 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
     return rows.map(mapJob);
   }
 
+  /**
+   * Jobs that ICOS handed to a human. A SIBLING of `listPending`, deliberately not folded
+   * into it: `listPending` is a RECOVERY input — `InMemoryQualityControlRepository`
+   * implements `listRecoverableMissionIds` as `listPending() ∪ unsettledAccepted()` and
+   * excludes `escalated` for exactly that reason. Widening `listPending` would make the two
+   * implementations of one port answer different questions and would put every escalated
+   * mission back into the recovery sweep for good.
+   *
+   * Read-only, for DISPLAY: escalation must be legible to the human it was handed to, or
+   * ICOS escalates into silence.
+   */
+  async listEscalated(missionId?: string): Promise<QualityControlJob[]> {
+    const escalated = eq(qualityControlJobs.state, "escalated");
+    const rows = await this.db
+      .select()
+      .from(qualityControlJobs)
+      .where(missionId ? and(escalated, eq(qualityControlJobs.missionId, missionId)) : escalated)
+      .orderBy(asc(qualityControlJobs.createdAt), asc(qualityControlJobs.workflowId));
+    return rows.map(mapJob);
+  }
+
   private async lockOwned(
     tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
     workflowId: string,
