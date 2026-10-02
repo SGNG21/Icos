@@ -85,6 +85,15 @@ describe("workforceTaskCompute", () => {
     expect(await source().forTask("mission-sec", "appsec")).toBeNull();
   });
 
+  it("is composed ready-to-use on the runtime, bound to its own system principal", async () => {
+    const a = await assign();
+    // What the integrator actually passes to the supervisor — no store, no `runtime` facet.
+    expect(await runtime.core3Compute.forTask("mission-sec", "appsec")).toMatchObject({
+      assignmentId: a.assignmentId,
+      agentId: "appsec-1",
+    });
+  });
+
   it("refuses to answer a caller that is not the trusted runtime", async () => {
     await assign();
     const forged = { ...system };

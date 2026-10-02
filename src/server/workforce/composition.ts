@@ -5,6 +5,7 @@ import type { Database } from "@/server/database/client";
 
 import { WorkforceAuthorityPort } from "./authority-port";
 import { WorkforceComputePort } from "./compute-port";
+import { workforceTaskCompute, type WorkforceTaskCompute } from "./core3-task-compute";
 import { InMemoryWorkforceStore } from "./in-memory-workforce-store";
 import type { WorkforceStore } from "./ports";
 import { PostgresWorkforceStore } from "./postgres-workforce-store";
@@ -25,7 +26,7 @@ import { WorkforceService } from "./workforce-service";
  * Integrator (container.ts, not edited by lane D):
  *   const workforce = createWorkforceRuntime({ store: createWorkforceStore(backend) });
  *   routes / cockpit   ← workforce.service, workforce.readModel, workforce.sessions
- *   CORE3 dispatch     ← workforce.compute,   workforce.runtime.system("core3-dispatch")
+ *   CORE3 dispatch     ← workforce.core3Compute (SupervisorService's last argument)
  *   Tool Gateway       ← workforce.authority, workforce.runtime.system("tool-gateway")
  *   Cognitive Runtime  ← workforce.authority, workforce.runtime.system("cognitive-runtime")
  * `workforce.runtime` must NEVER reach a route handler.
@@ -52,6 +53,12 @@ export interface WorkforceRuntime {
   service: WorkforceService;
   readModel: WorkforceReadModel;
   compute: WorkforceComputePort;
+  /**
+   * The compute port ALREADY bound to the `core3-dispatch` system principal and this store —
+   * what CORE3's dispatcher takes (`SupervisorService`'s last argument). Composed here so the
+   * integrator needs neither the store nor `runtime`, which must never leave this root.
+   */
+  core3Compute: WorkforceTaskCompute;
   authority: WorkforceAuthorityPort;
   sessions: SessionPrincipals;
   runtime: RuntimePrincipals;
@@ -68,10 +75,16 @@ export function createWorkforceRuntime(options: WorkforceRuntimeOptions): Workfo
     now,
     newId: options.newId ?? ((prefix) => `${prefix}-${randomUUID()}`),
   });
+  const compute = new WorkforceComputePort({ store, principals, service });
   return {
     service,
     readModel: new WorkforceReadModel({ store, principals, now }),
-    compute: new WorkforceComputePort({ store, principals, service }),
+    compute,
+    core3Compute: workforceTaskCompute({
+      compute,
+      store,
+      system: principals.runtime.system("core3-dispatch"),
+    }),
     authority: new WorkforceAuthorityPort({ store, principals, now }),
     sessions: principals.sessions,
     runtime: principals.runtime,
