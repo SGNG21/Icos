@@ -37,6 +37,9 @@ const envSchema = z.object({
   // composée (backend postgres). Aucune valeur réelle committée.
   BETTER_AUTH_SECRET: optionalSecret,
   BETTER_AUTH_URL: optionalUrl,
+  // Origines supplémentaires explicitement approuvées (séparées par des virgules).
+  // Jamais de joker : chaque entrée doit être une origine absolue exacte.
+  ICOS_AUTH_TRUSTED_ORIGINS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   ICOS_OWNER_EMAIL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   OPENAI_API_KEY: optionalSecret,
   ANTHROPIC_API_KEY: optionalSecret,
@@ -265,6 +268,36 @@ export type Env = z.infer<typeof envSchema>;
 export interface AuthConfig {
   secret: string;
   baseURL: string;
+  /** `baseURL` plus toute origine explicitement approuvée. Jamais de joker. */
+  trustedOrigins: string[];
+}
+
+/**
+ * N'accepte qu'une origine absolue exacte (`https://hote[:port]`). Un joker, un
+ * chemin ou une valeur non analysable est refusé : une origine de confiance trop
+ * large vaut une absence de validation.
+ */
+function parseTrustedOrigins(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(entry);
+      } catch {
+        throw new Error(`ICOS_AUTH_TRUSTED_ORIGINS: origine invalide « ${entry} ».`);
+      }
+      if (parsed.origin !== entry || entry.includes("*")) {
+        throw new Error(
+          `ICOS_AUTH_TRUSTED_ORIGINS: « ${entry} » doit être une origine exacte sans joker ` +
+            `(attendu « ${parsed.origin} »).`,
+        );
+      }
+      return parsed.origin;
+    });
 }
 
 /**
@@ -281,7 +314,13 @@ export function resolveAuthConfig(env: Env): AuthConfig {
   if (env.BETTER_AUTH_URL === undefined) {
     throw new Error("BETTER_AUTH_URL est requis pour l'authentification humaine.");
   }
-  return { secret: env.BETTER_AUTH_SECRET, baseURL: env.BETTER_AUTH_URL };
+  const extra = parseTrustedOrigins(env.ICOS_AUTH_TRUSTED_ORIGINS);
+  const baseOrigin = new URL(env.BETTER_AUTH_URL).origin;
+  return {
+    secret: env.BETTER_AUTH_SECRET,
+    baseURL: env.BETTER_AUTH_URL,
+    trustedOrigins: [baseOrigin, ...extra.filter((origin) => origin !== baseOrigin)],
+  };
 }
 
 /**

@@ -123,6 +123,7 @@ describe("composeAuthentication", () => {
       {
         secret: "x".repeat(40),
         baseURL: "https://icos.test",
+        trustedOrigins: ["https://icos.test"],
       },
       createAuth,
     );
