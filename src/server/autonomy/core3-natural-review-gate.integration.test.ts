@@ -174,6 +174,14 @@ function envOverrides(extra: Record<string, string> = {}) {
     OMNIROUTE_BASE_URL: reviewerUrl,
     OMNIROUTE_API_KEY: "d28-natural-key",
     ICOS_REVIEWER_MODEL: "d28-natural-model",
+    /*
+     * La relecture est du TRAVAIL DE MISSION et passe par le compteur de dépense : sans
+     * plafond configuré, le budget du goal n'est pas applicable et la réservation REFUSE
+     * avant même d'émettre — le relecteur n'est alors jamais appelé. C'est le comportement
+     * voulu, et c'est ce qu'un vrai déploiement doit configurer ; le test le configure donc
+     * comme la production, au lieu de dépendre d'une relecture gratuite.
+     */
+    ICOS_GOAL_MAX_TOTAL_TOKENS: "5000000",
     ICOS_WORKER_EXEC_COMMANDS: JSON.stringify({
       binary: { command: process.execPath, args: ["-e", WORKER_SCRIPT], timeoutMs: 30_000 },
     }),

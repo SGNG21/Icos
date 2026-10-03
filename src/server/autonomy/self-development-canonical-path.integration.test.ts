@@ -159,6 +159,14 @@ async function container(writerScope = WRITE_SCOPE): Promise<Container> {
     OMNIROUTE_BASE_URL: reviewerUrl,
     OMNIROUTE_API_KEY: "sd-key",
     ICOS_REVIEWER_MODEL: "sd-model",
+    /*
+     * La relecture est du TRAVAIL DE MISSION et passe par le compteur de dépense : sans
+     * plafond configuré, le budget du goal n'est pas applicable et la réservation REFUSE
+     * avant même d'émettre — le relecteur n'est alors jamais appelé. C'est le comportement
+     * voulu, et c'est ce qu'un vrai déploiement doit configurer ; le test le configure donc
+     * comme la production, au lieu de dépendre d'une relecture gratuite.
+     */
+    ICOS_GOAL_MAX_TOTAL_TOKENS: "5000000",
     ICOS_PLANNER_COMMAND: JSON.stringify({
       command: process.execPath,
       args: ["-e", `process.stdout.write(${JSON.stringify(plan(writerScope))})`, "{{prompt}}"],

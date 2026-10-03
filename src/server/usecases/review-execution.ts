@@ -3,7 +3,6 @@ import type { ReviewDecisionRecord } from "@/core/contracts/review";
 import type { ReviewerService } from "@/server/review/ports";
 import type { ReviewDecisionRepository } from "@/server/review/review-decision-repository";
 import type { TaskRepository } from "@/server/repositories/ports";
-import { runWithAttribution } from "@/server/budget/attribution-context";
 import type { MissionRepository } from "@/server/mission/ports";
 
 export interface ReviewExecutionDeps {
@@ -119,35 +118,11 @@ export async function reviewExecution(
   let review: ReviewDecisionRecord;
   try {
     /*
-     * PORTÉE D'IMPUTATION DE LA RELECTURE (décision du propriétaire : budget de relecture
-     * système, strictement borné).
-     *
-     * Une relecture appelle un modèle, donc elle dépense, donc elle doit être imputée.
-     * Deux cas, et UN SEUL repli possible :
-     *
-     *   mission AVEC goal  -> BUDGET DU GOAL, et rien d'autre. Si ce budget n'est pas
-     *                         applicable, la relecture ÉCHOUE. Elle ne retombe jamais sur
-     *                         le budget de relecture système : ce repli-là transformerait
-     *                         « mon goal n'a plus de budget » en « relis quand même », et
-     *                         viderait le plafond de son sens.
-     *
-     *   mission SANS goal  -> BUDGET DE RELECTURE SYSTÈME, par mission, strictement borné.
-     *                         Une relecture indépendante est un CONTRÔLE DE SÛRETÉ : la
-     *                         refuser faute de budget n'est pas « fermé par défaut », c'est
-     *                         éteindre le contrôle. Une mission générique n'a pourtant
-     *                         aucun budget d'exécution à débiter — d'où ce cas, et aucun
-     *                         autre.
-     *
-     * POURQUOI ON NE PEUT PAS CONTOURNER. `goalId` n'est PAS une entrée de cette fonction :
-     * il est lu sur la MISSION PERSISTÉE, chargée à l'étape 1 par son id. Un appelant ne
-     * peut donc pas l'omettre pour obtenir le budget souple — il n'a jamais eu la main
-     * dessus. Et `attributionKey` donne de toute façon la priorité au goal, donc même une
-     * imputation portant les deux tombe sur le goal.
+     * Aucune portée d'imputation ici : elle est posée par `ReviewerServiceImpl`, le point
+     * de passage OBLIGÉ de toute relecture LLM. La poser aussi ici ferait deux autorités
+     * pour une seule question, et c'est la seconde qu'on oublierait de corriger.
      */
-    const scope = mission.goalId
-      ? { goalId: mission.goalId }
-      : { systemReviewMissionId: mission.id };
-    review = await runWithAttribution(scope, () => deps.reviewer.review(reviewInput));
+    review = await deps.reviewer.review(reviewInput);
   } catch (error) {
     return {
       ok: false,

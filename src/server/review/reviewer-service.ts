@@ -7,6 +7,8 @@ import type {
   ReviewDecisionRepository,
 } from "@/server/review/ports";
 import { idSchema } from "@/core/contracts/common";
+import { runWithAttribution } from "@/server/budget/attribution-context";
+
 import { DeterministicReviewer } from "./deterministic-reviewer";
 
 /**
@@ -42,7 +44,29 @@ export class ReviewerServiceImpl implements ReviewerService {
       throw new Error("Deterministic reviewer returned no decision but proceedToLlm=false");
     }
 
-    const llmResult = await this.llmReviewer.review(input);
+    /*
+     * PORTÉE D'IMPUTATION DE LA RELECTURE — ICI, pas chez un appelant.
+     *
+     * C'est le CHOKE POINT : toute relecture LLM passe par cette ligne, quel que soit le
+     * déclencheur (porte de revue, rappel de fin d'exécution, balayage de récupération,
+     * QC). Poser la portée chez un seul appelant (`review-execution.ts`) ne couvrait donc
+     * qu'un chemin sur plusieurs, et les autres étaient refusés faute d'imputation —
+     * mesuré : `QUALITY_REVIEWER_NO_ENFORCEABLE_CAP` sur le chemin du balayage.
+     *
+     *   mission AVEC goal -> budget du GOAL, sans repli. Un budget de goal inapplicable
+     *                        FAIT ÉCHOUER la relecture : retomber ailleurs transformerait
+     *                        « plus de budget » en « relis quand même ».
+     *   mission SANS goal -> budget de RELECTURE SYSTÈME, par mission, strictement borné.
+     *                        Une relecture indépendante est un contrôle de sûreté ; une
+     *                        mission générique n'a pourtant aucun budget d'exécution.
+     *
+     * `goalId` vient de la mission CHARGÉE, jamais d'une entrée d'appelant : on ne peut pas
+     * l'omettre pour obtenir le budget souple.
+     */
+    const scope = input.mission.goalId
+      ? { goalId: input.mission.goalId }
+      : { systemReviewMissionId: input.mission.id };
+    const llmResult = await runWithAttribution(scope, () => this.llmReviewer.review(input));
 
     // Construire la décision finale combinée
     const finalDecision: ReviewDecisionRecord = {
