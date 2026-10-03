@@ -51,7 +51,11 @@ beforeAll(async () => {
     req.on("end", () => {
       reviewerRequests += 1;
       const mode =
-        reviewerMode === "changes-once" ? (reviewerRequests === 2 ? "changes" : "approve") : reviewerMode;
+        reviewerMode === "changes-once"
+          ? reviewerRequests === 2
+            ? "changes"
+            : "approve"
+          : reviewerMode;
       const content =
         mode === "approve"
           ? { decision: "APPROVE", reasons: ["inside its declared scope"], confidence: 0.9 }
@@ -64,7 +68,11 @@ beforeAll(async () => {
                 confidence: 0.8,
               };
       res.writeHead(200, { "content-type": "application/json" }).end(
-        JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify(content) } }] }),
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: JSON.stringify(content) } }],
+          /* Fidélité du faux : un fournisseur réel rapporte sa consommation (voir ci-dessus). */
+          usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
+        }),
       );
     });
   });
@@ -110,7 +118,13 @@ const plan = (writerScope: string) =>
   JSON.stringify({
     version: 1,
     tasks: [
-      { key: "inspect", title: "Inspect the docs", description: "Read docs/ and report", dependsOn: [], riskClass: "read_only" },
+      {
+        key: "inspect",
+        title: "Inspect the docs",
+        description: "Read docs/ and report",
+        dependsOn: [],
+        riskClass: "read_only",
+      },
       {
         key: "write",
         title: "Write the note",
@@ -171,7 +185,10 @@ async function container(writerScope = WRITE_SCOPE): Promise<Container> {
       "TRUNCATE TABLE missions, tasks, mission_tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry, goals RESTART IDENTITY CASCADE",
     ),
   );
-  for (const id of ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]) {
+  for (const id of [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+  ]) {
     await built.workerRegistration.register({
       id,
       workerKind: "agent",
@@ -253,7 +270,9 @@ describe("0052 — self-development is ordinary governed work", () => {
     /* Reviews were persisted by QC for BOTH tasks — the reader too. */
     const tasks = await c.mission.listTasks(outcome.missionId);
     for (const t of tasks) {
-      expect((await c.reviewDecisions.listByTaskId(t.taskId)).map((r) => r.decision)).toEqual(["APPROVE"]);
+      expect((await c.reviewDecisions.listByTaskId(t.taskId)).map((r) => r.decision)).toEqual([
+        "APPROVE",
+      ]);
     }
     expect((await runtime.backlog.get(candidate.id))?.status).toBe("approved");
     expect(await c.durableMemory.getPatterns({ limit: 50 })).not.toHaveLength(0);
@@ -278,7 +297,9 @@ describe("0052 — self-development is ordinary governed work", () => {
     ]);
     /* What integrated is the CORRECTION (attempt 2), not the refused attempt. */
     expect(outcome.workflowId).toBe(workflowIdForAttempt(outcome.taskId, 2));
-    expect(await c.dispatchAttempts.getByWorkflowId(workflowIdForAttempt(outcome.taskId, 2))).not.toBeNull();
+    expect(
+      await c.dispatchAttempts.getByWorkflowId(workflowIdForAttempt(outcome.taskId, 2)),
+    ).not.toBeNull();
     expect(applySpy).toHaveBeenCalledTimes(1);
     expect(git(repo, "log", "--oneline", `${before}..${TARGET}`).split("\n")).toHaveLength(1);
   }, 480_000);
@@ -318,6 +339,8 @@ describe("0052 — self-development is ordinary governed work", () => {
     }
     expect(applySpy).not.toHaveBeenCalled();
     expect(targetHead()).toBe(before);
-    expect(Object.values(await missionTaskStatuses(c, outcome.missionId))).not.toContain("succeeded");
+    expect(Object.values(await missionTaskStatuses(c, outcome.missionId))).not.toContain(
+      "succeeded",
+    );
   }, 360_000);
 });

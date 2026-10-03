@@ -1,3 +1,4 @@
+import { describeFailure, failureCauseOf } from "@/core/contracts/failure-cause";
 import { z } from "zod";
 
 import type { Env } from "@/config/env";
@@ -188,7 +189,27 @@ export class OmniRouteReviewer implements ReviewerPort {
       if (controller.signal.aborted) {
         throw reviewerError("TIMEOUT");
       }
-      throw reviewerError("PROVIDER_FAILURE");
+      /*
+       * LA CAUSE RACINE SURVIT À CETTE COUCHE.
+       *
+       * Ce `catch` repliait TOUT en `PROVIDER_FAILURE`. Mesuré : une relecture refusée par
+       * le budget remontait comme « échec du fournisseur », et la vraie cause —
+       * `BUDGET_DENIED:NO_ENFORCEABLE_CAP` — n'a été trouvée qu'en ajoutant un log
+       * temporaire. Un opérateur serait allé inspecter OmniRoute pendant que le problème
+       * était une variable de configuration.
+       *
+       * On traduit donc la cause au lieu de l'effacer, en gardant les identifiants et le
+       * modèle. Une cause INCONNUE reste `PROVIDER_FAILURE` : c'est l'aveu honnête « je ne
+       * sais pas », et ce qui est interdit est seulement qu'une cause CONNUE vienne s'y
+       * perdre.
+       */
+      const cause = failureCauseOf(error, {
+        missionId: input.mission.id,
+        taskId: input.executionResult.taskId,
+        provider: input.reviewerCompute?.provider ?? "omniroute",
+        model: input.reviewerCompute?.model ?? this.options.model,
+      });
+      throw reviewerError(`${cause.rootCause}:${describeFailure(cause)}`);
     } finally {
       clearTimeout(timeout);
       input.signal?.removeEventListener("abort", abort);

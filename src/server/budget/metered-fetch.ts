@@ -138,7 +138,24 @@ function requestedModel(init: RequestInit | undefined): string | undefined {
  * le streaming de l'appelant.
  */
 async function observe(response: Response): Promise<{ usage: UsageOutcome; model?: string }> {
-  if (!JSON_CONTENT_TYPE.test(response.headers.get("content-type") ?? "")) {
+  /*
+   * LA MESURE NE DOIT JAMAIS CASSER L'APPEL. `meteredFetch` est typé `typeof fetch`, donc
+   * un `inner` conforme rend un vrai `Response` — mais un adaptateur de test, un proxy ou
+   * un polyfill peut rendre un objet qui n'en a que la forme utile (`ok`, `json`). Lire
+   * `headers.get` dessus lançait un TypeError, et ce TypeError remontait à l'appelant :
+   * une réponse de fournisseur PARFAITEMENT valide devenait une panne, parce qu'on n'avait
+   * pas pu la compter. Mesuré : un relecteur a échoué en `PROVIDER_FAILURE` pour cette
+   * seule raison.
+   *
+   * Un objet qu'on ne sait pas inspecter est donc UNMETERED — une dépense non mesurée,
+   * visible dans la fenêtre — et jamais une erreur. Compter est subordonné à servir.
+   */
+  const headers: unknown = (response as { headers?: unknown }).headers;
+  const readHeader =
+    typeof (headers as Headers | undefined)?.get === "function"
+      ? (headers as Headers).get("content-type")
+      : null;
+  if (typeof response.clone !== "function" || !JSON_CONTENT_TYPE.test(readHeader ?? "")) {
     return { usage: { kind: UNMETERED, reason: "NON_JSON_BODY" } };
   }
 

@@ -536,3 +536,72 @@ describe("createOmniRouteReviewer — la couture du compteur de dépense (C1)", 
     expect(createOmniRouteReviewer(env)).toBeDefined();
   });
 });
+
+/**
+ * LA CAUSE RACINE SURVIT À LA COUCHE RELECTEUR.
+ *
+ * Ce `catch` repliait tout en `PROVIDER_FAILURE`. Une relecture refusée par le budget
+ * remontait donc comme « échec du fournisseur », et la vraie cause n'était trouvable qu'en
+ * instrumentant le code. Ces preuves verrouillent la distinction, dans les deux sens.
+ */
+describe("OmniRouteReviewer — la cause racine n'est pas repliée", () => {
+  const env = {
+    OMNIROUTE_BASE_URL: "https://provider.test",
+    OMNIROUTE_API_KEY: "cle",
+    ICOS_REVIEWER_MODEL: "modele-relecteur",
+    ICOS_REVIEWER_TIMEOUT_MS: 5_000,
+  } as const;
+
+  /** Un `fetch` qui échoue avec la cause voulue, avant toute réponse. */
+  const failingWith = (message: string): typeof fetch =>
+    vi.fn<typeof fetch>(async () => {
+      throw new Error(message);
+    });
+
+  const reviewFailure = async (message: string): Promise<string> => {
+    const reviewer = createOmniRouteReviewer(env, failingWith(message));
+    try {
+      await reviewer!.review(makeBaseInput());
+      return "NO_ERROR";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
+  it("un refus de BUDGET n'est plus un échec de fournisseur", async () => {
+    const message = await reviewFailure("BUDGET_DENIED:NO_ENFORCEABLE_CAP rien à appliquer");
+    expect(message).toContain("NO_ENFORCEABLE_CAP");
+    expect(message).toContain("BUDGET/");
+    /* La distinction est le point : la cause connue ne se cache plus derrière le générique. */
+    expect(message).not.toMatch(/QUALITY_REVIEWER_PROVIDER_FAILURE$/);
+  });
+
+  it("préserve chaque cause connue, exactement", async () => {
+    for (const [thrown, expected] of [
+      ["BUDGET_DENIED:TOKEN_CAP_REACHED 1000/1000", "BUDGET_EXHAUSTED"],
+      ["BUDGET_DENIED:UNBOUNDED_REQUEST corps illisible", "UNBOUNDED_REQUEST"],
+      ["BUDGET_DENIED:RESERVATION_LEASE_LOST", "LEASE_LOST"],
+      ["ICOS_PLANNER_ERROR:OUTPUT_TRUNCATED", "OUTPUT_TRUNCATED"],
+    ] as const) {
+      expect(await reviewFailure(thrown), thrown).toContain(expected);
+    }
+  });
+
+  it("une cause INCONNUE reste PROVIDER_FAILURE : l'aveu honnête est conservé", async () => {
+    const message = await reviewFailure("ECONNRESET socket hang up");
+    expect(message).toContain("PROVIDER_FAILURE");
+    expect(message).toContain("PROVIDER/");
+  });
+
+  it("porte les identifiants et le modèle, pour qu'on sache DE QUOI on parle", async () => {
+    const message = await reviewFailure("BUDGET_DENIED:NO_ENFORCEABLE_CAP x");
+    expect(message).toContain("missionId=mission-1");
+    expect(message).toContain("model=modele-relecteur");
+    expect(message).toContain("provider=omniroute");
+  });
+
+  it("garde le préfixe du relecteur : les appelants existants le reconnaissent encore", async () => {
+    /* La compatibilité compte : `ReviewerService` et les sondes filtrent sur ce préfixe. */
+    expect(await reviewFailure("ECONNRESET")).toMatch(/^QUALITY_REVIEWER_/);
+  });
+});

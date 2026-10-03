@@ -111,13 +111,19 @@ beforeAll(async () => {
               requestedChanges: [{ field: "src/d28/feature.txt", reason: "missing header" }],
               confidence: 0.8,
             };
-      res
-        .writeHead(200, { "content-type": "application/json" })
-        .end(
-          JSON.stringify({
-            choices: [{ message: { role: "assistant", content: JSON.stringify(content) } }],
-          }),
-        );
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          model: "test/reviewer",
+          choices: [{ message: { role: "assistant", content: JSON.stringify(content) } }],
+          /*
+           * Un vrai fournisseur OpenAI-compatible rapporte sa consommation. Sans ce bloc,
+           * chaque relecture est UNMETERED, et une fenêtre non mesurée refuse — à juste
+           * titre — tout appel suivant du même goal. Le faux doit être fidèle sur ce que
+           * le code mesure, sinon il teste un fournisseur qui n'existe pas.
+           */
+          usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
+        }),
+      );
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

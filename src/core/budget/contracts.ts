@@ -121,6 +121,27 @@ export interface Attribution {
    * résout vers la contrainte, jamais vers la permission.
    */
   readonly conversationId?: string;
+  /**
+   * BUDGET DE RELECTURE SYSTÈME — UNIQUEMENT pour la relecture OBLIGATOIRE d'une mission
+   * qui n'a réellement AUCUN goal (décision du propriétaire).
+   *
+   * Ce n'est PAS un troisième budget d'exécution. Une relecture indépendante est un
+   * CONTRÔLE DE SÛRETÉ : la refuser faute de budget n'est pas « fermé par défaut », c'est
+   * éteindre le contrôle. Mais une mission générique (N11) n'a pas de goal, donc pas de
+   * budget d'exécution à débiter. Ce champ est la seule réponse à ce cas précis, et il est
+   * borné strictement.
+   *
+   * DERNIER dans la précédence de {@link attributionKey}, après le goal ET la mission.
+   * C'est ce qui rend le contournement INEXPRIMABLE : une imputation qui porte un goal
+   * tombe TOUJOURS sur le budget du goal, même si elle porte aussi ceci. On ne peut donc
+   * pas « obtenir le budget de relecture système » en ajoutant un champ — il faudrait
+   * qu'aucun goal n'existe, et le goal est lu sur la MISSION PERSISTÉE, jamais fourni par
+   * l'appelant.
+   *
+   * Porte l'id de la mission relue : une fenêtre par mission, pas une cagnotte commune où
+   * une relecture bavarde affamerait les suivantes.
+   */
+  readonly systemReviewMissionId?: string;
 }
 
 /** Décompte de tokens mesuré. `totalTokens >= promptTokens + completionTokens`. */
@@ -193,8 +214,14 @@ export function attributionKey(attribution: Attribution | null | undefined): str
     ["goal", attribution.goalId],
     ["mission", attribution.missionId],
     ["brain", attribution.brainId],
-    /* Dernier : une imputation qui porte AUSSI un goal retombe sur le budget du goal. */
+    /* Avant-dernier : une imputation qui porte AUSSI un goal retombe sur le budget du goal. */
     ["conversation", attribution.conversationId],
+    /*
+     * DERNIER DE TOUS. La relecture système ne gagne que s'il n'y a RIEN d'autre — ni goal,
+     * ni mission, ni brain, ni conversation. C'est la non-contournabilité, écrite dans
+     * l'ordre : on ne peut pas descendre vers ce budget, seulement y tomber faute de mieux.
+     */
+    ["system-review", attribution.systemReviewMissionId],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
       return `${label}=${encodeURIComponent(value.trim())}`;
@@ -236,6 +263,8 @@ export function attributionFromKey(key: string): Attribution | null {
       return { brainId: value };
     case "conversation":
       return { conversationId: value };
+    case "system-review":
+      return { systemReviewMissionId: value };
     default:
       return null;
   }

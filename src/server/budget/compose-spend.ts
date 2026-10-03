@@ -79,6 +79,26 @@ export const DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS = 200_000;
  * par goal : un plafond global ferait qu'une conversation bavarde fermerait la bouche d'ICOS
  * pour toutes les autres.
  */
+/**
+ * PLAFOND PAR DÉFAUT DE LA RELECTURE SYSTÈME, en tokens, PAR MISSION relue.
+ *
+ * Strict, et beaucoup plus bas que celui d'une conversation : une relecture est UN appel
+ * borné sur un résultat d'exécution, pas un dialogue. Si une mission a besoin de plus que
+ * ça pour être relue, c'est que quelque chose d'autre ne va pas, et le refus est
+ * l'information utile.
+ */
+export const DEFAULT_SYSTEM_REVIEW_MAX_TOTAL_TOKENS = 50_000;
+
+/**
+ * LE PLAFOND DE LA RELECTURE SYSTÈME. Ne répond QU'À une imputation de relecture système ;
+ * pour tout le reste il rend `CAPPED` sans limite, donc `decide` refuse. Un worker ordinaire
+ * ne peut donc pas s'en servir même s'il arrivait jusqu'ici.
+ */
+export function systemReviewCaps(maxTotalTokens: number): BudgetCapResolver {
+  return async (attribution) =>
+    attribution?.systemReviewMissionId ? { kind: "CAPPED", maxTotalTokens } : { kind: "CAPPED" };
+}
+
 export function conversationCaps(maxTotalTokens: number): BudgetCapResolver {
   return async (attribution) =>
     attribution?.conversationId
@@ -165,6 +185,9 @@ export interface ComposeSpendOptions extends Omit<SpendLedgerSelection, "caps"> 
   readonly maxTotalTokensPerGoal?: number;
   /** Plafond de tokens d'UNE conversation. Défaut : {@link DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS}. */
   readonly maxTotalTokensPerConversation?: number;
+  /** Plafond de tokens d'UNE relecture système. Défaut :
+   * {@link DEFAULT_SYSTEM_REVIEW_MAX_TOTAL_TOKENS}. */
+  readonly maxTotalTokensPerSystemReview?: number;
   /** Le `fetch` réellement émetteur. Injectable pour les tests, jamais muet en production. */
   readonly inner?: typeof fetch;
   /** Durée du bail des réservations de mission. Défaut : celui du magasin. */
@@ -187,12 +210,43 @@ export interface SpendMeters {
   readonly conversation: typeof fetch;
 }
 
-/** LE plafond du travail de mission, en un seul endroit : `goals.budget` + plafond de tokens. */
-function goalCapsFor(db: SqlExec, maxTotalTokensPerGoal: number | undefined): BudgetCapResolver {
-  return createGoalBudgetCapResolver({
+/**
+ * LE plafond du travail de mission, en un seul endroit, et LA PRÉCÉDENCE EST ICI.
+ *
+ * Un seul résolveur, qui AIGUILLE sur la forme de l'imputation plutôt que deux coutures
+ * parallèles. C'est ce qui rend la règle du propriétaire non contournable :
+ *
+ *   - imputation avec GOAL            -> budget du goal, et RIEN d'autre. Si ce budget
+ *                                        n'est pas applicable, on REFUSE ; on ne retombe
+ *                                        JAMAIS sur la relecture système.
+ *   - imputation de RELECTURE SYSTÈME -> plafond strict de relecture, et seulement si
+ *                                        aucun goal n'est présent (`attributionKey` donne
+ *                                        déjà la priorité au goal, donc le cas « les deux »
+ *                                        est inexprimable en pratique ; on le ferme quand
+ *                                        même ici, parce qu'une règle de sûreté ne doit pas
+ *                                        reposer sur une seule barrière).
+ *   - tout le reste                   -> `CAPPED` sans limite, donc refus.
+ *
+ * Avec deux résolveurs séparés, « quelle couture ai-je reçue » déciderait du plafond. Avec
+ * celui-ci, c'est l'imputation qui décide, et une imputation ne se choisit pas : elle est
+ * lue dans la portée ambiante, posée par le code qui connaît le travail.
+ */
+function goalCapsFor(
+  db: SqlExec,
+  maxTotalTokensPerGoal: number | undefined,
+  maxTotalTokensPerSystemReview: number = DEFAULT_SYSTEM_REVIEW_MAX_TOTAL_TOKENS,
+): BudgetCapResolver {
+  const goalCaps = createGoalBudgetCapResolver({
     db,
     ...(maxTotalTokensPerGoal === undefined ? {} : { maxTotalTokensPerGoal }),
   });
+  const reviewCaps = systemReviewCaps(maxTotalTokensPerSystemReview);
+  return async (attribution) => {
+    /* LE GOAL GAGNE TOUJOURS. Pas de repli : un budget de goal inapplicable est un refus. */
+    if (attribution?.goalId) return goalCaps(attribution);
+    if (attribution?.systemReviewMissionId) return reviewCaps(attribution);
+    return goalCaps(attribution);
+  };
 }
 
 export interface ComposeSpendReservationsOptions {
@@ -200,6 +254,8 @@ export interface ComposeSpendReservationsOptions {
   readonly db: SqlExec & TxCapable;
   readonly tenantId?: string;
   readonly maxTotalTokensPerGoal?: number;
+  /** Même aiguillage que le compteur : la réservation doit obéir au MÊME plafond. */
+  readonly maxTotalTokensPerSystemReview?: number;
   readonly leaseMs?: number;
 }
 
@@ -223,7 +279,11 @@ export function composeSpendReservations(
   return new PostgresSpendReservations({
     db: options.db,
     tenantId: options.tenantId ?? SPEND_LEDGER_TENANT_ID,
-    caps: goalCapsFor(options.db, options.maxTotalTokensPerGoal),
+    caps: goalCapsFor(
+      options.db,
+      options.maxTotalTokensPerGoal,
+      options.maxTotalTokensPerSystemReview,
+    ),
     ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
   });
 }
@@ -233,7 +293,7 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
   const selection = { db: options.db, ...(options.tenantId ? { tenantId: options.tenantId } : {}) };
 
   const goalCaps = options.db
-    ? goalCapsFor(options.db, options.maxTotalTokensPerGoal)
+    ? goalCapsFor(options.db, options.maxTotalTokensPerGoal, options.maxTotalTokensPerSystemReview)
     : NO_GOAL_SOURCE;
 
   /*
@@ -256,6 +316,9 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
         ...(options.maxTotalTokensPerGoal === undefined
           ? {}
           : { maxTotalTokensPerGoal: options.maxTotalTokensPerGoal }),
+        ...(options.maxTotalTokensPerSystemReview === undefined
+          ? {}
+          : { maxTotalTokensPerSystemReview: options.maxTotalTokensPerSystemReview }),
         ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
       })
     : undefined;

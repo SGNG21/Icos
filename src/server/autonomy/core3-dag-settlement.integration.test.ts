@@ -114,9 +114,13 @@ beforeAll(async () => {
       /* `changes-once`: the first review asks for changes, every later one approves. */
       const mode =
         reviewerMode === "changes-once"
-          ? reviewerRequests === 1 ? "changes" : "approve"
+          ? reviewerRequests === 1
+            ? "changes"
+            : "approve"
           : reviewerMode === "retry-once"
-            ? reviewerRequests === 1 ? "retry" : "approve"
+            ? reviewerRequests === 1
+              ? "retry"
+              : "approve"
             : reviewerMode;
       const content =
         mode === "approve"
@@ -125,15 +129,20 @@ beforeAll(async () => {
             ? { decision: "BLOCK", reasons: ["unsafe change"], confidence: 0.9 }
             : mode === "retry"
               ? { decision: "RETRY", reasons: ["the worker failed; re-execute"], confidence: 0.9 }
-            : {
-                decision: "REQUEST_CHANGES",
-                reasons: ["the feature file needs a header"],
-                requestedChanges: [{ field: "feature.txt", reason: "missing header" }],
-                confidence: 0.8,
-              };
+              : {
+                  decision: "REQUEST_CHANGES",
+                  reasons: ["the feature file needs a header"],
+                  requestedChanges: [{ field: "feature.txt", reason: "missing header" }],
+                  confidence: 0.8,
+                };
       res.writeHead(200, { "content-type": "application/json" }).end(
         JSON.stringify({
           choices: [{ message: { role: "assistant", content: JSON.stringify(content) } }],
+          /*
+           * Un vrai fournisseur rapporte sa consommation. Sans ce bloc, chaque relecture
+           * est UNMETERED, et une fenêtre non mesurée refuse tout appel suivant du goal.
+           */
+          usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
         }),
       );
     });
@@ -474,7 +483,11 @@ describe("DEFECT 36 — natural two-task DAG progression", () => {
       bAttempts: 0,
     });
 
-    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 120_000);
+    await until(
+      "the mission settled",
+      async () => (await missionStatus(c)) === "succeeded",
+      120_000,
+    );
 
     const wsA = (await workspaceOf(c, WF_A))!;
     const wsB = (await workspaceOf(c, WF_B))!;
@@ -516,16 +529,27 @@ describe("DEFECT 36 × 0050 — a correction attempt settles like any governed w
     const gate = c.integrationGate!;
     const realIntegrate = gate.integrate.bind(gate);
     const gateSpy = vi.spyOn(gate, "integrate").mockImplementation(async (id, options) => {
-      atGate.push({ workspaceId: id, bStatus: await status(c, MT_B), bAttempts: await attempts(c, TASK_B) });
+      atGate.push({
+        workspaceId: id,
+        bStatus: await status(c, MT_B),
+        bAttempts: await attempts(c, TASK_B),
+      });
       return realIntegrate(id, options);
     });
     const applySpy = vi.spyOn(c.integrationApplier!, "apply");
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
-    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 240_000);
+    await until(
+      "the mission settled",
+      async () => (await missionStatus(c)) === "succeeded",
+      240_000,
+    );
 
     /* A was reviewed twice by the real reviewer client: changes, then approval of the correction. */
-    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["REQUEST_CHANGES", "APPROVE"]);
+    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual([
+      "REQUEST_CHANGES",
+      "APPROVE",
+    ]);
     expect(await attempts(c, TASK_A)).toBe(2);
 
     /* The correction got its OWN governed workspace and branch; attempt 1 never integrated. */
@@ -545,7 +569,9 @@ describe("DEFECT 36 × 0050 — a correction attempt settles like any governed w
       atGate.flatMap((g, i) => (g.workspaceId === wsA1.workspaceId ? [decisions[i].decision] : [])),
     ).not.toContain("ACCEPT");
     expect(atGate.find((g) => g.workspaceId === wsA2.workspaceId)).toEqual({
-      workspaceId: wsA2.workspaceId, bStatus: "draft", bAttempts: 0,
+      workspaceId: wsA2.workspaceId,
+      bStatus: "draft",
+      bAttempts: 0,
     });
 
     /* B was allocated FROM the integrated correction. */
@@ -578,7 +604,11 @@ describe("SUPERSEDED_ATTEMPT_WORKSPACE_HELD — a retry after a FAILED execution
     const WF_A2 = workflowIdForAttempt(TASK_A, 2);
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
-    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 240_000);
+    await until(
+      "the mission settled",
+      async () => (await missionStatus(c)) === "succeeded",
+      240_000,
+    );
 
     /* The failed attempt's workspace was retired, never integrated; the retry had its own. */
     const wsA1 = (await workspaceOf(c, WF_A))!;
@@ -738,43 +768,47 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
   it.each([
     ["the recovery sweep (recoverUnregistered)", false],
     ["the completion callback (registerExecution)", true],
-  ])("A cancelled WHILE AWAITING REVIEW, registered by %s, then approved: never integrated, not resurrected", async (_path, viaCallback) => {
-    makeRepo();
-    const c = await container();
-    await seed(c);
-    const base = targetHead();
-    const applySpy = vi.spyOn(c.integrationApplier!, "apply");
-    const runtime = composeAutonomyRuntime(c);
-    await runtime.supervisor.run(MISSION_ID);
-    await c.mission.updateMissionTaskStatus(MISSION_ID, MT_A, "cancelled");
-    if (viaCallback) {
-      /* What the execution-completed route does for a recorded result. */
-      await runtime.qualityControl.registerExecution({
-        missionId: MISSION_ID,
-        missionTaskId: MT_A,
-        taskId: TASK_A,
-        workflowId: WF_A,
-      });
-    }
+  ])(
+    "A cancelled WHILE AWAITING REVIEW, registered by %s, then approved: never integrated, not resurrected",
+    async (_path, viaCallback) => {
+      makeRepo();
+      const c = await container();
+      await seed(c);
+      const base = targetHead();
+      const applySpy = vi.spyOn(c.integrationApplier!, "apply");
+      const runtime = composeAutonomyRuntime(c);
+      await runtime.supervisor.run(MISSION_ID);
+      await c.mission.updateMissionTaskStatus(MISSION_ID, MT_A, "cancelled");
+      if (viaCallback) {
+        /* What the execution-completed route does for a recorded result. */
+        await runtime.qualityControl.registerExecution({
+          missionId: MISSION_ID,
+          missionTaskId: MT_A,
+          taskId: TASK_A,
+          workflowId: WF_A,
+        });
+      }
 
-    reviewerMode = "approve";
-    await runtime.qualityControl.recover();
-    await new PendingReviewGateSweeper(c.workspaceExecutionCoordinator!).sweep();
-    const sweeper = new QualityControlRecoverySweeper(
-      runtime.qualityControl,
-      c.qualityControlJobs,
-      (missionId) => runtime.wakeup.wake(missionId),
-    );
-    await sweeper.sweep();
-    await sweeper.sweep();
+      reviewerMode = "approve";
+      await runtime.qualityControl.recover();
+      await new PendingReviewGateSweeper(c.workspaceExecutionCoordinator!).sweep();
+      const sweeper = new QualityControlRecoverySweeper(
+        runtime.qualityControl,
+        c.qualityControlJobs,
+        (missionId) => runtime.wakeup.wake(missionId),
+      );
+      await sweeper.sweep();
+      await sweeper.sweep();
 
-    expect(await status(c, MT_A)).toBe("cancelled");
-    await expectBBlocked(c);
-    /* CANCELLED_WORK_INTEGRATION_DEFECT: approved work of a cancelled task never lands. */
-    expect(applySpy).not.toHaveBeenCalled();
-    expect(targetHead()).toBe(base);
-    expect((await workspaceOf(c, WF_A))?.releasedAt).not.toBeNull();
-  }, 180_000);
+      expect(await status(c, MT_A)).toBe("cancelled");
+      await expectBBlocked(c);
+      /* CANCELLED_WORK_INTEGRATION_DEFECT: approved work of a cancelled task never lands. */
+      expect(applySpy).not.toHaveBeenCalled();
+      expect(targetHead()).toBe(base);
+      expect((await workspaceOf(c, WF_A))?.releasedAt).not.toBeNull();
+    },
+    180_000,
+  );
 });
 
 describe("DEFECT 36 — durability and exactly-once", () => {
@@ -797,8 +831,15 @@ describe("DEFECT 36 — durability and exactly-once", () => {
     await crash(a);
 
     const c = (await boot()).container;
-    await until("B executed after the restart", async () => (await workspaceOf(c, WF_B))?.sourceCommit || undefined);
-    await until("the mission settled", async () => (await missionStatus(c)) === "succeeded", 120_000);
+    await until(
+      "B executed after the restart",
+      async () => (await workspaceOf(c, WF_B))?.sourceCommit || undefined,
+    );
+    await until(
+      "the mission settled",
+      async () => (await missionStatus(c)) === "succeeded",
+      120_000,
+    );
     expect(await status(c, MT_A)).toBe("succeeded");
     expect((await workspaceOf(c, WF_B))!.baseCommit).toBe(integrated);
     await ticks(6);
