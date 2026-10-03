@@ -3,11 +3,13 @@
  *
  * Invariant: authoritative mutable state is NEVER served from cache.
  * - navigations: network only; offline → static offline.html (shows no data)
- * - /_next/static/*: content-hashed, immutable → cache-first
+ * - /_next/static/*: cache-first ONLY when the server marks the response
+ *   immutable. Dev builds reuse chunk filenames across rebuilds and send
+ *   no-cache; storing those pins a stale module graph and breaks hydration.
  * - everything else (API, RSC payloads, icons, manifest): untouched network
  * - non-GET: never intercepted (commands must reach ICOS or fail visibly)
  */
-const CACHE = "icos-shell-v1";
+const CACHE = "icos-shell-v2";
 const OFFLINE_URL = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -26,6 +28,11 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+/** Only a response the server itself declares immutable may be reused forever. */
+function isImmutable(response) {
+  return /immutable/i.test(response.headers.get("cache-control") || "");
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -43,7 +50,7 @@ self.addEventListener("fetch", (event) => {
         (hit) =>
           hit ||
           fetch(request).then((response) => {
-            if (response.ok) {
+            if (response.ok && isImmutable(response)) {
               const copy = response.clone();
               caches.open(CACHE).then((cache) => cache.put(request, copy));
             }
