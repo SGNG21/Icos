@@ -6,6 +6,7 @@ import {
   Briefcase,
   Cpu,
   GitMerge,
+  House,
   LayoutDashboard,
   Menu,
   MessageSquare,
@@ -23,6 +24,7 @@ import { usePathname } from "next/navigation";
 import { MOBILE_TABS, NAV_ITEMS, isActive, type NavIcon } from "./nav-items";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
+  home: House,
   overview: LayoutDashboard,
   executive: Briefcase,
   pipeline: GitMerge,

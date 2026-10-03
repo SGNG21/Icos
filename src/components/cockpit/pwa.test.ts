@@ -10,7 +10,14 @@ const SW = readFileSync(join(process.cwd(), "public/sw.js"), "utf8");
 const ORIGIN = "https://icos.local";
 
 /** Loads public/sw.js in a sandbox with fake caches/fetch and returns its handlers. */
-function loadWorker({ online }: { online: boolean }) {
+function loadWorker({
+  online,
+  cacheControl = "public, max-age=31536000, immutable",
+}: {
+  online: boolean;
+  /** What the SERVER says about the asset. Only `immutable` may be stored. */
+  cacheControl?: string;
+}) {
   const store = new Map<string, string>();
   const listeners: Record<string, (e: unknown) => void> = {};
   const cache = {
@@ -22,7 +29,12 @@ function loadWorker({ online }: { online: boolean }) {
   const network = vi.fn(async (req: { url: string }) => {
     if (!online) throw new TypeError("offline");
     const body = `network:${req.url}`;
-    return { ok: true, body, clone: () => ({ body }) };
+    return {
+      ok: true,
+      body,
+      headers: { get: (name: string) => (name === "cache-control" ? cacheControl : null) },
+      clone: () => ({ body }),
+    };
   });
   const sandbox = {
     self: {
@@ -105,6 +117,21 @@ describe("service worker — offline-safe shell", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(await sw.dispatch(url)).toBe(`network:${ORIGIN}${url}`);
     expect(sw.network).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * A dev build reuses chunk FILENAMES across rebuilds and sends `no-cache`. Storing one
+   * pinned a previous build's module graph behind a current URL, so hydration threw and
+   * the login button stayed disabled forever. Only what the server calls immutable may be
+   * kept; everything else is fetched every time.
+   */
+  it("never stores a build asset the server marked no-cache", async () => {
+    const sw = loadWorker({ online: true, cacheControl: "no-cache, must-revalidate" });
+    const url = "/_next/static/chunks/app.js";
+    expect(await sw.dispatch(url)).toBe(`network:${ORIGIN}${url}`);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await sw.dispatch(url)).toBe(`network:${ORIGIN}${url}`);
+    expect(sw.network).toHaveBeenCalledTimes(2);
   });
 });
 

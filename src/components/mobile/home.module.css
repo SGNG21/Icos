@@ -156,6 +156,9 @@
 .headerRight {
   display: flex;
   align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .greeting {
@@ -1248,4 +1251,28 @@ a.commandBtn {
   line-height: 1.35;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/*
+ * The way into the Control Center from the main interface. Sized for a thumb
+ * (44px min target) and allowed to wrap under the greeting on a narrow phone.
+ */
+.cockpitLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.85rem;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.18));
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.cockpitLink:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }

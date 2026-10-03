@@ -21,6 +21,7 @@ import { CommandBar } from "./command-bar";
 import { LiveStatus } from "./live-status";
 import { MobileNav } from "./mobile-nav";
 import styles from "./home.module.css";
+import Link from "next/link";
 
 /**
  * ICOS Mobile Home — a READ/CONTROL surface over the canonical runtime.
@@ -230,6 +231,10 @@ export function MobileHome({ session, model }: MobileHomeProps) {
         </div>
         <div className={styles.headerRight}>
           <p className={styles.greeting}>Bonjour {userName}</p>
+          {/* The way into the Control Center. Same product, same router. */}
+          <Link href="/cockpit" className={styles.cockpitLink}>
+            Cockpit
+          </Link>
         </div>
       </header>
 

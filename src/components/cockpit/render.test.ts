@@ -61,6 +61,7 @@ describe("truth rendering", () => {
 describe("navigation", () => {
   it("exposes all sections and a five-slot thumb bar with Ask ICOS centred", () => {
     expect(NAV_ITEMS.map((i) => i.label)).toEqual([
+      "Accueil",
       "Overview",
       "Executive",
       "Missions",

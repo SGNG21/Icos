@@ -1,5 +1,8 @@
 /** Cockpit information architecture. Pure data so it is testable outside React. */
 export const NAV_ITEMS = [
+  // The way back to the main ICOS interface. The cockpit is a surface OF the product,
+  // not a separate one, so leaving it must not require editing the URL.
+  { href: "/", label: "Accueil", icon: "home" },
   { href: "/cockpit", label: "Overview", icon: "overview" },
   { href: "/cockpit/executive", label: "Executive", icon: "executive" },
   { href: "/cockpit/missions", label: "Missions", icon: "missions" },
@@ -26,6 +29,9 @@ export const MOBILE_TABS = [
 export type NavIcon = (typeof NAV_ITEMS)[number]["icon"] | "ask";
 
 export function isActive(pathname: string, href: string): boolean {
+  // "/" is a prefix of every route, so it only ever matches exactly — as does "/cockpit",
+  // which would otherwise light up for all of its own children.
+  if (href === "/") return pathname === "/";
   return href === "/cockpit"
     ? pathname === "/cockpit"
     : pathname === href || pathname.startsWith(`${href}/`);

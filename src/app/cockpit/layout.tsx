@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
+import Link from "next/link";
+
 import { CockpitNav } from "@/components/cockpit/cockpit-nav";
 import { LiveRefresh } from "@/components/cockpit/live-refresh";
 import { ToneBadge } from "@/components/cockpit/primitives";
@@ -55,7 +57,7 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
   return (
     <div className="cx">
       <aside className="cx-rail">
-        <a className="cx-brand" href="/cockpit" aria-label="ICOS Control Center">
+        <Link className="cx-brand" href="/" aria-label="ICOS — accueil">
           <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden>
             <circle cx="16" cy="16" r="14" className="cx-brand__ring" />
             <circle cx="16" cy="16" r="6" className="cx-brand__core" />
@@ -68,7 +70,7 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
             <strong>ICOS</strong>
             <small>Control Center</small>
           </span>
-        </a>
+        </Link>
         <CockpitNav p0={p0} />
         <footer className="cx-rail__foot">
           <span className="cx-rail__user">{ctx.session.user.name ?? ctx.session.user.email}</span>
@@ -80,9 +82,9 @@ export default async function CockpitLayout({ children }: { children: ReactNode 
 
       <div className="cx-main">
         <header className="cx-top">
-          <a href="/cockpit" className="cx-top__brand" aria-label="ICOS home">
+          <Link href="/" className="cx-top__brand" aria-label="ICOS — accueil">
             ICOS
-          </a>
+          </Link>
           <span className="cx-top__health" title={snapshot.health.reasons.join("\n")}>
             <ToneBadge tone={tone} label={`System ${snapshot.health.level}`} />
           </span>
