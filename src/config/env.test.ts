@@ -6,12 +6,7 @@ import {
   isModelAllowed,
 } from "@/core/autonomy/model-allowlist";
 
-import {
-  loadEnv,
-  resolveAuthConfig,
-  resolveAutonomyBounds,
-  resolveSystemModelAllowlist,
-} from "./env";
+import { loadEnv, resolveAutonomyBounds, resolveSystemModelAllowlist } from "./env";
 
 describe("loadEnv", () => {
   it("traite les chaînes vides des variables optionnelles comme absentes", () => {
@@ -229,37 +224,4 @@ describe("pool de compute autorisé par le SYSTÈME (P0-F)", () => {
       resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "cheap,,other" })),
     ).toThrow(/MODEL_ALLOWLIST_INVALID/);
   });
-});
-
-describe("resolveAuthConfig trusted origins", () => {
-  const SECRET = "x".repeat(32);
-  const CANONICAL = "https://macbook.example.ts.net";
-
-  function resolve(trusted?: string) {
-    return resolveAuthConfig(
-      loadEnv({
-        BETTER_AUTH_SECRET: SECRET,
-        BETTER_AUTH_URL: CANONICAL,
-        ...(trusted === undefined ? {} : { ICOS_AUTH_TRUSTED_ORIGINS: trusted }),
-      }),
-    );
-  }
-
-  it("trusts the base origin alone when nothing else is approved", () => {
-    expect(resolve().trustedOrigins).toEqual([CANONICAL]);
-  });
-
-  it("adds explicitly approved origins without duplicating the base", () => {
-    expect(resolve(`http://localhost:3310, ${CANONICAL}`).trustedOrigins).toEqual([
-      CANONICAL,
-      "http://localhost:3310",
-    ]);
-  });
-
-  it.each(["*", "https://*.ts.net", "https://evil.test/path", "not-a-url"])(
-    "refuses the non-exact origin %s",
-    (entry) => {
-      expect(() => resolve(entry)).toThrow(/ICOS_AUTH_TRUSTED_ORIGINS/);
-    },
-  );
 });

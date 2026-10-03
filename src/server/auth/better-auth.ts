@@ -7,8 +7,6 @@ import { account, session, user, verification } from "@/server/database/auth-sch
 export interface BetterAuthConfig {
   secret: string;
   baseURL: string;
-  /** Origines approuvées, résolues en amont. Énumérées, jamais un joker. */
-  trustedOrigins?: string[];
 }
 
 /**
@@ -24,10 +22,6 @@ export function createBetterAuth(db: Database, config: BetterAuthConfig) {
   return betterAuth({
     secret: config.secret,
     baseURL: config.baseURL,
-    // Derrière un proxy TLS (tailscale serve) l'origine du navigateur n'est pas
-    // celle que Next connaît : sans cette liste, la connexion est refusée en 403
-    // avant toute validation d'identifiant.
-    trustedOrigins: config.trustedOrigins ?? [config.baseURL],
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: { user, session, account, verification },
