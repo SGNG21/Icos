@@ -137,7 +137,13 @@ export async function runGovernedWorker(prompt: string): Promise<string> {
     const root = workspaceRoot();
     const run = await runNonInteractive({
       command: "hermes",
-      args: ["-z", prompt, "--usage-file", usageFile],
+      /*
+       * `--no-restore-cwd` is load-bearing. Hermes otherwise chdirs to ITS OWN configured
+       * project on startup, which leaves the directory ICOS bound and is not in the
+       * sandbox profile — so the run reported the repository "not accessible" while
+       * sitting in a temp folder. The workspace ICOS declares must be the one it runs in.
+       */
+      args: ["-z", prompt, "--usage-file", usageFile, "--no-restore-cwd"],
       /*
        * The declared checkout IS the working directory, so `allowed_file_scope: ["."]`
        * means the repository rather than an empty temp folder.
