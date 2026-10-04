@@ -35,6 +35,16 @@ function install(access: Access) {
   }));
   const baseContainer = buildMemoryContainer();
   // We will set spies for the services we need in each test
+    const goalRepository = new (class implements GoalRepository {
+    create = vi.fn().mockResolvedValue(undefined);
+    list = vi.fn().mockResolvedValue([]);
+    getById = vi.fn().mockResolvedValue(null);
+    updateStatus = vi.fn().mockResolvedValue(undefined);
+    setConverted = vi.fn().mockResolvedValue(undefined);
+    setIdempotencyKey = vi.fn().mockResolvedValue(undefined);
+    getByIdempotencyKey = vi.fn().mockResolvedValue(null);
+  })() as GoalRepository;
+
   const container: Container = {
     ...baseContainer,
     auth: access === "no-auth-gateway" ? undefined : auth,
@@ -42,15 +52,9 @@ function install(access: Access) {
     taskExecution: { dispatch } as never,
     goalNormalizer: new GoalNormalizer(), // not used
     goalPlanner: new GoalPlanner(),
-    goalPreviewStore: new GoalPreviewStore(new class implements GoalRepository {
-      create = vi.fn().mockResolvedValue(undefined);
-      list = vi.fn().mockResolvedValue([]);
-      getById = vi.fn().mockResolvedValue(null);
-      updateStatus = vi.fn().mockResolvedValue(undefined);
-      setConverted = vi.fn().mockResolvedValue(undefined);
-      setIdempotencyKey = vi.fn().mockResolvedValue(undefined);
-      getByIdempotencyKey = vi.fn().mockResolvedValue(null);
-    } as GoalRepository),
+    goalPreviewStore: new GoalPreviewStore(goalRepository),
+    /* The route writes the goal's side of the link, so the container must expose it. */
+    goalRepository,
     mission: {
       // Mock mission repository with proper Mission return type
       list: vi.fn().mockResolvedValue([]),
@@ -65,6 +69,7 @@ function install(access: Access) {
       }),
       applyPlan: vi.fn().mockResolvedValue([]),
       findById: vi.fn().mockResolvedValue(null),
+      findByGoalId: vi.fn().mockResolvedValue(null),
       listTasks: vi.fn().mockResolvedValue([]),
       getMissionIdByTaskId: vi.fn().mockResolvedValue(null),
       getMissionTaskById: vi.fn().mockResolvedValue(null),
