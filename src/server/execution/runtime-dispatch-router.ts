@@ -1,4 +1,8 @@
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
+import {
+  orchestratorFor,
+  requireExecutionClass,
+} from "@/core/execution/execution-class";
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import type {
@@ -8,7 +12,22 @@ import type {
 } from "./ports";
 
 /**
- * Chooses the executor for a dispatch BY RUNTIME (M8, defect 22).
+ * Chooses the ORCHESTRATOR for a dispatch, from the execution class the caller declared.
+ *
+ * THE DEFECT THIS CLOSES. It used to choose by asking "does this worker's runtime have an
+ * external executor adapter configured?". That let executor CONFIGURATION decide
+ * orchestration: declaring `ICOS_WORKER_EXEC_COMMANDS` — done so `tools.governed` would
+ * stop reporting NOT_CONNECTED while hermes ran every mission — moved every `binary`
+ * worker off Temporal and into the in-process executor. Silently, with no code change,
+ * and durable multi-step mission work landed on a path that cannot survive a restart.
+ *
+ * Orchestrator and executor are now separate questions (`core/execution/execution-class`):
+ * the executor is configuration, the orchestrator is a property of the work. This reads
+ * the declaration and never infers it.
+ *
+ * (Historical note, kept because the reasoning still holds for the EXECUTOR: a worker
+ * KIND says what the worker is for and a PROVIDER says whose service answers — neither
+ * tells you how to start it. Worker != Runtime != Model != Provider.)
  *
  * WHY RUNTIME, AND ONLY RUNTIME
  * The runtime is what determines HOW something is executed: a `binary` worker is
@@ -58,12 +77,28 @@ export class RuntimeDispatchRouter implements TaskExecutionDispatcher {
     input: TaskExecutionDispatchInput,
     digitalosFacadePath?: string,
   ): Promise<TaskExecutionDispatchResult> {
-    const runtime = await this.runtimeOf(input);
+    /*
+     * Fail closed. An unclassified dispatch is a caller bug, and guessing would reinstate
+     * the silent switch — the dangerous direction being a durable mission task quietly
+     * taking the non-durable path.
+     */
+    const executionClass = requireExecutionClass(input.executionClass);
 
-    if (runtime && this.externalRuntimes.has(runtime)) {
+    if (orchestratorFor(executionClass) === "in_process") {
+      /*
+       * Still requires an adapter for the runtime: in-process execution that cannot
+       * actually launch anything must fail, not silently become a workflow.
+       */
+      const runtime = await this.runtimeOf(input);
+      if (!runtime || !this.externalRuntimes.has(runtime)) {
+        throw new Error(
+          `EXECUTION_IN_PROCESS_UNAVAILABLE: no executor adapter for runtime '${runtime ?? "unknown"}'`,
+        );
+      }
       return this.deps.external.dispatch(input, digitalosFacadePath);
     }
 
+    /* DURABLE_MISSION_TASK: the durable orchestrator, always. */
     return this.deps.fallback.dispatch(input, digitalosFacadePath);
   }
 

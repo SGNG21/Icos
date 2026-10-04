@@ -74,7 +74,18 @@ function harness(
   return { router, external, fallback };
 }
 
-const input = { taskId: "t1", prompt: "do work", workflowId: "wf-1" };
+/*
+ * These exercise adapter selection WITHIN the in-process class. The orchestrator itself
+ * is no longer inferred from adapters — see `execution-path-contract.test.ts` — so each
+ * dispatch declares its class, and what remains under test is that the runtime (never the
+ * worker kind or provider) decides whether this process can launch it.
+ */
+const input = {
+  taskId: "t1",
+  prompt: "do work",
+  workflowId: "wf-1",
+  executionClass: "INTERACTIVE_COMMAND",
+} as const;
 
 describe("M8 runtime dispatch router", () => {
   it("ROUTES TO THE EXTERNAL EXECUTOR when the worker's runtime has an adapter", async () => {
@@ -86,24 +97,29 @@ describe("M8 runtime dispatch router", () => {
     expect(h.fallback.dispatch).not.toHaveBeenCalled();
   });
 
-  it("FALLS BACK when the runtime has NO adapter", async () => {
-    /* `binary` is not configured here, so this process cannot launch it. */
+  it("REFUSES rather than silently becoming a workflow when the runtime has NO adapter", async () => {
+    /*
+     * `binary` is not configured here, so this process cannot launch it. It used to fall
+     * through to the durable dispatcher, which is how an interactive call could quietly
+     * become a workflow. Now it fails.
+     */
     const h = harness({ externalRuntimes: ["node"] });
 
-    await h.router.dispatch(input);
-
-    expect(h.fallback.dispatch).toHaveBeenCalledTimes(1);
+    await expect(h.router.dispatch(input)).rejects.toThrow("EXECUTION_IN_PROCESS_UNAVAILABLE");
+    expect(h.fallback.dispatch).not.toHaveBeenCalled();
     expect(h.external.dispatch).not.toHaveBeenCalled();
   });
 
-  it("NOTHING CONFIGURED means BEHAVIOUR IS EXACTLY AS BEFORE", async () => {
+  it("NOTHING CONFIGURED still runs MISSION work durably", async () => {
     /*
-     * The safety property that makes wiring this in non-negotiable to review: a
-     * deployment that has not opted in must be bit-for-bit unchanged.
+     * The old property was "a deployment that has not opted in is bit-for-bit
+     * unchanged", which held only while adapters chose the orchestrator. The orchestrator
+     * is now the declared class, so the honest version of that safety property is: an
+     * unconfigured deployment still runs mission work on the durable path.
      */
     const h = harness({ externalRuntimes: [] });
 
-    await h.router.dispatch(input);
+    await h.router.dispatch({ ...input, executionClass: "DURABLE_MISSION_TASK" });
 
     expect(h.fallback.dispatch).toHaveBeenCalledTimes(1);
     expect(h.external.dispatch).not.toHaveBeenCalled();
@@ -121,14 +137,16 @@ describe("M8 runtime dispatch router", () => {
     await asHermesKind.router.dispatch(input);
     expect(asHermesKind.external.dispatch).toHaveBeenCalledTimes(1);
 
-    /* Same kind, different runtime: now it must NOT go external. */
+    /* Same kind, different runtime: this process cannot launch it, so it refuses. */
     const sameKindOtherRuntime = harness({
       worker: worker({ workerKind: "hermes", runtime: "docker" }),
       externalRuntimes: ["binary"],
     });
-    await sameKindOtherRuntime.router.dispatch(input);
+    await expect(sameKindOtherRuntime.router.dispatch(input)).rejects.toThrow(
+      "EXECUTION_IN_PROCESS_UNAVAILABLE",
+    );
     expect(sameKindOtherRuntime.external.dispatch).not.toHaveBeenCalled();
-    expect(sameKindOtherRuntime.fallback.dispatch).toHaveBeenCalledTimes(1);
+    expect(sameKindOtherRuntime.fallback.dispatch).not.toHaveBeenCalled();
   });
 
   it("A PROVIDER IN METADATA CHANGES NOTHING", async () => {
@@ -141,23 +159,26 @@ describe("M8 runtime dispatch router", () => {
     expect(h.external.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("NO WORKFLOW ID, NO ATTEMPT or NO WORKER falls back rather than guessing", async () => {
+  it("AN UNRESOLVABLE RUNTIME refuses in-process rather than guessing", async () => {
+    /*
+     * Previously each of these fell through to the durable dispatcher. Under the class
+     * contract that would be the silent switch again, so an interactive command whose
+     * runtime cannot be resolved now fails instead.
+     */
     const noWorkflow = harness();
-    await noWorkflow.router.dispatch({ taskId: "t1", prompt: "p" });
-    expect(noWorkflow.fallback.dispatch).toHaveBeenCalledTimes(1);
+    await expect(
+      noWorkflow.router.dispatch({ taskId: "t1", prompt: "p", executionClass: "INTERACTIVE_COMMAND" }),
+    ).rejects.toThrow("EXECUTION_IN_PROCESS_UNAVAILABLE");
 
-    const noAttempt = harness({ attempt: null });
-    await noAttempt.router.dispatch(input);
-    expect(noAttempt.fallback.dispatch).toHaveBeenCalledTimes(1);
-
-    /* Routed to a worker that has since been deregistered: its runtime is unknowable. */
-    const noWorker = harness({ worker: null });
-    await noWorker.router.dispatch(input);
-    expect(noWorker.fallback.dispatch).toHaveBeenCalledTimes(1);
-
-    const unassigned = harness({ attempt: attempt({ workerId: undefined }) });
-    await unassigned.router.dispatch(input);
-    expect(unassigned.fallback.dispatch).toHaveBeenCalledTimes(1);
+    for (const h of [
+      harness({ attempt: null }),
+      /* Routed to a worker that has since been deregistered: its runtime is unknowable. */
+      harness({ worker: null }),
+      harness({ attempt: attempt({ workerId: undefined }) }),
+    ]) {
+      await expect(h.router.dispatch(input)).rejects.toThrow("EXECUTION_IN_PROCESS_UNAVAILABLE");
+      expect(h.fallback.dispatch).not.toHaveBeenCalled();
+    }
   });
 
   it("REPORTS which runtimes it will execute itself", () => {

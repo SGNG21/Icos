@@ -22,6 +22,7 @@ import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { executionPrompt } from "@/core/review/output-contract";
+import type { ExecutionClass } from "@/core/execution/execution-class";
 import type { ExecutionLeaseGrant } from "@/core/contracts/dispatch-attempt";
 import { DEFAULT_EXECUTION_LEASE_MS } from "@/server/execution/external-worker-task-execution-dispatcher";
 import {
@@ -47,6 +48,13 @@ function executionLeaseFor(attempt: { workflowId: string }): ExecutionLeaseGrant
     leaseMs: Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
   };
 }
+
+/**
+ * Everything the SUPERVISOR dispatches is mission work: a task in a DAG, with retries,
+ * review, correction and settlement. It must survive this process dying, so it is always
+ * orchestrated durably — never in-process, whatever executors happen to be configured.
+ */
+const MISSION_EXECUTION_CLASS: ExecutionClass = "DURABLE_MISSION_TASK";
 
 /** A task in one of these is finished; a leftover intent must not resurrect it. */
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
@@ -323,6 +331,7 @@ export class SupervisorService {
         signal?.throwIfAborted();
 
         const result = await this.dispatcher.dispatch({
+          executionClass: MISSION_EXECUTION_CLASS,
           missionId: attempt.missionId,
           taskId: attempt.taskId,
           taskTitle: (await this.missionRepository.getMissionTaskById(attempt.missionTaskId))
@@ -576,6 +585,7 @@ export class SupervisorService {
 
           // Prepare the dispatch input (without workflowId, as the coordinator will handle it)
           const dispatchInput = {
+            executionClass: MISSION_EXECUTION_CLASS,
             missionId: mission.id,
             taskId: task.taskId,
             taskTitle: task.title,
@@ -669,6 +679,7 @@ export class SupervisorService {
 
         try {
           const result = await this.dispatcher.dispatch({
+            executionClass: MISSION_EXECUTION_CLASS,
             missionId: mission.id,
             taskId: task.taskId,
             taskTitle: task.title,
@@ -705,6 +716,7 @@ export class SupervisorService {
       signal?.throwIfAborted();
 
       await this.dispatcher.dispatch({
+        executionClass: MISSION_EXECUTION_CLASS,
         missionId: mission.id,
         taskId: task.taskId,
         taskTitle: task.title,
