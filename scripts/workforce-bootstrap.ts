@@ -11,7 +11,6 @@
  * contient que des identifiants d'agents, de rôles et d'outils.
  */
 import { loadEnv } from "@/config/env";
-import { createPrincipalAuthority } from "@/server/workforce/principals";
 import { createContainer } from "@/server/container";
 
 async function main(): Promise<void> {
@@ -25,7 +24,13 @@ async function main(): Promise<void> {
     throw new Error("La workforce n'est pas composée sur ce conteneur.");
   }
 
-  const authority = createPrincipalAuthority();
+  /*
+   * The authority the COMPOSED workforce uses, not a fresh one. `isIssued` is a WeakSet
+   * membership test on the instance that issued the principal, so a second authority
+   * produces principals the service rejects as "non émis" — which is what made this
+   * command unrunnable.
+   */
+  const authority = { sessions: container.workforce.sessions };
   const ownerEmail = env.ICOS_OWNER_EMAIL;
   if (!ownerEmail) throw new Error("ICOS_OWNER_EMAIL est requis.");
   /*
@@ -62,6 +67,22 @@ async function main(): Promise<void> {
   );
   /* Un amorçage incomplet doit faire échouer la commande : un succès partiel n'en est pas un. */
   if (!report.complete) process.exitCode = 1;
+
+  /*
+   * Sortir EXPLICITEMENT. Le conteneur garde un pool PostgreSQL et des minuteurs ouverts,
+   * donc le processus restait vivant après avoir imprimé son rapport : la commande ne
+   * rendait jamais la main et bloquait tout appel automatisé. Tout le travail est terminé
+   * et affiché à ce point.
+   */
+  process.exit(process.exitCode ?? 0);
 }
 
-await main();
+/*
+ * Not a top-level await: tsx transforms these scripts to CJS, where one is a transform
+ * error, so `pnpm workforce:bootstrap` could not run at all. Same shape as the other
+ * scripts in here — a rejected bootstrap must still exit non-zero.
+ */
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : "WORKFORCE_BOOTSTRAP_FAILED");
+  process.exit(1);
+});

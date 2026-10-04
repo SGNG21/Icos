@@ -417,6 +417,13 @@ export class InMemoryMissionRepository implements MissionRepository {
     return this.missions.get(id) ?? null;
   }
 
+  async findByGoalId(goalId: string): Promise<Mission | null> {
+    for (const mission of this.missions.values()) {
+      if (mission.goalId === goalId) return mission;
+    }
+    return null;
+  }
+
   async listTasks(missionId: string): Promise<MissionTask[]> {
     const tasks: MissionTask[] = [];
     for (const task of this.missionTasks.values()) {

@@ -818,6 +818,38 @@ export class PostgresMissionRepository implements MissionRepository {
     ];
   }
 
+  async findByGoalId(goalId: string): Promise<Mission | null> {
+    const mission = await this.db
+      .select({
+        id: missions.id,
+        title: missions.title,
+        objective: missions.objective,
+        status: missions.status,
+        createdAt: missions.createdAt,
+        updatedAt: missions.updatedAt,
+        goalId: missions.goalId,
+        planId: missions.planId,
+      })
+      .from(missions)
+      .where(eq(missions.goalId, goalId))
+      .limit(1);
+
+    if (!mission[0]) {
+      return null;
+    }
+
+    return {
+      id: mission[0].id,
+      title: mission[0].title,
+      objective: mission[0].objective,
+      status: mission[0].status as MissionStatus,
+      goalId: mission[0].goalId ?? undefined,
+      planId: mission[0].planId ?? undefined,
+      createdAt: mission[0].createdAt,
+      updatedAt: mission[0].updatedAt,
+    };
+  }
+
   async findById(id: string): Promise<Mission | null> {
     const mission = await this.db
       .select({

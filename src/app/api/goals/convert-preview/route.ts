@@ -192,16 +192,49 @@ export async function POST(request: Request): Promise<Response> {
       capability: task.capability ?? null,
     }));
 
-    // Create the mission.
+    /*
+     * A goal converts to AT MOST ONE mission, and both sides of the link are persisted:
+     * `missions.goal_id` at insert, `goals."resultingMissionId"` immediately after.
+     *
+     * Those are two rows, so a crash or a concurrent caller can land between them. This
+     * reads the existing mission FIRST, which makes a retry idempotent and also repairs the
+     * half-written state (mission created, goal never marked) by completing the second
+     * write instead of creating a duplicate. The database refuses the duplicate outright
+     * (unique index `missions_goal_id_unique`), so a race loses the insert rather than
+     * producing two missions for one goal, and the loser adopts the winner's mission.
+     */
     const missionService = new MissionService(container.mission);
-    const mission = await missionService.createMission({
-      title: preview.missionTitle,
-      objective: preview.missionObjective,
-      goalId: preview.goalId,
-      tasks: missionTasksInput,
-    });
 
-    // Return the created mission.
+    const already = await container.mission.findByGoalId(preview.goalId);
+    if (already) {
+      await container.goalRepository.setConverted(preview.goalId, already.id);
+      return json({ mission: already });
+    }
+
+    let mission;
+    try {
+      mission = await missionService.createMission({
+        title: preview.missionTitle,
+        objective: preview.missionObjective,
+        goalId: preview.goalId,
+        tasks: missionTasksInput,
+      });
+    } catch (error) {
+      // Lost the race: the unique index refused our insert, so adopt the winner's mission.
+      const winner = await container.mission.findByGoalId(preview.goalId);
+      if (!winner) throw error;
+      await container.goalRepository.setConverted(preview.goalId, winner.id);
+      return json({ mission: winner });
+    }
+
+    /*
+     * The second side. NOT swallowed: if this fails the goal stays `pending` while its
+     * mission exists, and the next convert repairs it through the lookup above. Reporting
+     * success here would tell the owner the goal is converted when its own row says it is
+     * not — the exact state this endpoint was shipped with.
+     */
+    await container.goalRepository.setConverted(preview.goalId, mission.id);
+
     return json({ mission });
   } catch (error) {
     // TODO: better error handling

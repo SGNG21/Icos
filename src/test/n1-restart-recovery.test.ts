@@ -92,6 +92,13 @@ class MockMissionRepository implements MissionRepository {
     return this.missions.get(id) ?? null;
   }
 
+  async findByGoalId(goalId: string) {
+    for (const mission of this.missions.values()) {
+      if (mission.goalId === goalId) return mission;
+    }
+    return null;
+  }
+
   async list(filter?: { status?: Mission["status"] }) {
     const missions = Array.from(this.missions.values());
     if (filter?.status) {

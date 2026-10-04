@@ -72,6 +72,12 @@ export interface MissionRepository {
   ): Promise<AutonomousPlan[]>;
 
   findById(id: string): Promise<Mission | null>;
+  /**
+   * The mission a goal converted to, if it already has one. A goal converts at most once
+   * (unique index `missions_goal_id_unique`), so this both makes conversion idempotent and
+   * recovers the half-written state where the mission exists but the goal was never marked.
+   */
+  findByGoalId(goalId: string): Promise<Mission | null>;
   list(filter?: { status?: Mission["status"] }): Promise<Mission[]>;
   listTasks(missionId: string): Promise<MissionTask[]>;
   getMissionIdByTaskId(taskId: string): Promise<string | null>;
