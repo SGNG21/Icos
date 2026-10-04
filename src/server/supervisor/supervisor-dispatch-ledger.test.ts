@@ -4,6 +4,7 @@ import { buildMemoryContainer } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { InMemoryDispatchAttemptRepository } from "@/server/services/in-memory/dispatch-attempt-repository";
 import type { TaskExecutionDispatcher, TaskExecutionDispatchInput } from "@/server/execution/ports";
+import { executionPrompt } from "@/core/review/output-contract";
 
 describe("Supervisor N2.3 durable dispatch ledger", () => {
   it("prepare l'intention avant le dispatch et la marque dispatched après succès", async () => {
@@ -47,7 +48,7 @@ describe("Supervisor N2.3 durable dispatch ledger", () => {
       expect.objectContaining({
         missionId: mission.id,
         taskTitle: "A",
-        prompt: "A",
+        prompt: executionPrompt("A"),
         workerKind: "agent",
       }),
     );
@@ -98,7 +99,7 @@ describe("Supervisor N2.3 durable dispatch ledger", () => {
       taskId: task.taskId,
       attempt: 1,
       workflowId,
-      prompt: "A",
+      prompt: executionPrompt("A"),
       workerKind: "agent",
     });
 

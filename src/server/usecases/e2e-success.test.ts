@@ -17,6 +17,7 @@ import { FakeReviewer } from "@/server/review/fake-reviewer";
 import { DeterministicReviewer } from "@/server/review/deterministic-reviewer";
 import { CompositeTaskExecutionDispatcher } from "@/server/execution/composite-task-execution-dispatcher";
 import { InMemoryTaskExecutionResultRepository } from "@/server/services/in-memory/task-execution-result-repository";
+import { executionPrompt } from "@/core/review/output-contract";
 // Mock node:crypto to return sequential UUIDs
 const uuids = [
   "mission-id", // mission id
@@ -201,7 +202,7 @@ describe("E2E success scenario", () => {
         missionId,
         taskId: taskA.taskId, // Use canonical taskId, not MissionTask.id
         taskTitle: taskA.title,
-        prompt: taskA.description || taskA.title,
+        prompt: executionPrompt(taskA.description || taskA.title),
         workerKind: taskA.workerKind || undefined,
         capability: undefined,
         digitalosFacadePath: undefined,

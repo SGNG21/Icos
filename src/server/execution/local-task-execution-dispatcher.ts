@@ -55,8 +55,15 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
     let error: ExecutionError | undefined;
 
     try {
-      if (prompt.startsWith("WRITE_FILE:")) {
-        const rest = prompt.substring("WRITE_FILE:".length);
+      /*
+       * A directive ends at its LINE. The dispatched prompt now carries the reviewer's
+       * output contract after the objective, and taking the rest of the prompt as content
+       * wrote that contract into the file too.
+       */
+      const directive = prompt.split("\n", 1)[0] ?? prompt;
+
+      if (directive.startsWith("WRITE_FILE:")) {
+        const rest = directive.substring("WRITE_FILE:".length);
         const [filepath, ...contentParts] = rest.split(":");
         const content = contentParts.join(":"); // allow colons in content
         if (!filepath) {
@@ -66,8 +73,8 @@ export class LocalTaskExecutionDispatcher implements TaskExecutionDispatcher {
         await mkdir(join("/tmp/icos", filepath, ".."), { recursive: true });
         await writeFile(fullPath, content, "utf8");
         output = `Wrote ${content.length} bytes to ${fullPath}`;
-      } else if (prompt.startsWith("ECHO:")) {
-        output = prompt.substring("ECHO:".length);
+      } else if (directive.startsWith("ECHO:")) {
+        output = directive.substring("ECHO:".length);
       } else {
         // Default: treat as echo
         output = `Echo: ${prompt}`;

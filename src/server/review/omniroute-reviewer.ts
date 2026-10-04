@@ -242,6 +242,11 @@ export function reviewerSystemPrompt(): string {
      * correct change because it looked for the worker's file in the wrong repository and
      * reported it missing. What a reviewer cannot see is not evidence of absence.
      */
+    /*
+     * The worker is given this same contract (EXECUTION_OUTPUT_CONTRACT), so "the context
+     * is insufficient" is now a real finding about this result rather than a standing
+     * consequence of never having asked for evidence.
+     */
     "Judge ONLY from the review context in this prompt. You have no access to any repository,",
     "branch, commit or file: do not attempt to inspect one, and never treat something you",
     "cannot see as missing. If the context is insufficient to decide, say so in reasons.",

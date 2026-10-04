@@ -12,6 +12,7 @@ import { ReviewerServiceImpl } from "@/server/review/reviewer-service";
 // We need to cast to InMemoryMissionRepository to update dependsOn
 import { InMemoryMissionRepository } from "@/server/services/in-memory/mission-repository";
 import type { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-durable-memory";
+import { executionPrompt } from "@/core/review/output-contract";
 
 // Mock node:crypto to return sequential UUIDs
 const uuids = [
@@ -183,7 +184,7 @@ describe("E2E failure scenario", () => {
         missionId,
         taskId: internalTaskIdA, // internal task ID
         taskTitle: missionTaskA.title,
-        prompt: missionTaskA.description || missionTaskA.title,
+        prompt: executionPrompt(missionTaskA.description || missionTaskA.title),
         workerKind: missionTaskA.workerKind || undefined,
         capability: missionTaskA.capability || undefined,
       }),
@@ -249,7 +250,7 @@ describe("E2E failure scenario", () => {
         missionId,
         taskId: internalTaskIdB, // internal task ID
         taskTitle: missionTaskB.title,
-        prompt: missionTaskB.description || missionTaskB.title,
+        prompt: executionPrompt(missionTaskB.description || missionTaskB.title),
         workerKind: missionTaskB.workerKind || undefined,
         capability: missionTaskB.capability || undefined,
       }),

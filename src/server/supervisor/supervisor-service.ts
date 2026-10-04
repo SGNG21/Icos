@@ -21,6 +21,7 @@ import { computeReadyTasks } from "@/server/supervisor/readiness";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { executionPrompt } from "@/core/review/output-contract";
 import {
   decideWorkspaceAllocation,
   requiresGovernedWorkspace,
@@ -391,7 +392,11 @@ export class SupervisorService {
       if (routing.deferred) continue;
       const routedWorkerKind = routing.workerKind ?? task.workerKind ?? undefined;
 
-      const prompt = task.description || task.title;
+      /*
+       * The objective PLUS the output contract the reviewer will apply. Sending the bare
+       * description meant the worker was judged against a rubric it had never been shown.
+       */
+      const prompt = executionPrompt(task.description || task.title);
 
       /*
        * GOVERNED WORKSPACE ALLOCATION (M9, defect 23).

@@ -32,11 +32,14 @@
     "compute:probe": "tsx scripts/compute-probe.ts",
     "voice:serve": "tsx scripts/voice-server.ts",
     "workforce:bootstrap": "tsx scripts/workforce-bootstrap.ts",
-    "certify:gateway": "tsx scripts/certify-execution-gateway.ts"
+    "certify:gateway": "tsx scripts/certify-execution-gateway.ts",
+    "worker:temporal": "tsx scripts/temporal-worker.ts"
   },
   "dependencies": {
     "@temporalio/client": "^1.23.0",
     "@temporalio/common": "1.23.0",
+    "@temporalio/worker": "1.23.0",
+    "@temporalio/workflow": "1.23.0",
     "better-auth": "1.6.23",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^1.47.0",
