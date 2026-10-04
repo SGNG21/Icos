@@ -160,7 +160,7 @@ describe("Phase 7C — crash/restart recovery (PostgreSQL, icos_test_7c)", () =>
           signal,
         });
         if (result.workflowId !== prepared.workflowId) throw new Error("ACK_MISMATCH");
-        await dispatchAttempts.markDispatched(prepared.id);
+        await dispatchAttempts.markDispatched(prepared.id, { owner: "test-owner", leaseMs: 60_000 });
       },
     });
     const wakeup = new AutonomyWakeupService(missions, supervisor, runtime, undefined, planner);

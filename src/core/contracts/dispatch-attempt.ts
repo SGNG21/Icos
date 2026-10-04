@@ -145,6 +145,12 @@ export type AuthorizeDispatchStartResult =
       message: string;
     };
 
+/** Who owns a dispatched execution, and for how long. Both required. */
+export interface ExecutionLeaseGrant {
+  readonly owner: string;
+  readonly leaseMs: number;
+}
+
 export interface DispatchAttemptRepository {
   /**
    * Atomically:
@@ -187,7 +193,19 @@ export interface DispatchAttemptRepository {
    */
   releaseClaim(id: string, ownerToken: string): Promise<void>;
 
-  markDispatched(id: string): Promise<void>;
+  /**
+   * DISPATCHED implies a FINITE LEASE, in one atomic write.
+   *
+   * An attempt used to enter `dispatched` with a null lease, and nothing could ever
+   * reclaim it: `listAbandonedExecutions` needs an expiry to call a runner dead, and the
+   * orphan scan can only ask a workflow probe — which answers "running" for ever when a
+   * workflow sits on a task queue no worker consumes. Nineteen such rows each pinned a
+   * worker of concurrency 1 until no capacity was left.
+   *
+   * The lease is therefore part of the transition rather than a later call a caller may
+   * forget, and it is REQUIRED so that forgetting it does not typecheck.
+   */
+  markDispatched(id: string, lease: ExecutionLeaseGrant): Promise<void>;
 
   markFailed(id: string, message: string): Promise<void>;
 

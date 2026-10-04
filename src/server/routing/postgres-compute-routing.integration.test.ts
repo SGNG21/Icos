@@ -242,7 +242,7 @@ describe("DECISION 0054 on PostgreSQL", () => {
     const { ledger, supervisor } = restart();
     await supervisor.run(MISSION_ID);
     const attempt = (await ledger.getByWorkflowId(workflowIdForAttempt(TASK, 1)))!;
-    await ledger.markDispatched(attempt.id);
+    await ledger.markDispatched(attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await ledger.markCompletedByWorkflowId(attempt.workflowId, 1234);
     await seed.handle.db.insert(decisions).values({
       id: "review-1",
@@ -273,7 +273,7 @@ describe("DECISION 0054 on PostgreSQL", () => {
     const { ledger, supervisor, router } = restart();
     await supervisor.run(MISSION_ID);
     const a1 = (await ledger.getByWorkflowId(workflowIdForAttempt(TASK, 1)))!;
-    await ledger.markDispatched(a1.id);
+    await ledger.markDispatched(a1.id, { owner: "test-owner", leaseMs: 60_000 });
     expect(await ledger.acquireExecutionLease(a1.id, "runner-1", 60_000)).toBe(true);
     await ledger.recordExecutionFailure(a1.id, {
       failureClass: "EXECUTION_TIMEOUT",

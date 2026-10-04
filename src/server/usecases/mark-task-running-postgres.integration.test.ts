@@ -183,7 +183,7 @@ describe("markTaskRunning integration with PostgreSQL", () => {
       workflowId: "icos-task-task-can-1",
       prompt: "first",
     });
-    await dispatchAttemptsRepository.markDispatched(first.attempt.id);
+    await dispatchAttemptsRepository.markDispatched(first.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     const second = await dispatchAttemptsRepository.prepare({
       missionId: "mission-1",
       missionTaskId: "mission-task-1",
@@ -192,7 +192,7 @@ describe("markTaskRunning integration with PostgreSQL", () => {
       workflowId: "icos-task-task-can-1-attempt-2",
       prompt: "second",
     });
-    await dispatchAttemptsRepository.markDispatched(second.attempt.id);
+    await dispatchAttemptsRepository.markDispatched(second.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     expect(
       await markTaskRunning(
@@ -218,7 +218,7 @@ describe("markTaskRunning integration with PostgreSQL", () => {
       workflowId: "icos-task-task-can-1",
       prompt: "first",
     });
-    await dispatchAttemptsRepository.markDispatched(first.attempt.id);
+    await dispatchAttemptsRepository.markDispatched(first.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     let markEntered!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -263,7 +263,7 @@ describe("markTaskRunning integration with PostgreSQL", () => {
       workflowId: "icos-task-task-can-1",
       prompt: "first",
     });
-    await dispatchAttemptsRepository.markDispatched(prepared.attempt.id);
+    await dispatchAttemptsRepository.markDispatched(prepared.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     const processB = new PostgresDispatchAttemptRepository(db.db);
 
     const results = await Promise.all([

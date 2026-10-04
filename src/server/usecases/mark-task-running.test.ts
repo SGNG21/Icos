@@ -36,7 +36,7 @@ async function dispatchFixture() {
     workflowId: `icos-task-${missionTask.taskId}`,
     prompt: missionTask.title,
   });
-  await dispatchAttempts.markDispatched(first.attempt.id);
+  await dispatchAttempts.markDispatched(first.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
   return { tasks, missions, mission, missionTask, dispatchAttempts, first };
 }
 
@@ -109,7 +109,7 @@ describe("markTaskRunning", () => {
       workflowId: `${f.first.attempt.workflowId}-attempt-2`,
       prompt: "retry",
     });
-    await f.dispatchAttempts.markDispatched(second.attempt.id);
+    await f.dispatchAttempts.markDispatched(second.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     const stale = await markTaskRunning(
       { tasks: f.tasks, dispatchAttempts: f.dispatchAttempts },

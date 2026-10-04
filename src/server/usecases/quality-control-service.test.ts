@@ -56,7 +56,7 @@ async function fixture(
     workerKind: missionTask.workerKind ?? undefined,
     capability: missionTask.capability ?? undefined,
   });
-  await dispatchAttempts.markDispatched(original.attempt.id);
+  await dispatchAttempts.markDispatched(original.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
   await tasks.transition(missionTask.taskId, "running");
 
   let responseIndex = 0;
@@ -99,7 +99,7 @@ async function fixture(
     qualityJobs,
     dispatchPrepared: async (attempt) => {
       dispatched.push(attempt.workflowId);
-      await dispatchAttempts.markDispatched(attempt.id);
+      await dispatchAttempts.markDispatched(attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     },
   });
 

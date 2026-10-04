@@ -126,7 +126,7 @@ describe("Phase 6 — autonomous E2E (PostgreSQL, icos_n23_probe)", () => {
         if (result.workflowId !== prepared.workflowId) {
           throw new Error("DISPATCH_ACKNOWLEDGEMENT_ID_MISMATCH");
         }
-        await dispatchAttempts.markDispatched(prepared.id);
+        await dispatchAttempts.markDispatched(prepared.id, { owner: "test-owner", leaseMs: 60_000 });
       },
     });
 

@@ -14,6 +14,7 @@ import type { MissionRepository } from "@/server/mission/ports";
 import type { TaskRepository } from "@/server/repositories/ports";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import { canTransition } from "@/core/tasks/lifecycle";
+import type { ExecutionLeaseGrant } from "@/core/contracts/dispatch-attempt";
 
 export class InMemoryDispatchAttemptRepository implements DispatchAttemptRepository {
   private readonly attempts = new Map<string, DispatchAttempt>();
@@ -437,7 +438,13 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
     return true;
   }
 
-  async markDispatched(id: string): Promise<void> {
+  async markDispatched(id: string, lease: ExecutionLeaseGrant): Promise<void> {
+    if (!Number.isFinite(lease.leaseMs) || lease.leaseMs <= 0) {
+      throw new Error("EXECUTION_LEASE_INVALID_LEASE");
+    }
+    if (!lease.owner) {
+      throw new Error("EXECUTION_LEASE_INVALID_OWNER");
+    }
     this.recoveryClaims.delete(id);
 
     const attempt = this.attempts.get(id);
@@ -454,6 +461,12 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       dispatchedAt: now,
       updatedAt: now,
       lastError: undefined,
+    });
+
+    /* Same invariant as PostgreSQL: dispatched is never leaseless. */
+    this.executionLeases.set(id, {
+      owner: lease.owner,
+      until: now.getTime() + lease.leaseMs,
     });
   }
 

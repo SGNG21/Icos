@@ -22,12 +22,31 @@ import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { executionPrompt } from "@/core/review/output-contract";
+import type { ExecutionLeaseGrant } from "@/core/contracts/dispatch-attempt";
+import { DEFAULT_EXECUTION_LEASE_MS } from "@/server/execution/external-worker-task-execution-dispatcher";
 import {
   decideWorkspaceAllocation,
   requiresGovernedWorkspace,
   workspaceSlug,
   type WorkspaceAllocationDecision,
 } from "./workspace-allocation-policy";
+
+/**
+ * The lease a dispatched attempt carries.
+ *
+ * The OWNER is the workflow id: it is what actually holds the execution, it is already
+ * the idempotency key the completion callback settles on, and a restarted runner for the
+ * same workflow renews rather than collides. The duration is the deployment's execution
+ * lease, so an attempt whose runner dies becomes reclaimable by the existing
+ * `listAbandonedExecutions` scan once it lapses — nothing new is introduced.
+ */
+function executionLeaseFor(attempt: { workflowId: string }): ExecutionLeaseGrant {
+  const configured = Number(loadEnv().ICOS_WORKER_EXECUTION_LEASE_MS);
+  return {
+    owner: attempt.workflowId,
+    leaseMs: Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
+  };
+}
 
 /** A task in one of these is finished; a leftover intent must not resurrect it. */
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
@@ -310,7 +329,7 @@ export class SupervisorService {
 
         signal?.throwIfAborted();
 
-        await this.dispatchAttempts.markDispatched(attempt.id);
+        await this.dispatchAttempts.markDispatched(attempt.id, executionLeaseFor(attempt));
       } catch (error) {
         // Leave PREPARED for transport/runtime failures so a later recovery
         // can safely retry the same logical dispatch.
@@ -567,7 +586,10 @@ export class SupervisorService {
             task.taskId,
             dispatchInput,
           );
-          await this.dispatchAttempts.markDispatched(prepared.attempt.id);
+          await this.dispatchAttempts.markDispatched(
+            prepared.attempt.id,
+            executionLeaseFor(prepared.attempt),
+          );
 
           // Update task status based on coordinator result
           /* Awaiting review OR awaiting integration: in flight, workspace kept (0049). */
@@ -652,7 +674,7 @@ export class SupervisorService {
 
           signal?.throwIfAborted();
 
-          await this.dispatchAttempts.markDispatched(attempt.id);
+          await this.dispatchAttempts.markDispatched(attempt.id, executionLeaseFor(attempt));
         } catch (error) {
           // Important: do NOT convert to failed here.
           // If the process/transport dies after Temporal accepted the workflow

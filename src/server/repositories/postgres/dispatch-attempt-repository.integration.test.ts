@@ -113,7 +113,7 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
     });
 
     expect(attempt.acquired).toBe(true);
-    await repo.markDispatched(attempt.attempt.id);
+    await repo.markDispatched(attempt.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     const stored = await repo.getByWorkflowId("icos-task-task-a");
 
@@ -134,7 +134,7 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
     };
     const winner = await repo.prepare(input);
     expect(winner.acquired).toBe(true);
-    await repo.markDispatched(winner.attempt.id);
+    await repo.markDispatched(winner.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     // The winner's worker has started: state must not be pushed back to queued.
     await handle.db.update(missionTasks).set({ status: "running" }).where(sql`id = 'mission-task-a'`);
     await handle.db.update(tasks).set({ status: "running" }).where(sql`id = 'task-a'`);
@@ -160,7 +160,7 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
       prompt: "A",
     };
     const winner = await repo.prepare(input);
-    await repo.markDispatched(winner.attempt.id);
+    await repo.markDispatched(winner.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await repo.markCompletedByWorkflowId(input.workflowId);
 
     expect(await repo.prepare(input)).toMatchObject({
@@ -183,8 +183,8 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
       prompt: "A",
     });
 
-    await repo.markDispatched(prepared.attempt.id);
-    await repo.markDispatched(prepared.attempt.id);
+    await repo.markDispatched(prepared.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
+    await repo.markDispatched(prepared.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await repo.markCompletedByWorkflowId("icos-task-task-a");
     await repo.markCompletedByWorkflowId("icos-task-task-a");
 
@@ -204,7 +204,7 @@ describe("PostgresDispatchAttemptRepository N2.3", () => {
       workflowId: "icos-task-task-a",
       prompt: "A",
     });
-    await repo.markDispatched(first.attempt.id);
+    await repo.markDispatched(first.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     const second = await repo.prepare({
       missionId: "mission-a",

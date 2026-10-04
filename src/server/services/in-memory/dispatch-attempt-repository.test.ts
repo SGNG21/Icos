@@ -85,7 +85,7 @@ describe("InMemoryDispatchAttemptRepository.prepare", () => {
   it("ferme les anciennes tentatives lorsque la suivante devient autoritative", async () => {
     const f = await fixture();
     const first = await f.repository.prepare(f.input);
-    await f.repository.markDispatched(first.attempt.id);
+    await f.repository.markDispatched(first.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     const second = await f.repository.prepare({
       ...f.input,
@@ -151,7 +151,7 @@ describe("InMemoryDispatchAttemptRepository.prepare", () => {
   it("converges idempotently on an attempt already dispatched by a concurrent supervisor", async () => {
     const f = await fixture();
     const winner = await f.repository.prepare(f.input);
-    await f.repository.markDispatched(winner.attempt.id);
+    await f.repository.markDispatched(winner.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await f.missions.updateMissionTaskStatus(f.input.missionId, f.input.missionTaskId, "running");
 
     const loser = await f.repository.prepare(f.input);
@@ -164,7 +164,7 @@ describe("InMemoryDispatchAttemptRepository.prepare", () => {
   it("still rejects the same attempt with a foreign workflowId", async () => {
     const f = await fixture();
     const winner = await f.repository.prepare(f.input);
-    await f.repository.markDispatched(winner.attempt.id);
+    await f.repository.markDispatched(winner.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await expect(
       f.repository.prepare({ ...f.input, workflowId: "icos-task-other" }),
     ).rejects.toThrow("DISPATCH_ATTEMPT_CONFLICT");

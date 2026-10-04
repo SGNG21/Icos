@@ -186,7 +186,7 @@ function restart() {
       if (result.workflowId !== prepared.workflowId) {
         throw new Error("DISPATCH_ACKNOWLEDGEMENT_ID_MISMATCH");
       }
-      await ledger.markDispatched(prepared.id);
+      await ledger.markDispatched(prepared.id, { owner: "test-owner", leaseMs: 60_000 });
     },
   });
 
@@ -301,7 +301,7 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       workerId: firstWorker,
       capability: CAPABILITY,
     });
-    await boot.ledger.markDispatched(attempt1.attempt.id);
+    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
 
     /* ---- 2. THE FAULT: the worker hangs and is really killed. ---- */
     await boot.dispatcher.dispatch({
@@ -470,7 +470,7 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       workerId: WORKER_A,
       capability: CAPABILITY,
     });
-    await boot.ledger.markDispatched(attempt1.attempt.id);
+    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await boot.dispatcher.dispatch({
       missionId: MISSION_ID,
       taskId: TASK_ID,

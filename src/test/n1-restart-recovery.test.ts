@@ -628,7 +628,7 @@ describe('SupervisorService - CORRECTION RESTART', () => {
       workflowId: initialWorkflowId,
       prompt: task.description ?? task.title,
     });
-    await dispatchAttempts.markDispatched(original.attempt.id);
+    await dispatchAttempts.markDispatched(original.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await taskRepository.transition(canonicalTaskId, 'running');
 
     // The execution result must exist before mission-level review.

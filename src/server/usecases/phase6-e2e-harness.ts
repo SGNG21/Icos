@@ -27,6 +27,7 @@ import { recordMissionTaskExecution } from "@/server/usecases/record-mission-tas
 import { AutonomyWakeupService } from "@/server/autonomy/autonomy-wakeup-service";
 import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-sweeper";
 import { loadEnv } from "@/config/env";
+import { DEFAULT_EXECUTION_LEASE_MS } from "@/server/execution/external-worker-task-execution-dispatcher";
 
 /**
  * Phase 6 — Deterministic autonomous E2E harness.
@@ -240,7 +241,10 @@ export function createHarness(options: HarnessOptions) {
       throw new Error("DISPATCH_ACKNOWLEDGEMENT_ID_MISMATCH");
     }
     signal?.throwIfAborted();
-    await dispatchAttempts.markDispatched(prepared.id);
+    await dispatchAttempts.markDispatched(prepared.id, {
+      owner: prepared.workflowId,
+      leaseMs: DEFAULT_EXECUTION_LEASE_MS,
+    });
   };
 
   const qualityControl = new QualityControlService({

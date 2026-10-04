@@ -94,7 +94,7 @@ describe("PostgreSQL durable quality control", () => {
       prompt: missionTask.description ?? missionTask.title,
       workerKind: "hermes",
     });
-    await container.dispatchAttempts.markDispatched(prepared.attempt.id);
+    await container.dispatchAttempts.markDispatched(prepared.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     const recorded = await container.executionResults.record({
       taskId: missionTask.taskId,
       workflowId,

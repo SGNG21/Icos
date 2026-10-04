@@ -12,6 +12,7 @@ import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 
 import { reviewExecution } from "./review-execution";
 import { saveMissionCheckpoint } from "./save-mission-checkpoint";
+import { DEFAULT_EXECUTION_LEASE_MS } from "@/server/execution/external-worker-task-execution-dispatcher";
 
 export interface RecordMissionTaskExecutionInput {
   missionId: string;
@@ -113,6 +114,24 @@ export async function recordMissionTaskExecution(
     throw new Error(`MissionTask inconnue pour la tâche canonique : ${input.taskId}`);
   }
 
+  /*
+   * SETTLE THE ATTEMPT AS SOON AS ITS RESULT IS DURABLE — before review, and on every
+   * branch.
+   *
+   * It used to happen after the review gate, and the quality-control branch below returns
+   * without reaching it at all. So a worker that really finished kept its attempt in
+   * `dispatched`, holding a slot on a worker of concurrency 1, whenever review could not
+   * complete — which is how nineteen finished executions (fifteen of them successful) ate
+   * the whole fleet's capacity until nothing could be dispatched.
+   *
+   * Whether the work was any good is review's question. Whether the worker is still busy
+   * is not, and capacity must not be hostage to it. Idempotent by workflowId, so a replay
+   * settles nothing twice.
+   */
+  if (deps.dispatchAttempts) {
+    await deps.dispatchAttempts.markCompletedByWorkflowId(input.workflowId);
+  }
+
   if (deps.qualityControl) {
     await deps.qualityControl.registerExecution({
       missionId: input.missionId,
@@ -151,12 +170,6 @@ export async function recordMissionTaskExecution(
   if (!reviewResult.ok) {
     // No terminal state and no supervisor run: callback replay can retry review.
     throw new Error(`[REVIEW] ${reviewResult.message}`);
-  }
-
-  // The worker execution is durably complete once its persisted result has
-  // passed the review lookup. This operation is idempotent by workflowId.
-  if (deps.dispatchAttempts) {
-    await deps.dispatchAttempts.markCompletedByWorkflowId(input.workflowId);
   }
 
   switch (reviewResult.review.decision) {
@@ -239,7 +252,11 @@ export async function recordMissionTaskExecution(
           workerKind: missionTask.workerKind ?? undefined,
           capability: missionTask.capability ?? undefined,
         });
-        await deps.dispatchAttempts.markDispatched(prepared.attempt.id);
+        await deps.dispatchAttempts.markDispatched(prepared.attempt.id, {
+          /* Same rule as the supervisor: the workflow owns the execution it carries. */
+          owner: prepared.attempt.workflowId,
+          leaseMs: DEFAULT_EXECUTION_LEASE_MS,
+        });
       } catch (error) {
         throw error;
       }

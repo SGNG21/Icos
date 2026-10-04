@@ -84,7 +84,7 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     capability: CAPABILITY,
     workerId: WORKER_A,
   });
-  await dispatchAttempts.markDispatched(original.attempt.id);
+  await dispatchAttempts.markDispatched(original.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
   await tasks.transition(missionTask.taskId, "running");
 
   const reviewer: ReviewerService = {
@@ -130,7 +130,7 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     capabilityRouter: options.withRouter === false ? undefined : capabilityRouter,
     dispatchPrepared: async (attempt) => {
       dispatched.push(attempt.workflowId);
-      await dispatchAttempts.markDispatched(attempt.id);
+      await dispatchAttempts.markDispatched(attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     },
   });
 

@@ -9,6 +9,7 @@ import {
   type PrepareDispatchAttemptResult,
   type RecordExecutionFailureInput,
   type ResumableAttemptState,
+  type ExecutionLeaseGrant,
 } from "@/core/contracts/dispatch-attempt";
 import type { AuditEntry } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
@@ -459,7 +460,13 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
       );
   }
 
-  async markDispatched(id: string): Promise<void> {
+  async markDispatched(id: string, lease: ExecutionLeaseGrant): Promise<void> {
+    if (!Number.isFinite(lease.leaseMs) || lease.leaseMs <= 0) {
+      throw new Error("EXECUTION_LEASE_INVALID_LEASE");
+    }
+    if (!lease.owner) {
+      throw new Error("EXECUTION_LEASE_INVALID_OWNER");
+    }
     const now = new Date();
 
     const updated = await this.db
@@ -471,6 +478,13 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         lastError: null,
         claimToken: null,
         claimUntil: null,
+        /*
+         * The lease lands in the SAME update as the state, so `dispatched` with a null
+         * lease is not a state this table can hold. Two statements would leave a window
+         * in which a crash produced exactly the unreclaimable row this closes.
+         */
+        executionLeaseOwner: lease.owner,
+        executionLeaseUntil: new Date(now.getTime() + lease.leaseMs),
       })
       .where(and(eq(dispatchAttempts.id, id), eq(dispatchAttempts.state, "prepared")))
       .returning({ id: dispatchAttempts.id });
@@ -630,6 +644,9 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         ...(durationMs === undefined ? {} : { executionDurationMs: durationOrNull(durationMs) }),
         claimToken: null,
         claimUntil: null,
+        /* Releasing the execution lease IS releasing the capacity it reserved. */
+        executionLeaseOwner: null,
+        executionLeaseUntil: null,
       })
       .where(
         and(
