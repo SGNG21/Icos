@@ -198,7 +198,8 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
-import { composeSpendMeters } from "@/server/budget/compose-spend";
+import {
+  DEFAULT_GOAL_MAX_TOTAL_TOKENS, composeSpendMeters } from "@/server/budget/compose-spend";
 import {
   CanonicalAutonomousMissionPlanner,
   type PlannerCompletionProvider,
@@ -743,9 +744,12 @@ export async function buildPostgresContainer(
    */
   const spend = composeSpendMeters({
     db: handle.db,
-    ...(env.ICOS_GOAL_MAX_TOTAL_TOKENS === undefined
-      ? {}
-      : { maxTotalTokensPerGoal: env.ICOS_GOAL_MAX_TOTAL_TOKENS }),
+    /*
+     * The deployment's ceiling, or the named default. Never absent: without a token cap
+     * the resolver returns CAPPED-with-no-limit and `decide` refuses everything, so an
+     * unconfigured deployment would spend nothing at all.
+     */
+    maxTotalTokensPerGoal: env.ICOS_GOAL_MAX_TOTAL_TOKENS ?? DEFAULT_GOAL_MAX_TOTAL_TOKENS,
     ...(env.ICOS_CONVERSATION_MAX_TOTAL_TOKENS === undefined
       ? {}
       : { maxTotalTokensPerConversation: env.ICOS_CONVERSATION_MAX_TOTAL_TOKENS }),

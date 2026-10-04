@@ -96,7 +96,16 @@ export interface FailureCause {
  * RAISON, on ne la devine pas : une raison inconnue reste `PROVIDER_FAILURE` plutôt que
  * d'être rangée de force dans une catégorie qui lui irait mal.
  */
-const BUDGET_DENIED = /^BUDGET_DENIED:([A-Z_]+)\s*(.*)$/s;
+/*
+ * NOT anchored to the start, deliberately.
+ *
+ * It used to be `^BUDGET_DENIED:`, which assumed the refusal arrives raw. It does not:
+ * the reviewer wraps it — `QUALITY_REVIEWER_BUDGET_EXHAUSTED:BUDGET/... : BUDGET_DENIED:
+ * RESERVATION_EXCEEDS_CAP ...` — so a real cap refusal was classified PROVIDER_FAILURE
+ * and retried as if the provider were flaky. The token is distinctive enough to find
+ * anywhere in the message, and finding it is the whole point of this function.
+ */
+const BUDGET_DENIED = /BUDGET_DENIED:([A-Z_]+)\s*(.*)$/s;
 
 const DENY_TO_ROOT: Readonly<Record<string, RootCause>> = Object.freeze({
   NO_ENFORCEABLE_CAP: "NO_ENFORCEABLE_CAP",

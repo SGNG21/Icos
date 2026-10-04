@@ -168,8 +168,13 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .update(qualityControlJobs)
         .set({
           state: sql`case when ${qualityControlJobs.state} in ('review_pending','review_unavailable') then 'reviewing' else ${qualityControlJobs.state} end`,
-          // A recovered unavailable review gets a fresh review budget.
-          reviewAttemptCount: sql`case when ${qualityControlJobs.state} = 'review_unavailable' then 1 when ${qualityControlJobs.state} in ('review_pending','reviewing') then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
+          /*
+           * MONOTONIC for the logical review cycle. Reclaiming an unavailable review used
+           * to reset this to 1, which made MAX_REVIEW_ATTEMPTS unreachable: attempts ran
+           * 1,2,3, the job parked, the cooldown lapsed, the count went back to 1 and it
+           * ran for ever. A retry budget that resets is not a budget.
+           */
+          reviewAttemptCount: sql`case when ${qualityControlJobs.state} in ('review_pending','reviewing','review_unavailable') then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
           claimToken: ownerToken,
           claimUntil: sql`now() + (${leaseMs} * interval '1 millisecond')`,
           updatedAt: sql`now()`,

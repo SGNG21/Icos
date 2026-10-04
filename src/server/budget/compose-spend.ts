@@ -69,6 +69,20 @@ export const UNCAPPED_OVERHEAD: BudgetCapResolver = async () => ({ kind: "UNCAPP
  * 200 000 tokens : plusieurs heures de dialogue nourri sur une même conversation, et très
  * en-dessous de ce qu'une boucle emballée consommerait avant d'être remarquée.
  */
+/**
+ * The Goal execution ceiling when the deployment names none.
+ *
+ * 200_000 was the previous value and it was too small to finish real work: a two-task
+ * mission with ONE correction round measured 174_749 tokens, and the final review then
+ * could not be reserved — the budget seam refused correctly and the mission could never
+ * settle. Execution, review, correction and recovery all draw on this same Goal budget,
+ * so it has to cover the whole loop, not one pass of it.
+ *
+ * A bounded default, not unlimited authority: a Goal still cannot exceed it, and the
+ * owner raises it deliberately through configuration.
+ */
+export const DEFAULT_GOAL_MAX_TOTAL_TOKENS = 500_000;
+
 export const DEFAULT_CONVERSATION_MAX_TOTAL_TOKENS = 200_000;
 
 /**

@@ -14,6 +14,8 @@ import type { ReviewerCompute, ReviewerService } from "@/server/review/ports";
 /** The capability a candidate declares to be routable as an independent reviewer (0054). */
 export const REVIEW_CAPABILITY = "review";
 import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
+import { categoryOf, rootCauseOf } from "@/core/contracts/failure-cause";
+import { attributionKey } from "@/core/budget/contracts";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 import type { CapabilityRouter } from "@/server/routing/capability-router";
@@ -23,6 +25,9 @@ const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
 /** Cool-down before a review parked as unavailable is retried with a fresh budget. */
 export const REVIEW_UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
 export const MAX_REVIEW_ATTEMPTS = 3;
+
+/** A review the Goal cannot pay for. Terminal: only the owner can change it. */
+export const QUALITY_CONTROL_BUDGET_EXHAUSTED = "QUALITY_CONTROL_BUDGET_EXHAUSTED";
 export const MAX_CORRECTION_ATTEMPTS = 2;
 export const MAX_EXECUTION_RETRIES = 2;
 
@@ -153,6 +158,15 @@ export function reviewFailureDiagnostic(input: {
 function stableReviewError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "QUALITY_CONTROL_REVIEW_ABORTED";
+  }
+  /*
+   * A BUDGET refusal is a DECISION, not an outage. Retrying it spends nothing and
+   * changes nothing: the cap will still be the cap on the next attempt. It was filed as
+   * a generic review failure, so the retry/cooldown machinery treated an owner decision
+   * about money as a transient provider problem and looped on it for hours.
+   */
+  if (categoryOf(rootCauseOf(error)) === "BUDGET") {
+    return QUALITY_CONTROL_BUDGET_EXHAUSTED;
   }
   /* Keep a fleet problem legible instead of filing it as a review failure. */
   if (error instanceof Error && error.message.startsWith(QUALITY_CONTROL_NO_ELIGIBLE_WORKER)) {
@@ -351,18 +365,37 @@ export class QualityControlService {
                 : {}),
               ...(this.reviewTrace.provider ? { provider: this.reviewTrace.provider } : {}),
               ...(this.reviewTrace.model ? { model: this.reviewTrace.model } : {}),
+              ...(this.reviewTrace.attributionKey
+                ? { attributionKey: this.reviewTrace.attributionKey }
+                : {}),
               error,
             }),
           ),
         );
 
         const current = await this.deps.qualityJobs.getByWorkflowId(job.workflowId);
+        const stable = stableReviewError(error);
+
+        if (
+          stable === QUALITY_CONTROL_BUDGET_EXHAUSTED &&
+          current?.state !== "action_applied" &&
+          current?.state !== "escalated"
+        ) {
+          /*
+           * TERMINAL. The Goal cannot pay for this review and no amount of retrying
+           * changes that — only the owner can, by granting more budget. Escalating stops
+           * the loop, keeps the execution result and review history, and surfaces the
+           * decision instead of hiding it behind a cooldown that never ends.
+           */
+          await this.deps.qualityJobs.applyAction(job.workflowId, ownerToken, {
+            replanReason: QUALITY_CONTROL_BUDGET_EXHAUSTED,
+            forceEscalate: true,
+          });
+          throw error;
+        }
+
         if (current?.state !== "action_applied" && current?.state !== "escalated") {
-          await this.deps.qualityJobs.releaseForRetry(
-            job.workflowId,
-            ownerToken,
-            stableReviewError(error),
-          );
+          await this.deps.qualityJobs.releaseForRetry(job.workflowId, ownerToken, stable);
         }
         throw error;
       }
@@ -502,6 +535,7 @@ export class QualityControlService {
     routedWorkerId?: string;
     provider?: string;
     model?: string;
+    attributionKey?: string;
   } = { stage: "unknown", startedAtMs: 0 };
 
   private async review(workflowId: string, signal?: AbortSignal) {
@@ -527,6 +561,16 @@ export class QualityControlService {
     this.reviewTrace.routedWorkerId = reviewerCompute?.workerId;
     this.reviewTrace.provider = reviewerCompute?.provider;
     this.reviewTrace.model = reviewerCompute?.model;
+
+    /*
+     * The scope the review spends under, captured where it is known. Reported as
+     * `unresolved` rather than guessed: the diagnostic said `null` once and that was this
+     * field never being filled in, not an attribution failure — the budget refusal itself
+     * proved the goal scope was live.
+     */
+    this.reviewTrace.attributionKey = mission.goalId
+      ? attributionKey({ goalId: mission.goalId })
+      : attributionKey({ systemReviewMissionId: mission.id });
 
     this.reviewTrace.stage = "reviewer_invocation";
     const review = await this.deps.reviewer.review({
