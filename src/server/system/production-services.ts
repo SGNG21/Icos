@@ -100,6 +100,8 @@ export function autonomyIgniteDeps(
     missions: container.mission,
     runtimeRepository: container.autonomousRuntime,
     supervisor,
+    /* Both sides of the goal -> mission link, on every path that ignites from a goal. */
+    goals: container.goalRepository,
     planner: container.autonomousPlanner ?? {
       async plan() {
         throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");

@@ -109,7 +109,19 @@ export class PostgresGoalRepository implements GoalRepository {
     await this.db.transaction(async (tx) => {
       await tx
         .update(goals)
-        .set({ status: "converted", updatedAt: nowDate })
+        .set({
+          status: "converted",
+          /*
+           * The LINK, not just the status. This used to set `status` alone and drop the
+           * missionId into the audit detail, so every converted goal kept a null
+           * `resultingMissionId` and the owner saw it frozen at intake while its mission
+           * ran. The in-memory repository always wrote it, which is why the unit tests
+           * were green over a live defect.
+           */
+          resultingMissionId: missionId,
+          convertedAt: nowDate,
+          updatedAt: nowDate,
+        })
         .where(eq(goals.id, goalId));
 
       await tx.insert(auditEntries).values(auditToRow(auditEntry));
@@ -132,7 +144,8 @@ export class PostgresGoalRepository implements GoalRepository {
     await this.db.transaction(async (tx) => {
       await tx
         .update(goals)
-        .set({ status: "converted", updatedAt: nowDate })
+        /* The idempotency key — not `status`, which a copy of setConverted left here. */
+        .set({ idempotencyKey, updatedAt: nowDate })
         .where(eq(goals.id, goalId));
 
       await tx.insert(auditEntries).values(auditToRow(auditEntry));

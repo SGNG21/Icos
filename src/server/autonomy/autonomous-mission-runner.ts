@@ -12,6 +12,7 @@ import type {
 } from "@/server/autonomy/runtime";
 
 import { randomUUID } from "node:crypto";
+import { runWithAttribution } from "@/server/budget/attribution-context";
 
 export interface AutonomousMissionPlanner {
   plan(input: {
@@ -162,7 +163,23 @@ export class AutonomousMissionRunner {
     private readonly runtimeRepository?: AutonomousMissionRuntimeRepository,
   ) {}
 
+  /**
+   * Every run of a goal-backed mission spends under that goal.
+   *
+   * The scope used to be opened by `startAutonomousMission` alone, so the RECOVERY path —
+   * the sweeper calling `run` directly — planned with no attribution at all. With no goal
+   * to cap, the budget seam refuses (`NO_ENFORCEABLE_CAP`) and the planner reports an
+   * opaque PROVIDER_FAILURE, which means a mission that failed once could never recover.
+   * Opening it here covers both callers; the outer scope simply nests with the same value.
+   */
   async run(missionId: string): Promise<AutonomousMissionRunnerResult> {
+    const attributed = await this.missions.findById(missionId);
+    return attributed?.goalId
+      ? runWithAttribution({ goalId: attributed.goalId }, () => this.runInScope(missionId))
+      : this.runInScope(missionId);
+  }
+
+  private async runInScope(missionId: string): Promise<AutonomousMissionRunnerResult> {
     let runtime = await this.loadOrCreateRuntime(missionId);
 
     const ownerToken = this.runtimeRepository ? randomUUID() : null;

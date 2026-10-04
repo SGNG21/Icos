@@ -1,5 +1,6 @@
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import type { AutonomousMissionPlanner, AutonomousSupervisor } from "@/server/autonomy/autonomous-mission-runner";
+import type { GoalRepository } from "@/server/repositories/ports";
 import type { MissionRepository } from "@/server/mission/ports";
 import {
   startAutonomousMission,
@@ -17,6 +18,13 @@ export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
   runtimeRepository: AutonomousMissionRuntimeRepository;
   supervisor: AutonomousSupervisor;
   planner: AutonomousMissionPlanner;
+  /**
+   * Written only when the mission names a goal. The link lives on two rows and this is the
+   * other one: `missions.goal_id` goes in with the insert above, and without this the goal
+   * stays `pending` forever while its own mission succeeds — the live state this closed.
+   * Optional so a caller with no goal, and the tests, need not supply it.
+   */
+  goals?: Pick<GoalRepository, "setConverted">;
 }
 
 export type IgniteAutonomousMissionResult =
@@ -52,6 +60,16 @@ export async function igniteAutonomousMission(
     goalId: input.goalId ?? undefined,
     tasks: [],
   });
+
+  /*
+   * Before ignition: the mission row exists, so the goal must already point at it. If this
+   * throws, nothing has been started yet and a retry re-enters with the mission already
+   * created — `missions.create` is idempotent on a supplied id and the conversion endpoint
+   * recovers the pair through `findByGoalId`.
+   */
+  if (input.goalId !== undefined && deps.goals) {
+    await deps.goals.setConverted(input.goalId, mission.id);
+  }
 
   try {
     const result = await startAutonomousMission(
