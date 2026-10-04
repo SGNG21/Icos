@@ -95,6 +95,18 @@ export class SupervisorService {
      * dispatch for a missing human approval. It can do nothing else, and never names a model.
      */
     private readonly workforceCompute?: WorkforceTaskCompute,
+    /**
+     * Releases the mission's workforce assignments when it reaches a terminal state.
+     *
+     * Chief grants an assignment per delegated step and nothing gave them back, so six
+     * assignments stayed `assigned` across missions that had already failed. With
+     * `maxParallelAssignments` at 4, Chief then had no capacity left and REFUSED to
+     * delegate the next goal — a mission ran undelegated not because delegation was
+     * optional but because the brains were still, on paper, busy with finished work.
+     *
+     * Optional, like every other seam here: absent means the previous behaviour.
+     */
+    private readonly releaseDelegation?: (missionId: string, reason: string) => Promise<void>,
   ) {}
 
   private async admissionHeld(missionId: string): Promise<boolean> {
@@ -712,6 +724,8 @@ export class SupervisorService {
 
     if (tasks.some((task) => task.status === "failed")) {
       await this.missionRepository.updateMissionStatus(mission.id, "failed");
+      /* A failed mission gives its brains back too: they are not still working on it. */
+      await this.releaseDelegation?.(mission.id, "MISSION_FAILED");
       return;
     }
 
@@ -727,6 +741,7 @@ export class SupervisorService {
 
     if (tasks.every((task) => task.status === "succeeded" || task.status === "superseded")) {
       await this.missionRepository.updateMissionStatus(mission.id, "succeeded");
+      await this.releaseDelegation?.(mission.id, "MISSION_SUCCEEDED");
       return;
     }
   }

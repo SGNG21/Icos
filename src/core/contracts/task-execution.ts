@@ -93,6 +93,10 @@ export type RecordTaskExecutionResultInput = {
   workerKind?: WorkerKind;
   capability?: string;
   digitalosExecutionId?: string;
+  /** Reported by the executor. Absent = unreported; never the routing request. */
+  actualExecutor?: string;
+  actualProvider?: string;
+  actualModel?: string;
   result?: string;
   error?: ExecutionError;
   startedAt?: string;
@@ -125,6 +129,9 @@ export const taskExecutionResultSchema = z
     capability: z.string().optional(),
     /** Identifiant d'exécution DigitalOS (si worker digitalos) */
     digitalosExecutionId: z.string().optional(),
+    actualExecutor: z.string().min(1).max(200).optional(),
+    actualProvider: z.string().min(1).max(200).optional(),
+    actualModel: z.string().min(1).max(200).optional(),
     /** Résultat métier exploitable (texte). Absent en cas d'échec. */
     result: z.string().max(EXECUTION_RESULT_MAX_LENGTH).optional(),
     /** Erreur normalisée. Obligatoire en cas d'échec (voir `refine`). */

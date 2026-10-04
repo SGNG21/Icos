@@ -82,5 +82,22 @@ export async function recordTaskExecution(
   // Enregistrement de l'exécution (cela inclut la transition du statut de la tâche dans le repository)
   const executionResult = await deps.executionResults.record(input);
 
+  /*
+   * THE ATTEMPT IS CLOSED HERE, where the result becomes durable.
+   *
+   * This is the production completion path — the internal callback route calls it — and it
+   * recorded the result without ever settling the attempt. The attempt therefore stayed
+   * `dispatched`, holding a slot on a worker of concurrency 1, for every execution that
+   * ever succeeded. Nineteen finished executions, fifteen of them successful, ate the
+   * fleet's whole capacity that way before anything noticed.
+   *
+   * Success must not depend on lease expiry to give the worker back: the lease is the
+   * safety net for a runner that DIED, not the normal way capacity is returned.
+   * Idempotent by workflowId, so a Temporal replay settles nothing twice.
+   */
+  if (deps.dispatchAttempts) {
+    await deps.dispatchAttempts.markCompletedByWorkflowId(input.workflowId);
+  }
+
   return executionResult;
 }

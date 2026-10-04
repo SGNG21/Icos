@@ -113,7 +113,15 @@ async function postJson(path: string, body: unknown): Promise<void> {
  * Throws on failure, which Temporal turns into an activity failure and the workflow turns
  * into a canonical ICOS `failure` callback. Nothing here may report success on its own.
  */
-export async function runGovernedWorker(prompt: string): Promise<string> {
+export interface GovernedRun {
+  readonly result: string;
+  /** Reported by the executor itself. Absent means unreported, never the request. */
+  readonly actualExecutor: string;
+  readonly actualProvider?: string;
+  readonly actualModel?: string;
+}
+
+export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
   const workspace = await mkdtemp(join(tmpdir(), "icos-worker-"));
   const home = await createEphemeralHome();
   try {
@@ -183,7 +191,12 @@ export async function runGovernedWorker(prompt: string): Promise<string> {
 
     const classified = classifyHermesRun(run.stdout, usage);
     if (!classified.ok) throw new Error(classified.message);
-    return classified.result;
+    return {
+      result: classified.result,
+      actualExecutor: "hermes",
+      /* Only what hermes itself stated; silence stays silence. */
+      ...(classified.model ? { actualModel: classified.model } : {}),
+    };
   } finally {
     await home.dispose();
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
@@ -204,6 +217,9 @@ export async function reportSuccess(input: {
   result: string;
   startedAt: string;
   completedAt: string;
+  actualExecutor?: string;
+  actualProvider?: string;
+  actualModel?: string;
 }): Promise<void> {
   await postJson("/api/internal/executions/completed", {
     taskId: input.ctx.taskId,
@@ -213,6 +229,9 @@ export async function reportSuccess(input: {
     result: input.result,
     startedAt: input.startedAt,
     completedAt: input.completedAt,
+    ...(input.actualExecutor ? { actualExecutor: input.actualExecutor } : {}),
+    ...(input.actualProvider ? { actualProvider: input.actualProvider } : {}),
+    ...(input.actualModel ? { actualModel: input.actualModel } : {}),
   });
 }
 

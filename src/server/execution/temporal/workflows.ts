@@ -56,15 +56,18 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
   await reportStarted(ctx);
 
   try {
-    const result = await runGovernedWorker(input.prompt);
+    const run = await runGovernedWorker(input.prompt);
     await reportSuccess({
       ctx,
       workerKind: "hermes",
-      result,
+      result: run.result,
+      actualExecutor: run.actualExecutor,
+      ...(run.actualProvider ? { actualProvider: run.actualProvider } : {}),
+      ...(run.actualModel ? { actualModel: run.actualModel } : {}),
       startedAt,
       completedAt: new Date().toISOString(),
     });
-    return result;
+    return run.result;
   } catch (error) {
     const message =
       error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);

@@ -100,6 +100,51 @@ const PROCESS_SIGNALS: ProductionServiceSignals = {
  * rather than a fabricated one: an invented assignment would tell the dispatcher a brain
  * owns work nobody assigned.
  */
+/**
+ * Gives a mission's brains back when it reaches a terminal state.
+ *
+ * `synthesize` is the workforce's own terminal transition, so this is a release through
+ * the existing authority rather than a second lifecycle: Chief closes what Chief opened.
+ */
+function chiefRelease(
+  container: Container,
+): ((missionId: string, reason: string) => Promise<void>) | undefined {
+  const workforce = container.workforce;
+  if (!workforce) return undefined;
+
+  return async (missionId, reason) => {
+    const system = workforce.runtime.system("core3-dispatch");
+    const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
+    try {
+      await workforce.service.synthesize(chief, {
+        missionId,
+        parentAssignmentId: null,
+        summary: reason,
+      });
+    } catch (error) {
+      /*
+       * NOT fatal, and NOT silent.
+       *
+       * `synthesize` refuses with CHILDREN_NOT_SETTLED while any child assignment is
+       * still open, and the workforce has no cancellation transition: a child can only
+       * leave `assigned` by being executed and reviewed. So a mission that FAILS strands
+       * its delegations for ever, and those stranded assignments consume Chief's
+       * `maxParallelAssignments` until it refuses to delegate anything new — which is
+       * exactly how a goal came to run undelegated.
+       *
+       * Releasing is housekeeping; it must never turn a settled mission into a crash. The
+       * refusal is reported so the gap is visible rather than inferred from capacity
+       * running out weeks later. Closing it needs a cancellation path in the workforce
+       * lifecycle, which is a decision, not a patch.
+       */
+      console.error(
+        `WORKFORCE_RELEASE_REFUSED mission=${missionId} reason=${reason} ` +
+          `detail=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+}
+
 function chiefDelegate(
   container: Container,
 ): Pick<IgniteAutonomousMissionDeps, "delegate"> {
@@ -112,7 +157,20 @@ function chiefDelegate(
       if (!record) return;
       const system = workforce.runtime.system("core3-dispatch");
       const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
-      await workforce.chiefDelegation(chief).delegateGoal(record.goal, missionId);
+      const outcome = await workforce.chiefDelegation(chief).delegateGoal(record.goal, missionId);
+      if (!outcome.ok) {
+        /*
+         * NOT swallowed. A refusal used to be discarded here, so a goal ran as
+         * undelegated autonomy and looked identical to a delegated one — which is how a
+         * capacity refusal (brains still holding assignments from finished missions) went
+         * unnoticed. Chief declining is a decision the operator must be able to read.
+         */
+        console.error(
+          `CHIEF_DELEGATION_REFUSED mission=${missionId} reasons=${outcome.refusals
+            .map((r) => (typeof r === "string" ? r : JSON.stringify(r)))
+            .join(" | ")}`,
+        );
+      }
     },
   };
 }
@@ -225,6 +283,8 @@ export function composeAutonomyRuntime(container: Container): {
      * Optional, so a composition without a workforce routes byte-identically.
      */
     container.workforce?.core3Compute,
+    /* Chief closes what Chief opened: a terminal mission gives its brains back. */
+    chiefRelease(container),
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,

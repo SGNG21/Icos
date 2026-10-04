@@ -824,6 +824,14 @@ export const taskExecutionResults = pgTable(
     workerKind: text("worker_kind"),
     capability: text("capability"),
     digitalosExecutionId: text("digitalos_execution_id"),
+    /*
+     * WHAT ACTUALLY RAN, as reported by the executor — never copied from the routing
+     * decision. A run was once attributed to a model the gateway rejects as dead because
+     * the request was the only trace. NULL means the executor did not report it.
+     */
+    actualExecutor: text("actual_executor"),
+    actualProvider: text("actual_provider"),
+    actualModel: text("actual_model"),
     result: text("result"),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),

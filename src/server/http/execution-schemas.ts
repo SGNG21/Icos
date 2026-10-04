@@ -42,6 +42,10 @@ export const executionCompletedBodySchema = z
     workflowId: workflowIdSchema,
     outcome: executionOutcomeSchema,
     workerKind: workerKindSchema.optional(),
+    /* Observations about the real executor, not a copy of the routing request. */
+    actualExecutor: z.string().min(1).max(200).optional(),
+    actualProvider: z.string().min(1).max(200).optional(),
+    actualModel: z.string().min(1).max(200).optional(),
     result: z.string().max(EXECUTION_RESULT_MAX_LENGTH).optional(),
     error: executionErrorInputSchema.optional(),
     startedAt: isoDateTimeSchema.optional(),
