@@ -400,6 +400,13 @@
       "when": 1791232011287,
       "tag": "0059_execution_actuals",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1791232012287,
+      "tag": "0060_assignment_cancelled",
+      "breakpoints": true
     }
   ]
 }

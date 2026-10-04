@@ -276,9 +276,21 @@ export const assignmentStatusSchema = z.enum([
   "accepted",
   "blocked",
   "synthesized",
+  /*
+   * The supervisor withdrew the work. A delegation outlives nothing: when its mission
+   * ends, the assignment must end too. Without this the only exits were "executed and
+   * reviewed" or "blocked by a qualified reviewer", so a FAILED mission stranded its
+   * assignments for ever and they went on consuming the delegant's parallel-assignment
+   * capacity until Chief could delegate nothing at all.
+   */
+  "cancelled",
 ]);
 export type AssignmentStatus = z.infer<typeof assignmentStatusSchema>;
-export const TERMINAL_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = ["blocked", "synthesized"];
+export const TERMINAL_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = [
+  "blocked",
+  "synthesized",
+  "cancelled",
+];
 
 export const reviewOutcomeSchema = z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]);
 export type ReviewOutcome = z.infer<typeof reviewOutcomeSchema>;
@@ -419,6 +431,7 @@ export const WORKFORCE_EVENT_TYPES = [
   "assignment.executed",
   "assignment.reviewed",
   "assignment.synthesized",
+  "assignment.cancelled",
   "observation.recorded",
   "governance.denied",
 ] as const;

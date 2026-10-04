@@ -27,6 +27,7 @@ import { sweepAll } from "@/server/recovery/sweep-all";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 import { CHIEF_BRAIN_ID } from "@/core/workforce/brains";
+import { TERMINAL_ASSIGNMENT_STATUSES } from "@/core/workforce/contracts";
 
 export interface ProductionServiceScheduler {
   start(): void;
@@ -116,6 +117,18 @@ function chiefRelease(
     const system = workforce.runtime.system("core3-dispatch");
     const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
     try {
+      /*
+       * Children first. `synthesize` refuses CHILDREN_NOT_SETTLED while any assignment is
+       * open, and until `cancel` existed there was no way to settle one that had not been
+       * executed and reviewed — so a failed mission's delegations were unreleasable and
+       * went on consuming Chief's capacity.
+       */
+      const open = (await workforce.service.listAssignments(chief)).filter(
+        (a) => a.missionId === missionId && !TERMINAL_ASSIGNMENT_STATUSES.includes(a.status),
+      );
+      for (const assignment of open) {
+        await workforce.service.cancel(chief, assignment.assignmentId, reason);
+      }
       await workforce.service.synthesize(chief, {
         missionId,
         parentAssignmentId: null,

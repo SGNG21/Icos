@@ -501,15 +501,24 @@ export function evaluateAgentStatusChange(input: {
   return verdict(v);
 }
 
+/*
+ * `cancelled` is reachable from every NON-terminal status, deliberately.
+ *
+ * The supervisor withdrawing work is not a step in the work: it can happen while the
+ * assignment is merely assigned, mid-execution or waiting on review. Restricting it to
+ * one status would recreate the trap it exists to remove — a mission that failed early
+ * leaves assignments at `assigned`, and `assigned` had no exit but execution.
+ */
 const ASSIGNMENT_TRANSITIONS: Readonly<Record<AssignmentStatus, readonly AssignmentStatus[]>> = {
-  assigned: ["executing", "blocked"],
+  assigned: ["executing", "blocked", "cancelled"],
   // A FAILED execution returns the work for another attempt; a succeeded one goes to review.
-  executing: ["in_review", "assigned", "blocked"],
-  in_review: ["accepted", "changes_requested", "blocked"],
-  changes_requested: ["executing", "blocked"],
-  accepted: ["synthesized"],
+  executing: ["in_review", "assigned", "blocked", "cancelled"],
+  in_review: ["accepted", "changes_requested", "blocked", "cancelled"],
+  changes_requested: ["executing", "blocked", "cancelled"],
+  accepted: ["synthesized", "cancelled"],
   blocked: [],
   synthesized: [],
+  cancelled: [],
 };
 
 export function isAssignmentTransitionAllowed(

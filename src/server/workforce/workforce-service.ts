@@ -29,6 +29,7 @@ import {
 } from "@/core/workforce/contracts";
 import {
   approveAssignment,
+  cancelAssignment,
   buildAssignment,
   observationFromReview,
   planDelegation,
@@ -584,6 +585,29 @@ export class WorkforceService {
     });
     if ("denied" in outcome) return this.deny(principal, assignmentId, action, outcome.denied);
     return outcome.value;
+  }
+
+  /**
+   * Withdraws a delegation. The ONLY exit that does not require the work to be done.
+   *
+   * Without it an assignment left `assigned` only by being executed and reviewed, so a
+   * mission that failed early stranded its delegations permanently and they kept
+   * consuming the delegant's parallel-assignment capacity — six of them were enough to
+   * stop Chief delegating anything at all.
+   */
+  async cancel(
+    principal: Principal,
+    assignmentId: string,
+    reason: string,
+  ): Promise<WorkAssignment> {
+    this.trust(principal);
+    return this.advance(
+      principal,
+      assignmentId,
+      "assignment.cancel",
+      "assignment.cancelled",
+      async (a) => cancelAssignment(a, principal, reason, this.deps.now()),
+    );
   }
 
   async approve(principal: Principal, assignmentId: string): Promise<WorkAssignment> {

@@ -37,6 +37,8 @@ export type DelegationError =
   | "REVIEWER_NOT_QUALIFIED"
   | "NOT_THE_SUPERVISOR"
   | "CHILDREN_NOT_SETTLED"
+  /* A withdrawal must say why: an unexplained cancellation is indistinguishable from a bug. */
+  | "CANCELLATION_REASON_REQUIRED"
   | "NOTHING_TO_SYNTHESIZE";
 
 export type Step<T> = { ok: true; value: T } | { ok: false; errors: DelegationError[] };
@@ -220,6 +222,36 @@ function move(
 }
 
 /** A human holding `approvals.decide` (existing permission) releases a gated assignment. */
+/**
+ * The SUPERVISOR withdraws work it delegated.
+ *
+ * Only the delegant — a brain may not cancel its own assignment to escape review, and a
+ * stranger may not cancel someone else's. Terminal stays terminal, so this is idempotent
+ * in the way that matters: cancelling twice is refused, never silently re-applied.
+ */
+export function cancelAssignment(
+  a: WorkAssignment,
+  canceller: Principal,
+  reason: string,
+  now: string,
+): Step<WorkAssignment> {
+  if (canceller.tenantId !== a.tenantId) return fail("ACTOR_NOT_AUTHORIZED");
+  if (canceller.kind !== "agent" || canceller.id !== a.supervisorAgentId) {
+    return fail("NOT_THE_SUPERVISOR");
+  }
+  if (isAssignmentTerminal(a.status)) return fail("TERMINAL_STATUS");
+  if (!reason.trim()) return fail("CANCELLATION_REASON_REQUIRED");
+  return {
+    ok: true,
+    value: {
+      ...a,
+      status: "cancelled",
+      updatedAt: now,
+      version: a.version + 1,
+    },
+  };
+}
+
 export function approveAssignment(
   a: WorkAssignment,
   approver: Principal,

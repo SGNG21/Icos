@@ -145,7 +145,7 @@ export const workforceAssignments = pgTable(
     }).onDelete("restrict"),
     check(
       "workforce_assignments_status_check",
-      sql`${t.status} in ('assigned','executing','in_review','changes_requested','accepted','blocked','synthesized')`,
+      sql`${t.status} in ('assigned','executing','in_review','changes_requested','accepted','blocked','synthesized','cancelled')`,
     ),
     index("workforce_assignments_mission_idx").on(t.tenantId, t.missionId),
     index("workforce_assignments_assignee_idx").on(t.tenantId, t.assigneeAgentId),
