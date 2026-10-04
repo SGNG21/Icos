@@ -171,6 +171,55 @@ function chiefDelegate(
       const system = workforce.runtime.system("core3-dispatch");
       const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
       const outcome = await workforce.chiefDelegation(chief).delegateGoal(record.goal, missionId);
+
+      if (outcome.ok && outcome.gaps.length > 0) {
+        /*
+         * A PARTIAL delegation is not a success.
+         *
+         * `delegateGoal` returns { assignments, gaps } and only `!ok` was ever logged, so
+         * a mission whose roles could not all be placed looked identical to one fully
+         * delegated — a live run produced ZERO assignments, logged nothing, and the
+         * capacity question could only be guessed at. The gaps carry exactly who was
+         * considered and why each was rejected, so they are reported.
+         */
+        console.error(
+          JSON.stringify({
+            event: "CHIEF_DELEGATION_PARTIAL",
+            goalId,
+            missionId,
+            requestedRoles: [
+              ...outcome.plan.assignments.map((a) => a.brainId),
+              outcome.plan.review.brainId,
+            ],
+            assignmentsCreated: outcome.assignments.length,
+            gapsCount: outcome.gaps.length,
+            gaps: outcome.gaps.map((g) => ({
+              brainId: g.request.requiredAgentId ?? null,
+              reason: g.reason,
+              rejected: g.rejected.map((r) => ({
+                agentId: r.agentId,
+                violations: r.violations,
+              })),
+            })),
+          }),
+        );
+
+        /*
+         * The REVIEWER is mandatory: independent review is a safety control, not a
+         * nicety, and a mission that cannot place one must not proceed as though it had.
+         * Any other gap is reported and allowed, because the plan's other steps are
+         * deferred rather than lost.
+         */
+        const reviewerGap = outcome.gaps.some(
+          (g) => g.request.requiredAgentId === outcome.plan.review.brainId,
+        );
+        if (reviewerGap) {
+          throw new Error(
+            `CHIEF_DELEGATION_REVIEWER_UNPLACED: mission ${missionId} has no independent reviewer`,
+          );
+        }
+      }
+
       if (!outcome.ok) {
         /*
          * NOT swallowed. A refusal used to be discarded here, so a goal ran as
