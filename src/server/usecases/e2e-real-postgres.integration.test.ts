@@ -11,6 +11,7 @@ import { InMemoryReviewerService } from "@/server/review/in-memory-reviewer-serv
 import { InMemoryReviewDecisionRepository } from "@/server/services/in-memory/review-decision-repository";
 import { sql } from "drizzle-orm";
 import { eq } from "drizzle-orm";
+import { executionPrompt } from "@/core/review/output-contract";
 
 // Stable but unique UUID-shaped values keep the PostgreSQL proof deterministic.
 let uuidIndex = 0;
@@ -178,7 +179,7 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskAWithDeps.taskId,
         taskTitle: taskAWithDeps.title,
-        prompt: taskAWithDeps.description || taskAWithDeps.title,
+        prompt: executionPrompt(taskAWithDeps.description || taskAWithDeps.title),
       }),
     );
 
@@ -245,7 +246,7 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskBWithDeps.taskId,
         taskTitle: taskBWithDeps.title,
-        prompt: taskBWithDeps.description || taskBWithDeps.title,
+        prompt: executionPrompt(taskBWithDeps.description || taskBWithDeps.title),
       }),
     );
 
@@ -308,7 +309,7 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskCWithDeps.taskId,
         taskTitle: taskCWithDeps.title,
-        prompt: taskCWithDeps.description || taskCWithDeps.title,
+        prompt: executionPrompt(taskCWithDeps.description || taskCWithDeps.title),
       }),
     );
 
