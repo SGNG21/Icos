@@ -13,6 +13,7 @@ import type { ReviewerCompute, ReviewerService } from "@/server/review/ports";
 
 /** The capability a candidate declares to be routable as an independent reviewer (0054). */
 export const REVIEW_CAPABILITY = "review";
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 import type { CapabilityRouter } from "@/server/routing/capability-router";
@@ -84,6 +85,70 @@ function actionForDecision(decision: string): QualityAction {
  * task with no eligible worker stays recoverable rather than failing.
  */
 export const QUALITY_CONTROL_NO_ELIGIBLE_WORKER = "QUALITY_CONTROL_NO_ELIGIBLE_WORKER";
+
+/**
+ * The STAGE a review attempt died in. Without it a failure is just "the review failed",
+ * which is what `stableReviewError` has always persisted and why two missions sat parked
+ * for hours with nothing in the logs to act on.
+ */
+export type ReviewFailureStage =
+  | "route_reviewer"
+  | "load_context"
+  | "reviewer_invocation"
+  | "response_validation"
+  | "save_decision"
+  | "apply_action"
+  | "unknown";
+
+/**
+ * Everything knowable about ONE failed review attempt, in one structured line.
+ *
+ * `stableReviewError` deliberately returns a STABLE code because the state machine
+ * branches on it — but it collapses every unrecognised error to
+ * QUALITY_CONTROL_REVIEW_FAILED, discarding class, message and stack. That is the whole
+ * of the silence: the cause existed, was caught, and was thrown away one line later.
+ *
+ * So the stable code stays, and the detail is emitted beside it. Redacted with the same
+ * helper the worker probes use, because a provider error can quote a request.
+ */
+export function reviewFailureDiagnostic(input: {
+  workflowId: string;
+  missionId: string;
+  taskId: string;
+  attemptNumber: number;
+  stage: ReviewFailureStage;
+  startedAtMs: number;
+  routedWorkerId?: string;
+  provider?: string;
+  model?: string;
+  attributionKey?: string;
+  error: unknown;
+}): Record<string, unknown> {
+  const error = input.error;
+  return {
+    event: "REVIEW_ATTEMPT_FAILED",
+    reviewAttemptId: `${input.workflowId}#${input.attemptNumber}`,
+    missionId: input.missionId,
+    taskId: input.taskId,
+    attemptNumber: input.attemptNumber,
+    routerSelectedWorker: input.routedWorkerId ?? null,
+    reviewProvider: input.provider ?? null,
+    reviewModel: input.model ?? null,
+    attributionKey: input.attributionKey ?? null,
+    durationMs: Date.now() - input.startedAtMs,
+    failureStage: input.stage,
+    errorClass: error instanceof Error ? error.name : typeof error,
+    errorCode: stableReviewError(error),
+    errorMessageRedacted:
+      error instanceof Error ? firstLineRedacted(error.message).slice(0, 500) : null,
+    stackAvailable: error instanceof Error && Boolean(error.stack),
+    /* First frames only: enough to locate, not enough to leak a filesystem layout. */
+    stackHead:
+      error instanceof Error && error.stack
+        ? error.stack.split("\n").slice(1, 4).map((l) => l.trim())
+        : null,
+  };
+}
 
 function stableReviewError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
@@ -265,6 +330,32 @@ export class QualityControlService {
           await this.deps.dispatchPrepared(attempt, signal);
         }
       } catch (error) {
+        /*
+         * EMIT BEFORE NORMALISING. `stableReviewError` below returns a stable code the
+         * state machine branches on, and collapses everything it does not recognise to
+         * QUALITY_CONTROL_REVIEW_FAILED — which is how two missions sat parked for hours
+         * with no cause anywhere. The stable code is still what gets persisted; the cause
+         * is emitted here so it exists at all.
+         */
+        console.error(
+          JSON.stringify(
+            reviewFailureDiagnostic({
+              workflowId: job.workflowId,
+              missionId: job.missionId,
+              taskId: job.taskId,
+              attemptNumber: job.reviewAttemptCount,
+              stage: this.reviewTrace.stage,
+              startedAtMs: this.reviewTrace.startedAtMs || Date.now(),
+              ...(this.reviewTrace.routedWorkerId
+                ? { routedWorkerId: this.reviewTrace.routedWorkerId }
+                : {}),
+              ...(this.reviewTrace.provider ? { provider: this.reviewTrace.provider } : {}),
+              ...(this.reviewTrace.model ? { model: this.reviewTrace.model } : {}),
+              error,
+            }),
+          ),
+        );
+
         const current = await this.deps.qualityJobs.getByWorkflowId(job.workflowId);
         if (current?.state !== "action_applied" && current?.state !== "escalated") {
           await this.deps.qualityJobs.releaseForRetry(
@@ -401,7 +492,20 @@ export class QualityControlService {
     };
   }
 
+  /**
+   * Set while a review attempt is in flight so a failure can say WHERE it died. Reset at
+   * the start of each attempt; read by the catch in `processPending`.
+   */
+  private reviewTrace: {
+    stage: ReviewFailureStage;
+    startedAtMs: number;
+    routedWorkerId?: string;
+    provider?: string;
+    model?: string;
+  } = { stage: "unknown", startedAtMs: 0 };
+
   private async review(workflowId: string, signal?: AbortSignal) {
+    this.reviewTrace = { stage: "load_context", startedAtMs: Date.now() };
     const job = await this.deps.qualityJobs.getByWorkflowId(workflowId);
     if (!job) throw new Error("QUALITY_CONTROL_JOB_NOT_FOUND");
     const existing = await this.deps.reviewDecisions.getByWorkflowId(workflowId);
@@ -418,7 +522,13 @@ export class QualityControlService {
     }
 
     signal?.throwIfAborted();
+    this.reviewTrace.stage = "route_reviewer";
     const reviewerCompute = await this.routeReviewer(workflowId, task.id);
+    this.reviewTrace.routedWorkerId = reviewerCompute?.workerId;
+    this.reviewTrace.provider = reviewerCompute?.provider;
+    this.reviewTrace.model = reviewerCompute?.model;
+
+    this.reviewTrace.stage = "reviewer_invocation";
     const review = await this.deps.reviewer.review({
       reviewerCompute,
       mission,
@@ -440,6 +550,7 @@ export class QualityControlService {
     });
     signal?.throwIfAborted();
 
+    this.reviewTrace.stage = "response_validation";
     const normalized = reviewDecisionRecordSchema.safeParse({
       ...review,
       missionId: job.missionId,
