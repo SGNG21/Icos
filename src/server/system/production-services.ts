@@ -26,6 +26,7 @@ import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe
 import { sweepAll } from "@/server/recovery/sweep-all";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
+import { CHIEF_BRAIN_ID } from "@/core/workforce/brains";
 
 export interface ProductionServiceScheduler {
   start(): void;
@@ -92,6 +93,30 @@ const PROCESS_SIGNALS: ProductionServiceSignals = {
  * Fail closed sans planificateur : la mission reste `running` et la reprise retentera la
  * planification une fois configurée — jamais un faux succès, jamais un plan inventé.
  */
+/**
+ * The Chief seam for ignition, or nothing at all.
+ *
+ * Absent workforce (in-memory backend, or brains never bootstrapped) means no delegation
+ * rather than a fabricated one: an invented assignment would tell the dispatcher a brain
+ * owns work nobody assigned.
+ */
+function chiefDelegate(
+  container: Container,
+): Pick<IgniteAutonomousMissionDeps, "delegate"> {
+  const workforce = container.workforce;
+  if (!workforce) return {};
+
+  return {
+    delegate: async (goalId, missionId) => {
+      const record = await container.goalRepository.getById(goalId);
+      if (!record) return;
+      const system = workforce.runtime.system("core3-dispatch");
+      const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
+      await workforce.chiefDelegation(chief).delegateGoal(record.goal, missionId);
+    },
+  };
+}
+
 export function autonomyIgniteDeps(
   container: Container,
   supervisor: AutonomousSupervisor,
@@ -102,6 +127,16 @@ export function autonomyIgniteDeps(
     supervisor,
     /* Both sides of the goal -> mission link, on every path that ignites from a goal. */
     goals: container.goalRepository,
+    /*
+     * CHIEF on the ordinary goal path. Composed HERE because only the composition root
+     * holds both the workforce authority and the goal store; `igniteAutonomousMission`
+     * stays a use case and learns nothing about principals.
+     *
+     * `actAsAgent` is how the runtime speaks AS brain-chief: governance only lets a
+     * delegant assign to its own direct reports, and the other eleven brains report to
+     * brain-chief, so no other principal could delegate this.
+     */
+    ...chiefDelegate(container),
     planner: container.autonomousPlanner ?? {
       async plan() {
         throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");

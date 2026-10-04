@@ -25,6 +25,19 @@ export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
    * Optional so a caller with no goal, and the tests, need not supply it.
    */
   goals?: Pick<GoalRepository, "setConverted">;
+  /**
+   * CHIEF, before any worker runs.
+   *
+   * Chief decides logical responsibility — which canonical brain owns which step — and
+   * records workforce assignments. It executes nothing: CORE3 still owns task state and
+   * dispatch, and `workforceTaskCompute.forTask` may only TIGHTEN what the dispatcher
+   * would have done. Optional, so a mission with no goal (and the tests) need no Chief.
+   *
+   * A refusal is NOT fatal here. Delegation is an orchestration decision; losing it must
+   * not strand a goal the owner asked for, so it is recorded and the mission proceeds
+   * undelegated rather than failing closed on a planning nicety.
+   */
+  delegate?: (goalId: string, missionId: string) => Promise<void>;
 }
 
 export type IgniteAutonomousMissionResult =
@@ -69,6 +82,11 @@ export async function igniteAutonomousMission(
    */
   if (input.goalId !== undefined && deps.goals) {
     await deps.goals.setConverted(input.goalId, mission.id);
+  }
+
+  /* Chief delegates BEFORE planning, so assignments exist when the dispatcher reads them. */
+  if (input.goalId !== undefined && deps.delegate) {
+    await deps.delegate(input.goalId, mission.id);
   }
 
   try {

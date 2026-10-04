@@ -32,7 +32,9 @@ async function main(): Promise<void> {
 
   // 1. Goal intake — the canonical normalizer + planner + durable store.
   const goal = container.goalNormalizer.normalize({
-    title: "Analyse de l'état d'ICOS",
+    // A goal id is derived from title+objective and a goal converts at most once, so a
+    // fresh run needs a fresh title. The OBJECTIVE is kept verbatim.
+    title: `Analyse de l'état d'ICOS (${stamp})`,
     objective: OBJECTIVE,
     successCriteria: ["un rapport court et lisible"],
   } as never);
