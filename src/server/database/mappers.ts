@@ -360,6 +360,10 @@ export function rowToTaskExecutionResult(row: TaskExecutionResultRow): TaskExecu
     workflowId: row.workflowId,
     outcome: row.outcome,
     workerKind: row.workerKind ?? undefined,
+    /* Read back what actually ran, so the cockpit and the audit see the same thing. */
+    actualExecutor: row.actualExecutor ?? undefined,
+    actualProvider: row.actualProvider ?? undefined,
+    actualModel: row.actualModel ?? undefined,
     capability: row.capability ?? undefined,
     digitalosExecutionId: row.digitalosExecutionId ?? undefined,
     result: row.result ?? undefined,
@@ -392,6 +396,16 @@ export function taskExecutionResultToRow(result: TaskExecutionResult): TaskExecu
     workflowId: result.workflowId,
     outcome: result.outcome,
     workerKind: result.workerKind ?? null,
+    /*
+     * WHAT ACTUALLY RAN. Dropped here once already: the columns existed, the contract
+     * carried the values and the route forwarded them, but this mapper did not copy
+     * them — so a successful run recorded `actual_executor = NULL` while the routing
+     * decision still named a model the gateway rejects. The audit was false in exactly
+     * the way these columns were added to prevent.
+     */
+    actualExecutor: result.actualExecutor ?? null,
+    actualProvider: result.actualProvider ?? null,
+    actualModel: result.actualModel ?? null,
     capability: result.capability ?? null,
     digitalosExecutionId: result.digitalosExecutionId ?? null,
     result: result.result ?? null,
