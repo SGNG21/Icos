@@ -59,7 +59,8 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
     const run = await runGovernedWorker(input.prompt);
     await reportSuccess({
       ctx,
-      workerKind: "hermes",
+      /* Reported by the run, not asserted here: the executor is configuration. */
+      workerKind: run.actualExecutor,
       result: run.result,
       actualExecutor: run.actualExecutor,
       ...(run.actualProvider ? { actualProvider: run.actualProvider } : {}),
@@ -73,7 +74,8 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
       error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
     await reportFailure({
       ctx,
-      workerKind: "hermes",
+      /* A failure before the run resolved its executor cannot name one. */
+      workerKind: "unknown",
       errorCode: "WORKER_FAILED",
       errorMessage: message,
       startedAt,

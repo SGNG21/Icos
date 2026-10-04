@@ -61,9 +61,14 @@ describe("self-model: the description is a measurement, not prose", () => {
     const states = capabilityFacts(FULL).map((f) => f.state);
     expect(states).toContain("AUTONOMOUS");
     expect(states).toContain("GOVERNED");
-    // Exactly one thing is approval-gated by policy: launching a conversational goal.
-    expect(states.filter((s) => s === "APPROVAL_REQUIRED")).toHaveLength(1);
-    expect(stateOf(FULL, "mission.launch")).toBe("APPROVAL_REQUIRED");
+    /*
+     * Launching is GOVERNED, not blanket-approval-gated. The class is decided per goal by
+     * `classifyMissionAutonomy` from the capabilities it declares: verifiably read-only or
+     * worktree-confined work starts on its own, external and irreversible work is asked
+     * about. Reporting APPROVAL_REQUIRED for everything was simpler and false.
+     */
+    expect(stateOf(FULL, "mission.launch")).toBe("GOVERNED");
+    expect(states).not.toContain("NOT_SUPPORTED");
   });
 
   it("describes an approved mission as running durably without a human", () => {
@@ -186,7 +191,7 @@ describe("self-model as context: it must outrank recalled self-description", () 
       .map((c) => c.text)
       .join("\n");
     expect(text).toContain("NOT_CONNECTED — utiliser des outils");
-    expect(text).toContain("APPROVAL_REQUIRED — lancer une mission");
+    expect(text).toContain("GOVERNED — lancer une mission");
     expect(text).toContain("AUTONOMOUS — converser");
   });
 });

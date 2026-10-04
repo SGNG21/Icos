@@ -24,6 +24,11 @@ import { join, resolve } from "node:path";
 import { brokerCredentials, seedHome } from "@/server/workers/process/credential-broker";
 import { createEphemeralHome } from "@/server/workers/process/ephemeral-home";
 import { runNonInteractive } from "@/server/workers/process/run-process";
+import {
+  EXEC_PLACEHOLDERS,
+  parseWorkerExecCommands,
+} from "@/server/workers/execution/exec-command-config";
+import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
 import { classifyHermesRun } from "./hermes-run";
 
@@ -35,15 +40,36 @@ export interface ExecutionContext {
 
 const HOME = process.env.HOME ?? "";
 
-/** Credentials hermes needs, named one by one. A grant is never a whole directory. */
-const HERMES_CREDENTIALS = [".hermes/config.yaml", ".hermes/auth.json"] as const;
+/**
+ * THE EXECUTOR COMES FROM CONFIGURATION, never from a literal here.
+ *
+ * This activity used to name `hermes` outright while `exec-command-config.ts` states the
+ * rule plainly — "Adding Hermes, Codex or anything else is CONFIGURATION… deliberately no
+ * built-in default". So the thing that ran was not the thing ICOS declared, and
+ * `tools.governed` correctly read NOT_CONNECTED while hermes executed every mission.
+ *
+ * Fail closed: an undeclared runtime gets no command and the activity refuses, rather
+ * than falling back to an executable nobody authorised.
+ */
+const EXECUTOR_RUNTIME: WorkerRuntimeDescriptor = "binary";
 
-/** Program paths, read-only. Deliberately distinct from credentials. */
-const HERMES_PROGRAM_PATHS = [
-  `${HOME}/.local/bin`,
-  `${HOME}/.hermes/hermes-agent`,
-  `${HOME}/.local/share/uv`,
-] as const;
+/**
+ * Credentials and program paths the declared executor may read, named one by one — a
+ * grant is never a whole directory. Keyed by command so adding codex is configuration
+ * plus one entry here, not a code change in the run path.
+ */
+const EXECUTOR_ACCESS: Readonly<
+  Record<string, { credentials: readonly string[]; programPaths: readonly string[] }>
+> = {
+  hermes: {
+    credentials: [".hermes/config.yaml", ".hermes/auth.json"],
+    programPaths: [`${HOME}/.local/bin`, `${HOME}/.hermes/hermes-agent`, `${HOME}/.local/share/uv`],
+  },
+  codex: {
+    credentials: [".codex/auth.json", ".codex/config.toml"],
+    programPaths: [`${HOME}/.local/bin`],
+  },
+};
 
 /**
  * THE WORKSPACE THE TASK ACTUALLY RUNS AGAINST.
@@ -122,16 +148,30 @@ export interface GovernedRun {
 }
 
 export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
+  /* The declared command for this runtime. No declaration, no execution. */
+  const declared = parseWorkerExecCommands(process.env.ICOS_WORKER_EXEC_COMMANDS)[
+    EXECUTOR_RUNTIME
+  ];
+  if (!declared) {
+    throw new Error(
+      `WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no '${EXECUTOR_RUNTIME}' runtime`,
+    );
+  }
+  const access = EXECUTOR_ACCESS[declared.command];
+  if (!access) {
+    throw new Error(`WORKER_EXECUTOR_UNGRANTED: no credential policy for '${declared.command}'`);
+  }
+
   const workspace = await mkdtemp(join(tmpdir(), "icos-worker-"));
   const home = await createEphemeralHome();
   try {
-    const capabilities = HERMES_CREDENTIALS.map((relativePath) => ({
-      id: `hermes:${relativePath}`,
+    const capabilities = access.credentials.map((relativePath) => ({
+      id: `${declared.command}:${relativePath}`,
       kind: "file" as const,
       target: relativePath,
     }));
     const contents = new Map<string, string>();
-    for (const relativePath of HERMES_CREDENTIALS) {
+    for (const relativePath of access.credentials) {
       const value = await readFile(join(HOME, relativePath), "utf8").catch(() => undefined);
       if (value !== undefined) contents.set(relativePath, value);
     }
@@ -141,24 +181,32 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
     }
     await seedHome(home.path, broker.files);
 
-    const usageFile = join(workspace, "usage.json");
     const root = workspaceRoot();
+    /*
+     * Literal substitution, never a shell. The declaration owns the invocation shape —
+     * including `--no-restore-cwd`, which is load-bearing: hermes otherwise chdirs to its
+     * OWN configured project on startup, leaving the directory ICOS bound and outside the
+     * sandbox profile, so the run reports the repository "not accessible" from a temp
+     * folder. The workspace ICOS declares must be the one the executor runs in.
+     */
+    const args = declared.args.map((arg) =>
+      arg
+        .split(EXEC_PLACEHOLDERS.prompt)
+        .join(prompt)
+        .split(EXEC_PLACEHOLDERS.workspace)
+        .join(workspace),
+    );
+    const usageFile = join(workspace, "usage.json");
     const run = await runNonInteractive({
-      command: "hermes",
-      /*
-       * `--no-restore-cwd` is load-bearing. Hermes otherwise chdirs to ITS OWN configured
-       * project on startup, which leaves the directory ICOS bound and is not in the
-       * sandbox profile — so the run reported the repository "not accessible" while
-       * sitting in a temp folder. The workspace ICOS declares must be the one it runs in.
-       */
-      args: ["-z", prompt, "--usage-file", usageFile, "--no-restore-cwd"],
+      command: declared.command,
+      args,
       /*
        * The declared checkout IS the working directory, so `allowed_file_scope: ["."]`
        * means the repository rather than an empty temp folder.
        */
       cwd: root,
       env: { HOME: home.path, ...broker.env },
-      timeoutMs: executionTimeoutMs(),
+      timeoutMs: declared.timeoutMs ?? executionTimeoutMs(),
       sandbox: {
         /*
          * READ_ONLY. The repository is readable and NOT writable: the only writable paths
@@ -168,7 +216,7 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
          * means a path that is not listed does not exist for this process.
          */
         readWritePaths: [workspace, home.path],
-        readOnlyPaths: [root, ...HERMES_PROGRAM_PATHS],
+        readOnlyPaths: [root, ...access.programPaths],
         /*
          * A remote provider needs the network, so it is granted. Seatbelt cannot filter by
          * hostname, so this is all-or-nothing and the audit says so rather than implying a
@@ -193,7 +241,7 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
     if (!classified.ok) throw new Error(classified.message);
     return {
       result: classified.result,
-      actualExecutor: "hermes",
+      actualExecutor: declared.command,
       /* Only what hermes itself stated; silence stays silence. */
       ...(classified.model ? { actualModel: classified.model } : {}),
     };

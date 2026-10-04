@@ -112,11 +112,16 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
     {
       key: "mission.launch",
       label: "lancer une mission issue de la conversation",
-      // launchPolicy(): the risk level is ASSERTED BY THE MODEL, so it is unverified
-      // and can never be relaxed on the model's word. This is the real policy.
-      state: yes(probe.missionIntakeConnected) ? "APPROVAL_REQUIRED" : "NOT_CONNECTED",
+      /*
+       * The CLASS is decided per goal by `classifyMissionAutonomy`, from the capabilities
+       * the goal declares — never from the risk the model claims for itself. This fact
+       * describes the POLICY that will be applied, not a verdict on a goal that does not
+       * exist yet, so it reports that safe internal work starts on its own and the rest
+       * is asked about. Saying APPROVAL_REQUIRED unconditionally was simpler and false.
+       */
+      state: yes(probe.missionIntakeConnected) ? "GOVERNED" : "NOT_CONNECTED",
       evidence: yes(probe.missionIntakeConnected)
-        ? "niveau de risque affirmé par le modèle, donc non vérifié : approbation humaine requise avant lancement"
+        ? "travail interne vérifiablement en lecture seule ou confiné à un worktree isolé : lancé sans approbation ; effet externe, destructif ou irréversible : approbation humaine. Le niveau de risque affirmé par le modèle ne peut qu'augmenter l'exigence."
         : "intake d'objectif non connecté",
     },
     {
