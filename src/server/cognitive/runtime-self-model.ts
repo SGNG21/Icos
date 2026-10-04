@@ -18,6 +18,14 @@ export type RuntimeProbes = {
   readonly countToolConnectors: () => Promise<number | undefined>;
   readonly countToolGrants: () => Promise<number | undefined>;
   readonly countWorkers: () => Promise<number | undefined>;
+  /** Healthy AND available — the fleet that can actually take work right now. */
+  readonly countRoutableWorkers: () => Promise<number | undefined>;
+  /** Executors the Execution Gateway can launch under its sandbox. */
+  readonly countGovernedExecutors: () => Promise<number | undefined>;
+  /** Connectors that genuinely reach the web/search, not model providers. */
+  readonly countRealtimeConnectors: () => Promise<number | undefined>;
+  /** Canonical durable brains — logical roles, never compute workers. */
+  readonly countDurableBrains: () => Promise<number | undefined>;
   readonly countCapabilities: () => Promise<number | undefined>;
   readonly cognitionConfigured: () => boolean;
   readonly missionIntakeConnected: () => boolean;
@@ -39,13 +47,25 @@ export class RuntimeSelfModel implements SelfModelSource {
   constructor(private readonly probes: RuntimeProbes) {}
 
   async probe(): Promise<RuntimeCapabilityProbe> {
-    const [toolConnectors, toolGrants, registeredWorkers, registeredCapabilities] =
-      await Promise.all([
-        safely(this.probes.countToolConnectors),
-        safely(this.probes.countToolGrants),
-        safely(this.probes.countWorkers),
-        safely(this.probes.countCapabilities),
-      ]);
+    const [
+      toolConnectors,
+      toolGrants,
+      registeredWorkers,
+      registeredCapabilities,
+      routableWorkers,
+      governedExecutors,
+      realtimeConnectors,
+      durableBrains,
+    ] = await Promise.all([
+      safely(this.probes.countToolConnectors),
+      safely(this.probes.countToolGrants),
+      safely(this.probes.countWorkers),
+      safely(this.probes.countCapabilities),
+      safely(this.probes.countRoutableWorkers),
+      safely(this.probes.countGovernedExecutors),
+      safely(this.probes.countRealtimeConnectors),
+      safely(this.probes.countDurableBrains),
+    ]);
     return {
       cognitionConfigured: this.probes.cognitionConfigured(),
       // Reaching this class at all means the PostgreSQL runtime was composed.
@@ -56,6 +76,10 @@ export class RuntimeSelfModel implements SelfModelSource {
       toolConnectors,
       toolGrants,
       registeredWorkers,
+      routableWorkers,
+      governedExecutors,
+      realtimeConnectors,
+      durableBrains,
       registeredCapabilities,
       speechToText: this.probes.speechToText(),
       textToSpeech: this.probes.textToSpeech(),

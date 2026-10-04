@@ -53,6 +53,26 @@ export type RuntimeCapabilityProbe = {
   /** Non-expired, non-revoked grants: without one, no tool action may run. */
   readonly toolGrants: number | undefined;
   readonly registeredWorkers: number | undefined;
+  /**
+   * Registered is not routable. A worker whose probe failed is a row, not a resource, and
+   * reporting "15 workers" while 9 are unhealthy describes a fleet ICOS does not have.
+   */
+  readonly routableWorkers: number | undefined;
+  /**
+   * GOVERNED EXECUTORS the Execution Gateway can actually launch — hermes, codex — as
+   * distinct from Tool Gateway connectors. These were invisible here, so ICOS reported
+   * "aucun outil utilisable" while sandboxed autolaunch was certified working. Two
+   * different capabilities; conflating them made one of them unspeakable.
+   */
+  readonly governedExecutors: number | undefined;
+  /**
+   * A live WEB/REALTIME connector. Reaching a model provider is NOT web access: a model
+   * answers from its weights. Kept separate so provider connectivity can never be
+   * mistaken for the ability to look something up.
+   */
+  readonly realtimeConnectors: number | undefined;
+  /** Canonical durable brains. Logical roles — never counted as compute workers. */
+  readonly durableBrains: number | undefined;
   readonly registeredCapabilities: number | undefined;
   readonly speechToText: boolean | undefined;
   readonly textToSpeech: boolean | undefined;
@@ -114,19 +134,35 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
     {
       key: "tools.governed",
       label: "utiliser des outils ou connecteurs externes gouvernés",
-      state: toolsUsable ? "GOVERNED" : "NOT_CONNECTED",
+      /*
+       * TWO governed paths, and only one used to be measured.
+       *
+       * The Tool Gateway's connectors are one. The EXECUTION GATEWAY — hermes and codex,
+       * launched under a kernel sandbox with brokered credentials — is the other, and it
+       * was invisible here, so ICOS answered "aucun outil utilisable" on a runtime where
+       * governed autolaunch is certified. Either path makes the capability real.
+       */
+      state: toolsUsable || some(probe.governedExecutors) ? "GOVERNED" : "NOT_CONNECTED",
       evidence: toolsUsable
         ? "connecteurs installés et habilitations actives ; risque élevé ou critique = approbation humaine"
-        : `aucun outil utilisable (connecteurs: ${probe.toolConnectors ?? "inconnu"}, habilitations: ${probe.toolGrants ?? "inconnu"})`,
+        : some(probe.governedExecutors)
+          ? `exécuteurs gouvernés disponibles (${probe.governedExecutors}) sous bac à sable ; aucun connecteur externe installé`
+          : `aucun outil utilisable (connecteurs: ${probe.toolConnectors ?? "inconnu"}, habilitations: ${probe.toolGrants ?? "inconnu"}, exécuteurs: ${probe.governedExecutors ?? "inconnu"})`,
     },
     {
       key: "external.realtime",
-      label: "accéder à des données externes en temps réel",
-      // Strictly follows the tools: there is no other external path.
-      state: toolsUsable ? "GOVERNED" : "NOT_CONNECTED",
-      evidence: toolsUsable
-        ? "via les connecteurs gouvernés uniquement"
-        : "aucun connecteur externe installé",
+      label: "consulter des données externes en temps réel (web, recherche)",
+      /*
+       * ITS OWN MEASUREMENT. This used to follow `toolsUsable`, which made it true as
+       * soon as ANY connector existed and false otherwise — neither of which is a
+       * statement about the web. Reaching a model provider is not realtime access
+       * either: a model answers from its weights, so being able to call one says nothing
+       * about being able to look something up today.
+       */
+      state: some(probe.realtimeConnectors) ? "GOVERNED" : "NOT_CONNECTED",
+      evidence: some(probe.realtimeConnectors)
+        ? `connecteur web/recherche gouverné disponible (${probe.realtimeConnectors})`
+        : "aucun connecteur web ou de recherche installé : joindre un fournisseur de modèle n'est pas un accès au web",
     },
     {
       key: "workforce.delegate",

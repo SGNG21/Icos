@@ -25,6 +25,10 @@ const FULL: RuntimeCapabilityProbe = {
   toolConnectors: 3,
   toolGrants: 2,
   registeredWorkers: 4,
+  routableWorkers: 4,
+  governedExecutors: 2,
+  realtimeConnectors: 1,
+  durableBrains: 12,
   registeredCapabilities: 7,
   speechToText: true,
   textToSpeech: true,
@@ -36,6 +40,10 @@ const PHONE_RUNTIME: RuntimeCapabilityProbe = {
   toolConnectors: 0,
   toolGrants: 0,
   registeredWorkers: 0,
+  routableWorkers: 0,
+  governedExecutors: 0,
+  realtimeConnectors: 0,
+  durableBrains: 0,
   registeredCapabilities: 0,
 };
 
@@ -75,12 +83,32 @@ describe("self-model: the description is a measurement, not prose", () => {
   });
 
   it("does not claim external access merely because a connector exists without a grant", () => {
-    expect(stateOf({ ...FULL, toolGrants: 0 }, "tools.governed")).toBe("NOT_CONNECTED");
-    expect(stateOf({ ...FULL, toolConnectors: 0 }, "external.realtime")).toBe("NOT_CONNECTED");
+    /* A grant-less connector is not a usable tool, and no executor is available either. */
+    expect(stateOf({ ...FULL, toolGrants: 0, governedExecutors: 0 }, "tools.governed")).toBe(
+      "NOT_CONNECTED",
+    );
+    expect(stateOf({ ...FULL, realtimeConnectors: 0 }, "external.realtime")).toBe("NOT_CONNECTED");
   });
 
-  it("claims external access when connectors AND grants really exist", () => {
+  it("claims realtime access only from a real web/search connector", () => {
     expect(stateOf(FULL, "external.realtime")).toBe("GOVERNED");
+    /*
+     * Tool connectors and grants are NOT web access. This used to follow `toolsUsable`,
+     * so any connector at all made ICOS claim it could consult live external data.
+     */
+    expect(stateOf({ ...FULL, realtimeConnectors: 0 }, "external.realtime")).toBe("NOT_CONNECTED");
+  });
+
+  it("reports governed tools when only the Execution Gateway is available", () => {
+    /*
+     * Hermes and codex launch under the sandbox with no Tool Gateway connector in sight.
+     * ICOS used to answer "aucun outil utilisable" on exactly that runtime.
+     */
+    const gatewayOnly = { ...FULL, toolConnectors: 0, toolGrants: 0, governedExecutors: 2 };
+    expect(stateOf(gatewayOnly, "tools.governed")).toBe("GOVERNED");
+    expect(stateOf({ ...gatewayOnly, governedExecutors: 0 }, "tools.governed")).toBe(
+      "NOT_CONNECTED",
+    );
   });
 
   it("fails closed: an unmeasurable capability is NOT_CONNECTED, never assumed", () => {
@@ -93,7 +121,11 @@ describe("self-model: the description is a measurement, not prose", () => {
       toolConnectors: undefined,
       toolGrants: undefined,
       registeredWorkers: undefined,
-      registeredCapabilities: undefined,
+      routableWorkers: undefined,
+  governedExecutors: undefined,
+  realtimeConnectors: undefined,
+  durableBrains: undefined,
+  registeredCapabilities: undefined,
       speechToText: undefined,
       textToSpeech: undefined,
     };

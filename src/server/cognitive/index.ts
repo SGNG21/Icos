@@ -34,6 +34,12 @@ import {
 } from "./current-state-source";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
+import { and, eq } from "drizzle-orm";
+import { workforceAgents } from "@/server/database/workforce-schema";
+import {
+  executableRuntimes,
+  parseWorkerExecCommands,
+} from "@/server/workers/execution/exec-command-config";
 
 export {
   CognitiveRuntime,
@@ -127,6 +133,34 @@ function runtimeProbesFor(
     countToolConnectors: () => count(toolConnectorHealth),
     countToolGrants: () => count(toolGrants),
     countWorkers: () => count(workers),
+    /* Registered is not routable: a worker whose probe failed is a row, not a resource. */
+    countRoutableWorkers: async () => {
+      const [row] = await db
+        .select({ n: sqlCount() })
+        .from(workers)
+        .where(and(eq(workers.health, "healthy"), eq(workers.availability, "available")));
+      return Number(row?.n ?? 0);
+    },
+    /*
+     * Executors the Execution Gateway can actually launch. Declared by deployment
+     * (`ICOS_WORKER_EXEC_COMMANDS`) rather than inferred, because an executor ICOS cannot
+     * name is one it must not claim.
+     */
+    countGovernedExecutors: async () =>
+      executableRuntimes(parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS)).length,
+    /*
+     * Web/search connectors ONLY. Model-provider reachability is deliberately excluded:
+     * a model answers from its weights, which is not realtime access to anything.
+     */
+    countRealtimeConnectors: async () => 0,
+    /* Canonical durable brains — logical roles, counted apart from compute workers. */
+    countDurableBrains: async () => {
+      const [row] = await db
+        .select({ n: sqlCount() })
+        .from(workforceAgents)
+        .where(eq(workforceAgents.kind, "DURABLE_AGENT"));
+      return Number(row?.n ?? 0);
+    },
     countCapabilities: () => count(capabilitiesTable),
     cognitionConfigured: () => engine.label !== "not_connected",
     missionIntakeConnected: () => missionsConnected,
