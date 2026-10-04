@@ -176,6 +176,8 @@ function restart() {
     capabilityRouter: router,
     dispatchPrepared: async (prepared) => {
       const result = await dispatcher.dispatch({
+        /* Mission work: a DAG task with review and settlement. */
+        executionClass: "DURABLE_MISSION_TASK",
         missionId: prepared.missionId,
         taskId: prepared.taskId,
         prompt: prepared.prompt,
@@ -305,6 +307,8 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
 
     /* ---- 2. THE FAULT: the worker hangs and is really killed. ---- */
     await boot.dispatcher.dispatch({
+      /* Mission work: a DAG task with review and settlement. */
+      executionClass: "DURABLE_MISSION_TASK",
       missionId: MISSION_ID,
       taskId: TASK_ID,
       prompt: "Write proof.txt and commit it",
@@ -472,6 +476,8 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
     });
     await boot.ledger.markDispatched(attempt1.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
     await boot.dispatcher.dispatch({
+      /* Mission work: a DAG task with review and settlement. */
+      executionClass: "DURABLE_MISSION_TASK",
       missionId: MISSION_ID,
       taskId: TASK_ID,
       prompt: "Write proof.txt and commit it",
