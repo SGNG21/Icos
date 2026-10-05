@@ -198,8 +198,7 @@ import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attemp
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
-import {
-  DEFAULT_GOAL_MAX_TOTAL_TOKENS, composeSpendMeters } from "@/server/budget/compose-spend";
+import { DEFAULT_GOAL_MAX_TOTAL_TOKENS, composeSpendMeters } from "@/server/budget/compose-spend";
 import {
   CanonicalAutonomousMissionPlanner,
   type PlannerCompletionProvider,
@@ -764,7 +763,18 @@ export async function buildPostgresContainer(
       "Un reviewer LLM est requis pour le backend PostgreSQL (ICOS_REVIEWER_COMMAND ou OmniRoute).",
     );
   }
-  const reviewer = new PostgresReviewerService(handle.db, llmReviewer);
+  /*
+   * The workforce is composed BEFORE the reviewer so the reviewer can read the mission's
+   * Reviewer-brain assignment (decision 0070) and attribute its spend to that brain.
+   */
+  const workforce = createWorkforceRuntime({
+    store: createWorkforceStore({ kind: "postgres", db: handle.db }),
+  });
+  const reviewer = new PostgresReviewerService(
+    handle.db,
+    llmReviewer,
+    async (missionId) => (await workforce.reviewAssignmentFor(missionId))?.agentId ?? null,
+  );
   const conversationService = new ConversationService(
     new PostgresConversationRepository(handle.db),
     new PostgresMessageRepository(handle.db),
@@ -1088,9 +1098,7 @@ export async function buildPostgresContainer(
       },
       auth: authentication?.auth,
     }),
-    workforce: createWorkforceRuntime({
-      store: createWorkforceStore({ kind: "postgres", db: handle.db }),
-    }),
+    workforce,
   };
 }
 

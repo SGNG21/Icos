@@ -50,7 +50,8 @@ function executionLeaseFor(attempt: { workflowId: string }): ExecutionLeaseGrant
   const configured = Number(loadEnv().ICOS_WORKER_EXECUTION_LEASE_MS);
   return {
     owner: attempt.workflowId,
-    leaseMs: Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
+    leaseMs:
+      Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
   };
 }
 
@@ -165,11 +166,38 @@ export class SupervisorService {
       return { blocked: false, deferred: true, reason: "WORKFORCE_APPROVAL_PENDING" };
     }
 
+    /*
+     * WHAT THE BRAIN DID TO THIS DISPATCH, recorded on the attempt (decision 0070). The
+     * assignment is read from the workforce's durable row; what it changed — a raised
+     * difficulty, added capabilities — is written beside the router's own evidence so a
+     * reader can tell "a brain governed this" from "a brain changed this".
+     */
+    // Read only when something will use it: a composition with neither router nor brain
+    // routes byte-identically to before and touches no task row.
+    const canonicalTask =
+      this.capabilityRouter || brain ? await this.taskRepository.getById(missionTask.taskId) : null;
+    const ownComplexity = complexityFromRisk(canonicalTask?.riskClass);
+    const workforceEvidence = brain
+      ? {
+          assignmentIds: brain.assignmentIds,
+          agentIds: brain.agentIds,
+          complexityFloor: brain.complexity,
+          complexityRaised: higherComplexity(ownComplexity, brain.complexity) !== ownComplexity,
+          capabilitiesAdded: brain.workerCapabilities.filter(
+            (c) => !(canonicalTask?.requiredCapabilities ?? []).includes(c),
+          ),
+        }
+      : null;
+
     if (!this.capabilityRouter) {
-      return { blocked: false };
+      return {
+        blocked: false,
+        ...(workforceEvidence
+          ? { routingDecision: { kind: "ROUTING_UNCONFIGURED", workforce: workforceEvidence } }
+          : {}),
+      };
     }
 
-    const canonicalTask = await this.taskRepository.getById(missionTask.taskId);
     const requiredCapabilities = [
       ...new Set([
         ...(canonicalTask?.requiredCapabilities ?? []),
@@ -190,10 +218,7 @@ export class SupervisorService {
       {
         role: "writer",
         taskType: requiredCapabilities[0],
-        complexity: higherComplexity(
-          complexityFromRisk(canonicalTask?.riskClass),
-          brain?.complexity,
-        ),
+        complexity: higherComplexity(ownComplexity, brain?.complexity),
         risk: canonicalTask?.riskClass,
         repositoryMutation: (canonicalTask?.allowedFileScope?.length ?? 0) > 0,
         correctionAttempt: 0,
@@ -227,12 +252,19 @@ export class SupervisorService {
         blocked: false,
         workerKind: routing.worker.workerKind,
         workerId: routing.worker.id,
-        routingDecision: routing.evidence,
+        routingDecision: workforceEvidence
+          ? { ...routing.evidence, workforce: workforceEvidence }
+          : routing.evidence,
       };
     }
 
-    // ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour.
-    return { blocked: false };
+    // ROUTING_UNCONFIGURED: empty registry, pre-M4 behaviour — the brain still governed it.
+    return {
+      blocked: false,
+      ...(workforceEvidence
+        ? { routingDecision: { kind: "ROUTING_UNCONFIGURED", workforce: workforceEvidence } }
+        : {}),
+    };
   }
 
   /**

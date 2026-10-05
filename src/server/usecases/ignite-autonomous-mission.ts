@@ -1,5 +1,8 @@
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
-import type { AutonomousMissionPlanner, AutonomousSupervisor } from "@/server/autonomy/autonomous-mission-runner";
+import type {
+  AutonomousMissionPlanner,
+  AutonomousSupervisor,
+} from "@/server/autonomy/autonomous-mission-runner";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { MissionRepository } from "@/server/mission/ports";
 import {
@@ -14,7 +17,10 @@ import {
  * l'allumage. Absente = plafond historique et compute non restreint.
  */
 export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
-  missions: Pick<MissionRepository, "create" | "findById" | "listTasks" | "applyPlan" | "replacePlan">;
+  missions: Pick<
+    MissionRepository,
+    "create" | "findById" | "listTasks" | "applyPlan" | "replacePlan"
+  >;
   runtimeRepository: AutonomousMissionRuntimeRepository;
   supervisor: AutonomousSupervisor;
   planner: AutonomousMissionPlanner;
@@ -25,19 +31,6 @@ export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
    * Optional so a caller with no goal, and the tests, need not supply it.
    */
   goals?: Pick<GoalRepository, "setConverted">;
-  /**
-   * CHIEF, before any worker runs.
-   *
-   * Chief decides logical responsibility — which canonical brain owns which step — and
-   * records workforce assignments. It executes nothing: CORE3 still owns task state and
-   * dispatch, and `workforceTaskCompute.forTask` may only TIGHTEN what the dispatcher
-   * would have done. Optional, so a mission with no goal (and the tests) need no Chief.
-   *
-   * A refusal is NOT fatal here. Delegation is an orchestration decision; losing it must
-   * not strand a goal the owner asked for, so it is recorded and the mission proceeds
-   * undelegated rather than failing closed on a planning nicety.
-   */
-  delegate?: (goalId: string, missionId: string) => Promise<void>;
 }
 
 export type IgniteAutonomousMissionResult =
@@ -84,10 +77,11 @@ export async function igniteAutonomousMission(
     await deps.goals.setConverted(input.goalId, mission.id);
   }
 
-  /* Chief delegates BEFORE planning, so assignments exist when the dispatcher reads them. */
-  if (input.goalId !== undefined && deps.delegate) {
-    await deps.delegate(input.goalId, mission.id);
-  }
+  /*
+   * Chief no longer delegates here, before the planner has produced any task: a delegation
+   * made at this point could only name stages, which the dispatcher never matches. The
+   * bridge binds per CORE3 task at first routing (`boundTaskCompute`, decision 0070).
+   */
 
   try {
     const result = await startAutonomousMission(
@@ -109,7 +103,12 @@ export async function igniteAutonomousMission(
         ...(input.computePolicy !== undefined ? { computePolicy: input.computePolicy } : {}),
       },
     );
-    return { missionId: mission.id, outcome: "started", state: result.state, reason: result.reason };
+    return {
+      missionId: mission.id,
+      outcome: "started",
+      state: result.state,
+      reason: result.reason,
+    };
   } catch (error) {
     const runtime = await deps.runtimeRepository.get(mission.id).catch(() => null);
     if (runtime && !TERMINAL_RUNTIME_STATES.includes(runtime.state)) {

@@ -4,6 +4,7 @@ import {
 } from "@/core/chief/objective-classification";
 import {
   planObjectiveDelegation,
+  type DelegationAssignment,
   type DelegationLimits,
   type DelegationPlan,
   type DelegationRefusal,
@@ -20,6 +21,7 @@ import type { WorkAssignment, WorkRequest } from "@/core/workforce/contracts";
 import type { Principal } from "@/core/workforce/governance";
 
 import type { BrainRegistry } from "./brain-registry";
+import type { WorkforceStore } from "./ports";
 import type { WorkforceService } from "./workforce-service";
 
 /**
@@ -48,9 +50,56 @@ import type { WorkforceService } from "./workforce-service";
  * compétence et quelle autorité portent ce travail, jamais avec quoi on le fait.
  */
 
-/** Un identifiant de tâche stable par étape : rejouer la même délégation n'en crée pas deux. */
-export const stageTaskId = (missionId: string, stage: string): string =>
-  `${missionId}:${stage.toLowerCase()}`;
+/**
+ * L'identifiant de l'affectation de RELECTURE, qui n'est PAS une tâche CORE3 : la relecture
+ * est rendue par le `ReviewerService`, pas dispatchée. Clé d'idempotence d'une affectation
+ * hors-tâche, et rien d'autre — jamais une clé de jointure avec le dispatch.
+ */
+export const reviewAssignmentTaskId = (missionId: string): string => `${missionId}:review`;
+
+/**
+ * La tâche telle que le pont la voit : l'identité DURABLE CORE3 (`mission_tasks.task_id`,
+ * celle que le superviseur passe à `forTask`) et la capacité que le planificateur a déclarée,
+ * s'il en a déclaré une.
+ */
+export interface BindableTask {
+  readonly taskId: string;
+  readonly capability?: string | null;
+}
+
+export interface TaskBinding {
+  readonly taskId: string;
+  readonly stages: readonly DelegationAssignment[];
+}
+
+/**
+ * LE PONT, en une règle déterministe (décision 0070).
+ *
+ * Une tâche qui DÉCLARE une capacité va à l'étape (ou aux étapes) du plan qui la porte :
+ * `code_write` en auto-amélioration lie Evolution ET Builder, et `forTask` compose la plus
+ * stricte. Une tâche qui n'en déclare aucune — le cas réel : 23 tâches sur 26 en base —
+ * appartient au CERVEAU DE TÊTE de la classe de travail, l'étape de vague 0 : Planner pour un
+ * objectif logiciel, Evolution pour l'auto-amélioration, Recovery pour une réparation,
+ * Business pour un client. Une tâche dont la capacité ne correspond à aucune étape n'est PAS
+ * devinée vers le cerveau de tête : elle est rendue non liée, visible, et dispatchée comme
+ * avant.
+ */
+export function planTaskBindings(
+  plan: Pick<DelegationPlan, "assignments">,
+  tasks: readonly BindableTask[],
+): { bound: TaskBinding[]; unbound: BindableTask[] } {
+  const lowestWave = Math.min(...plan.assignments.map((a) => a.wave));
+  const leads = plan.assignments.filter((a) => a.wave === lowestWave);
+  const bound: TaskBinding[] = [];
+  const unbound: BindableTask[] = [];
+  for (const task of tasks) {
+    const capability = task.capability?.trim();
+    const stages = capability ? plan.assignments.filter((a) => a.capability === capability) : leads;
+    if (stages.length === 0) unbound.push(task);
+    else bound.push({ taskId: task.taskId, stages });
+  }
+  return { bound, unbound };
+}
 
 export type ChiefDelegationOutcome =
   | {
@@ -59,6 +108,10 @@ export type ChiefDelegationOutcome =
       readonly assignments: readonly WorkAssignment[];
       /** Ce que la gouvernance a refusé. Non vide ne veut PAS dire que rien n'a été fait. */
       readonly gaps: readonly DelegationGap[];
+      /** Tâches CORE3 qu'aucune étape du plan ne couvre : dispatchées sans cerveau, dit tel quel. */
+      readonly unbound: readonly BindableTask[];
+      /** Tâches déjà liées avant cet appel : la délégation est idempotente par tâche et cerveau. */
+      readonly alreadyBound: number;
     }
   | {
       readonly ok: false;
@@ -70,6 +123,8 @@ export type ChiefDelegationOutcome =
 export interface ChiefDelegationDeps {
   readonly registry: BrainRegistry;
   readonly service: Pick<WorkforceService, "delegate">;
+  /** Les affectations existantes du tenant : ce qui rend un second appel idempotent. */
+  readonly store: Pick<WorkforceStore, "listAssignments">;
   /**
    * Le principal du CHIEF. C'est lui qui délègue, donc lui que la gouvernance contrôle : la
    * workforce n'accorde une affectation qu'à un rapport DIRECT du délégant, et les onze
@@ -99,14 +154,23 @@ export const DEFAULT_DELEGATION_LIMITS: DelegationLimits = Object.freeze({
 });
 
 export interface ChiefDelegation {
-  delegateGoal(goal: HighLevelGoal, missionId: string): Promise<ChiefDelegationOutcome>;
+  /**
+   * Délègue l'objectif d'une mission à ses cerveaux, TÂCHE PAR TÂCHE : chaque affectation
+   * porte l'identité durable CORE3 de la tâche qu'elle gouverne, celle que le dispatch lit.
+   * Idempotent : une tâche déjà affectée à ce cerveau n'est pas réaffectée.
+   */
+  delegateGoal(
+    goal: HighLevelGoal,
+    missionId: string,
+    tasks: readonly BindableTask[],
+  ): Promise<ChiefDelegationOutcome>;
 }
 
 export function chiefDelegation(deps: ChiefDelegationDeps): ChiefDelegation {
   const limits = deps.limits ?? DEFAULT_DELEGATION_LIMITS;
 
   return {
-    async delegateGoal(goal, missionId) {
+    async delegateGoal(goal, missionId, tasks) {
       /*
        * DEUX SOURCES DE CLASSE, UNE PRÉCÉDENCE ÉCRITE — et aucun troisième classificateur.
        *
@@ -145,29 +209,64 @@ export function chiefDelegation(deps: ChiefDelegationDeps): ChiefDelegation {
        * de sa capacité travaille déjà. Elles restent dans le plan, visibles, et une
        * délégation ultérieure les reprendra — même identifiant d'étape, donc pas de doublon.
        */
-      const requests: WorkRequest[] = [...outcome.plan.assignments, outcome.plan.review].map(
-        (assignment) => ({
-          missionId,
-          taskId: stageTaskId(missionId, assignment.stage),
-          taskType: assignment.stage,
-          requiredCapabilities: [assignment.capability],
-          scope: {},
-          /* Une unité par étape : le coût réel est mesuré par le budget, pas estimé ici. */
-          computeUnits: 1,
-          requiredAgentId: assignment.brainId,
-        }),
+      /*
+       * IDEMPOTENCE PAR (TÂCHE, CERVEAU). `planDelegation` ne dédoublonne rien : relancer la
+       * délégation à chaque passage du superviseur recréerait les mêmes affectations et
+       * consommerait la capacité du Chief jusqu'au refus. Une affectation annulée ne compte
+       * pas : le Chief a retiré ce travail, le réaffecter est une nouvelle décision.
+       */
+      const existing = (await deps.store.listAssignments(deps.chief.tenantId)).filter(
+        (a) => a.missionId === missionId && a.status !== "cancelled",
       );
+      const taken = new Set(existing.map((a) => `${a.taskId}|${a.assigneeAgentId}`));
 
-      const recorded = await deps.service.delegate(deps.chief, {
-        requests,
-        parentAssignmentId: null,
-      });
+      const { bound, unbound } = planTaskBindings(outcome.plan, tasks);
+      const requests: WorkRequest[] = [];
+      let alreadyBound = 0;
+      for (const binding of bound) {
+        for (const stage of binding.stages) {
+          if (taken.has(`${binding.taskId}|${stage.brainId}`)) {
+            alreadyBound++;
+            continue;
+          }
+          requests.push({
+            missionId,
+            /* L'IDENTITÉ DURABLE CORE3, jamais une convention de nommage. */
+            taskId: binding.taskId,
+            taskType: stage.stage,
+            requiredCapabilities: [stage.capability],
+            scope: {},
+            /* Une unité par tâche : le coût réel est mesuré par le budget, pas estimé ici. */
+            computeUnits: 1,
+            requiredAgentId: stage.brainId,
+          });
+        }
+      }
+      const review = outcome.plan.review;
+      if (!taken.has(`${reviewAssignmentTaskId(missionId)}|${review.brainId}`)) {
+        requests.push({
+          missionId,
+          taskId: reviewAssignmentTaskId(missionId),
+          taskType: review.stage,
+          requiredCapabilities: [review.capability],
+          scope: {},
+          computeUnits: 1,
+          requiredAgentId: review.brainId,
+        });
+      }
+
+      const recorded =
+        requests.length === 0
+          ? { assignments: [], gaps: [] }
+          : await deps.service.delegate(deps.chief, { requests, parentAssignmentId: null });
 
       return {
         ok: true,
         plan: outcome.plan,
         assignments: recorded.assignments,
         gaps: recorded.gaps,
+        unbound,
+        alreadyBound,
       };
     },
   };

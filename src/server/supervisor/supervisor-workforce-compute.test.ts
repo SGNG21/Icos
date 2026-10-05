@@ -26,7 +26,7 @@ const need = (over: Partial<BrainComputeNeed> = {}): BrainComputeNeed => ({
   ...over,
 });
 
-async function harness(brain: BrainComputeNeed | null) {
+async function harness(brain: BrainComputeNeed | null, withAttempts = false) {
   const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
   const mission = await container.mission.create({
     title: "brain wiring",
@@ -50,13 +50,18 @@ async function harness(brain: BrainComputeNeed | null) {
   } as unknown as CapabilityRouter;
   const forTask = vi.fn(async () => brain);
   const workforce: WorkforceTaskCompute = { forTask };
-  const dispatch = vi.fn(async ({ taskId }: { taskId: string }) => ({ workflowId: `w-${taskId}` }));
+  const dispatch = vi.fn(
+    async ({ taskId, workflowId }: { taskId: string; workflowId?: string }) => ({
+      // With a dispatch ledger the acknowledgement must echo the workflow id it was given.
+      workflowId: workflowId ?? `w-${taskId}`,
+    }),
+  );
   const supervisor = new SupervisorService(
     container.mission,
     container.tasks,
     { dispatch } as unknown as TaskExecutionDispatcher,
     container.durableMemory,
-    undefined,
+    withAttempts ? container.dispatchAttempts : undefined,
     undefined,
     router,
     undefined,
@@ -95,6 +100,24 @@ describe("SupervisorService × the workforce compute port", () => {
     // Deferred, never `blocked`: a human approving ends the hold by itself.
     const task = (await h.container.mission.listTasks(h.mission.id))[0];
     expect(task.status).not.toBe("blocked");
+    await h.container.close();
+  });
+
+  it("records on the attempt WHICH brain governed the dispatch and what it changed (decision 0070)", async () => {
+    const h = await harness(need({ complexity: "high", agentIds: ["brain-delivery"] }), true);
+    await h.supervisor.run(h.mission.id);
+    const task = (await h.container.mission.listTasks(h.mission.id))[0];
+    const [attempt] = await h.container.dispatchAttempts.listNonTerminalByMissionTaskId(task.id);
+    expect(attempt?.routingDecision).toMatchObject({
+      workforce: {
+        assignmentIds: ["wfa-1"],
+        agentIds: ["brain-delivery"],
+        complexityFloor: "high",
+        // The task's own `reversible` risk routes as `medium`: the brain RAISED it.
+        complexityRaised: true,
+        capabilitiesAdded: [],
+      },
+    });
     await h.container.close();
   });
 

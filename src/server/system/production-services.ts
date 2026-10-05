@@ -16,6 +16,8 @@ import { DurableScheduler } from "@/server/scheduler/durable-scheduler";
 import { createSchedulerHandlers } from "@/server/scheduler/scheduler-handlers";
 import type { AutonomousSupervisor } from "@/server/autonomy/autonomous-mission-runner";
 import type { IgniteAutonomousMissionDeps } from "@/server/usecases/ignite-autonomous-mission";
+import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute";
+import { boundTaskCompute } from "@/server/workforce/mission-binding";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
 import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
 import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
@@ -158,83 +160,24 @@ function chiefRelease(
   };
 }
 
-function chiefDelegate(
-  container: Container,
-): Pick<IgniteAutonomousMissionDeps, "delegate"> {
+/**
+ * THE BRIDGE (decision 0070): Chief binds assignments to CORE3 task ids at first routing,
+ * and the dispatcher reads them through the same compute seam it always had. Composed HERE
+ * because only the composition root holds the workforce authority, the mission store and
+ * the goal store together. `actAsAgent` is how the runtime speaks AS brain-chief: governance
+ * lets a delegant assign only to its own direct reports, and the other eleven brains
+ * report to brain-chief, so no other principal could delegate this.
+ */
+function workforceDispatchBridge(container: Container): WorkforceTaskCompute | undefined {
   const workforce = container.workforce;
-  if (!workforce) return {};
-
-  return {
-    delegate: async (goalId, missionId) => {
-      const record = await container.goalRepository.getById(goalId);
-      if (!record) return;
-      const system = workforce.runtime.system("core3-dispatch");
-      const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
-      const outcome = await workforce.chiefDelegation(chief).delegateGoal(record.goal, missionId);
-
-      if (outcome.ok && outcome.gaps.length > 0) {
-        /*
-         * A PARTIAL delegation is not a success.
-         *
-         * `delegateGoal` returns { assignments, gaps } and only `!ok` was ever logged, so
-         * a mission whose roles could not all be placed looked identical to one fully
-         * delegated — a live run produced ZERO assignments, logged nothing, and the
-         * capacity question could only be guessed at. The gaps carry exactly who was
-         * considered and why each was rejected, so they are reported.
-         */
-        console.error(
-          JSON.stringify({
-            event: "CHIEF_DELEGATION_PARTIAL",
-            goalId,
-            missionId,
-            requestedRoles: [
-              ...outcome.plan.assignments.map((a) => a.brainId),
-              outcome.plan.review.brainId,
-            ],
-            assignmentsCreated: outcome.assignments.length,
-            gapsCount: outcome.gaps.length,
-            gaps: outcome.gaps.map((g) => ({
-              brainId: g.request.requiredAgentId ?? null,
-              reason: g.reason,
-              rejected: g.rejected.map((r) => ({
-                agentId: r.agentId,
-                violations: r.violations,
-              })),
-            })),
-          }),
-        );
-
-        /*
-         * The REVIEWER is mandatory: independent review is a safety control, not a
-         * nicety, and a mission that cannot place one must not proceed as though it had.
-         * Any other gap is reported and allowed, because the plan's other steps are
-         * deferred rather than lost.
-         */
-        const reviewerGap = outcome.gaps.some(
-          (g) => g.request.requiredAgentId === outcome.plan.review.brainId,
-        );
-        if (reviewerGap) {
-          throw new Error(
-            `CHIEF_DELEGATION_REVIEWER_UNPLACED: mission ${missionId} has no independent reviewer`,
-          );
-        }
-      }
-
-      if (!outcome.ok) {
-        /*
-         * NOT swallowed. A refusal used to be discarded here, so a goal ran as
-         * undelegated autonomy and looked identical to a delegated one — which is how a
-         * capacity refusal (brains still holding assignments from finished missions) went
-         * unnoticed. Chief declining is a decision the operator must be able to read.
-         */
-        console.error(
-          `CHIEF_DELEGATION_REFUSED mission=${missionId} reasons=${outcome.refusals
-            .map((r) => (typeof r === "string" ? r : JSON.stringify(r)))
-            .join(" | ")}`,
-        );
-      }
-    },
-  };
+  if (!workforce) return undefined;
+  const system = workforce.runtime.system("core3-dispatch");
+  const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
+  return boundTaskCompute(workforce.core3Compute, {
+    missions: container.mission,
+    goals: container.goalRepository,
+    chief: workforce.chiefDelegation(chief),
+  });
 }
 
 export function autonomyIgniteDeps(
@@ -247,16 +190,6 @@ export function autonomyIgniteDeps(
     supervisor,
     /* Both sides of the goal -> mission link, on every path that ignites from a goal. */
     goals: container.goalRepository,
-    /*
-     * CHIEF on the ordinary goal path. Composed HERE because only the composition root
-     * holds both the workforce authority and the goal store; `igniteAutonomousMission`
-     * stays a use case and learns nothing about principals.
-     *
-     * `actAsAgent` is how the runtime speaks AS brain-chief: governance only lets a
-     * delegant assign to its own direct reports, and the other eleven brains report to
-     * brain-chief, so no other principal could delegate this.
-     */
-    ...chiefDelegate(container),
     planner: container.autonomousPlanner ?? {
       async plan() {
         throw new Error("AUTONOMY_PLANNER_UNAVAILABLE");
@@ -344,7 +277,7 @@ export function composeAutonomyRuntime(container: Container): {
      * (`modelHints` stay non-binding and are deliberately not forwarded to the router).
      * Optional, so a composition without a workforce routes byte-identically.
      */
-    container.workforce?.core3Compute,
+    workforceDispatchBridge(container),
     /* Chief closes what Chief opened: a terminal mission gives its brains back. */
     chiefRelease(container),
   );

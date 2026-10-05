@@ -20,7 +20,7 @@ import { bootstrapWorkforce, type WorkforceBootstrapReport } from "./bootstrap-w
 import type { Principal } from "@/core/workforce/governance";
 
 import { brainRegistry } from "./brain-registry";
-import { chiefDelegation, type ChiefDelegation } from "./chief-delegation";
+import { chiefDelegation, reviewAssignmentTaskId, type ChiefDelegation } from "./chief-delegation";
 import { WorkforceService } from "./workforce-service";
 
 /**
@@ -81,6 +81,14 @@ export interface WorkforceRuntime {
    * qu'il affecte, donc un autre principal ne pourrait rien accorder.
    */
   chiefDelegation: (chief: Principal) => ChiefDelegation;
+  /**
+   * LE RELECTEUR de la mission, tel que le Chief l'a affecté (décision 0070). Lu par le
+   * `ReviewerService` au moment de la relecture LLM pour imputer la dépense au cerveau
+   * relecteur ; `null` quand la mission n'a pas été déléguée.
+   */
+  reviewAssignmentFor: (
+    missionId: string,
+  ) => Promise<{ assignmentId: string; agentId: string } | null>;
 }
 
 export function createWorkforceRuntime(options: WorkforceRuntimeOptions): WorkforceRuntime {
@@ -108,6 +116,15 @@ export function createWorkforceRuntime(options: WorkforceRuntimeOptions): Workfo
     sessions: principals.sessions,
     runtime: principals.runtime,
     bootstrap: (admin, certifier) => bootstrapWorkforce({ service, store, now }, admin, certifier),
-    chiefDelegation: (chief) => chiefDelegation({ registry: brainRegistry(store), service, chief }),
+    chiefDelegation: (chief) =>
+      chiefDelegation({ registry: brainRegistry(store), service, store, chief }),
+    reviewAssignmentFor: async (missionId) => {
+      const tenantId = principals.runtime.system("core3-dispatch").tenantId;
+      const taskId = reviewAssignmentTaskId(missionId);
+      const live = (await store.listAssignments(tenantId)).find(
+        (a) => a.missionId === missionId && a.taskId === taskId && a.status !== "cancelled",
+      );
+      return live ? { assignmentId: live.assignmentId, agentId: live.assigneeAgentId } : null;
+    },
   };
 }
