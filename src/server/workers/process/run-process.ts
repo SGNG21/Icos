@@ -60,6 +60,16 @@ export interface NonInteractiveProcessSpec {
    */
   envPassthrough?: readonly string[];
   timeoutMs: number;
+  /**
+   * ANNULATION EXTERNE — révocation d'autorité, pas expiration de budget.
+   *
+   * `timeoutMs` borne la DURÉE ; ce signal borne le DROIT DE CONTINUER. Un rédacteur qui
+   * perd son bail d'espace de travail doit s'arrêter immédiatement : refuser son résultat
+   * après coup ne suffit pas, puisqu'il écrit encore pendant qu'on le refuse. L'arbre
+   * entier est tué, comme à l'expiration, donc un petit-enfant ne survit pas à la
+   * révocation de son parent.
+   */
+  abortSignal?: AbortSignal;
   /** Per-stream cap. Default 1 MiB. */
   maxOutputBytes?: number;
   /**
@@ -90,6 +100,8 @@ export interface NonInteractiveProcessResult {
   exitCode: number | null;
   signal: string | null;
   timedOut: boolean;
+  /** Révoqué en cours d'exécution (bail perdu, annulation). Distinct de `timedOut`. */
+  aborted?: boolean;
   durationMs: number;
   /** True when either stream hit `maxOutputBytes`. Evidence, not a verdict. */
   truncated: boolean;
@@ -247,6 +259,21 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
     };
 
     let killTimer: NodeJS.Timeout | undefined;
+    /** Révocation d'autorité : même traitement que l'expiration, raison différente. */
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      killTree("SIGTERM");
+      killTimer = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
+    };
+    if (spec.abortSignal) {
+      if (spec.abortSignal.aborted) {
+        /* Déjà révoqué avant le premier octet : on ne laisse pas une écriture commencer. */
+        queueMicrotask(onAbort);
+      } else {
+        spec.abortSignal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       // Ask first, insist second: a worker may still flush a partial verdict.
@@ -259,12 +286,15 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      spec.abortSignal?.removeEventListener("abort", onAbort);
       resolve({
         stdout,
         stderr,
         exitCode,
         signal,
         timedOut,
+        /** Vrai quand l'autorité a été révoquée pendant l'exécution. */
+        aborted,
         durationMs: Date.now() - startedAt,
         truncated,
         confinement,

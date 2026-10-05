@@ -30,6 +30,8 @@ import {
 } from "@/server/workers/execution/exec-command-config";
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
+import { decideExecutable } from "@/core/execution/executable-policy";
+
 import { classifyHermesRun } from "./hermes-run";
 
 /** Correlates one run with its ICOS task and its durable Temporal workflow. */
@@ -147,6 +149,8 @@ export interface ExecutionGrant {
   readonly missionId: string;
   readonly workflowId: string;
   readonly goalId: string | null;
+  /** Executors ICOS authorised for this task; anything else gets no secrets. */
+  readonly credentialScope: readonly string[];
   readonly writeAllowed: boolean;
   readonly workspace: {
     readonly worktreePath: string;
@@ -172,6 +176,75 @@ async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
   const payload = (await response.json()) as { grant?: ExecutionGrant };
   if (!payload.grant) throw new Error("WORKER_GRANT_MALFORMED");
   return payload.grant;
+}
+
+/**
+ * KEEPS ASKING WHETHER THE WRITER MAY STILL WRITE.
+ *
+ * A fencing token proves authority at the instant it is read, and a long write runs for
+ * minutes afterwards. The workspace lease can be lost mid-run — expired, taken over by a
+ * recoverer, the workspace released — and until now the only consequence was that the
+ * RESULT would be refused later. That is not enough: the process is still writing into a
+ * worktree somebody else may now own, and refusing its result does not unwrite the files.
+ *
+ * So the grant is re-read on an interval, and the FIRST answer that is not "still yours,
+ * same token" aborts the run — which kills the process group, descendants included.
+ * An unreachable ICOS does NOT abort: that is absence of evidence, and killing live work
+ * because a callback timed out would turn a blip into lost work. Losing authority is a
+ * positive answer, and only a positive answer stops the writer.
+ */
+function watchAuthority(
+  ctx: ExecutionContext,
+  granted: ExecutionGrant,
+  intervalMs: number,
+): { signal: AbortSignal; reason: () => string | null; stop: () => void } {
+  const controller = new AbortController();
+  let lost: string | null = null;
+
+  const check = async (): Promise<void> => {
+    let current: ExecutionGrant;
+    try {
+      current = await fetchGrant(ctx);
+    } catch {
+      /* Unreachable is not revoked. Keep working; the next tick asks again. */
+      return;
+    }
+    if (!current.writeAllowed) {
+      lost = "WRITE_REVOKED";
+    } else if (!current.workspace || !granted.workspace) {
+      lost = "WORKSPACE_RELEASED";
+    } else if (current.workspace.fencingToken !== granted.workspace.fencingToken) {
+      /* Someone else fenced this workspace: this run is no longer its owner. */
+      lost = "FENCED_OUT";
+    } else if (current.workspace.worktreePath !== granted.workspace.worktreePath) {
+      lost = "WORKSPACE_MOVED";
+    }
+    if (lost) {
+      clearInterval(timer);
+      controller.abort();
+    }
+  };
+
+  const timer = setInterval(() => void check(), intervalMs);
+  /* Never hold the worker process open on this alone. */
+  timer.unref?.();
+
+  return {
+    signal: controller.signal,
+    reason: () => lost,
+    stop: () => clearInterval(timer),
+  };
+}
+
+/**
+ * How often a writer re-checks that it still holds its workspace.
+ *
+ * Read per run, not frozen at load: unlike the executable allowlist this is operational
+ * tuning, not a security boundary — shortening it cannot grant anyone anything.
+ */
+function authorityCheckIntervalMs(): number {
+  const configured = Number(process.env.ICOS_WORKER_AUTHORITY_CHECK_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 5_000;
 }
 
 /**
@@ -257,6 +330,15 @@ export async function runGovernedWorker(
   const grant = await fetchGrant(ctx);
 
   /*
+   * MAY THIS PROGRAM RUN? Asked of the executable policy, which is default-deny and
+   * frozen at load, and is a different question from which secrets it may read.
+   */
+  const executable = decideExecutable(declared.command, declared.args);
+  if (!executable.allowed) {
+    throw new Error(`WORKER_EXECUTABLE_DENIED: ${executable.reason}`);
+  }
+
+  /*
    * A credential policy is how a KNOWN agent gets its secrets, not a list of who may run.
    *
    * This used to refuse any command absent from the table, which made the table an
@@ -267,6 +349,22 @@ export async function runGovernedWorker(
    * for therefore runs with NO brokered credentials, which is the safe direction.
    */
   const access = EXECUTOR_ACCESS[declared.command] ?? { credentials: [], programPaths: [] };
+
+  /*
+   * THE SECRET SCOPE IS ICOS'S DECISION, not the deployment's.
+   *
+   * The credential set used to follow the declared command alone, so re-declaring the
+   * executor changed which secrets a task received without ICOS ever agreeing. A command
+   * that HAS a credential policy must therefore be one ICOS authorised for this task; a
+   * mismatch is a refusal, not a quieter grant, because the two disagreeing is a
+   * misconfiguration and running on would hand out the wrong secrets.
+   */
+  const executorName = declared.command.split("/").pop() ?? declared.command;
+  if (access.credentials.length > 0 && !grant.credentialScope.includes(executorName)) {
+    throw new Error(
+      `WORKER_CREDENTIAL_SCOPE_MISMATCH: '${executorName}' not authorised for this task`,
+    );
+  }
 
   const scratch = await mkdtemp(join(tmpdir(), "icos-worker-"));
   /*
@@ -282,10 +380,18 @@ export async function runGovernedWorker(
     throw new Error("WORKER_WORKSPACE_MISSING: écriture accordée sans worktree alloué");
   }
   const workspace = scratch;
+  /*
+   * Only a WRITER needs watching: a reader holds no worktree, so there is no authority
+   * over one to lose, and polling for it would be noise.
+   */
+  const authority = worktree
+    ? watchAuthority(ctx, grant, authorityCheckIntervalMs())
+    : null;
   const home = await createEphemeralHome();
   try {
     const capabilities = access.credentials.map((relativePath) => ({
-      id: `${declared.command}:${relativePath}`,
+      /* The task owns the capability: task A's grant cannot be replayed for task B. */
+      id: `${grant.taskId}:${executorName}:${relativePath}`,
       kind: "file" as const,
       target: relativePath,
     }));
@@ -294,7 +400,13 @@ export async function runGovernedWorker(
       const value = await readFile(join(HOME, relativePath), "utf8").catch(() => undefined);
       if (value !== undefined) contents.set(relativePath, value);
     }
-    const broker = brokerCredentials(capabilities, (c) => contents.get(c.target));
+    const broker = brokerCredentials(
+      capabilities,
+      (c) => contents.get(c.target),
+      undefined,
+      /* Audited: which task, which workflow, which executor — never a value. */
+      { taskId: grant.taskId, workflowId: grant.workflowId, executor: executorName },
+    );
     if (!broker.ok) {
       throw new Error(`WORKER_CREDENTIAL_MISSING: ${broker.reason}`);
     }
@@ -353,6 +465,8 @@ export async function runGovernedWorker(
         ...broker.env,
       },
       timeoutMs: declared.timeoutMs ?? executionTimeoutMs(),
+      /* Losing the workspace lease kills the run, and the process group with it. */
+      ...(authority ? { abortSignal: authority.signal } : {}),
       sandbox: {
         /*
          * READ_ONLY. The repository is readable and NOT writable: the only writable paths
@@ -383,6 +497,16 @@ export async function runGovernedWorker(
       },
     });
 
+    /*
+     * AUTHORITY FIRST. A run that lost its lease must fail for THAT reason, before its
+     * output is read: whatever it produced, it produced without the right to, and
+     * classifying it as a normal result would let post-revocation work be accepted.
+     */
+    const lostAuthority = authority?.reason();
+    if (lostAuthority) {
+      throw new Error(`WORKER_AUTHORITY_LOST: ${lostAuthority}`);
+    }
+
     if (run.timedOut) {
       throw new Error(`WORKER_TIMEOUT: no result within ${executionTimeoutMs()}ms`);
     }
@@ -403,6 +527,7 @@ export async function runGovernedWorker(
       ...(classified.model ? { actualModel: classified.model } : {}),
     };
   } finally {
+    authority?.stop();
     await home.dispose();
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
   }

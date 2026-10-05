@@ -116,6 +116,16 @@ export async function POST(request: Request): Promise<Response> {
         /* Attribution: the goal whose budget this execution spends under. */
         goalId: mission?.goalId ?? null,
         workerId: attempt.workerId ?? null,
+        /*
+         * THE SECRETS THIS TASK MAY RECEIVE, named by the executor ICOS actually routed.
+         *
+         * Credentials used to be chosen purely from the command the DEPLOYMENT declared,
+         * so changing that declaration changed which secrets a task was handed, with no
+         * reference to what ICOS had authorised it to use. Naming the scope here means a
+         * declaration that disagrees with the routing decision is a refusal rather than
+         * a wider grant.
+         */
+        credentialScope: attempt.workerKind ? [attempt.workerKind] : [],
         writeAllowed,
         /* Absent for a reader: nothing to write means nothing to write INTO. */
         workspace: workspace

@@ -41,9 +41,26 @@ export interface CredentialCapability {
 /** Résout la VALEUR d'une capacité. Séparé pour que rien d'autre ne la touche. */
 export type CredentialResolver = (capability: CredentialCapability) => string | undefined;
 
+/**
+ * À QUELLE EXÉCUTION cette capacité est accordée.
+ *
+ * Un identifiant était courtisé par COMMANDE : deux tâches servies par le même exécuteur
+ * recevaient le même secret, et rien ne disait laquelle l'avait reçu. Une capacité est
+ * accordée à une tâche précise pour la durée d'une exécution — c'est déjà ce que dit la
+ * règle en tête de ce fichier ; voici ce qui la rend vérifiable.
+ */
+export interface CredentialBinding {
+  readonly taskId: string;
+  readonly workflowId: string;
+  /** L'exécuteur qu'ICOS a routé pour cette tâche. Tracé, jamais déduit ici. */
+  readonly executor: string;
+}
+
 /** Ce que l'audit garde. Aucun champ ne peut porter la valeur : c'est le point. */
 export interface CredentialGrantRecord {
   readonly capabilityId: string;
+  /** La tâche et le workflow qui ont reçu la capacité, et par quel exécuteur. */
+  readonly boundTo?: CredentialBinding;
   readonly kind: CredentialCapability["kind"];
   /** Nom de variable ou chemin relatif. Un NOM, jamais un contenu. */
   readonly target: string;
@@ -77,6 +94,12 @@ export function brokerCredentials(
   requested: readonly CredentialCapability[],
   resolve: CredentialResolver,
   now: () => string = () => new Date().toISOString(),
+  /**
+   * Liée à une exécution. Optionnelle pour les appelants d'avant ce verrou, qui courtisent
+   * hors d'une tâche ; présente, elle est VÉRIFIÉE : une capacité dont l'identifiant porte
+   * une autre tâche est refusée, donc le grant de la tâche A ne peut pas servir à B.
+   */
+  binding?: CredentialBinding,
 ): BrokerOutcome {
   const env: Record<string, string> = {};
   const files: HomeSeedFile[] = [];
@@ -85,6 +108,14 @@ export function brokerCredentials(
   const rejected: string[] = [];
 
   for (const capability of requested) {
+    if (binding && !capability.id.startsWith(`${binding.taskId}:`)) {
+      /*
+       * L'identifiant porte la tâche à laquelle la capacité a été préparée. Une capacité
+       * préparée pour une autre tâche n'est pas « manquante » : elle est REFUSÉE.
+       */
+      rejected.push(capability.id);
+      continue;
+    }
     if (capability.kind === "file" && !isSafeHomeRelativePath(capability.target)) {
       /* Un chemin absolu ou remontant écrirait HORS du HOME jetable : refus net. */
       rejected.push(capability.id);
@@ -99,6 +130,7 @@ export function brokerCredentials(
     else files.push({ relativePath: capability.target, contents: value, mode: 0o600 });
     grants.push({
       capabilityId: capability.id,
+      ...(binding ? { boundTo: binding } : {}),
       kind: capability.kind,
       target: capability.target,
       grantedAt: now(),

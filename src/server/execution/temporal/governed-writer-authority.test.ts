@@ -3,6 +3,15 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/*
+ * The executable policy is frozen when its module loads, so a deployment authorises the
+ * binary BEFORE anything imports it. `vi.hoisted` is the only way to be earlier than the
+ * import — which is the property under test, not a workaround for it.
+ */
+vi.hoisted(() => {
+  process.env.ICOS_WORKER_EXECUTABLE_ALLOWLIST = JSON.stringify([process.execPath, "node", "hermes"]);
+});
+
 import { runGovernedWorker } from "./activities";
 
 /**
@@ -28,9 +37,27 @@ let sandboxArgs: Parameters<typeof import("@/server/workers/process/run-process"
 vi.mock("@/server/workers/process/run-process", () => ({
   runNonInteractive: vi.fn(async (options: never) => {
     sandboxArgs.push(options);
-    return { stdout: "RESULT_SENTINEL", stderr: "", timedOut: false, exitCode: 0 };
+    const signal = (options as { abortSignal?: AbortSignal }).abortSignal;
+    /*
+     * Models the real runner: a long run that ends when its authority is revoked. A mock
+     * that returned at once could never show that revocation stops anything.
+     */
+    if (signal && !slowRun) {
+      return { stdout: "RESULT_SENTINEL", stderr: "", timedOut: false, aborted: false, exitCode: 0 };
+    }
+    if (signal) {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) return resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { stdout: "", stderr: "", timedOut: false, aborted: true, exitCode: null };
+    }
+    return { stdout: "RESULT_SENTINEL", stderr: "", timedOut: false, aborted: false, exitCode: 0 };
   }),
 }));
+
+/** Set by the lease-loss tests: makes the mocked run wait for revocation. */
+let slowRun = false;
 vi.mock("./hermes-run", () => ({
   classifyHermesRun: () => ({ ok: true, result: "done" }),
 }));
@@ -58,6 +85,7 @@ function baseGrant(worktreePath: string | null, writeAllowed: boolean) {
     missionId: "mission-1",
     workflowId: "icos-task-task-1",
     goalId: "goal-1",
+    credentialScope: ["node"],
     writeAllowed,
     workspace: worktreePath
       ? { worktreePath, branch: "icos/w/task-1", baseCommit: "abc123", fencingToken: 1 }
@@ -67,6 +95,7 @@ function baseGrant(worktreePath: string | null, writeAllowed: boolean) {
 
 describe("the governed Temporal writer", () => {
   beforeEach(() => {
+    slowRun = false;
     sandboxArgs = [];
     root = realpathSync(mkdtempSync(join(tmpdir(), "icos-root-")));
     canonical = realpathSync(mkdtempSync(join(tmpdir(), "icos-canonical-")));
@@ -264,5 +293,107 @@ describe("the governed Temporal writer", () => {
         workflowId: "icos-task-task-1",
       });
     });
+  });
+});
+
+/**
+ * LOSING THE LEASE STOPS THE WRITER, not merely its result.
+ *
+ * A fencing token proves authority at the instant it is read, and a write runs for
+ * minutes afterwards. Until now the only consequence of losing the workspace lease was
+ * that the result would be refused later — but refusing a result does not unwrite the
+ * files, and the process went on writing into a worktree another owner may hold.
+ */
+describe("authority is re-checked while the writer runs", () => {
+  const ctx = { taskId: "task-1", workflowId: "icos-task-task-1" };
+
+  it("LEASE_LOSS_STOPS_WRITER: a fencing change aborts the run", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let token = 1;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const grant = baseGrant(worktree, true);
+        /* Somebody else fenced the workspace between two checks. */
+        grant.workspace = { ...grant.workspace!, fencingToken: token };
+        token = 2;
+        return grantResponse(grant);
+      }),
+    );
+
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow("WORKER_AUTHORITY_LOST");
+  });
+
+  it("NO_POST_LEASE_WRITE_ACCEPTED: the result is refused for authority, not classified", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let first = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const grant = baseGrant(first ? worktree : null, !first ? false : true);
+        first = false;
+        return grantResponse(grant);
+      }),
+    );
+
+    /* FENCED/REVOKED is the reason, so a post-revocation result cannot be read as success. */
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
+      /WORKER_AUTHORITY_LOST: (WRITE_REVOKED|WORKSPACE_RELEASED)/,
+    );
+  });
+
+  it("an unreachable ICOS does NOT kill live work", async () => {
+    /* Absence of evidence is not revocation: a blip must not destroy a running build. */
+    slowRun = false;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return grantResponse(baseGrant(worktree, true));
+        throw new Error("ECONNREFUSED");
+      }),
+    );
+
+    await expect(runGovernedWorker(ctx, "write it")).resolves.toMatchObject({ result: "done" });
+  });
+
+  it("a reader is not watched at all: it holds no worktree to lose", async () => {
+    slowRun = false;
+    const fetchSpy = vi.fn(async () => grantResponse(baseGrant(null, false)));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await runGovernedWorker(ctx, "just read");
+    /* Long enough for several poll intervals, had any been scheduled. */
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    /* Exactly one call: the initial grant, and no polling after it. */
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the deployment cannot widen a task's secret scope", () => {
+  const ctx = { taskId: "task-1", workflowId: "icos-task-task-1" };
+
+  it("CALLER_SECRET_SCOPE_WIDENING_BLOCKED: an unauthorised executor is refused", async () => {
+    /*
+     * The declaration names `hermes`, which HAS a credential policy — but ICOS routed
+     * this task to something else, so handing over hermes's secrets would be a grant
+     * nobody authorised.
+     */
+    process.env.ICOS_WORKER_EXEC_COMMANDS = JSON.stringify({
+      binary: { command: "hermes", args: [], timeoutMs: 5_000 },
+    });
+    const grant = baseGrant(allocate("task-1"), true);
+    grant.credentialScope = ["codex"];
+    vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grant)));
+
+    await expect(runGovernedWorker(ctx, "x")).rejects.toThrow("WORKER_CREDENTIAL_SCOPE_MISMATCH");
   });
 });
