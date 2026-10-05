@@ -21,6 +21,8 @@ import type { JobHandler } from "@/server/scheduler/durable-scheduler";
 import { NOT_CONNECTED_DEFINITIONS, notConnected } from "./connectors/catalog";
 import { httpConnector } from "./connectors/http";
 import { localFilesConnector } from "./connectors/local-files";
+import { searchConnector } from "./connectors/search";
+import { webConnector } from "./connectors/web";
 import { ToolGateway, type InstanceHealthView } from "./gateway";
 import {
   ConnectorRegistry,
@@ -184,6 +186,9 @@ export function defaultConnectors(fetchImpl?: typeof fetch): Connector[] {
   return [
     localFilesConnector,
     httpConnector(fetchImpl),
+    // Governed web read and search (decision 0067 item 5): READ/SEARCH, LOW, no approval.
+    webConnector(fetchImpl),
+    searchConnector(fetchImpl),
     ...NOT_CONNECTED_DEFINITIONS.map(notConnected),
   ];
 }

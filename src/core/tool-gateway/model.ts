@@ -65,6 +65,8 @@ export const connectorCategorySchema = z.enum([
   "SOCIAL",
   "MCP",
   "HTTP",
+  "WEB",
+  "SEARCH",
 ]);
 export type ConnectorCategory = z.infer<typeof connectorCategorySchema>;
 

@@ -17,6 +17,7 @@ import type { PgTable } from "drizzle-orm/pg-core";
 
 import { capabilities as capabilitiesTable, workers } from "@/server/database/schema";
 import { toolConnectorHealth, toolGrants } from "@/server/database/tool-gateway-schema";
+import { countRealtimeConnectors } from "@/server/tool-gateway/realtime";
 
 import {
   ContextAssembler,
@@ -152,7 +153,7 @@ function runtimeProbesFor(
      * Web/search connectors ONLY. Model-provider reachability is deliberately excluded:
      * a model answers from its weights, which is not realtime access to anything.
      */
-    countRealtimeConnectors: async () => 0,
+    countRealtimeConnectors: () => countRealtimeConnectors(db, env),
     /* Canonical durable brains — logical roles, counted apart from compute workers. */
     countDurableBrains: async () => {
       const [row] = await db
