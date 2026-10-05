@@ -71,8 +71,8 @@ beforeEach(() => {
   });
   delete process.env.ICOS_WORKER_AUTHORITY_CHECK_MS;
 });
-vi.mock("./hermes-run", () => ({
-  classifyHermesRun: () => ({ ok: true, result: "done" }),
+vi.mock("./worker-run", () => ({
+  classifyWorkerRun: () => ({ ok: true, result: "done" }),
 }));
 
 function grantResponse(grant: Record<string, unknown>) {

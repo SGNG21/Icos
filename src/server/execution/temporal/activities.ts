@@ -32,7 +32,7 @@ import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
 import { decideExecutable } from "@/core/execution/executable-policy";
 
-import { classifyHermesRun } from "./hermes-run";
+import { classifyWorkerRun } from "./worker-run";
 
 /** Correlates one run with its ICOS task and its durable Temporal workflow. */
 export interface ExecutionContext {
@@ -456,6 +456,7 @@ export async function runGovernedWorker(
      * sandbox profile, so the run reports the repository "not accessible" from a temp
      * folder. The workspace ICOS declares must be the one the executor runs in.
      */
+    const usageFile = join(workspace, "usage.json");
     const args = declared.args.map((arg) =>
       arg
         .split(EXEC_PLACEHOLDERS.prompt)
@@ -463,7 +464,6 @@ export async function runGovernedWorker(
         .split(EXEC_PLACEHOLDERS.workspace)
         .join(workspace),
     );
-    const usageFile = join(workspace, "usage.json");
     const run = await runNonInteractive({
       command: declared.command,
       args,
@@ -482,6 +482,13 @@ export async function runGovernedWorker(
        */
       env: {
         HOME: home.path,
+        /*
+         * WHERE TO REPORT. Hermes is told through `--usage-file` in its declaration;
+         * every other executor is told here, so "which program ran" and "how success is
+         * reported" stay separate questions and the result contract is not the private
+         * convention of one vendor.
+         */
+        ICOS_WORKER_STATUS_FILE: usageFile,
         ICOS_TASK_ID: grant.taskId,
         ICOS_WORKFLOW_ID: grant.workflowId,
         ICOS_MISSION_ID: grant.missionId,
@@ -549,12 +556,12 @@ export async function runGovernedWorker(
       usage = undefined; // fail closed: absent or unreadable status is a failure
     }
 
-    const classified = classifyHermesRun(run.stdout, usage);
+    const classified = classifyWorkerRun(run.stdout, usage);
     if (!classified.ok) throw new Error(classified.message);
     return {
       result: classified.result,
       actualExecutor: declared.command,
-      /* Only what hermes itself stated; silence stays silence. */
+      /* Only what the worker itself stated; silence stays silence. */
       ...(classified.model ? { actualModel: classified.model } : {}),
     };
   } finally {

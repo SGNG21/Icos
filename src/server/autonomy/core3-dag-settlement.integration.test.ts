@@ -8,8 +8,14 @@ import path from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import {
+  startTemporalRuntime,
+  uniqueTaskQueue,
+  type TemporalRuntime,
+} from "@/test/temporal-runtime-harness";
+
 import { loadEnv } from "@/config/env";
-import { buildPostgresContainer, type Container } from "@/server/container";
+import { buildPostgresContainer, resetContainer, type Container } from "@/server/container";
 import { missionTasks, missions, tasks } from "@/server/database/schema";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
@@ -80,9 +86,14 @@ const workerScript = (mode: WorkerMode) => `
   fs.writeFileSync(dir + '/feature.txt', 'built by ' + id + ' ' + process.env.ICOS_WORKFLOW_ID + '\\n');
   execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
   execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','d36 ' + id], { stdio: 'ignore' });
-  process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
-    status: 'succeeded', summary: 'wrote ' + dir + '/feature.txt', testsRun: ['unit'],
-  }) + process.env.ICOS_RESULT_SENTINEL_END);
+  process.stdout.write('wrote ' + dir + '/feature.txt');
+  /*
+   * The production worker result contract: a structured status the activity reads, at
+   * the path ICOS gave us. Stdout never decides success.
+   */
+  fs.writeFileSync(process.env.ICOS_WORKER_STATUS_FILE, JSON.stringify({
+    completed: true, failed: false,
+  }));
 `;
 
 // ------------------------------------------------------------------ OmniRoute network edge
@@ -92,6 +103,17 @@ let reviewerMode: ReviewerMode = "fail";
 let reviewerRequests = 0;
 let server: Server;
 let reviewerUrl: string;
+
+/*
+ * THE REAL DURABLE PATH. `DURABLE_MISSION_TASK` is orchestrated by Temporal and nothing
+ * else, so these tests need what production needs: a worker polling the queue, and an
+ * ICOS endpoint for it to ask its authority of and report back to. Without them a
+ * dispatch opened a workflow nobody consumed and sat at `dispatched` for ever — no
+ * result, no quality-control job, the reviewer never asked.
+ */
+const TASK_QUEUE = uniqueTaskQueue("d36");
+const CALLBACK_SECRET = "d36-callback-secret-at-least-32-chars-long";
+let temporal: TemporalRuntime;
 
 beforeAll(async () => {
   vi.stubEnv(
@@ -149,9 +171,14 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   reviewerUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  Object.assign(process.env, envOverrides());
+  await resetContainer();
+  temporal = await startTemporalRuntime(TASK_QUEUE);
 });
 
 afterAll(async () => {
+  await temporal?.stop();
+  await resetContainer();
   vi.unstubAllEnvs();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -209,6 +236,10 @@ function envOverrides(extra: Record<string, string> = {}) {
     }),
     ICOS_REPO_PATH: repo,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    /* A queue of this file's own, so no other worker can consume its workflows. */
+    TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
     /* Every gate RULE is real; only the pnpm suites are trivial passing commands. */
     ICOS_GATE_COMMANDS: JSON.stringify({
       install: [process.execPath, "-e", ""],
@@ -401,6 +432,20 @@ const targetHead = () => git(repo, "rev-parse", TARGET);
 async function integrateAWithoutSettling(c: Container) {
   const runtime = composeAutonomyRuntime(c);
   await runtime.supervisor.run(MISSION_ID);
+  /*
+   * THE DURABLE PATH IS ASYNCHRONOUS. The in-process dispatcher ran the worker inline,
+   * so `run()` returned with the result already persisted. Temporal returns as soon as
+   * the workflow is accepted: the worker runs, and reports, afterwards. Waiting for the
+   * result is modelling that, not conceding anything — the assertions below are
+   * unchanged and still have to hold.
+   */
+  await until("the worker reported its result", async () => {
+    const [row] = await rows<{ n: number }>(
+      c,
+      `select count(*)::int n from task_execution_results where workflow_id = '${WF_A}'`,
+    );
+    return row!.n > 0;
+  });
   reviewerMode = "approve";
   await runtime.qualityControl.recover();
   expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["APPROVE"]);
