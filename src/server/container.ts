@@ -864,8 +864,14 @@ export async function buildPostgresContainer(
     true,
     undefined,
     env.TEMPORAL_DISPATCH_TIMEOUT_MS,
-    /* namespace and consumer-proof TTL keep their defaults; neither is configured here. */
-    undefined,
+    /*
+     * THE SAME NAMESPACE THE WORKER POLLS. Both the consumer guard and the
+     * existing-execution probe are namespace-scoped reads, so asking in `default` while a
+     * worker polls elsewhere makes the guard refuse every dispatch for want of a consumer
+     * that is in fact there.
+     */
+    env.TEMPORAL_NAMESPACE,
+    /* Consumer-proof TTL keeps its default; it is not configured here. */
     undefined,
     /*
      * HOW A FINISHED EXECUTION IS TOLD FROM AN ABANDONED ONE.

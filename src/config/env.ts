@@ -241,12 +241,19 @@ const envSchema = z.object({
     .string()
     .min(1, "ICOS_AUTONOMY_ALLOWED_PROVIDERS vide : ambigu, l'omettre pour « non restreint »")
     .optional(),
-  ICOS_SELF_DEVELOPMENT: z.preprocess(
-    emptyAsUndefined,
-    z.enum(["enabled", "disabled"]).optional(),
-  ),
+  ICOS_SELF_DEVELOPMENT: z.preprocess(emptyAsUndefined, z.enum(["enabled", "disabled"]).optional()),
   SCHEDULER_LEASE_MS: optionalPositiveInteger,
   TEMPORAL_ADDRESS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  /*
+   * The namespace the task queue lives in. The WORKER already reads this from its own
+   * environment (`scripts/temporal-worker.ts`), and the dispatcher did not read it at
+   * all: it asked about pollers, and now describes a colliding execution, in a hardcoded
+   * `default`. A deployment that sets TEMPORAL_NAMESPACE therefore had its worker polling
+   * one namespace while ICOS inspected another, so the consumer guard found no poller and
+   * refused every dispatch. Fail-closed, and a trap: the guard reads as broken when the
+   * configuration is simply split in two.
+   */
+  TEMPORAL_NAMESPACE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_TASK_QUEUE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_WORKFLOW_TYPE: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   TEMPORAL_DISPATCH_TIMEOUT_MS: optionalPositiveInteger,
