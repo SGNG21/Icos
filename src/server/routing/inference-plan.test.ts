@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { ComputeOutcome } from "@/core/workers/compute-routing";
 import {
   INFERENCE_PLAN_VERSION,
+  INFERENCE_TOPOLOGIES,
   effectiveCeilings,
   planInference,
   type InferencePlan,
@@ -14,6 +15,7 @@ import {
 } from "@/core/workers/inference-plan";
 import type { PriceRecord, PriceRegistry } from "@/core/pricing/registry";
 import { MICROS_PER_UNIT } from "@/core/pricing/registry";
+import { effectiveModelKey, sameEffectiveModel } from "@/core/workers/compute-routing";
 import { CapabilityRouter } from "@/server/routing/capability-router";
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
 import {
@@ -25,9 +27,15 @@ import {
 /*
  * GOVERNED INFERENCE PLANS — decision 0071.
  *
- * Every candidate in every plan below is produced by the REAL CapabilityRouter: each test routes
- * first, hands the router's OWN requirement to the planner as its base, and asserts on the plan.
- * There is no second router under test, and a candidate the router refused can never appear.
+ * WHAT THIS FILE PROVES, STATED EXACTLY. `base()` routes for real and hands the planner the
+ * router's OWN requirement — so the compute context, the history aggregation, the clock and the
+ * lease are all the router's. The planner then calls `rankComputePool` itself, once per stage.
+ *
+ * It does NOT prove "no candidate the router refused can appear": that property is about every
+ * stage's own ranking, and `PLAN_NEVER_OVERRULES_THE_ROUTER` below is what proves it, by
+ * re-running the router per emitted stage and checking each seated candidate against its verdict.
+ * Three tests deliberately inject a `load` snapshot the router did not produce, to reach the
+ * capacity gates.
  */
 
 const NOW = new Date("2026-10-05T12:00:00.000Z");
@@ -40,6 +48,12 @@ const MODELS = {
   sonnet: "anthropic/claude-sonnet-5",
   sol: "openai/gpt-5.6-sol",
   n550: "nvidia/nemotron-3-ultra-550b",
+  /*
+   * A SECOND ROUTE TO THE SAME MODEL, under a name `effectiveModelKey` does NOT collapse — the
+   * exact pair `compute-routing.ts` names in its own comment. `sameEffectiveModel` collapses it
+   * via the family. Several proofs below turn on that difference.
+   */
+  n550alt: "oc/nemotron-3-ultra-free",
   opus: "anthropic/claude-opus-5",
 } as const;
 type Key = keyof typeof MODELS;
@@ -70,6 +84,15 @@ function candidate(key: Key, over: Partial<WorkerRegistryEntry> = {}): WorkerReg
 }
 
 const id = (key: Key) => candidateWorkerId(MODELS[key]);
+
+/** A registered worker declaring NO model. Its metadata key is absent, not empty. */
+function modelless(key: Key): WorkerRegistryEntry {
+  const w = candidate(key);
+  return {
+    ...w,
+    metadata: Object.fromEntries(Object.entries(w.metadata).filter(([k]) => k !== "model")),
+  };
+}
 
 /** Routes for real, then returns the router's own requirement — the planner's only input. */
 async function base(
@@ -217,7 +240,7 @@ describe("inference plan — topologies", () => {
     expect(p.stages[0]!.parallelism).toBe(3);
     expect(p.stages[0]!.candidates).toHaveLength(3);
     expect(p.stages[1]!.purpose).toBe("aggregate");
-    expect(p.diversity).toBe("family");
+    expect(p.diversity).toBe("distinct-model");
   });
 
   it("latency-first orders on MEASURED duration; unmeasured sorts last", async () => {
@@ -457,7 +480,7 @@ describe("inference plan — health is the probe's", () => {
 /* ------------------------------------------------------------------------------------------ */
 
 describe("inference plan — diversity and independence", () => {
-  it("DIVERSITY: an ensemble never seats two members of one family", async () => {
+  it("DIVERSITY: an ensemble never seats two routes to one model", async () => {
     /* Two Sonnet routes and two Nemotron routes: four workers, two families. */
     const workers = [
       candidate("sonnet"),
@@ -480,10 +503,10 @@ describe("inference plan — diversity and independence", () => {
     );
     const families = p.stages[0]!.candidates.map((c) => c.family);
     expect(new Set(families).size).toBe(families.length);
-    expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain("DUPLICATE_FAMILY");
+    expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain("DUPLICATE_MODEL");
   });
 
-  it("diversity `model` keeps one route per model, across providers", async () => {
+  it("diversity keeps one route per model, across providers", async () => {
     const workers = [
       candidate("sonnet"),
       candidate("sonnet", {
@@ -496,7 +519,7 @@ describe("inference plan — diversity and independence", () => {
       plan(workers, await base(workers), {
         topology: "fallback",
         governed: NO_CEILINGS,
-        diversity: "model",
+        diversity: "distinct-model",
         width: 3,
       }),
     );
@@ -763,6 +786,7 @@ describe("inference plan — the other ceilings", () => {
         requiresStructuredOutput: true,
       }),
     );
+    expect(p.stages[0]!.candidates.map((c) => c.workerId)).toEqual([id("n120")]);
     expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain(
       "STRUCTURED_OUTPUT_UNSUPPORTED",
     );
@@ -772,7 +796,13 @@ describe("inference plan — the other ceilings", () => {
 /* ------------------------------------------------------------------------------------------ */
 
 describe("inference plan — durability and determinism", () => {
-  it("a plan survives JSON round-tripping unchanged", async () => {
+  it("a plan survives JSON round-tripping STRICTLY, with no undefined-valued keys", async () => {
+    /*
+     * This asserted `toEqual(roundTrip, roundTrip)` — two round trips of the SAME value, which
+     * passes for any object whatsoever. The honest assertion compares the round trip with the
+     * ORIGINAL, strictly, and it failed: optional fields were assigned unconditionally, so a plan
+     * carried present-but-undefined keys that JSON drops.
+     */
     const workers = [candidate("sonnet"), candidate("opus"), candidate("n120")];
     const p = expectPlan(
       plan(workers, await base(workers), {
@@ -781,14 +811,70 @@ describe("inference plan — durability and determinism", () => {
         width: 2,
       }),
     );
-    expect(JSON.parse(JSON.stringify(p))).toEqual(JSON.parse(JSON.stringify(p)));
-    expect(JSON.parse(JSON.stringify(p))).toMatchObject({
-      kind: "INFERENCE_PLAN",
-      planVersion: INFERENCE_PLAN_VERSION,
-    });
+    expect(JSON.parse(JSON.stringify(p))).toStrictEqual(p);
+    const everyKey = (o: unknown): string[] =>
+      typeof o !== "object" || o === null
+        ? []
+        : Array.isArray(o)
+          ? o.flatMap(everyKey)
+          : Object.entries(o).flatMap(([k, v]) => (v === undefined ? [k] : everyKey(v)));
+    expect(everyKey(p)).toEqual([]);
   });
 
-  it("the same inputs always produce the same plan", async () => {
+  it("a refusal round-trips strictly too, and carries what caused it", async () => {
+    const workers = [candidate("sonnet", { health: "unhealthy" })];
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "single",
+        governed: { tokens: 4_000 },
+        requested: { latencyMs: 10_000 },
+      }),
+    );
+    expect(JSON.parse(JSON.stringify(r))).toStrictEqual(r);
+    /* A refusal that cannot be re-derived against its inputs is anecdote, not evidence. */
+    expect(r.policyVersion).toBe("compute-routing/1");
+    expect(r.ceilings).toMatchObject({ tokens: 4_000, latencyMs: 10_000 });
+    expect(r.ceilingSources).toMatchObject({ tokens: "governed", latencyMs: "requested" });
+  });
+
+  it("DETERMINISM: planning reads no clock, no randomness and starts no timer", async () => {
+    /*
+     * "Same inputs, same plan" is near-tautological for a pure function with an injected clock:
+     * it can only catch a wall-clock read. This catches the read itself.
+     */
+    const workers = [candidate("sonnet"), candidate("opus"), candidate("n120"), candidate("n550")];
+    const b = await base(workers);
+    const touched: string[] = [];
+    const spies = [
+      vi.spyOn(Date, "now").mockImplementation(() => {
+        touched.push("Date.now");
+        return 0;
+      }),
+      vi.spyOn(Math, "random").mockImplementation(() => {
+        touched.push("Math.random");
+        return 0;
+      }),
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((() => {
+        touched.push("setTimeout");
+        return 0;
+      }) as unknown as typeof setTimeout),
+      vi.spyOn(globalThis, "setInterval").mockImplementation((() => {
+        touched.push("setInterval");
+        return 0;
+      }) as unknown as typeof setInterval),
+    ];
+    try {
+      for (const topology of INFERENCE_TOPOLOGIES) {
+        if (topology === "mission-specific") continue;
+        plan(workers, b, { topology, governed: { tokens: 4_000 }, width: 3 });
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(touched).toEqual([]);
+  });
+
+  it("the same inputs always produce the same plan, byte for byte", async () => {
     const workers = [candidate("sonnet"), candidate("opus"), candidate("n120"), candidate("n550")];
     const b = await base(workers);
     const request: InferencePlanRequest = {
@@ -812,12 +898,380 @@ describe("inference plan — durability and determinism", () => {
   });
 
   it("a plan request cannot name a provider or a model", () => {
-    /* Type-level fact, asserted at run time so it cannot regress silently. */
+    /*
+     * The run-time half only inspects a literal this test wrote, so it proves nothing on its own;
+     * the `@ts-expect-error` is the assertion that carries weight, and it fails the BUILD if the
+     * field ever becomes expressible. Kept together deliberately, and labelled as such.
+     */
     const request: InferencePlanRequest = { topology: "single", governed: NO_CEILINGS };
     expect(Object.keys(request)).not.toContain("provider");
-    expect(Object.keys(request)).not.toContain("model");
     // @ts-expect-error — naming a provider is unexpressible, not merely refused.
     const bypass: InferencePlanRequest = { ...request, provider: "privileged" };
     void bypass;
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ */
+/* Regression proofs. Each one FAILED at 6f07058 and was found by independent review.          */
+/* ------------------------------------------------------------------------------------------ */
+
+describe("inference plan — the plan never overrules the router", () => {
+  it("across every topology, only a router-selectable worker is ever seated", async () => {
+    /* One healthy worker; every other fails a different canonical gate. */
+    const workers = [
+      candidate("n120"),
+      candidate("sonnet", { health: "degraded" }),
+      candidate("opus", { availability: "unavailable" }),
+      candidate("n550", { lastProbeAt: null, lastProbeOutcome: "never" }),
+      candidate("sol", { runtimeSupport: "DECLARED_ONLY" }),
+      candidate("haiku", { status: "inactive" }),
+    ];
+    const b = await base(workers);
+    for (const topology of INFERENCE_TOPOLOGIES) {
+      if (topology === "mission-specific") continue;
+      const outcome = plan(workers, b, { topology, governed: NO_CEILINGS, width: 8 });
+      if (!isPlan(outcome)) continue;
+      for (const stage of outcome.stages) {
+        for (const c of stage.candidates) {
+          expect(c.workerId, `${topology} seated an ineligible worker`).toBe(id("n120"));
+        }
+      }
+    }
+  });
+
+  it("the router's TIER_FALLBACK is RESPECTED and recorded, not overruled", async () => {
+    /*
+     * `rankComputePool` sets `selectable: true` while LEAVING `BELOW_REQUIRED_TIER` in
+     * `exclusions` — "nothing meets the tier, this is the strongest that remains, and it is
+     * recorded". Reading the exclusion list made the plan refuse where a bare dispatch would run.
+     */
+    /*
+     * The relaxation needs a fleet whose top tier is out of reach for a transient reason: the
+     * required tier is capped at the highest tier ELIGIBLE now (0054), so a single low-tier
+     * worker never triggers it. Here n550 (tier 4) raises the cap and is then in cooldown, so
+     * nothing meets tier 3 and haiku (tier 1) is promoted.
+     */
+    const workers = [candidate("haiku"), candidate("n550")];
+    const history: ComputeOutcome[] = [
+      {
+        workerId: id("n550"),
+        taskId: "t1",
+        attempt: 1,
+        state: "failed",
+        failureClass: "RATE_LIMITED",
+        at: ago(30_000),
+      },
+    ];
+    const p = expectPlan(
+      plan(workers, await base(workers, { complexity: "high", history }), {
+        topology: "single",
+        governed: NO_CEILINGS,
+      }),
+    );
+    expect(p.stages[0]!.candidates[0]!.workerId).toBe(id("haiku"));
+    expect(p.stages[0]!.candidates[0]!.routerFallback).toBe("TIER_FALLBACK");
+    expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain("PROVIDER_COOLDOWN");
+  });
+});
+
+describe("inference plan — a ceiling that is not a number cannot widen one", () => {
+  const widened = (requested: Record<string, number>) =>
+    effectiveCeilings({ tokens: 8, latencyMs: 1_000, moneyMicros: 50 }, requested).ceilings;
+
+  it("NaN loses the minimum instead of winning it", () => {
+    /* `NaN >= g` is false, so `requested` won and every later comparison against NaN was false. */
+    expect(widened({ tokens: NaN })).toMatchObject({ tokens: 8 });
+    expect(widened({ latencyMs: NaN })).toMatchObject({ latencyMs: 1_000 });
+    expect(effectiveCeilings({}, { tokens: NaN }).ceilings.tokens).toBeUndefined();
+    expect(effectiveCeilings({}, { tokens: NaN }).sources.tokens).toBe("unset");
+  });
+
+  it("zero, negatives and Infinity are not ceilings", () => {
+    expect(widened({ tokens: 0 })).toMatchObject({ tokens: 8 });
+    expect(widened({ tokens: -1 })).toMatchObject({ tokens: 8 });
+    expect(widened({ tokens: Infinity })).toMatchObject({ tokens: 8 });
+    expect(effectiveCeilings({ tokens: 0 }, {}).ceilings.tokens).toBeUndefined();
+  });
+
+  it("a NaN ceiling can no longer reach a candidate gate", async () => {
+    const workers = [candidate("sonnet"), candidate("n120")];
+    const history: ComputeOutcome[] = [
+      { workerId: id("sonnet"), taskId: "t1", attempt: 1, state: "completed", durationMs: 900_000, at: ago(60_000) },
+    ];
+    const p = expectPlan(
+      plan(workers, await base(workers, { history }), {
+        topology: "fallback",
+        governed: { latencyMs: 1_000 },
+        requested: { latencyMs: NaN },
+        width: 2,
+      }),
+    );
+    expect(p.ceilings.latencyMs).toBe(1_000);
+    expect(p.stages[0]!.candidates.map((c) => c.workerId)).not.toContain(id("sonnet"));
+  });
+});
+
+describe("inference plan — independence covers EVERY writer candidate", () => {
+  /*
+   * `writerModel ??= kept[0]?.candidate.model` compared a judge only against the FIRST writer
+   * candidate, while a producing stage's default width is 2. Measured at the shipped defaults:
+   * writers [sonnet, nemotron-3-ultra-550b], judge oc/nemotron-3-ultra-free — the same effective
+   * model as writer #2 — seated, with `independence: "required"` recorded on the plan.
+   */
+  const twoRoutesPlusOne = () => [candidate("sonnet"), candidate("n550"), candidate("n550alt")];
+
+  it("a judge matching writer candidate #2 is refused at the DEFAULT width", async () => {
+    const workers = twoRoutesPlusOne();
+    const r = expectRefusal(
+      plan(workers, await base(workers), { topology: "reviewer", governed: NO_CEILINGS }),
+    );
+    expect(r.purpose).toBe("review");
+    expect(r.refused.flatMap((x) => x.because)).toContain("NOT_INDEPENDENT_OF_WRITER");
+  });
+
+  it("same for critique, whose critic judges the same work", async () => {
+    const workers = twoRoutesPlusOne();
+    const r = expectRefusal(
+      plan(workers, await base(workers), { topology: "critique", governed: NO_CEILINGS }),
+    );
+    expect(r.purpose).toBe("critique");
+    expect(r.refused.flatMap((x) => x.because)).toContain("NOT_INDEPENDENT_OF_WRITER");
+  });
+
+  it("an UNPROVABLE independence refuses instead of passing unchecked", async () => {
+    /*
+     * A writer declaring no model skipped the check AND left the router's gate off, so a plan
+     * recorded `independence: "required"` while nothing had been verified and no refusal said so.
+     */
+    const workers = [modelless("sonnet"), candidate("opus")];
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "reviewer",
+        governed: NO_CEILINGS,
+        width: 1,
+      }),
+    );
+    expect(r.refused.flatMap((x) => x.because)).toContain("INDEPENDENCE_UNVERIFIABLE");
+  });
+
+  it("a judge declaring no model is refused too", async () => {
+    const workers = [candidate("sonnet"), modelless("opus")];
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "reviewer",
+        governed: NO_CEILINGS,
+        width: 1,
+      }),
+    );
+    expect(r.refused.flatMap((x) => x.because)).toContain("INDEPENDENCE_UNVERIFIABLE");
+  });
+
+  it("mission-specific cannot declare a judge with nothing to judge", async () => {
+    const workers = [candidate("sonnet"), candidate("opus")];
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "mission-specific",
+        governed: NO_CEILINGS,
+        stages: [
+          { role: "reviewer", purpose: "review" },
+          { role: "writer", purpose: "produce" },
+        ],
+      }),
+    );
+    expect(r.reason).toMatch(/juge sans étape productrice/);
+  });
+
+  it("mission-specific cannot give a writer a judging purpose, or the reverse", async () => {
+    const workers = [candidate("sonnet")];
+    const b = await base(workers);
+    for (const stage of [
+      { role: "writer" as const, purpose: "aggregate" as const },
+      { role: "reviewer" as const, purpose: "produce" as const },
+    ]) {
+      expect(
+        expectRefusal(
+          plan(workers, b, { topology: "mission-specific", governed: NO_CEILINGS, stages: [stage] }),
+        ).reason,
+      ).toMatch(/incompatible/);
+    }
+  });
+});
+
+describe("inference plan — diversity means the same-judge rule", () => {
+  it("two routes to one model, under names effectiveModelKey does not collapse, seat ONCE", async () => {
+    const workers = [candidate("n550"), candidate("n550alt")];
+    /* The keys differ; `sameEffectiveModel` is what says these are one model. */
+    expect(effectiveModelKey(MODELS.n550)).not.toBe(effectiveModelKey(MODELS.n550alt));
+    expect(sameEffectiveModel(MODELS.n550, MODELS.n550alt)).toBe(true);
+
+    const p = expectPlan(
+      plan(workers, await base(workers), {
+        topology: "fallback",
+        governed: NO_CEILINGS,
+        diversity: "distinct-model",
+        width: 2,
+      }),
+    );
+    expect(p.stages[0]!.candidates).toHaveLength(1);
+    expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain("DUPLICATE_MODEL");
+  });
+
+  it("a candidate declaring no model cannot be claimed distinct", async () => {
+    const workers = [modelless("sonnet"), modelless("opus")];
+    const p = expectPlan(
+      plan(workers, await base(workers), {
+        topology: "fallback",
+        governed: NO_CEILINGS,
+        diversity: "distinct-model",
+        width: 2,
+      }),
+    );
+    expect(p.stages[0]!.candidates).toHaveLength(1);
+    expect(p.stages[0]!.refused.flatMap((r) => r.because)).toContain("INDEPENDENCE_UNVERIFIABLE");
+  });
+
+  it("a REFUSED candidate does not consume a diversity seat", async () => {
+    /*
+     * Measured: an `unhealthy` route sorted first under latency-first, took the seat, and the
+     * HEALTHY route to the same model was dropped as a duplicate. The refused one was never
+     * going to run, so it cost the stage its only viable member.
+     */
+    const workers = [
+      candidate("n550alt", { health: "unhealthy" }),
+      candidate("n550"),
+    ];
+    const history: ComputeOutcome[] = [
+      { workerId: id("n550alt"), taskId: "t1", attempt: 1, state: "completed", durationMs: 1_000, at: ago(60_000) },
+      { workerId: id("n550"), taskId: "t2", attempt: 1, state: "completed", durationMs: 9_000, at: ago(60_000) },
+    ];
+    const p = expectPlan(
+      plan(workers, await base(workers, { history }), {
+        topology: "latency-first",
+        governed: NO_CEILINGS,
+        diversity: "distinct-model",
+        width: 2,
+      }),
+    );
+    expect(p.stages[0]!.candidates.map((c) => c.workerId)).toEqual([id("n550")]);
+  });
+});
+
+describe("inference plan — the worst case needs no unproven assumption", () => {
+  it("it charges the DEARER rate, not the completion rate", async () => {
+    /*
+     * The justification was "the completion rate, which is never below the prompt rate". Nothing
+     * enforces that: `recordDefect` only requires both rates positive. A record with a prompt
+     * rate ten million times the completion rate validated, and a candidate was admitted under a
+     * 5-micro enforced ceiling with a "worst case" of 1 micro.
+     */
+    const workers = [candidate("n120")];
+    const lopsided: PriceRegistry = [
+      {
+        provider: "nvidia",
+        modelId: MODELS.n120,
+        currency: "EUR",
+        promptMicrosPerMillion: 10 * MICROS_PER_UNIT,
+        completionMicrosPerMillion: 1,
+        provenance: "fixture de test, pas un tarif réel",
+        effectiveAt: "2026-10-01T00:00:00.000Z",
+        staleAfter: "2026-12-01T00:00:00.000Z",
+      },
+    ];
+    const b = await base(workers);
+    const governed = { tokens: 1_000, moneyMicros: 5, moneyEnforced: true };
+    expect(
+      expectRefusal(plan(workers, b, { topology: "single", governed }, lopsided)).refused[0]!
+        .because,
+    ).toContain("MONEY_CEILING_EXCEEDED");
+    /* And the number it reports is the real worst case: 1 000 tokens at 10 EUR/Mtok. */
+    const p = expectPlan(
+      plan(workers, b, { topology: "single", governed: { tokens: 1_000 } }, lopsided),
+    );
+    expect(p.stages[0]!.candidates[0]!.worstCaseCostMicros).toBe(10_000);
+  });
+});
+
+describe("inference plan — a refusal points at what actually refused it", () => {
+  it("costUnprovableBecause appears ONLY on a refusal the cost caused", async () => {
+    /*
+     * It was attached to every refusal, so a candidate excluded as the writer's own worker
+     * carried "no token ceiling" beside it — sending an operator to the price registry over a
+     * review-independence rule, the exact failure this field was added to prevent.
+     */
+    const workers = [candidate("sonnet"), candidate("opus")];
+    const p = expectPlan(
+      plan(workers, await base(workers), {
+        topology: "reviewer",
+        governed: NO_CEILINGS,
+        width: 1,
+      }),
+    );
+    const judgeRefusals = p.stages[1]!.refused;
+    expect(judgeRefusals.flatMap((r) => r.because)).toContain("EXCLUDED_WORKER");
+    for (const r of judgeRefusals) {
+      if (!r.because.includes("COST_UNPROVABLE")) {
+        expect(r.costUnprovableBecause).toBeUndefined();
+      }
+    }
+  });
+
+  it("every stage of a cascade carries the refusals, not only the first", async () => {
+    const workers = [
+      candidate("haiku"),
+      candidate("sonnet"),
+      candidate("opus"),
+      candidate("n120", { health: "unhealthy" }),
+    ];
+    const p = expectPlan(
+      plan(workers, await base(workers, { complexity: "low" }), {
+        topology: "cascade",
+        governed: NO_CEILINGS,
+      }),
+    );
+    expect(p.stages.length).toBeGreaterThan(1);
+    for (const stage of p.stages) {
+      expect(stage.refused.flatMap((r) => r.because)).toContain("HEALTH_NOT_HEALTHY");
+    }
+  });
+});
+
+describe("inference plan — shape coherence", () => {
+  it("the plan authors no retry budget: one attempt per declared candidate", async () => {
+    const workers = [candidate("sonnet"), candidate("opus"), candidate("n120")];
+    const b = await base(workers);
+    const single = expectPlan(plan(workers, b, { topology: "single", governed: NO_CEILINGS }));
+    /* `single`'s own doc says a failure is the task's failure. It used to ship two attempts. */
+    expect(single.stages[0]!.maxAttempts).toBe(1);
+    const multi = expectPlan(
+      plan(workers, b, { topology: "fallback", governed: NO_CEILINGS, width: 3 }),
+    );
+    for (const stage of multi.stages) {
+      expect(stage.maxAttempts).toBe(stage.candidates.length);
+    }
+  });
+
+  it("an ensemble that cannot seat two distinct judges refuses, never degrades silently", async () => {
+    const workers = [candidate("n550"), candidate("n550alt")];
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "ensemble",
+        governed: NO_CEILINGS,
+        width: 2,
+      }),
+    );
+    expect(r.purpose).toBe("member");
+    expect(r.reason).toMatch(/au moins 2/);
+  });
+
+  it("a cascade that advances on a review verdict can also terminate on one", async () => {
+    const workers = [candidate("haiku"), candidate("opus")];
+    const p = expectPlan(
+      plan(workers, await base(workers, { complexity: "low" }), {
+        topology: "cascade",
+        governed: NO_CEILINGS,
+      }),
+    );
+    expect(p.stages[0]!.advanceWhen).toContain("REVIEW_REQUEST_CHANGES");
+    expect(p.terminateWhen).toContain("REVIEW_APPROVED");
   });
 });

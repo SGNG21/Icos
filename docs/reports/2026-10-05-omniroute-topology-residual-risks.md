@@ -13,6 +13,10 @@ have landed.
 Every claim below marked *verified* was checked against the tree at `6f07058` with the command or
 file:line given. Claims not so marked are proposals.
 
+This document covers the five residual risks the owner named. It does **not** cover the defects
+found by the independent review of `6f07058` — those are in decision 0071, Amendment A, and were
+fixed in the lane.
+
 ---
 
 ## A. No caller, no persistence

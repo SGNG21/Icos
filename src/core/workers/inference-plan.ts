@@ -8,9 +8,7 @@ import {
 
 import {
   COMPUTE_POLICY_VERSION,
-  effectiveModelKey,
   sameEffectiveModel,
-  SETTLEMENT_MARGIN_MS,
   type ComputeContext,
 } from "./compute-routing";
 import {
@@ -109,7 +107,6 @@ export const TERMINATION_CONDITIONS = [
   "FINAL_STAGE_COMPLETED",
   "REVIEW_APPROVED",
   "CANDIDATES_EXHAUSTED",
-  "RETRY_BUDGET_EXHAUSTED",
   "CEILING_REACHED",
   "REVIEW_BLOCKED",
 ] as const;
@@ -123,9 +120,20 @@ export type TerminationCondition = (typeof TERMINATION_CONDITIONS)[number];
 export interface PlanCeilings {
   /** Measured mean duration a candidate may not exceed. */
   latencyMs?: number;
-  /** Output tokens a stage may be given. Also the worst case the money ceiling is proven against. */
+  /**
+   * TOTAL tokens a stage may consume — prompt plus completion, which is what both a context
+   * window and a bill are measured in. It was documented as OUTPUT tokens, and that made two
+   * things wrong at once: it was compared against a candidate's whole `contextWindow`, and the
+   * worst-case cost charged ZERO prompt tokens, so a stage "proven" at 3 000 micros for 1 000
+   * output tokens really cost 103 000 with a 100 k prompt.
+   */
   tokens?: number;
-  /** Integer micros of {@link import("@/core/budget/contracts").BudgetCurrency}, per stage. */
+  /**
+   * Integer micros of {@link import("@/core/budget/contracts").BudgetCurrency}, per stage.
+   * On its own this gates only candidates whose price is KNOWN; an unpriced candidate passes it,
+   * because unknown stays unknown. Set `moneyEnforced` to make an unprovable cost a refusal —
+   * without it a money ceiling is a preference, not a bound.
+   */
   moneyMicros?: number;
   /** True: an unprovable cost is a refusal. The money ceiling then fails CLOSED. */
   moneyEnforced?: boolean;
@@ -134,6 +142,22 @@ export interface PlanCeilings {
 }
 
 export type CeilingSource = "governed" | "requested" | "unset";
+
+/**
+ * ONE diversity rule: `sameEffectiveModel`, the same relation review independence uses.
+ *
+ * There were two values, `"model"` and `"family"`, and `"model"` keyed on `effectiveModelKey`
+ * alone. That is NOT the same-judge rule: `sameEffectiveModel` is key-match **OR** family-match,
+ * and the pair its own comment names — `nvidia/nemotron-3-ultra-550b` and
+ * `oc/nemotron-3-ultra-free` — normalizes to two different keys. Both were seated as "two
+ * models" while being one model under two routes, so an ensemble could have no diversity at all.
+ * Under the correct relation the two values are the same value, so there is one.
+ *
+ * It is deliberately coarse, in the same direction and for the same reason decision 0054 gives:
+ * no suffix rule can know every route's naming, so Sonnet 4.6 and Sonnet 5 count as one judge.
+ * Seating one fewer member is a smaller harm than an ensemble whose members are the same model.
+ */
+export type Diversity = "none" | "distinct-model";
 
 export interface InferencePlanRequest {
   topology: InferenceTopology;
@@ -150,12 +174,13 @@ export interface InferencePlanRequest {
    * Defaults to `required` for `reviewer` and `critique`, which exist to be independent.
    */
   independence?: "required" | "preferred";
-  /** How candidates in one stage must differ. `ensemble` defaults to `family`. */
-  diversity?: "none" | "model" | "family";
+  /**
+   * Whether two candidates in one stage may be the same judge. `ensemble` defaults to
+   * `distinct-model`. There is ONE rule — {@link sameEffectiveModel} — see {@link Diversity}.
+   */
+  diversity?: Diversity;
   /** Alternates per stage (`fallback`, `latency-first`, `quality-first`) or members (`ensemble`). */
   width?: number;
-  /** Attempts a stage may spend across its candidates before the plan terminates. */
-  maxAttemptsPerStage?: number;
   /** `mission-specific` only. Roles and purposes — never models. */
   stages?: ReadonlyArray<{ role: StageRole; purpose: StagePurpose }>;
   /** A stage must have a candidate declaring tool support. */
@@ -180,12 +205,15 @@ export type PlanExclusion =
   | "TOOLS_UNSUPPORTED"
   /** Declares no structured output while the plan requires it. */
   | "STRUCTURED_OUTPUT_UNSUPPORTED"
-  /** Diversity: an earlier candidate in this stage already represents its model. */
+  /** Diversity: a candidate already seated in this stage is the same judge as this one. */
   | "DUPLICATE_MODEL"
-  /** Diversity: an earlier candidate in this stage already represents its family. */
-  | "DUPLICATE_FAMILY"
-  /** Independence is required and this candidate is the same judge as the writer. */
-  | "NOT_INDEPENDENT_OF_WRITER";
+  /** Independence is required and this candidate is the same judge as a writer candidate. */
+  | "NOT_INDEPENDENT_OF_WRITER"
+  /**
+   * Independence or diversity is required and cannot be PROVEN for this candidate, because it
+   * or the work it would judge declares no model. Unprovable is refused, never assumed distinct.
+   */
+  | "INDEPENDENCE_UNVERIFIABLE";
 
 export interface PlannedCandidate {
   workerId: string;
@@ -210,6 +238,12 @@ export interface PlannedCandidate {
   worstCaseCostMicros?: number;
   /** Why the cost is not proven. Present exactly when `worstCaseCostMicros` is absent. */
   costUnprovableBecause?: string;
+  /**
+   * The router's own relaxation, when it applied one (`TIER_FALLBACK`): nothing met the required
+   * tier, so this is among the strongest that remain. Carried because a relaxation that is not
+   * recorded is a silent one.
+   */
+  routerFallback?: string;
 }
 
 /**
@@ -232,7 +266,15 @@ export interface PlannedStage {
   parallelism: number;
   /** Ordered. The first runs; a later one runs only on a condition in `advanceWhen`. */
   candidates: readonly PlannedCandidate[];
-  /** Attempts this stage may spend across its candidates. */
+  /**
+   * Attempts this stage may spend: exactly one per declared candidate.
+   *
+   * This was a request field defaulting to 2 and clamped by `clampWidth`, so the plan AUTHORED a
+   * retry budget — a number that belongs to the lease, the policy or QC, not to a routing shape —
+   * and `topology: "single"`, whose own doc says a failure is the task's failure, shipped with
+   * two attempts over one candidate. A plan declares WHO may run and in what order; how often to
+   * re-run the same compute is not its decision.
+   */
   maxAttempts: number;
   /** What hands over to the next stage — or, on the last stage, ends the plan. */
   advanceWhen: readonly AdvanceCondition[];
@@ -257,7 +299,7 @@ export interface InferencePlan {
   /** Which side each ceiling came from. The evidence that nothing was widened. */
   ceilingSources: Readonly<Record<keyof PlanCeilings, CeilingSource>>;
   independence: "required" | "preferred";
-  diversity: "none" | "model" | "family";
+  diversity: Diversity;
   stages: readonly PlannedStage[];
   terminateWhen: readonly TerminationCondition[];
   /** Telemetry a run of this plan must produce. A stage with no evidence is an unproven stage. */
@@ -267,8 +309,13 @@ export interface InferencePlan {
 export interface NoViableRoute {
   kind: "NO_VIABLE_ROUTE";
   planVersion: string;
+  /** The router's policy version, as a plan carries it: a refusal is re-derivable or it is anecdote. */
+  policyVersion: string;
   plannedAt: string;
   topology: InferenceTopology;
+  /** The EFFECTIVE ceilings a money or latency refusal turned on, and where each came from. */
+  ceilings: PlanCeilings;
+  ceilingSources: Readonly<Record<keyof PlanCeilings, CeilingSource>>;
   /** The stage that could not be filled. */
   atStage: number;
   role: StageRole;
@@ -306,6 +353,11 @@ const CEILING_KEYS = [
  * where the authority set none gets its own (tighter) one. An enforcement flag takes the OR: a
  * caller can turn fail-closed ON, never off.
  */
+/** A numeric ceiling is usable only if it is a positive, finite number. Anything else is absent. */
+function usable(value: number | boolean | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export function effectiveCeilings(
   governed: PlanCeilings,
   requested: PlanCeilings = {},
@@ -321,8 +373,16 @@ export function effectiveCeilings(
       sources[key] = g ? "governed" : r ? "requested" : "unset";
       continue;
     }
-    const g = governed[key];
-    const r = requested[key];
+    /*
+     * A CEILING THAT IS NOT A POSITIVE FINITE NUMBER IS NOT A CEILING. Measured: `r >= g` is
+     * FALSE for NaN, so a caller passing `tokens: NaN` won the minimum and the effective ceiling
+     * became NaN — after which every later comparison (`meanDurationMs > NaN`,
+     * `contextWindow < NaN`) is false, so the ceiling gated nothing, and it serialized to `null`,
+     * i.e. "no ceiling at all" on reload. Zero and negatives were accepted as narrowings too.
+     * Both sides are validated, and an unusable value is DISCARDED rather than compared.
+     */
+    const g = usable(governed[key]);
+    const r = usable(requested[key]);
     if (g === undefined && r === undefined) {
       sources[key] = "unset";
       continue;
@@ -354,9 +414,16 @@ interface Admitted {
 }
 
 /**
- * The worst a stage can cost: the whole token ceiling billed at the COMPLETION rate, which is
- * never below the prompt rate. Overestimating is the only safe direction under a cap, and the
- * registry's integer-micros arithmetic already rounds a non-zero remainder UP.
+ * The worst a stage can cost: every token of the ceiling billed at whichever side bills MORE.
+ *
+ * It charged the completion rate, justified by "which is never below the prompt rate". Nothing
+ * enforces that: `recordDefect` only requires both rates positive, so a record with a prompt rate
+ * ten thousand times the completion rate validated, and a candidate was admitted under a 5-micro
+ * enforced ceiling with a "worst case" of 1 micro. An unproven assumption was deciding a money
+ * refusal. Taking the dearer rate needs no assumption at all.
+ *
+ * Overestimating is the only safe direction under a cap, and the registry's integer-micros
+ * arithmetic already rounds a non-zero remainder UP.
  */
 function worstCaseCost(
   model: string | undefined,
@@ -370,9 +437,11 @@ function worstCaseCost(
   }
   const resolved = resolvePrice(prices, model, now);
   if (resolved.kind !== "PRICE") return { unprovable: `${resolved.defect}: ${resolved.reason}` };
+  const { promptMicrosPerMillion: pm, completionMicrosPerMillion: cm } = resolved.record;
+  /* All on one side, so `totalTokens === prompt + completion` and UNPRICED_TOKENS cannot fire. */
   const cost = costMicros(resolved.record, {
-    promptTokens: 0,
-    completionTokens: tokens,
+    promptTokens: pm > cm ? tokens : 0,
+    completionTokens: pm > cm ? 0 : tokens,
     totalTokens: tokens,
   });
   if (cost.kind !== "COST_MICROS") return { unprovable: `${cost.defect}: ${cost.reason}` };
@@ -402,6 +471,11 @@ function admit(
     exclusions.push("LATENCY_UNMEASURED");
   }
 
+  /*
+   * Both sides are TOTAL tokens now. While `ceilings.tokens` meant OUTPUT tokens this compared
+   * an output ceiling against a whole context window, so a 200 k-context model passed a 100 k
+   * "output" ceiling it could never emit.
+   */
   if (
     ceilings.tokens !== undefined &&
     profile.contextWindow !== undefined &&
@@ -432,20 +506,31 @@ function admit(
     exclusions.push("STRUCTURED_OUTPUT_UNSUPPORTED");
   }
 
+  /*
+   * EVERY OPTIONAL FIELD IS OMITTED WHEN ABSENT, never present-and-undefined. The fields were
+   * assigned unconditionally, so a plan carried undefined-valued keys: `toEqual` passed on a JSON
+   * round trip while `toStrictEqual` threw, and the module's own round-trip test was written the
+   * weaker way. A plan meant for a jsonb column must round-trip strictly.
+   */
+  const defined = <T,>(key: string, value: T | undefined) =>
+    value === undefined ? {} : { [key]: value };
+
   return {
     exclusions,
     candidate: {
       workerId: verdict.workerId,
-      provider: profile.provider,
-      model: profile.model,
-      family: profile.family,
-      tier: profile.tier,
-      costTier: profile.costTier,
-      score: verdict.score?.total,
-      qualityScore: verdict.score?.quality,
-      reliabilityScore: verdict.score?.reliability,
-      budgetMs,
-      meanDurationMs,
+      ...defined("provider", profile.provider),
+      ...defined("model", profile.model),
+      ...defined("family", profile.family),
+      ...defined("tier", profile.tier),
+      ...defined("costTier", profile.costTier),
+      ...defined("score", verdict.score?.total),
+      ...defined("qualityScore", verdict.score?.quality),
+      ...defined("reliabilityScore", verdict.score?.reliability),
+      ...defined("budgetMs", budgetMs),
+      ...defined("meanDurationMs", meanDurationMs),
+      /* The router's own relaxation, carried so it is recorded rather than lost. */
+      ...defined("routerFallback", verdict.fallback),
       ...("micros" in cost
         ? { worstCaseCostMicros: cost.micros }
         : { costUnprovableBecause: cost.unprovable }),
@@ -462,7 +547,7 @@ interface StageShape {
   purpose: StagePurpose;
   advanceWhen: readonly AdvanceCondition[];
   parallelism: number;
-  /** Candidates to keep in this stage. `undefined` = one per ascending group (cascade). */
+  /** Candidates to keep in this stage. Ignored when `grouped`: a group IS the stage. */
   width: number;
 }
 
@@ -572,35 +657,50 @@ function reorder(
       /* The measured review-quality rate, not the aggregate score: a cheap, fast, poorly
          reviewed model must not win a quality-first stage on its cost component. */
       return byMeasure((a) => a.candidate.qualityScore, "high");
-    case "cheap-first-escalate":
-      return byMeasure((a) => a.candidate.costTier, "low");
+    /*
+     * `cheap-first-escalate` is NOT here: it is a grouped topology, and the grouping below sorts
+     * by the same cost tier. Re-sorting first changed nothing but which candidate happened to be
+     * read as the writer's model — a dead branch with one live side effect.
+     */
     default:
       return admitted;
   }
 }
 
-/** Diversity, applied in order so the strongest candidate always keeps its place. */
+/**
+ * Two candidates are the same judge when `sameEffectiveModel` says so. A candidate declaring NO
+ * model cannot be proven distinct from anything, so it is treated as clashing — refusing a seat
+ * we cannot justify, rather than claiming a diversity we cannot prove.
+ */
+function sameJudge(a: PlannedCandidate, b: PlannedCandidate): boolean {
+  if (a.workerId === b.workerId) return true;
+  if (a.model === undefined || b.model === undefined) return true;
+  return sameEffectiveModel(a.model, b.model);
+}
+
+/**
+ * Diversity, applied in order so the strongest candidate always keeps its seat.
+ *
+ * A candidate ALREADY REFUSED — by this module or by the router — takes no seat. Measured: an
+ * `unhealthy` route to a model sorted first under `latency-first`, took the seat, and the HEALTHY
+ * route to the same model was then dropped as a duplicate. The refused candidate was never going
+ * to run, so it cost the stage its only viable member.
+ */
 function applyDiversity(
   admitted: readonly Admitted[],
-  diversity: "none" | "model" | "family",
+  diversity: Diversity,
+  refusedByRouter: (workerId: string) => boolean,
 ): Admitted[] {
   if (diversity === "none") return [...admitted];
-  const seen = new Set<string>();
+  const seated: PlannedCandidate[] = [];
   return admitted.map((a) => {
-    if (a.exclusions.length > 0) return a;
-    const key =
-      diversity === "family"
-        ? (a.candidate.family ?? `model:${a.candidate.model ?? a.candidate.workerId}`)
-        : a.candidate.model !== undefined
-          ? effectiveModelKey(a.candidate.model)
-          : `worker:${a.candidate.workerId}`;
-    if (seen.has(key)) {
-      return {
-        ...a,
-        exclusions: [...a.exclusions, diversity === "family" ? "DUPLICATE_FAMILY" : "DUPLICATE_MODEL"],
-      };
+    if (a.exclusions.length > 0 || refusedByRouter(a.candidate.workerId)) return a;
+    if (seated.some((s) => sameJudge(s, a.candidate))) {
+      const why: PlanExclusion =
+        a.candidate.model === undefined ? "INDEPENDENCE_UNVERIFIABLE" : "DUPLICATE_MODEL";
+      return { ...a, exclusions: [...a.exclusions, why] };
     }
-    seen.add(key);
+    seated.push(a.candidate);
     return a;
   });
 }
@@ -610,8 +710,6 @@ function applyDiversity(
 /* ------------------------------------------------------------------------------------------ */
 
 const JUDGE_PURPOSES: ReadonlySet<StagePurpose> = new Set(["review", "critique", "aggregate"]);
-
-const DEFAULT_MAX_ATTEMPTS = 2;
 
 const EVIDENCE_REQUIRED = Object.freeze([
   /* Per STAGE, not per plan: a plan whose cost is known only in total cannot attribute it. */
@@ -641,31 +739,81 @@ export function planInference(
   const independence =
     request.independence ??
     (request.topology === "reviewer" || request.topology === "critique" ? "required" : "preferred");
-  const diversity = request.diversity ?? (request.topology === "ensemble" ? "family" : "none");
-  const maxAttempts = clampWidth(request.maxAttemptsPerStage, DEFAULT_MAX_ATTEMPTS);
+  const diversity = request.diversity ?? (request.topology === "ensemble" ? "distinct-model" : "none");
   const shape = shapeOf(request);
   const byId = new Map(pool.map((w) => [w.id, w] as const));
 
-  if (shape.stages.length === 0) {
+  /*
+   * A REFUSAL MUST BE RE-DERIVABLE, like a plan. It carried neither the policy version nor the
+   * ceilings, so "why was this refused?" could not be re-checked against the inputs that caused
+   * it — and the ceilings are exactly what a money or latency refusal turns on.
+   */
+  const refuse = (
+    atStage: number,
+    role: StageRole,
+    purpose: StagePurpose,
+    reason: string,
+    refused: readonly RefusedCandidate[],
+  ): NoViableRoute => {
+    const all = refused.flatMap((r) => r.because);
     return {
       kind: "NO_VIABLE_ROUTE",
       planVersion: INFERENCE_PLAN_VERSION,
+      policyVersion: COMPUTE_POLICY_VERSION,
       plannedAt,
       topology: request.topology,
-      atStage: 0,
-      role: "writer",
-      purpose: "produce",
-      reason: "topology mission-specific sans étape déclarée",
-      refused: [],
-      transient: false,
+      ceilings,
+      ceilingSources: sources,
+      atStage,
+      role,
+      purpose,
+      reason,
+      refused,
+      transient: all.length > 0 && all.every((r) => TRANSIENT_EXCLUSIONS.has(r)),
     };
+  };
+
+  if (shape.stages.length === 0) {
+    return refuse(0, "writer", "produce", "topology mission-specific sans étape déclarée", []);
+  }
+  /*
+   * A caller's own sequence is still checked for coherence: a purpose names what a stage DOES, so
+   * a judging purpose on a writer (or the reverse) is a contradiction, and a judge before any
+   * producer has nothing to judge and no worker to be independent of.
+   */
+  for (const [i, st] of shape.stages.entries()) {
+    if (JUDGE_PURPOSES.has(st.purpose) !== (st.role === "reviewer")) {
+      return refuse(i, st.role, st.purpose, `étape ${i}: rôle ${st.role} incompatible avec ${st.purpose}`, []);
+    }
+    if (st.role === "reviewer" && !shape.stages.slice(0, i).some((e) => e.role === "writer")) {
+      return refuse(i, st.role, st.purpose, `étape ${i}: un juge sans étape productrice avant lui`, []);
+    }
   }
 
   const stages: PlannedStage[] = [];
   /** Workers already used by a producing stage: a judge may never be one of them. */
   const writerWorkerIds: string[] = [];
-  /** The model of the work a judge will judge, when it is known. */
-  let writerModel: string | undefined;
+  /**
+   * EVERY model a producing stage declared — not just its first.
+   *
+   * This was one `string | undefined` assigned `kept[0]?.candidate.model`, while a producing
+   * stage's default width is 2. Measured at the shipped defaults: writers
+   * [nemotron-3-ultra-550b, oc/claude-sonnet-5-high], judge anthropic/claude-sonnet-5 — the same
+   * effective model as writer candidate #2, with `independence: "required"` recorded on the plan.
+   * A judge must be independent of whatever actually ran, and any declared candidate may run.
+   */
+  const writerModels: string[] = [];
+  /** True once a producing stage declared a candidate with no model: independence is then unprovable. */
+  let writerModelUnknown = false;
+
+  /** Records a producing stage's candidates as work a later judge must be independent of. */
+  const recordWriters = (produced: readonly Admitted[]) => {
+    for (const a of produced) {
+      writerWorkerIds.push(a.candidate.workerId);
+      if (a.candidate.model === undefined) writerModelUnknown = true;
+      else writerModels.push(a.candidate.model);
+    }
+  };
 
   for (const [index, template] of shape.stages.entries()) {
     const judging = JUDGE_PURPOSES.has(template.purpose);
@@ -679,7 +827,12 @@ export function planInference(
         requirement: {
           ...base.compute.requirement,
           role: template.role,
-          ...(judging ? { writerModelKey: writerModel } : {}),
+          /*
+           * The router's SAME_MODEL_AS_WRITER is a PREFERENCE it relaxes, and it takes one key.
+           * It is given the first writer model so that preference still works; the HARD rule for a
+           * plan that declared independence is applied below, against every writer model.
+           */
+          ...(judging ? { writerModelKey: writerModels[0] } : {}),
         },
       },
     };
@@ -691,54 +844,75 @@ export function planInference(
 
     /*
      * INDEPENDENCE AS A REFUSAL. The router avoids the writer's model while anything else
-     * qualifies, then relaxes so work never stalls on a preference. For a plan that DECLARED
-     * independence as required, relaxing is not acceptable: the stage refuses instead.
+     * qualifies, then relaxes so work never stalls on a preference. A plan that DECLARED
+     * independence as required cannot accept that relaxation: the stage refuses instead — and it
+     * refuses against EVERY model its producing stages declared, not just the first.
+     *
+     * An unprovable independence is also a refusal. Previously, a writer with no declared model
+     * skipped the check entirely AND left the router's own gate off, so a plan recorded
+     * `independence: "required"` while nothing had been verified and no refusal said so.
      */
     const withIndependence =
-      judging && independence === "required" && writerModel !== undefined
-        ? scored.map((a) =>
-            a.candidate.model !== undefined && sameEffectiveModel(a.candidate.model, writerModel!)
-              ? { ...a, exclusions: [...a.exclusions, "NOT_INDEPENDENT_OF_WRITER" as PlanExclusion] }
-              : a,
-          )
+      judging && independence === "required"
+        ? scored.map((a) => {
+            const why = independenceDefect(a.candidate, writerModels, writerModelUnknown);
+            return why ? { ...a, exclusions: [...a.exclusions, why] } : a;
+          })
         : scored;
 
     const routerRefusal = new Map(
       ranked.map((v) => [v.workerId, [...v.eligibility.reasons, ...v.exclusions]] as const),
     );
+    /*
+     * THE ROUTER'S VERDICT IS `selectable`, NOT "no exclusions". TIER_FALLBACK sets
+     * `selectable: true` while LEAVING `BELOW_REQUIRED_TIER` in `exclusions` — the router saying
+     * "nothing meets the tier, these are the strongest that remain, and it is recorded". Reading
+     * the exclusion list instead made the plan OVERRULE the authority it claims to defer to: the
+     * plan returned a permanent NO_VIABLE_ROUTE where a bare dispatch would have run, and the
+     * `fallback` provenance was dropped. The relaxation is now respected and carried.
+     */
+    const refusedByRouter = (id: string) => ranked.find((v) => v.workerId === id)?.selectable !== true;
     const ordered = reorder(request.topology, withIndependence);
-    const diverse = applyDiversity(ordered, judging ? "none" : diversity);
+    const diverse = applyDiversity(ordered, judging ? "none" : diversity, refusedByRouter);
 
     const viable = diverse.filter(
-      (a) => a.exclusions.length === 0 && (routerRefusal.get(a.candidate.workerId)?.length ?? 0) === 0,
+      (a) => a.exclusions.length === 0 && !refusedByRouter(a.candidate.workerId),
     );
     const refused: RefusedCandidate[] = diverse
       .filter((a) => !viable.includes(a))
-      .map((a) => ({
-        workerId: a.candidate.workerId,
-        because: [...(routerRefusal.get(a.candidate.workerId) ?? []), ...a.exclusions],
-        ...(a.candidate.costUnprovableBecause !== undefined
-          ? { costUnprovableBecause: a.candidate.costUnprovableBecause }
-          : {}),
-      }));
+      .map((a) => {
+        const because = [
+          ...(refusedByRouter(a.candidate.workerId)
+            ? (routerRefusal.get(a.candidate.workerId) ?? [])
+            : []),
+          ...a.exclusions,
+        ];
+        return {
+          workerId: a.candidate.workerId,
+          because,
+          /*
+           * Only when the cost is what refused it. It was attached to EVERY refusal, so a
+           * candidate excluded as the writer's own worker carried "no token ceiling" beside it —
+           * sending an operator to the price registry over a review-independence rule, which is
+           * the exact failure this field was added to prevent.
+           */
+          ...(because.includes("COST_UNPROVABLE") &&
+          a.candidate.costUnprovableBecause !== undefined
+            ? { costUnprovableBecause: a.candidate.costUnprovableBecause }
+            : {}),
+        };
+      });
 
     if (viable.length === 0) {
-      const all = refused.flatMap((r) => r.because);
-      return {
-        kind: "NO_VIABLE_ROUTE",
-        planVersion: INFERENCE_PLAN_VERSION,
-        plannedAt,
-        topology: request.topology,
-        atStage: index,
-        role: template.role,
-        purpose: template.purpose,
-        reason:
-          refused.length === 0
-            ? `aucun worker enregistré pour l'étape ${template.purpose}`
-            : `aucun candidat viable pour l'étape ${template.purpose} parmi ${refused.length}`,
+      return refuse(
+        index,
+        template.role,
+        template.purpose,
+        refused.length === 0
+          ? `aucun worker enregistré pour l'étape ${template.purpose}`
+          : `aucun candidat viable pour l'étape ${template.purpose} parmi ${refused.length}`,
         refused,
-        transient: all.length > 0 && all.every((r) => TRANSIENT_EXCLUSIONS.has(r)),
-      };
+      );
     }
 
     /*
@@ -762,40 +936,65 @@ export function planInference(
           purpose: g === 0 ? "produce" : "escalate",
           parallelism: 1,
           candidates: members.map((a) => a.candidate),
-          maxAttempts,
+          maxAttempts: members.length,
           advanceWhen: template.advanceWhen,
           excludedWorkerIds,
           ...stageCeilings(members, ceilings),
-          refused: g === 0 ? refused : [],
+          /*
+           * The refusals belong to EVERY stage of a cascade: one ranking produced them all, so a
+           * candidate refused is refused for the whole cascade. Attaching them only to stage 0
+           * made every escalation stage claim it had refused nobody.
+           */
+          refused,
         });
       }
-      writerWorkerIds.push(...viable.map((a) => a.candidate.workerId));
-      writerModel ??= viable[0]?.candidate.model;
+      recordWriters(viable);
       continue;
     }
 
     const kept = viable.slice(0, template.width);
+    /*
+     * AN ENSEMBLE OF ONE IS NOT AN ENSEMBLE. Its whole value is that several DISTINCT judges
+     * produce independently; with one seatable member the topology silently degrades to `single`
+     * while the plan still says `ensemble`. Refuse and say which.
+     */
+    if (template.purpose === "member" && kept.length < 2) {
+      return refuse(
+        index,
+        template.role,
+        template.purpose,
+        `ensemble: ${kept.length} membre(s) distinct(s) seulement, il en faut au moins 2`,
+        refused,
+      );
+    }
     stages.push({
       index: stages.length,
       role: template.role,
       purpose: template.purpose,
       parallelism: Math.min(template.parallelism, kept.length),
       candidates: kept.map((a) => a.candidate),
-      maxAttempts,
+      maxAttempts: kept.length,
       advanceWhen: template.advanceWhen,
       excludedWorkerIds,
       ...stageCeilings(kept, ceilings),
       refused,
     });
 
-    if (!judging) {
-      writerWorkerIds.push(...kept.map((a) => a.candidate.workerId));
-      writerModel ??= kept[0]?.candidate.model;
-    }
+    if (!judging) recordWriters(kept);
   }
 
-  const terminateWhen: TerminationCondition[] = ["FINAL_STAGE_COMPLETED", "CANDIDATES_EXHAUSTED", "RETRY_BUDGET_EXHAUSTED"];
-  if (stages.some((s) => JUDGE_PURPOSES.has(s.purpose))) {
+  const terminateWhen: TerminationCondition[] = ["FINAL_STAGE_COMPLETED", "CANDIDATES_EXHAUSTED"];
+  /*
+   * A review can end a plan whenever one can advance it. A `cascade` has no judging stage of its
+   * own yet escalates on REVIEW_REQUEST_CHANGES — ICOS reviews every attempt independently of the
+   * topology — so keying this on a judge stage alone left a cascade able to advance on a review
+   * verdict while declaring no review outcome could terminate it.
+   */
+  if (
+    stages.some(
+      (s) => JUDGE_PURPOSES.has(s.purpose) || s.advanceWhen.includes("REVIEW_REQUEST_CHANGES"),
+    )
+  ) {
     terminateWhen.push("REVIEW_APPROVED", "REVIEW_BLOCKED");
   }
   if (ceilings.tokens !== undefined || ceilings.moneyMicros !== undefined || ceilings.latencyMs !== undefined) {
@@ -819,6 +1018,25 @@ export function planInference(
 }
 
 /**
+ * Why this candidate cannot judge work produced by `writerModels` — or `undefined` when it can.
+ *
+ * Unprovable is refused. A judge with no declared model cannot be shown independent, and work
+ * whose producer declared no model cannot be shown to have a different judge; in both cases the
+ * honest answer is a named refusal, not an assumption in either direction.
+ */
+function independenceDefect(
+  candidate: PlannedCandidate,
+  writerModels: readonly string[],
+  writerModelUnknown: boolean,
+): PlanExclusion | undefined {
+  if (writerModelUnknown || candidate.model === undefined) return "INDEPENDENCE_UNVERIFIABLE";
+  const model = candidate.model;
+  return writerModels.some((w) => sameEffectiveModel(model, w))
+    ? "NOT_INDEPENDENT_OF_WRITER"
+    : undefined;
+}
+
+/**
  * A stage's own ceilings. The token and money ceilings are the plan's; the time budget is the
  * SMALLEST its candidates declare, because a stage that may run any of them must fit all of them.
  */
@@ -835,6 +1053,3 @@ function stageCeilings(
     ...(ceilings.moneyMicros !== undefined ? { moneyCeilingMicros: ceilings.moneyMicros } : {}),
   };
 }
-
-/** The settlement margin a plan's budgets are proven against. Re-exported so a reader finds it. */
-export { SETTLEMENT_MARGIN_MS };

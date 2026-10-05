@@ -104,6 +104,125 @@ What it cannot do is state a SHAPE in advance. Measured against the owner's targ
     CORE3 orchestration; the Temporal writer path; the runtime supervisor; the Product Layer; the
     IntegrationGate and its self-review refusal; migration 0048's evidence.
 
+## Amendment A — independent review of `6f07058` (2026-10-05)
+
+An independent adversarial reviewer, given no implementation context and told to falsify rather
+than read, ran 46 probe assertions against the ten invariants. Six held; **four decisions above
+were overstated and are corrected here.** Each correction is proven by a test that fails when the
+fix is reverted (seven mutations attempted, seven caught).
+
+**A1. §8 was false at the shipped defaults. Independence covered only the FIRST writer candidate.**
+`writerModel ??= kept[0]?.candidate.model`, while a producing stage's default width is **2**.
+Measured: writers `[nemotron-3-ultra-550b, oc/claude-sonnet-5-high]`, judge
+`anthropic/claude-sonnet-5` — the same effective model as writer candidate #2 — seated, with
+`independence: "required"` recorded on the plan. A judge must be independent of whatever actually
+ran, and **any declared candidate may run**. The plan now collects every model every producing
+stage declared and refuses a judge matching **any** of them.
+
+Related, and also false: a writer declaring **no model** skipped the check entirely *and* left the
+router's own gate off, so a plan recorded `independence: "required"` while nothing had been
+verified and no refusal said so. An unprovable independence is now a named refusal,
+`INDEPENDENCE_UNVERIFIABLE`. This is narrower than 0054's choice not to refuse on an unknown model:
+0054 governs every dispatch, whereas here the **caller declared** the requirement, so failing
+closed is honouring the declaration rather than imposing a new policy.
+
+**A2. §4 was false for `NaN`.** `r >= g` evaluates to **false** for `NaN`, so `requested` won the
+minimum and the effective ceiling became `NaN` — after which every later comparison
+(`meanDurationMs > NaN`, `contextWindow < NaN`) is false, so the ceiling gated nothing, and it
+serialized to `null`, i.e. "no ceiling at all" on reload. `0` and negatives were accepted as
+narrowings too. A ceiling is now usable only if it is a **positive finite number**, on both sides,
+and an unusable value is discarded rather than compared. Exactly the shape of `UNUSABLE_CLOCK` in
+0067 §3, and found the same way.
+
+**A3. §9 was false. `effectiveModelKey` is not the same-judge rule; `sameEffectiveModel` is.**
+The latter is key-match **OR** family-match, and the pair `compute-routing.ts` names in its own
+comment — `nvidia/nemotron-3-ultra-550b` and `oc/nemotron-3-ultra-free` — normalizes to two
+different keys. Both were seated as "two models" while being one model under two routes, so an
+ensemble could have had no diversity at all. The `"family"` value's fallback key used the **raw**
+model id, compounding it.
+
+Under the correct relation the two values are one value, so `diversity` is now
+`"none" | "distinct-model"` with a single rule. Separately: a candidate already refused — by this
+module or by the router — no longer **consumes a diversity seat**. Measured: an `unhealthy` route
+sorted first under `latency-first`, took the seat, and the healthy route to the same model was
+dropped as a duplicate, costing the stage its only viable member.
+
+**A4. The plan was overruling the authority it claims to defer to.** `viable` tested
+`exclusions.length === 0`, but `rankComputePool` expresses a TIER_FALLBACK by setting
+`selectable: true` while **leaving** `BELOW_REQUIRED_TIER` in `exclusions` — the router saying
+"nothing meets the tier, these are the strongest that remain, and it is recorded" (0054 §3,
+*preferences never stall work*). So the plan returned a permanent `NO_VIABLE_ROUTE` where a bare
+dispatch would have run, and dropped the relaxation's provenance. The router's own `selectable`
+verdict is now what decides, and its `fallback` is carried as `routerFallback` on the candidate.
+§1's claim holds only because of this change.
+
+### Also corrected, less severely
+
+- **§6's justification was unproven.** "The completion rate, which is never below the prompt rate"
+  is enforced nowhere — `recordDefect` only requires both rates positive. A record with a prompt
+  rate ten million times the completion rate validated, and a candidate was admitted under a
+  5-micro enforced ceiling with a "worst case" of 1 micro. The worst case now charges every token
+  at **whichever side bills more**, which needs no assumption. No change to the price authority.
+- **`tokens` was documented as OUTPUT tokens and used as if it were TOTAL.** Two things were wrong
+  at once: it was compared against a candidate's whole `contextWindow`, and the worst case charged
+  **zero prompt tokens**, so a stage "proven" at 3 000 micros for 1 000 output tokens really cost
+  103 000 with a 100 k prompt. `tokens` is now TOTAL tokens per stage.
+- **The plan authored a retry budget it had no business authoring.** `maxAttemptsPerStage`
+  defaulted to 2, was clamped by the *width* clamp (so retries silently capped at 8), and made
+  `topology: "single"` — whose own text says a failure is the task's failure — ship two attempts
+  over one candidate. Removed: a stage's `maxAttempts` is exactly its declared candidate count, and
+  `RETRY_BUDGET_EXHAUSTED` is gone. How often to re-run the same compute belongs to the lease, the
+  policy or QC.
+- **`costUnprovableBecause` was attached to every refusal**, so a candidate excluded as the
+  writer's own worker carried "no token ceiling" beside it — sending an operator to the price
+  registry over a review-independence rule, the exact failure the field was added to prevent. It
+  now appears only on a refusal the cost caused.
+- **Every cascade stage after the first claimed zero refusals.** One ranking produces them all, so
+  they belong to every stage of the cascade.
+- **A `NO_VIABLE_ROUTE` carried neither the policy version nor the ceilings**, so a refusal could
+  not be re-derived against the inputs that caused it — and the ceilings are exactly what a money
+  or latency refusal turns on. §2's "a plan read back can be re-derived" did not hold for refusals.
+- **An `ensemble` degraded silently to one member.** It now refuses below two distinct judges.
+- **A `cascade` could advance on `REVIEW_REQUEST_CHANGES` while declaring no review outcome could
+  terminate it.** `terminateWhen` now follows what the stages actually advance on.
+- **`mission-specific` validated nothing** — any `(role, purpose)` pair, a judge before any
+  producer. Both are refused.
+- **Plans carried present-but-undefined keys**, so `toEqual` passed a JSON round trip while
+  `toStrictEqual` threw — and the module's own round-trip test was written the weaker way. Every
+  optional field is now omitted when absent.
+- **§12 cited `SETTLEMENT_MARGIN_MS` as if the plan enforced it.** It was imported solely to be
+  re-exported; no logic used it. The router holds the lease and keeps that gate, as §12 otherwise
+  says. The vestigial re-export is gone.
+
+### Tests the review found to be asserting nothing
+
+`expect(JSON.parse(JSON.stringify(p))).toEqual(JSON.parse(JSON.stringify(p)))` compares two round
+trips of the **same value** and passes for any object; the honest form, `toStrictEqual(round, p)`,
+failed. "Same inputs, same plan" is near-tautological for a pure function with an injected clock,
+and is now joined by a proof that spies on `Date.now`, `Math.random`, `setTimeout` and
+`setInterval` across every topology and asserts none is touched. The structured-output test
+asserted a label's presence without asserting the candidate was dropped. The test file's header
+claimed "every proof goes through the REAL CapabilityRouter"; the router is used as a
+`ComputeContext` factory, and the header now says so, with a dedicated property test that re-checks
+every seated candidate against the authority across all topologies.
+
+### Two findings deliberately NOT fixed here
+
+- **`metered-fetch.ts:153` and `:169`** read `response.headers` and call `readUsage` **outside** any
+  `try`, so a *throwing* `headers` getter — the exact shape the comment at `:148-150` describes
+  from a real incident — still propagates to the caller, and `:151`'s "jamais une erreur" is
+  overstated. The two tests added at `6f07058` cover an **absent** `get`, not a throwing one. That
+  file is the production spend seam and belongs to the budget lane; changing it from a routing lane
+  is the cross-lane debt this freeze exists to avoid. **Owner: budget lane.** Fix: move both reads
+  inside the existing `try` and return `UNMETERED` on throw.
+- **`registry.ts:143` does not require `completion >= prompt`.** Handled on this side by charging
+  the dearer rate, so no change to a shared, separately certified authority is needed. If the
+  owner wants the invariant stated, it needs its own decision.
+
+Invariants the review confirmed unchanged: no second router (after A4), no health bypass across
+4 topologies × 3 diversity settings × width 8, price fails closed on all five defect paths, no I/O,
+no state, no timer, no clock, and the caller's body is never consumed by measurement.
+
 ## Consequences
 
 - **Nothing is wired yet.** This lane adds the authority and its proofs; no caller builds a plan,
