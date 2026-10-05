@@ -109,6 +109,20 @@ beforeEach(() => {
 });
 const TARGET = "integration/phase-7";
 
+/**
+ * THE CANONICAL WORKER RESULT CONTRACT, and why the sentinel was wrong here.
+ *
+ * `classifyWorkerRun` (`worker-run.ts`) reads a structured status FILE at
+ * `ICOS_WORKER_STATUS_FILE` — `{ completed: true, failed: false }` — and takes stdout as
+ * the recorded result. Stdout never decides success.
+ *
+ * This script used to report through `ICOS_RESULT_SENTINEL_START/END`, which is the
+ * IN-PROCESS executor's protocol (`command-worker-executor.ts`) and remains correct for
+ * INTERACTIVE_COMMAND. Mission work is orchestrated by Temporal and by nothing else
+ * (ADR 0067), and the activity reads the status file — so a sentinel-only worker could
+ * start, write, commit and still be classified `worker returned no structured status`,
+ * which is precisely what a broken worker looks like.
+ */
 const WORKER_SCRIPT = `
   const fs = require('fs');
   const { execFileSync } = require('child_process');
@@ -117,9 +131,15 @@ const WORKER_SCRIPT = `
   fs.writeFileSync(dir + '/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + ' attempt ' + process.env.ICOS_WORKFLOW_ID + '\\n');
   execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
   execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','d28 feature'], { stdio: 'ignore' });
-  process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
-    status: 'succeeded', summary: 'wrote src/d28/feature.txt', testsRun: ['unit'],
-  }) + process.env.ICOS_RESULT_SENTINEL_END);
+  /*
+   * The canonical result contract: a structured status FILE at the path ICOS gave us, plus
+   * a non-empty stdout which becomes the recorded result. Stdout never decides success.
+   * (No backticks in here: this comment lives inside a template literal.)
+   */
+  process.stdout.write('wrote ' + dir + '/feature.txt');
+  fs.writeFileSync(process.env.ICOS_WORKER_STATUS_FILE, JSON.stringify({
+    completed: true, failed: false,
+  }));
 `;
 
 // ------------------------------------------------------------------ OmniRoute network edge
@@ -448,6 +468,38 @@ async function until<T>(
 }
 const ticks = (n: number) => new Promise((r) => setTimeout(r, n * 250 + 200));
 
+/**
+ * RUN THE MISSION AND WAIT FOR THE DURABLE RESULT, because the dispatch is ASYNCHRONOUS.
+ *
+ * `supervisor.run` used to execute the work inline: mission work ran on the in-process
+ * executor, so when it returned the result was already recorded and QC could review it on
+ * the next line. `DURABLE_MISSION_TASK` is orchestrated by Temporal now (ADR 0067), so
+ * `run` only DISPATCHES — the worker executes in another process and ICOS learns the
+ * outcome from the completion callback afterwards.
+ *
+ * So every case here was asking QC to review work that had not landed yet, and getting the
+ * honest answer: no execution, no review, `[]`. The missing step is not a sleep but the
+ * durable fact itself — the row the completion callback writes — which is also what makes
+ * the wait immune to how fast the worker happens to be.
+ */
+async function runMission(
+  runtime: { supervisor: { run(missionId: string): Promise<unknown> } },
+  c: Container,
+): Promise<void> {
+  await runtime.supervisor.run(MISSION_ID);
+  await until(
+    "the execution result was recorded by the completion callback",
+    async () => {
+      const [row] = (await c.db!.execute(
+        sql.raw(
+          `select outcome from task_execution_results where workflow_id = '${WORKFLOW_ID}'`,
+        ),
+      )) as unknown as Array<{ outcome: string }>;
+      return row?.outcome;
+    },
+  );
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(started.splice(0).map((s) => s.stop()));
@@ -480,7 +532,7 @@ describe("DEFECT 28 closure — natural runtime order", () => {
     const applySpy = vi.spyOn(c.integrationApplier!, "apply");
 
     /* The runtime starts the work (same composition as the scheduler). */
-    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+    await runMission(composeAutonomyRuntime(c), c);
     const parked = await workspace(c);
     expect(parked?.status).toBe("ready_for_integration");
     expect(await reviews(c)).toEqual([]);
@@ -553,7 +605,7 @@ describe("DEFECT 28 closure — natural runtime order", () => {
     const services = await boot();
     const c = services.container;
     const applySpy = vi.spyOn(c.integrationApplier!, "apply");
-    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+    await runMission(composeAutonomyRuntime(c), c);
 
     await until("a REQUEST_CHANGES review was persisted", async () =>
       (await reviews(c)).some((r) => r.decision === "REQUEST_CHANGES"),
@@ -578,7 +630,7 @@ describe("DEFECT 28 closure — restart and concurrency", () => {
     const a = await container();
     await seed(a);
     const before = git(repo, "rev-parse", TARGET);
-    await composeAutonomyRuntime(a).supervisor.run(MISSION_ID);
+    await runMission(composeAutonomyRuntime(a), a);
     expect((await workspace(a))?.status).toBe("ready_for_integration");
     expect(await reviews(a)).toEqual([]);
     const deadOwner = await leaseOwner(a);
@@ -612,7 +664,7 @@ describe("DEFECT 28 closure — restart and concurrency", () => {
     await seed(a);
     const before = git(repo, "rev-parse", TARGET);
     const runtimeA = composeAutonomyRuntime(a);
-    await runtimeA.supervisor.run(MISSION_ID);
+    await runMission(runtimeA, a);
 
     /* The real QC path reviews in process A (no trigger runs there: A has no scheduler). */
     reviewerMode = "approve";
@@ -638,7 +690,7 @@ describe("DEFECT 28 closure — restart and concurrency", () => {
     await seed(c);
     const before = git(repo, "rev-parse", TARGET);
     const runtime = composeAutonomyRuntime(c);
-    await runtime.supervisor.run(MISSION_ID);
+    await runMission(runtime, c);
 
     reviewerMode = "approve";
     await Promise.all([runtime.qualityControl.recover(), runtime.qualityControl.recover()]);
@@ -666,7 +718,7 @@ describe("DEFECT 28 closure — restart and concurrency", () => {
     await seed(a);
     const before = git(repo, "rev-parse", TARGET);
     const runtimeA = composeAutonomyRuntime(a);
-    await runtimeA.supervisor.run(MISSION_ID);
+    await runMission(runtimeA, a);
     reviewerMode = "approve";
     await runtimeA.qualityControl.recover();
     await crash(a);

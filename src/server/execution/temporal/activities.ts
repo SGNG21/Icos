@@ -174,8 +174,32 @@ async function postJson(path: string, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    /* Status only: the body is ICOS's and may name internals. */
-    throw new Error(`ICOS callback ${path} -> HTTP ${response.status}`);
+    /*
+     * A 4xx ON AN INTERNAL CALLBACK IS A CONTRACT VIOLATION, so it must say which one.
+     *
+     * Both sides of this call are ICOS: a 4xx means the worker built a body its own route
+     * refuses, which is always a bug and never a runtime condition. Reporting the status
+     * alone made that bug unreadable — and a refused completion callback is the exact
+     * defect shape this lane exists to remove, because Temporal then retries it twenty
+     * times and the attempt sits `dispatched` for ever with a missing review as the only
+     * symptom. It cost two long hunts before the reason was carried at all.
+     *
+     * What the body can hold is bounded by construction: `apiError` emits
+     * `{error:{code,message,details}}`, and the only details this route produces are
+     * `zodDetails` — field PATH, zod code and zod message — or a fixed correlation
+     * message. Never a field VALUE, so the prompt and the result cannot travel here.
+     *
+     * 5xx keeps status only: those bodies are ICOS's internals, and a 5xx is an outage to
+     * retry rather than a contract to fix.
+     */
+    let detail = "";
+    if (response.status >= 400 && response.status < 500) {
+      detail = await response
+        .text()
+        .then((text) => (text ? ` ${text.slice(0, 500)}` : ""))
+        .catch(() => "");
+    }
+    throw new Error(`ICOS callback ${path} -> HTTP ${response.status}${detail}`);
   }
 }
 
