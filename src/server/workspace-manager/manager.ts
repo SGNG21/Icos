@@ -434,7 +434,30 @@ export class WorkspaceManager {
       const archivePath = path.join(this.archiveDir, `${ws.workspaceId}.json`);
       await writeFile(archivePath, JSON.stringify(ws, null, 2));
 
-      if (hasWorktree) await this.git.removeWorktree(ws.worktreePath);
+      /*
+       * A WORKTREE THAT WILL NOT UNREGISTER MUST NOT STRAND THE RELEASE.
+       *
+       * `git worktree remove` fails for reasons that are not this workspace's problem — a
+       * directory already gone, a stale registration another run left in
+       * `.git/worktrees`. It used to "succeed" regardless, because this adapter's `exec`
+       * dropped every exit code; now that it honours them, a failure here would abort
+       * cleanup and leave the workspace, its branch and its test database behind for ever.
+       *
+       * Nothing is risked by continuing: the UNCOMMITTED_CHANGES check above is what
+       * protects real work, and it has already passed. So the removal is attempted, a
+       * `prune` clears a stale registration, and the result reports what actually
+       * happened instead of asserting success.
+       */
+      let worktreeRemoved = false;
+      if (hasWorktree) {
+        try {
+          await this.git.removeWorktree(ws.worktreePath);
+          worktreeRemoved = true;
+        } catch {
+          await this.git.exec(["worktree", "prune"], undefined, [0, 1, 128]).catch(() => undefined);
+          worktreeRemoved = !existsSync(ws.worktreePath);
+        }
+      }
       /*
        * Reap against the INTEGRATION TARGET, not HEAD (M8, defect 19). `branch -d` asks
        * whether the branch is merged into HEAD, which for a worker branch integrated into
@@ -448,7 +471,7 @@ export class WorkspaceManager {
       ws.leaseExpiresAt = null;
       ws.updatedAt = now.toISOString();
       return {
-        worktreeRemoved: hasWorktree,
+        worktreeRemoved,
         branchDeleted,
         databaseDropped: true,
         archivePath,
