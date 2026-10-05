@@ -76,9 +76,10 @@ export class PostgresGit extends Git {
       });
   }
 
-  async addWorktree(worktreePath: string, branch: string, baseCommit: string): Promise<void> {
-    await this.exec(["worktree", "add", worktreePath, "-b", branch, baseCommit]);
-  }
+  /*
+   * `addWorktree` et `setBranchToCommit` sont HÉRITÉS : la forme détachée est la même pour
+   * tout adaptateur réel, et `exec` redéfini ici reste celui qu'ils appellent.
+   */
 
   async removeWorktree(worktreePath: string): Promise<void> {
     await this.exec(["worktree", "remove", worktreePath]);

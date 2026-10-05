@@ -67,9 +67,33 @@ export class InMemoryGit extends Git {
     return Array.from(this.worktreesMap.values());
   }
 
+  /**
+   * DÉTACHÉ, comme l'adaptateur réel : `branch: null` dans le worktree, et la branche existe
+   * séparément à la base. Un faux qui rendrait ici le nom de la branche laisserait passer du
+   * code qui suppose un HEAD attaché — exactement ce que la production n'alloue plus.
+   */
   async addWorktree(worktreePath: string, branch: string, baseCommit: string): Promise<void> {
-    this.worktreesMap.set(worktreePath, { path: worktreePath, branch, head: baseCommit });
+    if (this.branches.has(branch)) {
+      throw new WorkspaceError("GIT_FAILED", `git branch ${branch} -> 128: already exists`);
+    }
+    this.worktreesMap.set(worktreePath, { path: worktreePath, branch: null, head: baseCommit });
     this.branches.set(branch, baseCommit);
+  }
+
+  /** Le compare-and-swap du vrai `update-ref` : une valeur attendue périmée échoue. */
+  async setBranchToCommit(
+    branch: string,
+    commit: string,
+    expectedOldCommit: string,
+  ): Promise<void> {
+    const current = this.branches.get(branch);
+    if (current !== expectedOldCommit) {
+      throw new WorkspaceError(
+        "GIT_FAILED",
+        `git update-ref refs/heads/${branch} -> 128: expected ${expectedOldCommit}, got ${current ?? "none"}`,
+      );
+    }
+    this.branches.set(branch, commit);
   }
 
   async removeWorktree(worktreePath: string): Promise<void> {

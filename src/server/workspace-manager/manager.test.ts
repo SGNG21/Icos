@@ -122,8 +122,17 @@ describe("create", () => {
     const w = await manager.create(workspaceId);
     expect(w.status).toBe("ready");
     expect(existsSync(path.join(fx.root, "7a", "src/a.ts"))).toBe(true);
-    expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "--abbrev-ref", "HEAD")).toBe("ws/7a");
+    /*
+     * DÉTACHÉ, et la branche existe quand même. Un HEAD attaché ferait verrouiller
+     * `refs/heads/ws/7a` dans le dépôt canonique, que le bac à sable du writer refuse — donc
+     * aucune écriture gouvernée ne pouvait aboutir sous confinement. Le worker commite
+     * détaché et rend un SHA ; c'est le coordinateur qui nomme ensuite la branche, après
+     * vérification (`nameGovernedBranch`).
+     */
+    expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
     expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "HEAD")).toBe(w.baseCommit);
+    /* La branche est réservée dès l'allocation : deux exécutions ne partagent jamais un nom. */
+    expect(fx.git(fx.master, "rev-parse", "ws/7a")).toBe(w.baseCommit);
     expect(db.databases.has("icos_test_7a")).toBe(true);
     await expect(manager.create(workspaceId)).rejects.toThrow(/TRANSITION_FORBIDDEN/);
   });

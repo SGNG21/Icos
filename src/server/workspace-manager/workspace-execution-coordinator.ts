@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import type { Git } from "./git";
 import type { WorkspaceManager } from "./manager";
@@ -328,6 +329,18 @@ export class WorkspaceExecutionCoordinator {
       }
       await this.assertOwned(execWs);
 
+      /*
+       * THE COMMIT HANDOFF, AT THE MOMENT THE RESULT IS COLLECTED.
+       *
+       * The worker ran on a DETACHED HEAD and handed back a commit, so until this runs the
+       * governed branch still points at the base and the work is reachable only through the
+       * worktree. Everything downstream reads the BRANCH — the gate's cross-worker conflict
+       * detection looks at other workspaces that way, and the reaper keeps an unmerged branch
+       * rather than destroying work — so naming has to happen HERE, before any of them, and
+       * not at gate handoff. Authority is still held: `assertOwned` is directly above.
+       */
+      await this.nameGovernedBranch(execWs.workspaceId);
+
       // Record execution result in coordination state
       execWs.executionResult = {
         outcome: "success",
@@ -551,6 +564,72 @@ export class WorkspaceExecutionCoordinator {
     };
   }
 
+  /**
+   * NOMME LA BRANCHE GOUVERNÉE SUR LE COMMIT QUE LE WORKER A PRODUIT.
+   *
+   * Le worktree d'un writer est alloué DÉTACHÉ (voir `Git.addWorktree`) : un HEAD attaché
+   * ferait verrouiller `refs/heads/<branche>` dans le dépôt canonique, et accorder ce
+   * répertoire au bac à sable du worker lui donnerait le pouvoir de déplacer la branche
+   * CIBLE — l'exact contournement de la revue. Le worker rend donc un SHA, et la référence
+   * est écrite ICI, par du code de confiance, hors bac à sable.
+   *
+   * CE QUI EST VÉRIFIÉ AVANT D'ÉCRIRE, et pourquoi chaque point est fail-closed :
+   *
+   *   - le worktree existe encore, sinon il n'y a pas de commit à nommer ;
+   *   - HEAD est résoluble : un SHA absent ou invérifiable n'est pas un résultat ;
+   *   - HEAD DESCEND de la base déclarée du workspace. Un commit qui ne descend pas de sa
+   *     base n'est pas le travail de cette tâche — il vient d'un autre arbre ou d'une
+   *     réécriture d'historique — et le nommer ferait entrer dans la branche gouvernée un
+   *     contenu que personne n'a basé sur ce que la revue croit relire.
+   *
+   * La PORTÉE des fichiers, la revue et la décision d'intégration restent à
+   * l'IntegrationGate, qui juge ce même commit juste après : ceci rend le commit atteignable
+   * par une référence (donc ni perdu ni ramassé quand le worktree disparaît) et traçable,
+   * sans jamais devenir l'autorité d'intégration.
+   *
+   * REJOUABLE. L'écriture est un compare-and-swap sur la valeur attendue, et un HEAD déjà
+   * nommé ne fait rien du tout : un second passage (reprise, rejeu d'un handoff) ne peut ni
+   * échouer pour ce motif ni écraser une avancée concurrente.
+   */
+  private async nameGovernedBranch(workspaceId: string): Promise<void> {
+    const ws = await this.manager.get(workspaceId);
+    /* Un lecteur ne produit aucun commit et n'a pas de branche à nommer. */
+    if (!ws.branch || !ws.baseCommit) return;
+    /*
+     * Un worktree absent ou un HEAD irrésoluble ne sont PAS signalés ici. Ce sont déjà des
+     * préconditions de l'IntegrationGate (« worktree absent ») et du cleanup, qui échouent
+     * fermé un instant plus tard avec leur propre diagnostic. Les doubler ici remplacerait
+     * ce diagnostic par un code moins précis, sans rien refuser de plus — exactement le
+     * défaut « une erreur de nettoyage devient la raison » corrigé en c4f1be2.
+     *
+     * Ce qui est refusé ci-dessous, ce sont les cas qu'aucun autre contrôle ne couvre : un
+     * commit qui ne descend pas de la base déclarée, et une branche gouvernée disparue.
+     */
+    if (!existsSync(ws.worktreePath)) return;
+
+    const head = await this.git.headCommit(ws.worktreePath).catch(() => null);
+    if (!head) return;
+
+    const tip = await this.git.resolveCommit(ws.branch).catch(() => null);
+    /* Déjà nommé — rien à faire, et surtout pas une erreur. */
+    if (tip === head) return;
+
+    if (!(await this.git.isAncestor(ws.baseCommit, head).catch(() => false))) {
+      throw new WorkspaceError(
+        "COMMIT_HANDOFF_WRONG_ANCESTRY",
+        `${workspaceId}: ${head.slice(0, 12)} ne descend pas de la base déclarée ${ws.baseCommit.slice(0, 12)}`,
+      );
+    }
+
+    if (!tip) {
+      throw new WorkspaceError(
+        "COMMIT_HANDOFF_BRANCH_MISSING",
+        `${workspaceId}: la branche gouvernée ${ws.branch} n'existe pas`,
+      );
+    }
+    await this.git.setBranchToCommit(ws.branch, head, tip);
+  }
+
   private async handoffToIntegrationGate(
     workspaceId: string,
     workflowId: string,
@@ -561,6 +640,14 @@ export class WorkspaceExecutionCoordinator {
     );
     if (!execWs) throw new Error(`OWNERSHIP_LOST: workspace ${workspaceId} is not tracked`);
     await this.assertOwned(execWs);
+
+    /*
+     * THE COMMIT HANDOFF. The worker ran DETACHED and handed back a commit, never a
+     * reference mutation; naming the governed branch is this side's job and happens only
+     * after the commit has been checked. `assertOwned` just above is the authority half:
+     * a run whose lease had already expired never reaches here.
+     */
+    await this.nameGovernedBranch(workspaceId);
 
     /*
      * Move to `ready_for_integration` only if not already there. Since M13 the work may

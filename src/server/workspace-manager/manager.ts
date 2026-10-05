@@ -409,6 +409,27 @@ export class WorkspaceManager {
           );
         }
       }
+      /*
+       * PRÉSERVER AVANT DE DÉTRUIRE — le commit du worker vit sur un HEAD DÉTACHÉ.
+       *
+       * Un writer est alloué détaché (voir `Git.addWorktree`) : son commit n'est porté par
+       * aucune référence tant que le coordinateur ne l'a pas nommé. Sur le chemin ABANDONNÉ
+       * personne ne le nomme — le runner est mort, c'est précisément pourquoi on reape — donc
+       * la branche était restée sur la base, le reap la jugeait « fusionnée » et la
+       * supprimait : le travail devenait inatteignable. « Conserver, jamais détruire » doit
+       * tenir ici, au PAS IRRÉVERSIBLE, et pas seulement sur le chemin heureux.
+       *
+       * Avance uniquement en FAST-FORWARD (`tip` ancêtre de `head`) : on rend le travail
+       * atteignable, on ne réécrit jamais une branche qui aurait déjà bougé ailleurs.
+       */
+      if (hasWorktree) {
+        const head = await this.git.headCommit(ws.worktreePath).catch(() => null);
+        const tip = await this.git.resolveCommit(ws.branch).catch(() => null);
+        if (head && tip && head !== tip && (await this.git.isAncestor(tip, head).catch(() => false))) {
+          await this.git.setBranchToCommit(ws.branch, head, tip);
+        }
+      }
+
       await mkdir(this.archiveDir, { recursive: true });
       const archivePath = path.join(this.archiveDir, `${ws.workspaceId}.json`);
       await writeFile(archivePath, JSON.stringify(ws, null, 2));

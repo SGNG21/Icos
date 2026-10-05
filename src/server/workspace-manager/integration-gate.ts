@@ -341,8 +341,25 @@ export class IntegrationGate {
             const mine = new Set(changed.map((c) => c.path));
             const overlaps = new Set<string>();
             for (const o of others) {
-              if (!(await git.branchExists(o.branch))) continue;
-              for (const f of await git.changedFiles(o.baseCommit, o.branch))
+              /*
+               * LE TRAVAIL DE L'AUTRE WORKER, OÙ QU'IL SOIT ENCORE.
+               *
+               * Les writers sont alloués sur un HEAD DÉTACHÉ : le commit d'un pair n'est porté
+               * par sa branche qu'après que le coordinateur l'a nommé. Ne regarder que la
+               * branche ferait donc dépendre la détection d'un conflit multi-worker de
+               * l'ORDRE dans lequel les pairs ont été nommés — et un pair pas encore nommé
+               * paraîtrait n'avoir rien changé, donc deux workers modifiant le même fichier
+               * partagé passeraient tous les deux sans validation humaine.
+               *
+               * L'arbre de travail du pair, quand il existe, est la source la plus à jour ; sa
+               * branche sert quand le worktree a déjà été retiré. Les deux sont des LECTURES.
+               */
+              const tip = existsSync(o.worktreePath)
+                ? await git.headCommit(o.worktreePath).catch(() => null)
+                : null;
+              const peer = tip ?? ((await git.branchExists(o.branch)) ? o.branch : null);
+              if (!peer) continue;
+              for (const f of await git.changedFiles(o.baseCommit, peer))
                 if (mine.has(f.path)) overlaps.add(f.path);
             }
             report.conflictStatus = overlaps.size ? "MULTI_WORKER" : "CLEAN";

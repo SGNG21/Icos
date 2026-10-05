@@ -96,6 +96,50 @@ function workspaceRoot(): string {
 }
 
 /**
+ * CE QUE LE WORKER DOIT POUVOIR ÉCRIRE POUR COMMITER, ET RIEN DE PLUS.
+ *
+ * Un worktree git ne garde pas son index chez lui : `<worktree>/.git` est un FICHIER qui
+ * pointe vers `<canonique>/.git/worktrees/<id>`, et les objets d'un commit vont dans le
+ * dépôt d'objets PARTAGÉ. Les deux sont à l'intérieur du dépôt que la politique déclare en
+ * lecture seule, donc sans cet accord `git add` meurt sur « index.lock: Operation not
+ * permitted » et l'écriture gouvernée n'aboutit jamais (preuves : `sandbox-escape.test.ts`).
+ *
+ * L'accord est STRICTEMENT ces deux chemins :
+ *
+ *   - `.git/worktrees/<id>` — le dossier d'administration de CE worktree (index, HEAD,
+ *     verrous). Celui des autres reste dehors, donc inaccessible.
+ *   - `<commondir>/objects` — de quoi matérialiser blobs, arbres et commit.
+ *
+ * `.git/refs/**`, `.git/packed-refs`, `.git/config` et `.git/hooks/**` ne sont JAMAIS
+ * accordés : le worker rend un SHA sur un HEAD détaché, et c'est ICOS — hors bac à sable,
+ * après vérification — qui nomme la branche. Élargir `.git` en bloc rendrait la revue
+ * contournable, ce qui est le contraire du but.
+ *
+ * Résolu par LECTURE DE FICHIERS, sans sous-processus git : `<worktree>/.git` donne le
+ * dossier d'administration, et son `commondir` (relatif) donne le dépôt commun. Un worktree
+ * dont ces fichiers sont illisibles n'est pas un worktree : on échoue fermé plutôt que de
+ * lancer un writer qui ne pourra pas committer.
+ */
+async function gitWritePathsFor(worktree: string): Promise<string[]> {
+  const pointer = await readFile(join(worktree, ".git"), "utf8").catch(() => {
+    throw new Error("WORKER_WORKSPACE_NOT_A_WORKTREE: <worktree>/.git illisible");
+  });
+  const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
+  if (!match) {
+    throw new Error("WORKER_WORKSPACE_NOT_A_WORKTREE: <worktree>/.git sans 'gitdir:'");
+  }
+  const admin = resolve(worktree, match[1]);
+  /*
+   * `commondir` est relatif AU dossier d'administration. Absent, le worktree est en fait un
+   * dépôt ordinaire et son propre dossier contient déjà les objets.
+   */
+  const common = await readFile(join(admin, "commondir"), "utf8")
+    .then((text) => resolve(admin, text.trim()))
+    .catch(() => admin);
+  return [admin, join(common, "objects")];
+}
+
+/**
  * The execution budget. Matches `ICOS_WORKER_EXECUTION_TIMEOUT_MS` when the deployment
  * sets one, so the OWNER's budget is the binding constraint rather than a constant
  * compiled into the transport. A real codebase-inspection run measures around 7 minutes,
@@ -514,7 +558,9 @@ export async function runGovernedWorker(
          * reader this is unchanged — scratch and HOME only — so granting the writer
          * capability widened nothing for the tasks that do not have it.
          */
-        readWritePaths: worktree ? [worktree, workspace, home.path] : [workspace, home.path],
+        readWritePaths: worktree
+          ? [worktree, workspace, home.path, ...(await gitWritePathsFor(worktree))]
+          : [workspace, home.path],
         /*
          * A writer still READS the canonical checkout (it branched from it) but may not
          * write there, so it appears in the read-only list even when a worktree exists.
@@ -576,7 +622,25 @@ export async function runGovernedWorker(
     }
 
     const classified = classifyWorkerRun(run.stdout, usage);
-    if (!classified.ok) throw new Error(classified.message);
+    if (!classified.ok) {
+      /*
+       * A WORKER THAT DIED SAYING WHY IS NOT A SILENT WORKER.
+       *
+       * The result contract reads stdout, so a run that printed nothing there and failed on
+       * stderr reported `no structured status: no output` — indistinguishable from a worker
+       * that started and produced nothing. That is the same mistake as the confinement
+       * refusal (aa54ce1), one layer further in, and it cost this lane a second long hunt:
+       * `git add` was dying on « index.lock: Operation not permitted » and the only
+       * evidence anybody saw was "no output".
+       *
+       * stderr is therefore carried into the reason when stdout was silent — bounded, like
+       * stdout already is, and never allowed to turn a failure into a success.
+       */
+      const reason = run.stderr.trim().slice(0, 300);
+      throw new Error(
+        reason && !run.stdout.trim() ? `${classified.message} (stderr: ${reason})` : classified.message,
+      );
+    }
     return {
       result: classified.result,
       actualExecutor: declared.command,

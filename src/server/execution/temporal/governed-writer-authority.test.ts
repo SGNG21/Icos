@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -116,11 +117,28 @@ function grantResponse(grant: Record<string, unknown>) {
 
 const WORKER_COMMAND = process.execPath;
 
-/** A worktree the WorkspaceManager would really have created. */
+/**
+ * A worktree the WorkspaceManager would really have created — a REAL detached git worktree
+ * of the canonical repository, not a bare directory.
+ *
+ * It has to be real, because what the activity grants the sandbox is derived from the
+ * worktree itself: `<worktree>/.git` names this worktree's administration directory and its
+ * `commondir` names the shared object store, and those two paths are what let a confined
+ * writer commit at all. A plain directory has neither, so a fixture made of one proved the
+ * authority properties against a workspace no governed write could ever have used.
+ *
+ * DETACHED, like production: an attached HEAD would lock `refs/heads/<branch>` inside the
+ * canonical repo, which the sandbox refuses and must refuse.
+ */
 function allocate(name: string): string {
   const path = join(root, name);
-  mkdirSync(path, { recursive: true });
-  return path;
+  /* Idempotent, as the bare `mkdirSync` it replaces was: a case may ask twice. */
+  if (!existsSync(path)) {
+    execFileSync("/usr/bin/git", ["worktree", "add", "-q", "--detach", path, "HEAD"], {
+      cwd: canonical,
+    });
+  }
+  return realpathSync(path);
 }
 
 function baseGrant(worktreePath: string | null, writeAllowed: boolean) {
@@ -151,6 +169,15 @@ describe("the governed Temporal writer", () => {
     sandboxArgs = [];
     root = realpathSync(mkdtempSync(join(tmpdir(), "icos-root-")));
     canonical = realpathSync(mkdtempSync(join(tmpdir(), "icos-canonical-")));
+    /* A real repository with one commit: `worktree add` needs a base, and so does a commit. */
+    execFileSync("/usr/bin/git", ["init", "-q", "--initial-branch=main", "."], { cwd: canonical });
+    writeFileSync(join(canonical, "base.txt"), "base\n");
+    execFileSync("/usr/bin/git", ["add", "-A"], { cwd: canonical });
+    execFileSync(
+      "/usr/bin/git",
+      ["-c", "user.email=i@i", "-c", "user.name=i", "commit", "-q", "-m", "base"],
+      { cwd: canonical },
+    );
     process.env.ICOS_BASE_URL = "http://127.0.0.1:1";
     process.env.ICOS_EXECUTION_CALLBACK_SECRET = CALLBACK_SECRET;
     process.env.ICOS_WORKER_WORKSPACE_ROOT = root;
