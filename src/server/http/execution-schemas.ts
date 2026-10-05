@@ -24,6 +24,21 @@ export const executionStartedBodySchema = z
 
 export type ExecutionStartedBody = z.infer<typeof executionStartedBodySchema>;
 
+/**
+ * What a worker may ask about its own execution. Deliberately only identifiers: the
+ * ANSWER carries the authority, and every field of it is read from ICOS's durable state.
+ * A worker that invents a worktree path or claims write access changes nothing, because
+ * no such field is accepted here.
+ */
+export const executionGrantBodySchema = z
+  .object({
+    taskId: idSchema,
+    workflowId: workflowIdSchema,
+  })
+  .strict();
+
+export type ExecutionGrantBody = z.infer<typeof executionGrantBodySchema>;
+
 const executionErrorInputSchema = z
   .object({
     code: executionErrorCodeSchema,

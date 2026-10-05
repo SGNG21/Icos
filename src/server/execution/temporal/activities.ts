@@ -17,7 +17,7 @@
  * authenticated by a constant-time secret comparison — a second, in-process writer would
  * be a second settlement authority.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -134,6 +134,96 @@ async function postJson(path: string, body: unknown): Promise<void> {
 }
 
 /**
+ * WHAT THIS EXECUTION IS ALLOWED TO DO — asked of ICOS, never decided here.
+ *
+ * Write authority is a property of the TASK, held in ICOS's durable state: its declared
+ * risk class, its declared file scope, and the worktree the WorkspaceManager allocated
+ * for it before dispatch. None of that is in the workflow payload, and none of it is in
+ * this process's environment, so a forged payload or a tampered env cannot manufacture a
+ * writer. The worker is told; it does not claim (ADR 0067, amendment A).
+ */
+export interface ExecutionGrant {
+  readonly taskId: string;
+  readonly missionId: string;
+  readonly workflowId: string;
+  readonly goalId: string | null;
+  readonly writeAllowed: boolean;
+  readonly workspace: {
+    readonly worktreePath: string;
+    readonly branch: string;
+    readonly baseCommit: string;
+    readonly fencingToken: number;
+  } | null;
+}
+
+async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
+  const response = await fetch(`${icosBaseUrl()}/api/internal/executions/grant`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-icos-callback-secret": callbackSecret(),
+    },
+    body: JSON.stringify({ taskId: ctx.taskId, workflowId: ctx.workflowId }),
+  });
+  if (!response.ok) {
+    /* No grant, no run. Status only: the body is ICOS's and may name internals. */
+    throw new Error(`WORKER_GRANT_REFUSED: HTTP ${response.status}`);
+  }
+  const payload = (await response.json()) as { grant?: ExecutionGrant };
+  if (!payload.grant) throw new Error("WORKER_GRANT_MALFORMED");
+  return payload.grant;
+}
+
+/**
+ * The worktree must live under the root THIS process was configured with.
+ *
+ * The grant is authenticated, so this is not distrust of ICOS; it is the second half of
+ * a two-party agreement. A single compromised or misconfigured answer must not be able to
+ * point a writer at the canonical checkout, at another task's worktree, or anywhere else
+ * on the disk — and `resolve` collapses `..` before the comparison, so a traversal in the
+ * path is caught here rather than by the sandbox.
+ */
+async function assertWorktreeWithinRoot(worktreePath: string): Promise<string> {
+  const configured = process.env.ICOS_WORKER_WORKSPACE_ROOT;
+  if (!configured) {
+    throw new Error("WORKER_WORKSPACE_ROOT_UNDECLARED: ICOS_WORKER_WORKSPACE_ROOT manquant");
+  }
+  /*
+   * REAL paths on both sides. `resolve` collapses `..` but follows no symlink, so a
+   * worktree that IS a link to the canonical checkout — or to another task's tree —
+   * would pass a purely lexical check and then write wherever the link points.
+   */
+  const root = await realpath(resolve(configured)).catch(() => {
+    throw new Error("WORKER_WORKSPACE_ROOT_UNREADABLE: racine déclarée introuvable");
+  });
+  /*
+   * It must already exist: the WorkspaceManager allocates the worktree BEFORE dispatch,
+   * so a path that resolves to nothing is not a race, it is a grant for a workspace that
+   * was never created — and creating one here would be exactly the ad-hoc, ungoverned
+   * worktree whose branch nothing reviews.
+   */
+  const worktree = await realpath(resolve(worktreePath)).catch(() => {
+    throw new Error("WORKER_WORKSPACE_MISSING: worktree accordé inexistant");
+  });
+  if (worktree !== root && !worktree.startsWith(`${root}/`)) {
+    throw new Error("WORKER_WORKSPACE_OUTSIDE_ROOT: worktree hors de la racine déclarée");
+  }
+  /*
+   * The canonical checkout is never a worktree. Even nested under the root it stays
+   * read-only: a writer that reaches it bypasses the branch the IntegrationGate reviews.
+   */
+  const canonical = process.env.ICOS_REPO_PATH
+    ? await realpath(resolve(process.env.ICOS_REPO_PATH)).catch(() =>
+        resolve(process.env.ICOS_REPO_PATH as string),
+      )
+    : null;
+  if (canonical && (worktree === canonical || worktree.startsWith(`${canonical}/`))) {
+    throw new Error("WORKER_WORKSPACE_IS_CANONICAL: refus d'écrire dans le dépôt canonique");
+  }
+  return worktree;
+}
+
+/**
  * Runs the worker under the governed gateway and returns its text result.
  *
  * Throws on failure, which Temporal turns into an activity failure and the workflow turns
@@ -147,7 +237,10 @@ export interface GovernedRun {
   readonly actualModel?: string;
 }
 
-export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
+export async function runGovernedWorker(
+  ctx: ExecutionContext,
+  prompt: string,
+): Promise<GovernedRun> {
   /* The declared command for this runtime. No declaration, no execution. */
   const declared = parseWorkerExecCommands(process.env.ICOS_WORKER_EXEC_COMMANDS)[
     EXECUTOR_RUNTIME
@@ -157,12 +250,38 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
       `WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no '${EXECUTOR_RUNTIME}' runtime`,
     );
   }
-  const access = EXECUTOR_ACCESS[declared.command];
-  if (!access) {
-    throw new Error(`WORKER_EXECUTOR_UNGRANTED: no credential policy for '${declared.command}'`);
-  }
+  /*
+   * ICOS decides what this execution may do, BEFORE anything is provisioned. Asking
+   * first also means a refusal costs no worktree and no subprocess.
+   */
+  const grant = await fetchGrant(ctx);
 
-  const workspace = await mkdtemp(join(tmpdir(), "icos-worker-"));
+  /*
+   * A credential policy is how a KNOWN agent gets its secrets, not a list of who may run.
+   *
+   * This used to refuse any command absent from the table, which made the table an
+   * executable allowlist of exactly two names and left every other declared executor —
+   * including a governed writer — unable to run at all. Declaration is the authority for
+   * WHICH program runs (it is deployment configuration, not caller input); the table
+   * stays the authority for WHICH SECRETS it may read. A command nobody wrote a policy
+   * for therefore runs with NO brokered credentials, which is the safe direction.
+   */
+  const access = EXECUTOR_ACCESS[declared.command] ?? { credentials: [], programPaths: [] };
+
+  const scratch = await mkdtemp(join(tmpdir(), "icos-worker-"));
+  /*
+   * A WRITER RUNS IN THE WORKTREE ICOS ALLOCATED IT, and a reader never writes to the
+   * repository at all. The path is validated against this process's own configured root
+   * before it is given to the sandbox.
+   */
+  const worktree =
+    grant.writeAllowed && grant.workspace
+      ? await assertWorktreeWithinRoot(grant.workspace.worktreePath)
+      : null;
+  if (grant.writeAllowed && !worktree) {
+    throw new Error("WORKER_WORKSPACE_MISSING: écriture accordée sans worktree alloué");
+  }
+  const workspace = scratch;
   const home = await createEphemeralHome();
   try {
     const capabilities = access.credentials.map((relativePath) => ({
@@ -181,7 +300,12 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
     }
     await seedHome(home.path, broker.files);
 
-    const root = workspaceRoot();
+    /*
+     * WHERE THE WORK HAPPENS. A writer runs IN its own worktree, so a relative path and
+     * `allowed_file_scope: ["."]` both mean that worktree. A reader keeps the previous
+     * behaviour exactly: the canonical checkout, bound read-only.
+     */
+    const root = worktree ?? workspaceRoot();
     /*
      * Literal substitution, never a shell. The declaration owns the invocation shape —
      * including `--no-restore-cwd`, which is load-bearing: hermes otherwise chdirs to its
@@ -205,7 +329,29 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
        * means the repository rather than an empty temp folder.
        */
       cwd: root,
-      env: { HOME: home.path, ...broker.env },
+      /*
+       * IDENTITY COMES FROM THE GRANT, never from this process's environment.
+       *
+       * The worker is told which task and workflow it is executing, and those values are
+       * the ones ICOS holds durably. A caller who sets ICOS_TASK_ID in the environment
+       * cannot change them, because nothing here reads the environment for them — the
+       * allow-list below is constructed, not inherited.
+       */
+      env: {
+        HOME: home.path,
+        ICOS_TASK_ID: grant.taskId,
+        ICOS_WORKFLOW_ID: grant.workflowId,
+        ICOS_MISSION_ID: grant.missionId,
+        ...(grant.goalId ? { ICOS_GOAL_ID: grant.goalId } : {}),
+        ...(worktree && grant.workspace
+          ? {
+              ICOS_WORKSPACE_PATH: worktree,
+              ICOS_WORKSPACE_BRANCH: grant.workspace.branch,
+              ICOS_WORKSPACE_BASE_COMMIT: grant.workspace.baseCommit,
+            }
+          : {}),
+        ...broker.env,
+      },
       timeoutMs: declared.timeoutMs ?? executionTimeoutMs(),
       sandbox: {
         /*
@@ -215,8 +361,19 @@ export async function runGovernedWorker(prompt: string): Promise<GovernedRun> {
          * every unrelated worktree remain outside the profile entirely — `(deny default)`
          * means a path that is not listed does not exist for this process.
          */
-        readWritePaths: [workspace, home.path],
-        readOnlyPaths: [root, ...access.programPaths],
+        /*
+         * The allocated worktree is writable; the canonical checkout never is. For a
+         * reader this is unchanged — scratch and HOME only — so granting the writer
+         * capability widened nothing for the tasks that do not have it.
+         */
+        readWritePaths: worktree
+          ? [worktree, workspace, home.path]
+          : [workspace, home.path],
+        /*
+         * A writer still READS the canonical checkout (it branched from it) but may not
+         * write there, so it appears in the read-only list even when a worktree exists.
+         */
+        readOnlyPaths: [workspaceRoot(), ...access.programPaths],
         /*
          * A remote provider needs the network, so it is granted. Seatbelt cannot filter by
          * hostname, so this is all-or-nothing and the audit says so rather than implying a

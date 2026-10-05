@@ -56,7 +56,11 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
   await reportStarted(ctx);
 
   try {
-    const run = await runGovernedWorker(input.prompt);
+    /*
+     * The context travels with the work: the activity asks ICOS what this execution is
+     * allowed to do, and identifiers are all it may send to get that answer.
+     */
+    const run = await runGovernedWorker(ctx, input.prompt);
     await reportSuccess({
       ctx,
       /* Reported by the run, not asserted here: the executor is configuration. */
