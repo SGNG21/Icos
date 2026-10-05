@@ -24,6 +24,11 @@ import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { identities, type TestIdentity } from "@/test/test-identity";
 import {
+  startTemporalRuntime,
+  uniqueTaskQueue,
+  type TemporalRuntime,
+} from "@/test/temporal-runtime-harness";
+import {
   composeAutonomyRuntime,
   startProductionServices,
   type ProductionServices,
@@ -68,6 +73,24 @@ const CAPABILITY = "code-generation";
  * assertions stay exactly as exact as they were.
  */
 const FILE_IDENTITIES = identities("d28");
+
+/**
+ * THE ORCHESTRATOR THIS SUITE DRIVES, which it never used to start.
+ *
+ * `DURABLE_MISSION_TASK` is orchestrated by Temporal and by nothing else (ADR 0067). This
+ * file exercises the governed path through the REAL container, so every mission dispatch
+ * goes to Temporal — but nothing here ever started a worker, and no queue was configured,
+ * so the dispatcher fell back to its default `hello-world`, found no poller and refused
+ * every dispatch. The workspace then sat `blocked`, which is what each of these cases was
+ * actually asserting against when it expected `ready_for_integration`.
+ *
+ * It was invisible while mission work ran on the in-process executor: the suite built its
+ * own executor and needed no orchestrator at all. The harness is the production workflow,
+ * activities and callbacks, started on a queue of this file's own.
+ */
+const TASK_QUEUE = uniqueTaskQueue("d28");
+const CALLBACK_SECRET = "d28-callback-secret-at-least-32-chars-long";
+let temporal: TemporalRuntime | undefined;
 let caseNumber = 0;
 let ids: TestIdentity;
 
@@ -162,9 +185,28 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   reviewerUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  /*
+   * BEFORE THE HARNESS STARTS, because the executable policy FREEZES ON IMPORT.
+   *
+   * `executable-policy.ts` reads ICOS_WORKER_EXECUTABLE_ALLOWLIST once, when it is first
+   * imported, and never again — deliberately, so that nothing which later mutates the
+   * environment can widen it. `startTemporalRuntime` imports the production activities
+   * dynamically, so THAT call is when the policy is frozen, and an allowlist published
+   * after it arrives too late: the set is empty, `decideExecutable` answers
+   * EXECUTABLE_POLICY_EMPTY, and every governed run is refused WORKER_EXECUTABLE_DENIED.
+   *
+   * These two are static, so they belong here. The path-dependent values are published per
+   * case by `makeRepo`, which is read at call time rather than frozen.
+   */
+  Object.assign(process.env, {
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+  });
+  temporal = await startTemporalRuntime(TASK_QUEUE);
 });
 
 afterAll(async () => {
+  await temporal?.stop();
   vi.unstubAllEnvs();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -198,6 +240,20 @@ function makeRepo() {
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "base");
   git(repo, "branch", TARGET);
+  /*
+   * PUBLISH THE DEPLOYMENT TO THE PROCESS, because that is where the ACTIVITY reads it.
+   *
+   * `envOverrides()` is handed to `buildPostgresContainer`, which configures ICOS — but the
+   * Temporal activity runs in the worker and reads `process.env` directly at call time
+   * (`callbackSecret()`, `workspaceRoot()`, the exec-command table). Passing the values to
+   * the container only is why every run died `ICOS_EXECUTION_CALLBACK_SECRET manquant ou
+   * trop court`: a real deployment sets both, because they are the same environment.
+   *
+   * Done HERE rather than in `beforeAll` because `makeRepo` runs per case and the paths it
+   * publishes change with it; a worker started once would otherwise keep pointing at the
+   * first case's repository.
+   */
+  Object.assign(process.env, envOverrides());
 }
 
 function envOverrides(extra: Record<string, string> = {}) {
@@ -221,6 +277,16 @@ function envOverrides(extra: Record<string, string> = {}) {
     }),
     ICOS_REPO_PATH: repo,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    /*
+     * The CHECKOUT the activity binds read-only, read straight from `process.env`. A
+     * governed write needs both: its own worktree to write in, and the canonical checkout
+     * it branched from to read.
+     */
+    ICOS_WORKSPACE_ROOT: repo,
+    /* A queue of this file's own, so no other worker can consume its workflows. */
+    TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
     /* Every gate RULE is real; only the four pnpm suites are replaced by trivial passing commands. */
     ICOS_GATE_COMMANDS: JSON.stringify({
       install: [process.execPath, "-e", ""],
