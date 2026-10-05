@@ -17,6 +17,8 @@ import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 import { categoryOf, rootCauseOf } from "@/core/contracts/failure-cause";
 import { attributionKey } from "@/core/budget/contracts";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { higherComplexity } from "@/core/workforce/compute";
+import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute";
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 import type { CapabilityRouter } from "@/server/routing/capability-router";
 import { complexityFromRisk, type PriorAttemptFact } from "@/core/workers/compute-routing";
@@ -54,6 +56,14 @@ export interface QualityControlServiceDeps {
    * authority, never a second authority.
    */
   capabilityRouter?: CapabilityRouter;
+  /**
+   * THE WORKFORCE SEAM, the same instance the supervisor routes with (decision 0070). A
+   * retry or a correction is prepared HERE and never re-routed by the supervisor, so without
+   * this a brain governed only the first attempt of a task — the retry ran with the task's
+   * own bar and no evidence. A brain may only TIGHTEN here too: raise the difficulty, add
+   * the worker capabilities its skill declares, or hold while a human approval is missing.
+   */
+  workforceCompute?: WorkforceTaskCompute;
 }
 
 export interface RegisterExecutionInput {
@@ -150,7 +160,10 @@ export function reviewFailureDiagnostic(input: {
     /* First frames only: enough to locate, not enough to leak a filesystem layout. */
     stackHead:
       error instanceof Error && error.stack
-        ? error.stack.split("\n").slice(1, 4).map((l) => l.trim())
+        ? error.stack
+            .split("\n")
+            .slice(1, 4)
+            .map((l) => l.trim())
         : null,
   };
 }
@@ -292,6 +305,7 @@ export class QualityControlService {
         const retryRouting =
           current.action === "CORRECT" || current.action === "RETRY"
             ? await this.routeRetry(
+                current.missionId,
                 current.taskId,
                 originalAttempt?.workerKind,
                 current.executionAttempt,
@@ -423,11 +437,22 @@ export class QualityControlService {
    * grudges kept here.
    */
   private async routeRetry(
+    missionId: string,
     taskId: string,
     workerKind: string | undefined,
     executionAttempt: number,
     taskReviews: readonly { workflowId: string; decision: string }[],
   ): Promise<{ workerId?: string; evidence?: Record<string, unknown> } | undefined> {
+    /*
+     * The brain assignment of this task, the same durable row the supervisor read for the
+     * first attempt (decision 0070): a retry PRESERVES the governed assignment. A required
+     * approval that is not given is back-pressure, exactly like no eligible worker: the
+     * job stays pending and a human approving ends the hold by itself.
+     */
+    const brain = (await this.deps.workforceCompute?.forTask(missionId, taskId)) ?? null;
+    if (brain?.approvalPending) {
+      throw new Error(`${QUALITY_CONTROL_NO_ELIGIBLE_WORKER}: WORKFORCE_APPROVAL_PENDING`);
+    }
     if (!this.deps.capabilityRouter) return undefined;
 
     /*
@@ -436,6 +461,18 @@ export class QualityControlService {
      * routes.
      */
     const canonicalTask = await this.deps.tasks.getById(taskId);
+    const ownComplexity = complexityFromRisk(canonicalTask?.riskClass);
+    const workforceEvidence = brain
+      ? {
+          assignmentIds: brain.assignmentIds,
+          agentIds: brain.agentIds,
+          complexityFloor: brain.complexity,
+          complexityRaised: higherComplexity(ownComplexity, brain.complexity) !== ownComplexity,
+          capabilitiesAdded: brain.workerCapabilities.filter(
+            (c) => !(canonicalTask?.requiredCapabilities ?? []).includes(c),
+          ),
+        }
+      : null;
 
     /*
      * WHAT EVERY EARLIER ATTEMPT OF THIS TASK DID (decision 0054): which worker ran it, how it
@@ -445,7 +482,9 @@ export class QualityControlService {
     const verdictOf = new Map(taskReviews.map((r) => [r.workflowId, r.decision] as const));
     const priorAttempts: PriorAttemptFact[] = [];
     for (let n = 1; n <= executionAttempt; n += 1) {
-      const attempt = await this.deps.dispatchAttempts.getByWorkflowId(workflowIdForAttempt(taskId, n));
+      const attempt = await this.deps.dispatchAttempts.getByWorkflowId(
+        workflowIdForAttempt(taskId, n),
+      );
       if (!attempt) continue;
       priorAttempts.push({
         attempt: n,
@@ -457,13 +496,18 @@ export class QualityControlService {
 
     const routing = await this.deps.capabilityRouter.route(
       {
-        requiredCapabilities: canonicalTask?.requiredCapabilities ?? [],
+        requiredCapabilities: [
+          ...new Set([
+            ...(canonicalTask?.requiredCapabilities ?? []),
+            ...(brain?.workerCapabilities ?? []),
+          ]),
+        ],
         workerKind,
       },
       {
         role: "writer",
         taskType: canonicalTask?.requiredCapabilities?.[0],
-        complexity: complexityFromRisk(canonicalTask?.riskClass),
+        complexity: higherComplexity(ownComplexity, brain?.complexity),
         risk: canonicalTask?.riskClass,
         repositoryMutation: (canonicalTask?.allowedFileScope?.length ?? 0) > 0,
         correctionAttempt: taskReviews.filter((r) => r.decision === "REQUEST_CHANGES").length,
@@ -472,7 +516,12 @@ export class QualityControlService {
     );
 
     if (routing.decision === "ROUTED" && routing.worker) {
-      return { workerId: routing.worker.id, evidence: routing.evidence };
+      return {
+        workerId: routing.worker.id,
+        evidence: workforceEvidence
+          ? { ...routing.evidence, workforce: workforceEvidence }
+          : routing.evidence,
+      };
     }
 
     if (routing.decision === "NO_ELIGIBLE_WORKER") {

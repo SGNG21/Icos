@@ -34,7 +34,18 @@ const WORKER_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WORKER_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CAPABILITY = "code-generation";
 
-async function fixture(options: { withRouter?: boolean; maxConcurrency?: number } = {}) {
+async function fixture(
+  options: {
+    withRouter?: boolean;
+    maxConcurrency?: number;
+    /** A brain assignment waiting on the task (decision 0070), or none. */
+    brain?: {
+      agentIds: string[];
+      complexity: "low" | "medium" | "high";
+      approvalPending?: boolean;
+    };
+  } = {},
+) {
   const audit = new InMemoryAuditLog();
   const tasks = new InMemoryTaskRepository(audit, []);
   const missions = new InMemoryMissionRepository(tasks);
@@ -52,7 +63,6 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     ],
   });
   const missionTask = (await missions.listTasks(mission.id))[0]!;
-
 
   const store = new InMemoryWorkerRegistryStore();
   const registration = new WorkerRegistrationService(store);
@@ -84,7 +94,10 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     capability: CAPABILITY,
     workerId: WORKER_A,
   });
-  await dispatchAttempts.markDispatched(original.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
+  await dispatchAttempts.markDispatched(original.attempt.id, {
+    owner: "test-owner",
+    leaseMs: 60_000,
+  });
   await tasks.transition(missionTask.taskId, "running");
 
   const reviewer: ReviewerService = {
@@ -128,6 +141,17 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     dispatchAttempts,
     qualityJobs,
     capabilityRouter: options.withRouter === false ? undefined : capabilityRouter,
+    workforceCompute: options.brain
+      ? {
+          forTask: async () => ({
+            assignmentIds: ["wfa-1"],
+            agentIds: options.brain!.agentIds,
+            workerCapabilities: [],
+            complexity: options.brain!.complexity,
+            approvalPending: options.brain!.approvalPending ?? false,
+          }),
+        }
+      : undefined,
     dispatchPrepared: async (attempt) => {
       dispatched.push(attempt.workflowId);
       await dispatchAttempts.markDispatched(attempt.id, { owner: "test-owner", leaseMs: 60_000 });
@@ -171,6 +195,35 @@ async function fixture(options: { withRouter?: boolean; maxConcurrency?: number 
     nextWorkflowId: workflowIdForAttempt(missionTask.taskId, 2),
   };
 }
+
+describe("decision 0070 — a retry keeps the brain that governed the task", () => {
+  it("records the brain on the retry's routing evidence, with the raised difficulty", async () => {
+    const f = await fixture({ brain: { agentIds: ["brain-planner"], complexity: "medium" } });
+    await f.qualityControl.processPending(f.mission.id);
+    const retry = await f.dispatchAttempts.getByWorkflowId(f.nextWorkflowId);
+    // The task's own `reversible` risk already routes `medium`: governed, and said so.
+    expect(retry?.routingDecision).toMatchObject({
+      workforce: {
+        agentIds: ["brain-planner"],
+        complexityFloor: "medium",
+        complexityRaised: false,
+      },
+      requirement: { complexity: "medium" },
+    });
+  });
+
+  it("holds the retry while the brain's human approval is missing: pending, not failed", async () => {
+    const f = await fixture({
+      brain: { agentIds: ["brain-planner"], complexity: "low", approvalPending: true },
+    });
+    /* Back-pressure, like no eligible worker: the caller sees it, the job stays pending. */
+    await expect(f.qualityControl.processPending(f.mission.id)).rejects.toThrow(
+      /WORKFORCE_APPROVAL_PENDING/,
+    );
+    expect(await f.dispatchAttempts.getByWorkflowId(f.nextWorkflowId)).toBeNull();
+    expect(f.dispatched).toEqual([]);
+  });
+});
 
 describe("M7.1 QC retry is routed", () => {
   it("THE GAP: a retry is ROUTED to a worker instead of being created unrouted", async () => {

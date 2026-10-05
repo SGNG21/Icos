@@ -233,6 +233,8 @@ export function composeAutonomyRuntime(container: Container): {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
   }
 
+  /* ONE bridge instance for the two callers that prepare dispatches: supervisor and QC. */
+  const workforceBridge = workforceDispatchBridge(container);
   const qualityControl = new QualityControlService({
     missions: container.mission,
     tasks: container.tasks,
@@ -248,6 +250,8 @@ export function composeAutonomyRuntime(container: Container): {
      * uses: one authority, two callers.
      */
     capabilityRouter: container.capabilityRouter,
+    /* A retry keeps the brain that governed the task (decision 0070, owner property 6). */
+    workforceCompute: workforceBridge,
     /*
      * NO `dispatchPrepared` (0050 × 0049). A CORRECT/RETRY prepares its attempt and sets the
      * durable wake-up in the SAME transaction; the woken supervisor claims that intent and
@@ -290,7 +294,7 @@ export function composeAutonomyRuntime(container: Container): {
      * (`modelHints` stay non-binding and are deliberately not forwarded to the router).
      * Optional, so a composition without a workforce routes byte-identically.
      */
-    workforceDispatchBridge(container),
+    workforceBridge,
     /* Chief closes what Chief opened: a terminal mission gives its brains back. */
     chiefRelease(container),
   );
