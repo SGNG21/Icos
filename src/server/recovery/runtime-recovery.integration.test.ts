@@ -37,7 +37,11 @@ import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recove
  *
  * « Kill » = on abandonne la pile de services (repositories, services) sans aucun nettoyage ; « restart » =
  * une NOUVELLE pile (nouveau pool de connexions) sur la même base. Seul Temporal est simulé — avec la
- * sémantique réelle REJECT_DUPLICATE / USE_EXISTING : un même workflowId ne démarre jamais deux workflows.
+ * sémantique réelle REJECT_DUPLICATE / FAIL : un même workflowId ne démarre jamais deux workflows. Le
+ * faux Temporal répond un succès à un id déjà `running`, ce qui est bien ce que la production prouve
+ * (`reuse`) pour un redispatch du MÊME taskId et de la MÊME tentative — le seul cas que 7C provoque.
+ * Aucun cas ici ne redémarre un id CLOS : 2b repart sur une nouvelle tentative (nouvel id) et 2c part
+ * d'un id que Temporal a perdu. Le refus production (collision non prouvable) n'est donc pas simulé.
  * La chaîne de sweepers est composée comme en production (`production-services.ts`).
  *
  * `ICOS_7C_DISABLED=1` désactive le sweeper 7C : sert à démontrer le RED (les trous existaient).
