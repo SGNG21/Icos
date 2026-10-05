@@ -157,6 +157,8 @@ export interface ExecutionGrant {
     readonly branch: string;
     readonly baseCommit: string;
     readonly fencingToken: number;
+    /** The existing workspace lease. Null means no lease is held at all. */
+    readonly leaseExpiresAt: string | null;
   } | null;
 }
 
@@ -183,46 +185,75 @@ async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
  *
  * A fencing token proves authority at the instant it is read, and a long write runs for
  * minutes afterwards. The workspace lease can be lost mid-run — expired, taken over by a
- * recoverer, the workspace released — and until now the only consequence was that the
+ * recoverer, the workspace released — and the only consequence used to be that the
  * RESULT would be refused later. That is not enough: the process is still writing into a
  * worktree somebody else may now own, and refusing its result does not unwrite the files.
  *
- * So the grant is re-read on an interval, and the FIRST answer that is not "still yours,
- * same token" aborts the run — which kills the process group, descendants included.
- * An unreachable ICOS does NOT abort: that is absence of evidence, and killing live work
- * because a callback timed out would turn a blip into lost work. Losing authority is a
- * positive answer, and only a positive answer stops the writer.
+ * THREE ANSWERS, THREE BEHAVIOURS:
+ *
+ *   revoked / fenced out / released  abort at once; the work has no authority
+ *   still mine, same token           authority refreshed to the lease it reports
+ *   no answer at all                 keep working, but only as far as the authority
+ *                                    already verified actually reaches
+ *
+ * The third is the subtle one. Killing a live build because one callback timed out turns
+ * a network blip into lost work, so silence is tolerated — but never indefinitely, and
+ * never past the lease the writer was last told it held. That deadline is the workspace
+ * lease ICOS already keeps in the registry, carried on the grant: no second clock, and
+ * no way for a grace period to outlast the authority it stands in for. Reaching it
+ * without a successful re-read is AUTHORITY_REVALIDATION_TIMEOUT, which aborts exactly
+ * as a revocation does.
  */
 function watchAuthority(
   ctx: ExecutionContext,
   granted: ExecutionGrant,
   intervalMs: number,
+  now: () => number = Date.now,
 ): { signal: AbortSignal; reason: () => string | null; stop: () => void } {
   const controller = new AbortController();
   let lost: string | null = null;
+
+  /**
+   * How far the LAST SUCCESSFUL verification reaches. A workspace holding no lease at
+   * all can coast nowhere: authority that was never verifiable is not authority.
+   */
+  const deadlineFrom = (grant: ExecutionGrant): number => {
+    const expiry = grant.workspace?.leaseExpiresAt;
+    const parsed = expiry ? Date.parse(expiry) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  let authorityValidUntil = deadlineFrom(granted);
+
+  const revoke = (reason: string): void => {
+    lost = reason;
+    clearInterval(timer);
+    controller.abort();
+  };
 
   const check = async (): Promise<void> => {
     let current: ExecutionGrant;
     try {
       current = await fetchGrant(ctx);
     } catch {
-      /* Unreachable is not revoked. Keep working; the next tick asks again. */
+      /*
+       * Unreachable is not revoked — but it is not a renewal either. The writer coasts
+       * on the authority it last verified, and no further than that.
+       */
+      if (now() >= authorityValidUntil) revoke("AUTHORITY_REVALIDATION_TIMEOUT");
       return;
     }
-    if (!current.writeAllowed) {
-      lost = "WRITE_REVOKED";
-    } else if (!current.workspace || !granted.workspace) {
-      lost = "WORKSPACE_RELEASED";
-    } else if (current.workspace.fencingToken !== granted.workspace.fencingToken) {
+    if (!current.writeAllowed) return revoke("WRITE_REVOKED");
+    if (!current.workspace || !granted.workspace) return revoke("WORKSPACE_RELEASED");
+    if (current.workspace.fencingToken !== granted.workspace.fencingToken) {
       /* Someone else fenced this workspace: this run is no longer its owner. */
-      lost = "FENCED_OUT";
-    } else if (current.workspace.worktreePath !== granted.workspace.worktreePath) {
-      lost = "WORKSPACE_MOVED";
+      return revoke("FENCED_OUT");
     }
-    if (lost) {
-      clearInterval(timer);
-      controller.abort();
+    if (current.workspace.worktreePath !== granted.workspace.worktreePath) {
+      return revoke("WORKSPACE_MOVED");
     }
+    /* Verified: authority now reaches as far as the lease ICOS has just reported. */
+    authorityValidUntil = deadlineFrom(current);
+    if (now() >= authorityValidUntil) revoke("AUTHORITY_REVALIDATION_TIMEOUT");
   };
 
   const timer = setInterval(() => void check(), intervalMs);

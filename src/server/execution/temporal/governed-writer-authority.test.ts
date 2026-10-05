@@ -58,6 +58,19 @@ vi.mock("@/server/workers/process/run-process", () => ({
 
 /** Set by the lease-loss tests: makes the mocked run wait for revocation. */
 let slowRun = false;
+
+/*
+ * Every test starts from the same declaration. The scope test deliberately re-declares
+ * the executor, and without this the change leaked into the suites below it — which is
+ * the ordinary version of the configuration-widening defect those tests exist to catch.
+ */
+beforeEach(() => {
+  slowRun = false;
+  process.env.ICOS_WORKER_EXEC_COMMANDS = JSON.stringify({
+    binary: { command: WORKER_COMMAND, args: ["-e", ""], timeoutMs: 5_000 },
+  });
+  delete process.env.ICOS_WORKER_AUTHORITY_CHECK_MS;
+});
 vi.mock("./hermes-run", () => ({
   classifyHermesRun: () => ({ ok: true, result: "done" }),
 }));
@@ -88,7 +101,14 @@ function baseGrant(worktreePath: string | null, writeAllowed: boolean) {
     credentialScope: ["node"],
     writeAllowed,
     workspace: worktreePath
-      ? { worktreePath, branch: "icos/w/task-1", baseCommit: "abc123", fencingToken: 1 }
+      ? {
+          worktreePath,
+          branch: "icos/w/task-1",
+          baseCommit: "abc123",
+          fencingToken: 1,
+          /* A live lease, well beyond any test's runtime. */
+          leaseExpiresAt: new Date(Date.now() + 600_000).toISOString() as string | null,
+        }
       : null,
   };
 }
@@ -395,5 +415,121 @@ describe("the deployment cannot widen a task's secret scope", () => {
     vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grant)));
 
     await expect(runGovernedWorker(ctx, "x")).rejects.toThrow("WORKER_CREDENTIAL_SCOPE_MISMATCH");
+  });
+});
+
+/**
+ * SILENCE IS TOLERATED, BUT NOT FOR EVER.
+ *
+ * Aborting on the first failed callback would turn a network blip into lost work; never
+ * aborting would let a writer keep writing with authority nobody can confirm. The
+ * resolution is that silence costs nothing UNTIL the lease the writer was last told it
+ * held runs out — the workspace lease already in the registry, not a second clock, so a
+ * grace period can never outlast the authority it stands in for.
+ */
+describe("bounded authority revalidation", () => {
+  const ctx = { taskId: "task-1", workflowId: "icos-task-task-1" };
+
+  function grantWithLease(worktreePath: string, msFromNow: number) {
+    const grant = baseGrant(worktreePath, true);
+    grant.workspace = { ...grant.workspace!, leaseExpiresAt: new Date(Date.now() + msFromNow).toISOString() };
+    return grant;
+  }
+
+  it("TRANSIENT_CALLBACK_FAILURE_TOLERATED: a blip inside the lease does not stop the writer", async () => {
+    slowRun = false;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        /* First call grants; every later one fails, well inside a 10-minute lease. */
+        if (calls === 1) return grantResponse(grantWithLease(worktree, 600_000));
+        throw new Error("ECONNREFUSED");
+      }),
+    );
+
+    await expect(runGovernedWorker(ctx, "write it")).resolves.toMatchObject({ result: "done" });
+  });
+
+  it("CALLBACK_SILENCE_NOT_INDEFINITE: silence past the lease aborts", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        /* Granted with a lease that expires almost at once, then ICOS goes quiet. */
+        if (calls === 1) return grantResponse(grantWithLease(worktree, 25));
+        throw new Error("ECONNREFUSED");
+      }),
+    );
+
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
+      "WORKER_AUTHORITY_LOST: AUTHORITY_REVALIDATION_TIMEOUT",
+    );
+  });
+
+  it("LEASE_EXPIRY_WITHOUT_REVALIDATION_ABORTS: an expired lease ends it even when ICOS answers", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    /* ICOS is perfectly reachable and still reports a lease that has already run out. */
+    vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grantWithLease(worktree, -1_000))));
+
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
+      "WORKER_AUTHORITY_LOST: AUTHORITY_REVALIDATION_TIMEOUT",
+    );
+  });
+
+  it("a workspace holding no lease at all can coast nowhere", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    const grant = baseGrant(worktree, true);
+    grant.workspace = { ...grant.workspace!, leaseExpiresAt: null };
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return grantResponse(grant);
+        throw new Error("ECONNREFUSED");
+      }),
+    );
+
+    /* Authority that was never verifiable is not authority. */
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
+      "AUTHORITY_REVALIDATION_TIMEOUT",
+    );
+  });
+
+  it("POSITIVE_REVOKE_ABORTS_IMMEDIATELY: revocation does not wait for the lease", async () => {
+    slowRun = true;
+    process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
+    const worktree = allocate("task-1");
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        /* A ten-minute lease, revoked on the second answer. */
+        if (calls === 1) return grantResponse(grantWithLease(worktree, 600_000));
+        const revoked = grantWithLease(worktree, 600_000);
+        revoked.workspace = { ...revoked.workspace!, fencingToken: 99 };
+        return grantResponse(revoked);
+      }),
+    );
+
+    const started = Date.now();
+    await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
+      "WORKER_AUTHORITY_LOST: FENCED_OUT",
+    );
+    /* Immediately: nowhere near the lease it still nominally held. */
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

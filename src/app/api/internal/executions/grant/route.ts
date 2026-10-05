@@ -135,6 +135,12 @@ export async function POST(request: Request): Promise<Response> {
               baseCommit: workspace.baseCommit,
               /* The fence the worker's result is judged against if it reports late. */
               fencingToken: workspace.fencingToken,
+              /*
+               * THE DEADLINE A WRITER MAY COAST TO when ICOS is briefly unreachable. It
+               * is the workspace lease already held in the registry — not a second clock
+               * — so a grace period can never outlast the authority it is covering for.
+               */
+              leaseExpiresAt: workspace.leaseExpiresAt,
               fileScope: workspace.fileScope,
             }
           : null,
