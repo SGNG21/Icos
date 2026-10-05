@@ -34,7 +34,9 @@ import type { BrainComputeNeed, WorkforceTaskCompute } from "./core3-task-comput
 export interface MissionBindingDeps {
   readonly missions: {
     findById(id: string): Promise<{ id: string; goalId?: string } | null>;
-    listTasks(missionId: string): Promise<readonly Pick<MissionTask, "taskId" | "capability">[]>;
+    listTasks(
+      missionId: string,
+    ): Promise<readonly Pick<MissionTask, "taskId" | "capability" | "status">[]>;
   };
   readonly goals: { getById(goalId: string): Promise<{ goal: HighLevelGoal } | null> };
   readonly chief: ChiefDelegation;
@@ -47,9 +49,10 @@ export interface BoundTaskCompute extends WorkforceTaskCompute {
   ensureDelegated(missionId: string): Promise<ChiefDelegationOutcome | null>;
 }
 
-const fingerprintOf = (tasks: readonly { taskId: string }[]) =>
+/** Task ids AND statuses: a task finishing must re-enter, so its slot is released. */
+const fingerprintOf = (tasks: readonly { taskId: string; status?: string | null }[]) =>
   tasks
-    .map((t) => t.taskId)
+    .map((t) => `${t.taskId}:${t.status ?? ""}`)
     .sort()
     .join("|");
 
@@ -94,6 +97,7 @@ export function boundTaskCompute(
         goalId: mission.goalId,
         assignmentsCreated: outcome.assignments.length,
         alreadyBound: outcome.alreadyBound,
+        released: outcome.released,
         unboundTasks: outcome.unbound.map((t) => t.taskId),
         gaps: outcome.gaps.map((g) => ({
           taskId: g.request.taskId,

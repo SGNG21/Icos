@@ -65,7 +65,17 @@ export const reviewAssignmentTaskId = (missionId: string): string => `${missionI
 export interface BindableTask {
   readonly taskId: string;
   readonly capability?: string | null;
+  /** CORE3's own status. A finished or superseded task gives its brain's slot back. */
+  readonly status?: string | null;
 }
+
+/** Task statuses after which an assignment only holds capacity hostage. */
+export const RELEASABLE_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "superseded",
+]);
 
 export interface TaskBinding {
   readonly taskId: string;
@@ -112,6 +122,8 @@ export type ChiefDelegationOutcome =
       readonly unbound: readonly BindableTask[];
       /** Tâches déjà liées avant cet appel : la délégation est idempotente par tâche et cerveau. */
       readonly alreadyBound: number;
+      /** Affectations rendues : tâche remplacée par un replan, ou terminée. */
+      readonly released: number;
     }
   | {
       readonly ok: false;
@@ -122,7 +134,7 @@ export type ChiefDelegationOutcome =
 
 export interface ChiefDelegationDeps {
   readonly registry: BrainRegistry;
-  readonly service: Pick<WorkforceService, "delegate">;
+  readonly service: Pick<WorkforceService, "delegate" | "cancel">;
   /** Les affectations existantes du tenant : ce qui rend un second appel idempotent. */
   readonly store: Pick<WorkforceStore, "listAssignments">;
   /**
@@ -218,9 +230,36 @@ export function chiefDelegation(deps: ChiefDelegationDeps): ChiefDelegation {
       const existing = (await deps.store.listAssignments(deps.chief.tenantId)).filter(
         (a) => a.missionId === missionId && a.status !== "cancelled",
       );
-      const taken = new Set(existing.map((a) => `${a.taskId}|${a.assigneeAgentId}`));
 
-      const { bound, unbound } = planTaskBindings(outcome.plan, tasks);
+      /*
+       * LE CHIEF REPLANIFIE EXPLICITEMENT (propriété 6 du propriétaire) : une tâche que le
+       * replan a remplacée, ou qui est terminée, rend le créneau de son cerveau. Sans cela une
+       * affectation par tâche consomme la concurrence du cerveau de tête jusqu'à la fin de la
+       * mission — mesuré : trois tâches remplacées tenaient les trois créneaux de Planner et
+       * la mission suivante était refusée CONCURRENCY_LIMIT. La relecture n'est pas une tâche
+       * et n'est rendue qu'avec la mission.
+       */
+      const live = new Set(
+        tasks.filter((t) => !RELEASABLE_TASK_STATUSES.has(t.status ?? "")).map((t) => t.taskId),
+      );
+      const reviewKey = reviewAssignmentTaskId(missionId);
+      const stale = existing.filter(
+        (a) => a.taskId !== reviewKey && !live.has(a.taskId) && a.status === "assigned",
+      );
+      for (const a of stale) {
+        await deps.service.cancel(deps.chief, a.assignmentId, "task replaced or finished");
+      }
+      const staleIds = new Set(stale.map((a) => a.assignmentId));
+      const taken = new Set(
+        existing
+          .filter((a) => !staleIds.has(a.assignmentId))
+          .map((a) => `${a.taskId}|${a.assigneeAgentId}`),
+      );
+
+      const { bound, unbound } = planTaskBindings(
+        outcome.plan,
+        tasks.filter((t) => live.has(t.taskId)),
+      );
       const requests: WorkRequest[] = [];
       let alreadyBound = 0;
       for (const binding of bound) {
@@ -267,6 +306,7 @@ export function chiefDelegation(deps: ChiefDelegationDeps): ChiefDelegation {
         gaps: recorded.gaps,
         unbound,
         alreadyBound,
+        released: stale.length,
       };
     },
   };

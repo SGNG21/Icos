@@ -74,7 +74,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -118,7 +118,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -162,7 +162,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -206,7 +206,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -250,7 +250,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -294,7 +294,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -338,7 +338,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -382,7 +382,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -426,7 +426,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -470,7 +470,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {
@@ -514,7 +514,7 @@
       "bounds": {
         "maxDepth": 4,
         "maxDescendants": 12,
-        "maxConcurrentAssignments": 3
+        "maxConcurrentAssignments": 5
       }
     },
     "compute": {

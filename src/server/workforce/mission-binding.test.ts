@@ -19,12 +19,13 @@ const ok = (over: Partial<Extract<ChiefDelegationOutcome, { ok: true }>> = {}) =
     gaps: [],
     unbound: [],
     alreadyBound: 0,
+    released: 0,
     ...over,
   }) as ChiefDelegationOutcome;
 
 function harness(opts: {
   goalId?: string;
-  tasks?: { taskId: string; capability?: string | null }[];
+  tasks?: { taskId: string; capability?: string | null; status?: string }[];
   outcome?: ChiefDelegationOutcome | Error;
 }) {
   const tasks = opts.tasks ?? [{ taskId: "task-1", capability: null }];
@@ -37,7 +38,7 @@ function harness(opts: {
   const compute = boundTaskCompute(inner, {
     missions: {
       findById: async (id) => ({ id, goalId: opts.goalId }),
-      listTasks: async () => tasks,
+      listTasks: async () => tasks as never,
     },
     goals: { getById: async () => ({ goal }) },
     chief: { delegateGoal } as unknown as ChiefDelegation,
@@ -62,6 +63,15 @@ describe("boundTaskCompute", () => {
     expect(h.delegateGoal).toHaveBeenCalledTimes(1);
     tasks.push({ taskId: "task-2", capability: null });
     await h.compute.forTask("m-1", "task-2");
+    expect(h.delegateGoal).toHaveBeenCalledTimes(2);
+  });
+
+  it("a task finishing changes the fingerprint, so its slot can be released on the next pass", async () => {
+    const tasks = [{ taskId: "task-1", capability: null, status: "queued" }];
+    const h = harness({ goalId: "g-1", tasks });
+    await h.compute.forTask("m-1", "task-1");
+    tasks[0] = { ...tasks[0]!, status: "succeeded" };
+    await h.compute.forTask("m-1", "task-1");
     expect(h.delegateGoal).toHaveBeenCalledTimes(2);
   });
 

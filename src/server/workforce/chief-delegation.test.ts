@@ -357,6 +357,34 @@ describe("décision 0070 — l'affectation porte l'identité CORE3 et le dispatc
     expect(twice?.assignmentIds).toEqual(once?.assignmentIds);
   });
 
+  it("un replan ou une tâche terminée REND le créneau du cerveau ; la relecture reste", async () => {
+    const g = goal("Ajoute une page de paramètres utilisateur.", {
+      "icos.source": "cognitive_conversation",
+    });
+    await chief.delegateGoal(g, "m-rel", [
+      { taskId: "task-old", status: "queued" },
+      { taskId: "task-done", status: "running" },
+    ]);
+    /* Replan: task-old is superseded (gone from the list), task-done finished, task-new appears. */
+    const again = await chief.delegateGoal(g, "m-rel", [
+      { taskId: "task-done", status: "succeeded" },
+      { taskId: "task-new", status: "queued" },
+    ]);
+    if (!again.ok) throw new Error("attendu un plan");
+    expect(again.released).toBe(2);
+    expect(again.assignments.map((a) => a.taskId)).toEqual(["task-new"]);
+    const rows = (await store.listAssignments("default")).filter((a) => a.missionId === "m-rel");
+    expect(rows.map((a) => [a.taskId, a.status]).sort()).toEqual([
+      [reviewAssignmentTaskId("m-rel"), "assigned"],
+      ["task-done", "cancelled"],
+      ["task-new", "assigned"],
+      ["task-old", "cancelled"],
+    ]);
+    /* The dispatcher no longer sees the released ones, and the new one is live. */
+    expect(await compute().forTask("m-rel", "task-old")).toBeNull();
+    expect((await compute().forTask("m-rel", "task-new"))?.agentIds).toEqual(["brain-planner"]);
+  });
+
   it("une tâche qu'aucun cerveau ne porte reste nulle : rien n'est inventé au dispatch", async () => {
     await chief.delegateGoal(goal("Améliore ICOS."), "m-core3", TASKS);
     expect(await compute().forTask("m-core3", "task-inexistante")).toBeNull();
