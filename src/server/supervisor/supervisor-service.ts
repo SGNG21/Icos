@@ -18,7 +18,11 @@ import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute
 
 import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
-import { settleMission, type MissionSettlement } from "@/core/mission/settlement";
+import {
+  settleMission,
+  TERMINAL_TASK_STATUSES as TERMINAL_WORK_STATUSES,
+  type MissionSettlement,
+} from "@/core/mission/settlement";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
@@ -745,7 +749,8 @@ export class SupervisorService {
       return;
     }
 
-    await this.settleIfComplete(missionId);
+    /* A dispatch pass has just run, so a failure here is decisive. */
+    await this.settle(missionId, true);
   }
 
   /**
@@ -761,6 +766,14 @@ export class SupervisorService {
    * repeated sweeps neither re-release assignments nor overwrite the first outcome.
    */
   async settleIfComplete(missionId: string): Promise<MissionSettlement> {
+    /* No dispatch pass has run, so only work that is entirely over may settle. */
+    return this.settle(missionId, false);
+  }
+
+  private async settle(
+    missionId: string,
+    dispatchPassCompleted: boolean,
+  ): Promise<MissionSettlement> {
     const mission = await this.missionRepository.findById(missionId);
     if (!mission) throw new Error("Mission not found");
 
@@ -771,14 +784,25 @@ export class SupervisorService {
      * there is nothing in flight to miss. This is the repository being absent, not a
      * method being probed for.
      */
-    const activeAttempts = this.dispatchAttempts
-      ? await this.dispatchAttempts.countActiveByMissionId(missionId)
-      : 0;
+    const attemptTaskIds = this.dispatchAttempts
+      ? new Set(await this.dispatchAttempts.listActiveMissionTaskIds(missionId))
+      : new Set<string>();
+
+    /*
+     * Only attempts on work that is NOT finished count. A leftover intent on a task that
+     * already reached a terminal status cannot change the outcome — the task's own status
+     * refuses a late result — and holding the mission open for it strands the mission
+     * behind a bookkeeping leak.
+     */
+    const activeAttempts = tasks.filter(
+      (task) => attemptTaskIds.has(task.id) && !TERMINAL_WORK_STATUSES.has(task.status),
+    ).length;
 
     const settlement = settleMission({
       missionStatus: mission.status,
       taskStatuses: tasks.map((task) => task.status),
       activeAttempts,
+      dispatchPassCompleted,
     });
 
     if (!settlement.settled) return settlement;

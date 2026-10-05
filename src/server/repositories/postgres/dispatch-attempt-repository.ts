@@ -74,10 +74,9 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     return rows.map((row) => row.workerId as string).sort((a, b) => a.localeCompare(b));
   }
 
-  /** Counted in the database: the ledger decides, never a page of rows fetched and filtered. */
-  async countActiveByMissionId(missionId: string): Promise<number> {
+  async listActiveMissionTaskIds(missionId: string): Promise<string[]> {
     const rows = await this.db
-      .select({ active: sql<number>`count(*)::int` })
+      .selectDistinct({ missionTaskId: dispatchAttempts.missionTaskId })
       .from(dispatchAttempts)
       .where(
         and(
@@ -86,7 +85,7 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
         ),
       );
 
-    return rows[0]?.active ?? 0;
+    return rows.map((row) => row.missionTaskId);
   }
 
   /**

@@ -11,6 +11,7 @@ import type { Database } from "@/server/database/client";
 const TERMINAL_MISSION = sql`('succeeded','failed','blocked','cancelled')`;
 const ACTIVE_TASK = sql`('queued','running','review_pending','awaiting_approval')`;
 const ACTIVE_ATTEMPT = sql`('prepared','dispatched')`;
+const TERMINAL_TASK = sql`('succeeded','failed','blocked','cancelled','superseded')`;
 
 /**
  * When this mission's work last moved. Falls back to the runtime's start so a mission
@@ -86,13 +87,18 @@ export class PostgresRecoveryScanner implements RecoveryScanner {
           where t.mission_id = r.mission_id and t.status in ${ACTIVE_TASK}
         )
         /*
-         * And no execution is still in flight. A task can read terminal while the ledger
-         * still carries a live intent for it, and a durable Temporal execution IS such an
-         * intent, so the task statuses alone cannot answer this.
+         * And no execution is still in flight ON WORK THAT IS NOT FINISHED. A leftover
+         * intent against an already-terminal task is bookkeeping for the reaper, not a
+         * running worker: a single pre-invariant dispatched row with no lease -- which
+         * nothing can reclaim -- would otherwise hold its mission out of reconciliation
+         * for ever, trading one stranded mission for another.
          */
         and not exists (
           select 1 from dispatch_attempts d
-          where d.mission_id = r.mission_id and d.state in ${ACTIVE_ATTEMPT}
+          join mission_tasks dt on dt.id = d.mission_task_id
+          where d.mission_id = r.mission_id
+            and d.state in ${ACTIVE_ATTEMPT}
+            and dt.status not in ${TERMINAL_TASK}
         )
         /* Quiet since the work itself last moved -- a clock the sweep does not touch. */
         and ${SETTLED_SINCE} <= now() - ${grace}

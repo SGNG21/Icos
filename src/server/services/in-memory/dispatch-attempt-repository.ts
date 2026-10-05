@@ -243,12 +243,18 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
       .sort((a, b) => a.localeCompare(b));
   }
 
-  async countActiveByMissionId(missionId: string): Promise<number> {
-    return Array.from(this.attempts.values()).filter(
-      (attempt) =>
-        attempt.missionId === missionId &&
-        (attempt.state === "prepared" || attempt.state === "dispatched"),
-    ).length;
+  async listActiveMissionTaskIds(missionId: string): Promise<string[]> {
+    return Array.from(
+      new Set(
+        Array.from(this.attempts.values())
+          .filter(
+            (attempt) =>
+              attempt.missionId === missionId &&
+              (attempt.state === "prepared" || attempt.state === "dispatched"),
+          )
+          .map((attempt) => attempt.missionTaskId),
+      ),
+    );
   }
 
   /**

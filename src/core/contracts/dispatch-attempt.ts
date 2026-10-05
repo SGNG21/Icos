@@ -273,17 +273,17 @@ export interface DispatchAttemptRepository {
   listActiveWorkerAssignments(): Promise<string[]>;
 
   /**
-   * How many attempts for this mission are still `prepared` or `dispatched`.
+   * Mission task ids that still carry a `prepared` or `dispatched` attempt.
    *
-   * THE evidence that no execution is still in flight, used by mission settlement. A task
-   * can read `succeeded` while the ledger still carries a live intent for it, and a
-   * durable Temporal execution IS such an intent, so the task statuses alone cannot
-   * answer the question.
+   * Evidence for mission settlement, returned as ids rather than a count so the caller
+   * can weigh each against the task it belongs to: an attempt left over on a task that
+   * has already reached a terminal status is stale bookkeeping for the reaper, not an
+   * execution that could still change the outcome, and treating it as live strands the
+   * mission for ever — which is the very failure settlement exists to end.
    *
-   * Deliberately a first-class method rather than something a caller derives from a
-   * wider list: the guard that preceded it called `listByMissionId?.()`, which does not
-   * exist on this repository, so optional chaining returned `undefined` and the check
-   * passed without ever asking the database.
+   * Deliberately a first-class method. The guard that preceded it called
+   * `listByMissionId?.()`, a method this repository has never had, so optional chaining
+   * answered `undefined` and the check passed without asking the database.
    */
-  countActiveByMissionId(missionId: string): Promise<number>;
+  listActiveMissionTaskIds(missionId: string): Promise<string[]>;
 }

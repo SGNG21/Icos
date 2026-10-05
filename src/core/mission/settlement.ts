@@ -47,15 +47,33 @@ export interface MissionSettlementInput {
   readonly missionStatus: string;
   readonly taskStatuses: readonly string[];
   /**
-   * Dispatch attempts for this mission still in `prepared` or `dispatched`, counted from
-   * the ledger. REQUIRED, and a real number: a task can read `succeeded` while the ledger
-   * still carries a live intent for it, and settling then strands that execution.
+   * Live attempts that belong to work which is NOT finished — counted by the caller from
+   * the ledger, against the task each one belongs to.
    *
-   * This is deliberately not optional. The previous guard asked the repository for a
-   * method it did not have, so optional chaining answered `undefined`, the check passed
-   * vacuously and a mission was settled with attempts still open.
+   * An attempt left on a task that already reached a terminal status is stale bookkeeping
+   * for the reaper to clear, not an execution that could still change the outcome: the
+   * task's own terminal status is what refuses a late result. Counting those as live
+   * trades one stranded mission for another — a live mission sat at `draft` for a day
+   * behind a single pre-invariant `dispatched` row with no lease, which nothing can
+   * reclaim and which therefore would have held the mission open for ever.
+   *
+   * REQUIRED, and a real number. The guard this replaces called a repository method that
+   * does not exist, so optional chaining answered `undefined` and it passed vacuously.
    */
   readonly activeAttempts: number;
+  /**
+   * Whether a dispatch pass has just run, so the task statuses reflect everything this
+   * cycle could start.
+   *
+   * It decides whether a failure is allowed to be decisive. After a dispatch pass a
+   * `failed` or `blocked` task settles the mission at once — its dependents will never
+   * run, so waiting for the graph to finish means waiting for ever, and a mission that
+   * has failed must give its brains back promptly. BEFORE one — the runner asking "is
+   * this already over?" ahead of its budget — the same shortcut would kill a mission
+   * whose other branches were still about to be dispatched, so only total terminality
+   * settles it.
+   */
+  readonly dispatchPassCompleted: boolean;
 }
 
 /**
@@ -78,19 +96,36 @@ export function settleMission(input: MissionSettlementInput): MissionSettlement 
   }
 
   /*
-   * A FAILURE IS DECISIVE, and deliberately decided before the checks below.
+   * A FAILURE IS DECISIVE — but only once a dispatch pass has had its say.
    *
-   * Work still in flight cannot turn a failed task into a success, and the tasks that
-   * depended on it will never run — so waiting for them to reach a terminal status means
-   * waiting for ever. This is the one verdict that does not require the rest of the graph
-   * to be finished, and it is also the verdict that has to be prompt: it is what gives
-   * the mission's brains back.
+   * After one, the task statuses reflect everything this cycle could start, so a `failed`
+   * or `blocked` task settles the mission at once: its dependents will never run, and the
+   * brains have to come back. Asked BEFORE a dispatch pass, the same shortcut would end a
+   * mission whose other branches were about to be dispatched — a task blocked by
+   * transient capacity would kill the whole mission — so that caller waits for total
+   * terminality instead.
    */
-  if (input.taskStatuses.includes("failed")) {
-    return { settled: true, status: "failed", reason: "TASK_FAILED" };
-  }
-  if (input.taskStatuses.includes("blocked")) {
-    return { settled: true, status: "blocked", reason: "TASK_BLOCKED" };
+  const failedFirst = input.taskStatuses.includes("failed")
+    ? ("failed" as const)
+    : input.taskStatuses.includes("blocked")
+      ? ("blocked" as const)
+      : null;
+
+  if (input.dispatchPassCompleted && failedFirst) {
+    /*
+     * One sibling has failed, but another is genuinely executing. Settling now would
+     * declare the mission over while a worker is still running against it, and that
+     * worker's result may yet matter. Wait for the ledger to go quiet; the failure will
+     * still be a failure next cycle.
+     */
+    if (input.activeAttempts > 0) {
+      return { settled: false, reason: `ATTEMPT_ACTIVE:${input.activeAttempts}` };
+    }
+    return {
+      settled: true,
+      status: failedFirst,
+      reason: failedFirst === "failed" ? "TASK_FAILED" : "TASK_BLOCKED",
+    };
   }
 
   const pending = input.taskStatuses.filter((s) => !TERMINAL_TASK_STATUSES.has(s));
@@ -117,6 +152,13 @@ export function settleMission(input: MissionSettlementInput): MissionSettlement 
     return { settled: false, reason: "ALL_WORK_SUPERSEDED" };
   }
 
+  /* Everything is terminal here, so the worst outcome decides whatever the caller was. */
+  if (input.taskStatuses.includes("failed")) {
+    return { settled: true, status: "failed", reason: "TASK_FAILED" };
+  }
+  if (input.taskStatuses.includes("blocked")) {
+    return { settled: true, status: "blocked", reason: "TASK_BLOCKED" };
+  }
   if (input.taskStatuses.includes("cancelled")) {
     return { settled: true, status: "cancelled", reason: "TASK_CANCELLED" };
   }

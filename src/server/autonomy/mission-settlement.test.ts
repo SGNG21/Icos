@@ -131,7 +131,9 @@ describe("a mission settles on what its work has done, not on time remaining", (
 });
 
 describe("the settlement predicate", () => {
-  const base = { missionStatus: "draft", activeAttempts: 0 };
+  const base = { missionStatus: "draft", activeAttempts: 0, dispatchPassCompleted: true };
+  /* What the runner asks before spending budget: no dispatch pass has run this cycle. */
+  const beforeDispatch = { ...base, dispatchPassCompleted: false };
 
   it("settles a mission whose tasks all succeeded", () => {
     expect(settleMission({ ...base, taskStatuses: ["succeeded", "succeeded"] })).toEqual({
@@ -160,6 +162,32 @@ describe("the settlement predicate", () => {
      */
     expect(settleMission({ ...base, taskStatuses: ["succeeded", "failed", "draft"] })).toMatchObject(
       { settled: true, status: "failed" },
+    );
+  });
+
+  it("but not before a dispatch pass has had its say", () => {
+    /*
+     * The runner asks this ahead of its budget. A task blocked by transient capacity must
+     * not end a mission whose other branches are about to be dispatched.
+     */
+    expect(
+      settleMission({ ...beforeDispatch, taskStatuses: ["blocked", "draft"] }),
+    ).toMatchObject({ settled: false, reason: "TASK_NOT_TERMINAL:draft" });
+
+    /* Once everything IS terminal, the same caller settles on the worst outcome. */
+    expect(
+      settleMission({ ...beforeDispatch, taskStatuses: ["blocked", "succeeded"] }),
+    ).toMatchObject({ settled: true, status: "blocked" });
+  });
+
+  it("ignores a leftover attempt on work that is already finished", () => {
+    /*
+     * A live mission sat at draft for a day behind one pre-invariant `dispatched` row with
+     * no lease, which nothing can reclaim. The task was succeeded: that status, not the
+     * ledger row, is what refuses a late result.
+     */
+    expect(settleMission({ ...base, taskStatuses: ["succeeded"], activeAttempts: 0 })).toMatchObject(
+      { settled: true, status: "succeeded" },
     );
   });
 
@@ -197,8 +225,13 @@ describe("the settlement predicate", () => {
        * passed without asking anything.
        */
       expect(
-        settleMission({ missionStatus: "draft", taskStatuses: ["succeeded"], activeAttempts: 1 }),
+        settleMission({ ...base, taskStatuses: ["failed", "running"], activeAttempts: 1 }),
       ).toMatchObject({ settled: false, reason: "ATTEMPT_ACTIVE:1" });
+
+      /* Same graph, ledger quiet: the failure is decisive. */
+      expect(
+        settleMission({ ...base, taskStatuses: ["failed", "running"], activeAttempts: 0 }),
+      ).toMatchObject({ settled: true, status: "failed" });
     });
 
     it("does not call an unplanned mission successful", () => {
@@ -220,18 +253,14 @@ describe("the settlement predicate", () => {
         settleMission({ ...base, taskStatuses: ["succeeded"], activeAttempts: NaN }),
       ).toThrow("MISSION_SETTLEMENT_INVALID_ATTEMPT_COUNT");
       expect(() =>
-        settleMission({
-          missionStatus: "draft",
-          taskStatuses: ["succeeded"],
-          activeAttempts: undefined as never,
-        }),
+        settleMission({ ...base, taskStatuses: ["succeeded"], activeAttempts: undefined as never }),
       ).toThrow("MISSION_SETTLEMENT_INVALID_ATTEMPT_COUNT");
     });
   });
 
   it("is idempotent: an already terminal mission is left exactly as it is", () => {
     for (const status of ["succeeded", "failed", "blocked", "cancelled"]) {
-      expect(settleMission({ missionStatus: status, taskStatuses: ["failed"], activeAttempts: 0 }))
+      expect(settleMission({ ...base, missionStatus: status, taskStatuses: ["failed"] }))
         .toMatchObject({ settled: false, reason: `MISSION_ALREADY_TERMINAL:${status}` });
     }
   });
@@ -259,7 +288,11 @@ describe("settleIfComplete releases capacity exactly once", () => {
       {} as never,
       {} as never,
       {} as never,
-      { countActiveByMissionId: vi.fn(async () => activeAttempts) } as never,
+      {
+        listActiveMissionTaskIds: vi.fn(async () =>
+          Array.from({ length: activeAttempts }, (_, i) => `t${i}`),
+        ),
+      } as never,
       undefined,
       undefined,
       undefined,
@@ -291,12 +324,13 @@ describe("settleIfComplete releases capacity exactly once", () => {
     expect(releaseDelegation).toHaveBeenCalledWith("m1", "MISSION_BLOCKED");
   });
 
-  it("holds capacity while an attempt is still live", async () => {
-    const { supervisor, releaseDelegation, updateMissionStatus } = service(["succeeded"], 2);
+  it("holds capacity while an attempt is still live on unfinished work", async () => {
+    /* t0 is still running and carries the live attempt; t1 finished. */
+    const { supervisor, releaseDelegation, updateMissionStatus } = service(["running", "succeeded"], 1);
 
     expect(await supervisor.settleIfComplete("m1")).toMatchObject({
       settled: false,
-      reason: "ATTEMPT_ACTIVE:2",
+      reason: "TASK_NOT_TERMINAL:running",
     });
     expect(updateMissionStatus).not.toHaveBeenCalled();
     expect(releaseDelegation).not.toHaveBeenCalled();
