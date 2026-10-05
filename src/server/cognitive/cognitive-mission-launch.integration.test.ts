@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CognitionOutput, ConversationEvent } from "@/core/cognitive/contracts";
+import type { CognitionOutput, GoalProposal, ConversationEvent } from "@/core/cognitive/contracts";
 import { loadEnv } from "@/config/env";
 import { buildPostgresContainer, type Container } from "@/server/container";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
@@ -178,6 +178,44 @@ describe("Conversation → canonical CORE3 mission", () => {
     await core3Scheduler().sweep();
     await rt.recoverLaunches(TENANT);
     expect(await count("missions")).toBe(1);
+    expect(await count("scheduled_jobs")).toBe(1);
+  });
+
+  it("L5 — an AUTO_ALLOWED proposal launches without a human decision, as a policy approval", async () => {
+    const autoAllowed: CognitionOutput = {
+      ...missionRequest,
+      result: {
+        ...missionRequest.result,
+        kind: "MISSION_REQUEST",
+        text: "Je lance l'analyse.",
+        goal: {
+          ...(missionRequest.result as { goal: GoalProposal }).goal,
+          riskLevel: "read_only",
+          capabilities: ["research"],
+        },
+      },
+    };
+    const rt = runtimeWith(new ScriptedCognitionEngine(() => autoAllowed));
+    const conv = await rt.createConversation(ME, { clientId: "lds-renov" });
+    const res = await rt.submitTurn(ME, conv.id, {
+      text: "Analyse les leads.",
+      idempotencyKey: k(),
+    });
+    /* No decideProposal: the turn itself returns a LAUNCHED proposal signed by the policy. */
+    expect(res.proposal).toMatchObject({
+      status: "launched",
+      decidedBy: "policy:mission-autonomy",
+      policyReason: expect.stringMatching(/^AUTO_ALLOWED: /),
+    });
+    expect(res.proposal?.missionId).toBeTruthy();
+    const goal = await container.goalRepository.getById(res.proposal!.goalId!);
+    /* Tasks of a policy-approved goal run under if_risky: sensitive still asks a human. */
+    expect(goal?.goal.humanApprovalPolicy).toBe("if_risky");
+    expect(goal?.goal.metadata.approvedBy).toBe("policy:mission-autonomy");
+    expect(await count("scheduled_jobs")).toBe(1);
+    /* And a held proposal (undeclared capabilities) still waits for a human, as before. */
+    const held = await proposeGoal();
+    expect(held.ref.status).toBe("approval_required");
     expect(await count("scheduled_jobs")).toBe(1);
   });
 

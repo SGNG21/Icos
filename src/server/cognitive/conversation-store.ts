@@ -522,6 +522,11 @@ export class PostgresConversationStore {
             kind: result.proposal.kind,
             status: policy.status,
             policyReason: policy.reason,
+            // Policy-approved: signed by the policy and dated now, so `beginLaunch` (which
+            // needs `approved`) and the audit row read exactly as a human approval does.
+            ...(policy.status === "approved"
+              ? { decidedBy: policy.decidedBy, decidedAt: now }
+              : {}),
             payload: result.proposal.payload,
             createdAt: now,
             updatedAt: now,

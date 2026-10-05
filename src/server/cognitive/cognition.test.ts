@@ -149,16 +149,26 @@ describe("cognition boundary", () => {
     expect(launchPolicy("action_request").status).toBe("approval_required");
   });
 
-  it("launch policy: the autonomy verdict is written on the proposal, the human step stays", () => {
+  it("launch policy: AUTO_ALLOWED is approved by policy; everything else holds for a human", () => {
     const goal = { title: "t", objective: "o", successCriteria: [], constraints: [] };
-    // Confined work: policy WOULD allow it, and says so; the approval is still a human's.
+    // Confined work: policy approves and signs; the proposal row is still written.
     const safe = launchPolicy("goal_proposal", {
       ...goal,
       riskLevel: "read_only",
       capabilities: ["research", "code_write"],
     });
-    expect(safe.status).toBe("approval_required");
-    expect(safe.reason).toMatch(/^AUTO_ALLOWED: /);
+    expect(safe).toEqual({
+      status: "approved",
+      reason: expect.stringMatching(/^AUTO_ALLOWED: /),
+      decidedBy: "policy:mission-autonomy",
+    });
+    // POLICY_GATED (unclassified capability) holds.
+    expect(
+      launchPolicy("goal_proposal", { ...goal, riskLevel: "read_only", capabilities: ["x_ray"] }),
+    ).toMatchObject({
+      status: "approval_required",
+      reason: expect.stringMatching(/^POLICY_GATED/),
+    });
     // A declared external effect escalates, whatever risk the model claims.
     const external = launchPolicy("goal_proposal", {
       ...goal,

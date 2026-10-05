@@ -15,7 +15,7 @@ import type {
 import { rememberSchema } from "@/core/cognitive/contracts";
 import { isScopeChange, type ContextResolution } from "@/core/cognitive/client-resolution";
 import { maxSensitivityFor } from "@/core/cognitive/context-selection";
-import { governOutcome } from "@/core/cognitive/turn-policy";
+import { governOutcome, POLICY_DECIDER } from "@/core/cognitive/turn-policy";
 import { classifyWorkload } from "@/core/cognitive/workload";
 import { runWithAttribution } from "@/server/budget/attribution-context";
 import type { z } from "zod";
@@ -302,10 +302,27 @@ export class CognitiveRuntime {
         governed.outcome,
         thought.memorySuggestions,
       );
+      /*
+       * AUTO-LAUNCH, NARROW (decision 0067 item 7, second half). The runtime launches ONLY a
+       * proposal that the policy itself approved, that belongs to this conversation and this
+       * very turn (so it is neither stale nor someone else's), and that is still `approved`
+       * (`beginLaunch` moves approved → launching exactly once, so an already-launched ref
+       * cannot launch twice). Budget and authority are enforced on the launch path itself —
+       * objective admission, bounds, the model allowlist — unchanged. A failure leaves the
+       * ref `approved`/`launching` for the recovery sweep, exactly like a human approval.
+       */
+      const proposal =
+        done.ref &&
+        done.ref.status === "approved" &&
+        done.ref.decidedBy === POLICY_DECIDER &&
+        done.ref.conversationId === conversationId &&
+        done.ref.turnId === turn.id
+          ? await this.launch(conversation, done.ref).catch(() => done.ref)
+          : done.ref;
       return {
         turn: (await conversations.getTurn(conversationId, turn.id))!,
         reply: done.assistant,
-        proposal: done.ref,
+        proposal,
       };
     } catch (error) {
       const reason = abort.signal.aborted
@@ -580,6 +597,7 @@ export class CognitiveRuntime {
         conversationId: conversation.id,
         turnId: launching.turnId,
         approvedBy: launching.decidedBy ?? conversation.ownerUserId,
+        approval: launching.decidedBy === POLICY_DECIDER ? "policy" : "human",
         // The scope the proposal was MADE under: approving an LDS mission after the
         // conversation has switched to another client must still launch under LDS.
         clientId: launching.clientId,

@@ -71,7 +71,7 @@ const SYSTEM_PROMPT = [
   '{"kind":"ANSWER_ONLY","text":"..."} | {"kind":"CLARIFICATION","question":"..."} | {"kind":"NO_ACTION","text":"..."}',
   '| {"kind":"ACTION_REQUEST","text":"...","action":{"kind":"cle-action","description":"...","riskLevel":"read_only|reversible|sensitive"}}',
   '| {"kind":"MISSION_REQUEST","text":"...","goal":{"title":"...","objective":"...","successCriteria":["..."],"constraints":["..."],"riskLevel":"read_only|reversible|sensitive","capabilities":["..."]}}',
-  "Utilise MISSION_REQUEST quand la demande exige un travail multi-étapes (analyse + correction). C'est une proposition : son lancement est soumis à approbation humaine.",
+  "Utilise MISSION_REQUEST quand la demande exige un travail multi-étapes (analyse + correction). C'est une proposition : la politique la lance d'elle-même si elle est vérifiablement en lecture seule ou confinée à un worktree isolé, sinon elle est soumise à approbation humaine.",
   // The closed vocabulary of `classifyMissionAutonomy`. Declaring is the only way a goal can
   // be classified at all; an undeclared goal is unverifiable and always asks a human.
   `goal.capabilities : ce dont la mission aura BESOIN, uniquement parmi ${[...AUTO_ALLOWED_CAPABILITIES, ...APPROVAL_REQUIRED_CAPABILITIES].join(", ")}. Déclare honnêtement : une capacité à effet externe omise ne rend pas la mission plus sûre, elle la rend non vérifiable.`,

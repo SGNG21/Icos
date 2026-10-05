@@ -13,6 +13,13 @@ export interface GoalLaunchRequest {
   readonly conversationId: string;
   readonly turnId: string;
   readonly approvedBy: string;
+  /**
+   * Who approved: a human, or the launch policy (`POLICY_DECIDER`). A policy approval is
+   * only ever given to AUTO_ALLOWED work, so its tasks run under `if_risky` — a `sensitive`
+   * task still asks a human (the planner's `requiresHumanApproval`), DENY and HOLD are
+   * unchanged, budget and audit are the same path. A human approval keeps `always`.
+   */
+  readonly approval: "human" | "policy";
   readonly clientId: string | null;
   readonly projectId: string | null;
 }
@@ -123,7 +130,7 @@ export class CanonicalGoalLauncher implements MissionGateway {
       // The proposal's declared needs reach intake as the goal's capability allowlist, so the
       // planner and the autonomy policy read the same declaration the human approved.
       allowedCapabilities: p.capabilities,
-      humanApprovalPolicy: "always",
+      humanApprovalPolicy: r.approval === "policy" ? "if_risky" : "always",
       metadata,
       correlationId: r.refId,
     });

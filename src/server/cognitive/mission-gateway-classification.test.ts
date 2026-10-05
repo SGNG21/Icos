@@ -31,6 +31,7 @@ const request = {
   conversationId: "c-1",
   turnId: "t-1",
   approvedBy: "geoffrey",
+  approval: "human" as const,
   clientId: null as string | null,
   projectId: null as string | null,
 };
@@ -111,17 +112,18 @@ describe("CanonicalGoalLauncher — server-asserted work class", () => {
     "Quelle est la météo",
     "Améliore la plaquette commerciale",
     "",
-  ])("does NOT promote %j: an unclear objective is never guessed into self-modification", async (
-    text,
-  ) => {
-    const { metadata, workClass } = await launch({
-      title: text || "sans titre",
-      objective: text || "sans objet",
-    });
+  ])(
+    "does NOT promote %j: an unclear objective is never guessed into self-modification",
+    async (text) => {
+      const { metadata, workClass } = await launch({
+        title: text || "sans titre",
+        objective: text || "sans objet",
+      });
 
-    expect(metadata["icos.source"]).toBe("cognitive_conversation");
-    expect(workClass).not.toBe("SELF_IMPROVEMENT");
-  });
+      expect(metadata["icos.source"]).toBe("cognitive_conversation");
+      expect(workClass).not.toBe("SELF_IMPROVEMENT");
+    },
+  );
 
   it("does not read a signal that spans the title/objective boundary", async () => {
     /*

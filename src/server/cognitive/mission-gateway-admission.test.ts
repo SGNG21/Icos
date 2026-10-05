@@ -16,6 +16,7 @@ const request = {
   conversationId: "c-1",
   turnId: "t-1",
   approvedBy: "geoffrey",
+  approval: "human" as const,
   clientId: null,
   projectId: null,
 };
@@ -41,6 +42,7 @@ const launcher = (coordinator?: unknown) => {
       turnId: "t-1",
       proposalRefId: "ref-1",
       approvedBy: "geoffrey",
+      approval: "human" as const,
     },
     createdAt: "2026-10-01T00:00:00.000Z",
   };

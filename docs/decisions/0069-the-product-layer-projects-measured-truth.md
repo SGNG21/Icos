@@ -46,9 +46,16 @@ reason that told the approving human nothing.
 4. **A proposal declares what it needs, from the classifier's closed vocabulary, and the
    model can only narrow.** `GoalProposal.capabilities` reaches intake as the goal's
    allowlist; `launchPolicy` writes `classifyMissionAutonomy`'s verdict on the proposal.
-   **Every conversational goal and action still requires a human approval before launch.**
-   Turning an `AUTO_ALLOWED` verdict into a launch without that step is a separate,
-   owner-approved change (0067 item 7, second half) and is deliberately not taken here.
+   **Amended 2026-10-05 (owner decision, P2, after the dispatch bridge of 0070 and its
+   live-shaped E2E):** the second half is now taken, narrowly. An `AUTO_ALLOWED` goal
+   proposal is persisted `approved` with `decidedBy = policy:mission-autonomy` and launched
+   by the runtime at the end of the same turn — only a ref that the policy signed, that
+   belongs to that conversation and that very turn, and that is still `approved`
+   (`beginLaunch` moves it exactly once). `POLICY_GATED` and `APPROVAL_REQUIRED` hold for a
+   human; a human `reject` is the denial and never launches; actions always hold. A
+   policy-approved goal runs its tasks under `if_risky` (a `sensitive` task still asks a
+   human); a human approval keeps `always`. Budget, admission, bounds, the model allowlist
+   and the audit row are the same launch path as before. Never `launchPolicy = always`.
 
 5. **The cockpit shows a value exactly when ICOS has a source for it, through the same
    measurement the conversation uses.** Memory, tokens, the durable backlog, provider health
