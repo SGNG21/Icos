@@ -24,11 +24,16 @@ export class ReviewerServiceImpl implements ReviewerService {
     private readonly reviewDecisionRepository: ReviewDecisionRepository,
     /**
      * THE REVIEWER BRAIN of the mission, as Chief assigned it (decision 0070). Read here, at
-     * the one choke point every LLM review passes through, so the review's spend is
-     * attributed to `brain-reviewer` in the ledger. Optional: a mission that was never
-     * delegated reviews exactly as before. It names an identity, never a model.
+     * the one choke point every LLM review passes through, and recorded ON THE DECISION
+     * (`providerMetadata.routing.workforce`), the durable row every review leaves. It also
+     * enters the review's spend scope, which the ledger keeps only when the reservation is
+     * keyed by brain (a goal-keyed reservation is settled from its key, decision 0066 C2).
+     * Optional: a mission that was never delegated reviews exactly as before. It names an
+     * identity, never a model.
      */
-    private readonly reviewBrain?: (missionId: string) => Promise<string | null>,
+    private readonly reviewAssignment?: (
+      missionId: string,
+    ) => Promise<{ assignmentId: string; agentId: string } | null>,
   ) {}
 
   async review(input: ReviewInput): Promise<ReviewDecisionRecord> {
@@ -70,14 +75,21 @@ export class ReviewerServiceImpl implements ReviewerService {
      * `goalId` vient de la mission CHARGÉE, jamais d'une entrée d'appelant : on ne peut pas
      * l'omettre pour obtenir le budget souple.
      */
-    const brainId = (await this.reviewBrain?.(input.mission.id).catch(() => null)) ?? null;
+    const assignment = (await this.reviewAssignment?.(input.mission.id).catch(() => null)) ?? null;
     const scope = {
       ...(input.mission.goalId
         ? { goalId: input.mission.goalId }
         : { systemReviewMissionId: input.mission.id }),
-      ...(brainId ? { brainId } : {}),
+      ...(assignment ? { brainId: assignment.agentId } : {}),
     };
     const llmResult = await runWithAttribution(scope, () => this.llmReviewer.review(input));
+    const providerMetadata =
+      assignment && llmResult.providerMetadata
+        ? {
+            ...llmResult.providerMetadata,
+            routing: { ...(llmResult.providerMetadata?.routing ?? {}), workforce: assignment },
+          }
+        : llmResult.providerMetadata;
 
     // Construire la décision finale combinée
     const finalDecision: ReviewDecisionRecord = {
@@ -108,7 +120,7 @@ export class ReviewerServiceImpl implements ReviewerService {
         .filter((type) => idSchema.safeParse(type).success),
       findingRefs: input.findings.map((f) => f.check),
       policyRefs: ["llm-review"],
-      providerMetadata: llmResult.providerMetadata,
+      providerMetadata,
       confidence: llmResult.confidence,
       createdAt: new Date().toISOString(),
       humanOverridden: false,

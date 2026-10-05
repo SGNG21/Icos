@@ -77,6 +77,19 @@ export function reviewerError(code: string): Error {
   return new Error(`${ERROR_PREFIX}${code}`);
 }
 
+/**
+ * The JSON object a reviewer model wrapped in fences or prose. Smaller models (haiku on the
+ * proof fleet) answer "```json {…} ```" or "Voici la revue : {…}"; the strict parse then
+ * rejected EVERY review from them (`QUALITY_REVIEWER_INVALID_OUTPUT` ×5 → `review_unavailable`,
+ * and the mission never settled). Only the envelope is relaxed: the schema stays strict, and
+ * text with no object at all still fails closed.
+ */
+export function extractJsonObject(content: string): string {
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  return start >= 0 && end > start ? content.slice(start, end + 1) : content;
+}
+
 export class OmniRouteReviewer implements ReviewerPort {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -156,7 +169,7 @@ export class OmniRouteReviewer implements ReviewerPort {
 
       let candidate: unknown;
       try {
-        candidate = JSON.parse(content);
+        candidate = JSON.parse(extractJsonObject(content));
       } catch {
         throw reviewerError("INVALID_OUTPUT");
       }

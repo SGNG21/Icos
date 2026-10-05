@@ -12,7 +12,11 @@ import { ReviewerServiceImpl } from "./reviewer-service";
  * ledger carries `brain_id = brain-reviewer` for every review — the durable proof that the
  * reviewer brain is load-bearing. A mission that was never delegated reviews as before.
  */
-function service(reviewBrain?: (missionId: string) => Promise<string | null>) {
+function service(
+  reviewAssignment?: (
+    missionId: string,
+  ) => Promise<{ assignmentId: string; agentId: string } | null>,
+) {
   const seen: (Attribution | null)[] = [];
   const llm: ReviewerPort = {
     review: async () => {
@@ -29,7 +33,11 @@ function service(reviewBrain?: (missionId: string) => Promise<string | null>) {
   } as unknown as DeterministicReviewer;
   const saved: unknown[] = [];
   const repo = { save: async (d: unknown) => (saved.push(d), d) } as never;
-  return { impl: new ReviewerServiceImpl(llm, deterministic, repo, reviewBrain), seen, saved };
+  return {
+    impl: new ReviewerServiceImpl(llm, deterministic, repo, reviewAssignment),
+    seen,
+    saved,
+  };
 }
 
 const input = (goalId?: string) =>
@@ -44,10 +52,19 @@ const input = (goalId?: string) =>
   }) as unknown as ReviewInput;
 
 describe("reviewer brain attribution", () => {
-  it("attributes the review to the Reviewer brain Chief assigned, under the goal's budget", async () => {
-    const s = service(async (missionId) => (missionId === "m-1" ? "brain-reviewer" : null));
+  it("records the Reviewer brain Chief assigned ON THE DECISION, and in the review's scope", async () => {
+    const s = service(async (missionId) =>
+      missionId === "m-1" ? { assignmentId: "wfa-r", agentId: "brain-reviewer" } : null,
+    );
     await s.impl.review(input("g-1"));
     expect(s.seen[0]).toEqual({ goalId: "g-1", brainId: "brain-reviewer" });
+    expect(s.saved[0]).toMatchObject({
+      providerMetadata: {
+        provider: "p",
+        model: "m",
+        routing: { workforce: { assignmentId: "wfa-r", agentId: "brain-reviewer" } },
+      },
+    });
   });
 
   it("an undelegated mission, or a failing lookup, reviews exactly as before", async () => {

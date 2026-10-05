@@ -20,7 +20,9 @@ export class PostgresReviewerService implements ReviewerService {
   constructor(
     private readonly db: Database,
     llmReviewer: ReviewerPort,
-    reviewBrain?: (missionId: string) => Promise<string | null>,
+    reviewAssignment?: (
+      missionId: string,
+    ) => Promise<{ assignmentId: string; agentId: string } | null>,
   ) {
     const reviewDecisionRepository = new PostgresReviewDecisionRepository(db);
     const deterministicReviewer = new DeterministicReviewer();
@@ -28,7 +30,7 @@ export class PostgresReviewerService implements ReviewerService {
       llmReviewer,
       deterministicReviewer,
       reviewDecisionRepository,
-      reviewBrain,
+      reviewAssignment,
     );
   }
 

@@ -770,10 +770,8 @@ export async function buildPostgresContainer(
   const workforce = createWorkforceRuntime({
     store: createWorkforceStore({ kind: "postgres", db: handle.db }),
   });
-  const reviewer = new PostgresReviewerService(
-    handle.db,
-    llmReviewer,
-    async (missionId) => (await workforce.reviewAssignmentFor(missionId))?.agentId ?? null,
+  const reviewer = new PostgresReviewerService(handle.db, llmReviewer, (missionId) =>
+    workforce.reviewAssignmentFor(missionId),
   );
   const conversationService = new ConversationService(
     new PostgresConversationRepository(handle.db),
