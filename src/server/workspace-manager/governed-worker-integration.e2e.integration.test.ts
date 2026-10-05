@@ -19,6 +19,7 @@ import { WorkerExecutor } from "@/server/workers/execution/worker-executor";
 import { workerRegistryEntrySchema } from "@/core/contracts/worker-registry";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
+import { identities, type TestIdentity } from "@/test/test-identity";
 
 /*
  * DEFECTS 22 + 19, END TO END: a REAL external worker process writes into a GOVERNED
@@ -37,9 +38,42 @@ import type { TaskExecutionDispatcher } from "@/server/execution/ports";
  */
 
 const WORKER_ID = "77777777-7777-4777-8777-777777777777";
-const TASK_ID = "task-e2e-1";
-const MISSION_ID = "mission-e2e";
-const WORKFLOW_ID = "icos-task-task-e2e-1";
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-<taskId>` was therefore shared by every case in this file, by every rerun of
+ * it, and by every process running it at once: the first case of a fresh run passed, and
+ * from then on each one collided with the closed workflow its predecessor left behind.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * Registered FIRST, so the hooks below that seed from these ids see this case's values.
+ * Within a case every id is deterministic, so the business assertions stay exactly as
+ * exact as they were; a RETRIED case gets a new namespace instead of colliding with its
+ * own first run.
+ */
+const FILE_IDENTITIES = identities("gwe2e");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let TASK_ID: string;
+let MISSION_ID: string;
+let WORKFLOW_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  TASK_ID = ids.task("e2e-1");
+  MISSION_ID = ids.mission("e2e");
+  /* Via the PRODUCTION helper, so the test cannot assert a shape production does not use. */
+  WORKFLOW_ID = ids.workflow(TASK_ID, 1);
+});
 
 let fx: RepoFixture;
 let git: Git;
@@ -262,6 +296,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
 
     if (result.error) throw new Error(`coordination failed: ${result.error}`);
@@ -314,6 +363,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
     const headAfterIntegration = await target();
 
@@ -347,6 +411,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
     const head = await target();
     const current = await manager.get(execWs.workspaceId);
@@ -387,6 +466,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
 
     /*
@@ -418,6 +512,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
 
     expect(result.decision).toBe("REJECT");
@@ -456,6 +565,8 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
         missionId: MISSION_ID,
         prompt: "build the feature",
         workflowId: WORKFLOW_ID,
+        /* The in-process external executor, declared rather than inferred. */
+        executionClass: "INTERACTIVE_COMMAND",
       });
     };
     const before = await target();
@@ -495,6 +606,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
     expect(result.decision).toBe("ACCEPT");
     expect(await target()).not.toBe(before);
@@ -518,6 +644,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
 
     /*
@@ -560,6 +701,21 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
       missionId: MISSION_ID,
       prompt: "build the feature",
       workflowId: WORKFLOW_ID,
+      /*
+       * WHICH ORCHESTRATOR, declared. The router stopped inferring this from executor
+       * configuration (declaring an executor used to move mission work silently onto a
+       * non-durable path), so a dispatch that declares nothing is refused
+       * EXECUTION_CLASS_REQUIRED — and this suite declared nothing, so every case here
+       * failed before the worker was ever reached.
+       *
+       * INTERACTIVE_COMMAND, because what this suite proves is the IN-PROCESS external
+       * executor launching a real worker and the gate judging what it wrote. The mapping
+       * is total and has no fallback either way: `DURABLE_MISSION_TASK` means Temporal and
+       * nothing else, so declaring it here and still expecting the in-process executor
+       * would be asking for exactly the second durable executor the architecture forbids.
+       * Durable mission orchestration is proven against the real Temporal path, elsewhere.
+       */
+      executionClass: "INTERACTIVE_COMMAND",
     });
 
     expect(result.decision).toBe("ACCEPT");

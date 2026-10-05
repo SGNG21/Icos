@@ -24,6 +24,7 @@ import type { ReviewerPort } from "@/server/review/ports";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
 import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/external-worker-task-execution-dispatcher";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { identities, type TestIdentity } from "@/test/test-identity";
 import { CommandWorkerExecutor } from "@/server/workers/execution/command-worker-executor";
 import {
   createWorkerExecResolver,
@@ -55,9 +56,63 @@ import type { TaskExecutionDispatcher } from "@/server/execution/ports";
  */
 
 const DATABASE_URL = TEST_DATABASE_URL;
-const MISSION_ID = "chaos-mission";
-const MISSION_TASK_ID = "chaos-mt-1";
-const TASK_ID = "chaos-task-1";
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-<taskId>` was therefore shared by every case in this file, by every rerun of
+ * it, and by every process running it at once: the first case of a fresh run passed, and
+ * from then on each one collided with the closed workflow its predecessor left behind.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * Registered FIRST, so the hooks below that seed from these ids see this case's values.
+ * Within a case every id is deterministic, so the business assertions stay exactly as
+ * exact as they were; a RETRIED case gets a new namespace instead of colliding with its
+ * own first run.
+ */
+const FILE_IDENTITIES = identities("chaos");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+let MISSION_TASK_ID: string;
+let TASK_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  MISSION_TASK_ID = ids.missionTask("1");
+  TASK_ID = ids.task("1");
+});
+/**
+ * THE RUNNER'S OWN OWNERSHIP TOKEN.
+ *
+ * The execution lease fences one logical attempt to ONE runner: `acquireExecutionLease`
+ * answers true only for the holder, which is what stops two runners producing two results
+ * for one attempt. These cases granted the lease to a literal `"test-owner"` for sixty
+ * seconds and then invoked the external dispatcher, whose own token is different — so the
+ * dispatcher correctly declined to take the lease, returned without executing, and the
+ * attempt stayed `dispatched`. The fault being certified never happened; both cases were
+ * asserting against a worker that had never run.
+ *
+ * In production the ordering makes the question moot: the supervisor dispatches FIRST and
+ * marks the attempt dispatched afterwards, so nothing holds the lease when the runner
+ * reaches for it. These cases need the attempt already `dispatched` before the fault, so
+ * they name the runner that will execute it instead — one process marking its own attempt
+ * and then running it.
+ *
+ * The fencing property is untouched: a FOREIGN owner still cannot take a live lease, which
+ * is proven where it belongs, against the ledger itself.
+ */
+const RUNNER_OWNER = "chaos-runner";
+
 const WORKER_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WORKER_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CAPABILITY = "code-generation";
@@ -146,6 +201,8 @@ function restart() {
   });
 
   const dispatcher = new ExternalWorkerTaskExecutionDispatcher({
+    /* Named, so the attempt this runner marks dispatched is one it can still lease. */
+    owner: RUNNER_OWNER,
     executor,
     workers: store,
     dispatchAttempts: ledger,
@@ -188,7 +245,7 @@ function restart() {
       if (result.workflowId !== prepared.workflowId) {
         throw new Error("DISPATCH_ACKNOWLEDGEMENT_ID_MISMATCH");
       }
-      await ledger.markDispatched(prepared.id, { owner: "test-owner", leaseMs: 60_000 });
+      await ledger.markDispatched(prepared.id, { owner: RUNNER_OWNER, leaseMs: 60_000 });
     },
   });
 
@@ -303,7 +360,7 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       workerId: firstWorker,
       capability: CAPABILITY,
     });
-    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
+    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: RUNNER_OWNER, leaseMs: 60_000 });
 
     /* ---- 2. THE FAULT: the worker hangs and is really killed. ---- */
     await boot.dispatcher.dispatch({
@@ -474,7 +531,7 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       workerId: WORKER_A,
       capability: CAPABILITY,
     });
-    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: "test-owner", leaseMs: 60_000 });
+    await boot.ledger.markDispatched(attempt1.attempt.id, { owner: RUNNER_OWNER, leaseMs: 60_000 });
     await boot.dispatcher.dispatch({
       /* Mission work: a DAG task with review and settlement. */
       executionClass: "DURABLE_MISSION_TASK",

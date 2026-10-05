@@ -8,6 +8,7 @@ import { PostgresQualityControlRepository } from "./quality-control-repository";
 import { PostgresWorkerRegistryStore } from "./worker-registry-store";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { identities, type TestIdentity } from "@/test/test-identity";
 import type { ReviewDecisionRecord } from "@/core/contracts/review";
 
 /*
@@ -26,9 +27,41 @@ import type { ReviewDecisionRecord } from "@/core/contracts/review";
  */
 
 const DATABASE_URL = TEST_DATABASE_URL;
-const MISSION_ID = "qcc-mission";
-const MISSION_TASK_ID = "qcc-mt-1";
-const TASK_ID = "qcc-task-1";
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-<taskId>` was therefore shared by every case in this file, by every rerun of
+ * it, and by every process running it at once: the first case of a fresh run passed, and
+ * from then on each one collided with the closed workflow its predecessor left behind.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * Registered FIRST, so the hooks below that seed from these ids see this case's values.
+ * Within a case every id is deterministic, so the business assertions stay exactly as
+ * exact as they were; a RETRIED case gets a new namespace instead of colliding with its
+ * own first run.
+ */
+const FILE_IDENTITIES = identities("qcc");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+let MISSION_TASK_ID: string;
+let TASK_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  MISSION_TASK_ID = ids.missionTask("1");
+  TASK_ID = ids.task("1");
+});
 /** A second task, so the "own attempts do not compete" exemption cannot apply. */
 const OTHER_MISSION_TASK_ID = "qcc-mt-2";
 const OTHER_TASK_ID = "qcc-task-2";

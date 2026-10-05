@@ -15,13 +15,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { loadEnv } from "@/config/env";
 import { buildPostgresContainer, type Container } from "@/server/container";
 import { missionTasks, missions, tasks } from "@/server/database/schema";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { identities, type TestIdentity } from "@/test/test-identity";
 import {
   composeAutonomyRuntime,
   startProductionServices,
@@ -45,11 +46,44 @@ import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-rev
  */
 
 const DATABASE_URL = TEST_DATABASE_URL;
-const MISSION_ID = "d28-mission";
-const MISSION_TASK_ID = "d28-mt-1";
-const TASK_ID = "d28task1";
 const CAPABILITY = "code-generation";
-const WORKFLOW_ID = workflowIdForAttempt(TASK_ID, 1);
+
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-<taskId>` was therefore shared by every case in this file, by every rerun of
+ * it, and by every process running it at once: the first case of a fresh run passed, and
+ * from then on each one collided with the closed workflow its predecessor left behind.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * `beforeEach` takes a new namespace, so a RETRIED case gets one too instead of colliding
+ * with its own first run. Within a case every id is deterministic, so the business
+ * assertions stay exactly as exact as they were.
+ */
+const FILE_IDENTITIES = identities("d28");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+let MISSION_TASK_ID: string;
+let TASK_ID: string;
+let WORKFLOW_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  MISSION_TASK_ID = ids.missionTask("1");
+  TASK_ID = ids.task("1");
+  WORKFLOW_ID = ids.workflow(TASK_ID, 1);
+});
 const TARGET = "integration/phase-7";
 
 const WORKER_SCRIPT = `

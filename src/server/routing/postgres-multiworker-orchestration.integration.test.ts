@@ -14,10 +14,8 @@ import { PostgresDurableMemory } from "@/server/repositories/postgres/postgres-d
 import { CapabilityRouter } from "@/server/routing/capability-router";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
-import type {
-  TaskExecutionDispatchInput,
-  TaskExecutionDispatcher,
-} from "@/server/execution/ports";
+import { identities, type TestIdentity } from "@/test/test-identity";
+import type { TaskExecutionDispatchInput, TaskExecutionDispatcher } from "@/server/execution/ports";
 
 /*
  * M5.3 / M5.5 — DURABLE DISTRIBUTION AND CAPACITY against a real PostgreSQL.
@@ -79,7 +77,9 @@ function restart(clock = clockAt(NOW)) {
 }
 
 /** A fully eligible worker: active, supported, healthy, available, freshly probed. */
-function worker(over: Partial<WorkerRegistryEntry> & Pick<WorkerRegistryEntry, "id">): WorkerRegistryEntry {
+function worker(
+  over: Partial<WorkerRegistryEntry> & Pick<WorkerRegistryEntry, "id">,
+): WorkerRegistryEntry {
   return {
     workerKind: "agent",
     displayName: over.id,
@@ -104,7 +104,36 @@ function worker(over: Partial<WorkerRegistryEntry> & Pick<WorkerRegistryEntry, "
   };
 }
 
-const MISSION_ID = "m5-mission";
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it, so
+ * `icos-task-<taskId>` is a name shared by every case in this file, every rerun of it, and
+ * every process running it at once.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * Registered FIRST, so the hooks below that seed from these ids see this case's values.
+ * Within a case every id is deterministic, so the business assertions stay exactly as
+ * exact as they were; a RETRIED case gets a new namespace instead of colliding with its
+ * own first run.
+ */
+const FILE_IDENTITIES = identities("m5");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+});
 
 /**
  * Seeds one mission with `count` INDEPENDENT ready tasks.
@@ -176,7 +205,9 @@ describe("M5.3/M5.5 durable distribution and capacity on PostgreSQL", () => {
 
   beforeEach(async () => {
     await seed.db.execute(
-      sql.raw("TRUNCATE TABLE missions, tasks, workers, dispatch_attempts RESTART IDENTITY CASCADE"),
+      sql.raw(
+        "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts RESTART IDENTITY CASCADE",
+      ),
     );
   });
 
@@ -263,9 +294,7 @@ describe("M5.3/M5.5 durable distribution and capacity on PostgreSQL", () => {
       await a.supervisor.run(MISSION_ID);
 
       expect(await assignments(a.handle)).toHaveLength(0);
-      const states = await a.handle.db
-        .select({ status: missionTasks.status })
-        .from(missionTasks);
+      const states = await a.handle.db.select({ status: missionTasks.status }).from(missionTasks);
       expect(states.every((row) => row.status === "blocked")).toBe(true);
     });
 
@@ -408,9 +437,7 @@ describe("M5.3/M5.5 durable distribution and capacity on PostgreSQL", () => {
         }),
       ]);
 
-      const acquired = outcomes.filter(
-        (o) => o.status === "fulfilled" && o.value.acquired,
-      ).length;
+      const acquired = outcomes.filter((o) => o.status === "fulfilled" && o.value.acquired).length;
       const refused = outcomes.filter(
         (o) => o.status === "rejected" && o.reason instanceof WorkerCapacityExceededError,
       ).length;

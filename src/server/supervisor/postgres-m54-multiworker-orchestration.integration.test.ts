@@ -18,10 +18,8 @@ import { SupervisorService } from "@/server/supervisor/supervisor-service";
 import { recordTaskExecution } from "@/server/usecases/record-task-execution";
 import { recordMissionTaskExecution } from "@/server/usecases/record-mission-task-execution";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
-import type {
-  TaskExecutionDispatchInput,
-  TaskExecutionDispatcher,
-} from "@/server/execution/ports";
+import { identities, type TestIdentity } from "@/test/test-identity";
+import type { TaskExecutionDispatchInput, TaskExecutionDispatcher } from "@/server/execution/ports";
 
 /*
  * M5.4 — REAL MULTI-WORKER ORCHESTRATION against a real PostgreSQL.
@@ -48,15 +46,46 @@ const DATABASE_URL = TEST_DATABASE_URL;
 const W1 = "11111111-1111-4111-8111-111111111111";
 const W2 = "22222222-2222-4222-8222-222222222222";
 const CAPABILITY = "code-generation";
-const MISSION_ID = "m54-mission";
+
 const NOW = "2026-09-27T12:00:00.000Z";
 
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it, so
+ * `icos-task-<taskId>` is a name shared by every case in this file, every rerun of it, and
+ * every process running it at once.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * Registered FIRST, so the hooks below that seed from these ids see this case's values.
+ * Within a case every id is deterministic, so the business assertions stay exactly as
+ * exact as they were; a RETRIED case gets a new namespace instead of colliding with its
+ * own first run.
+ */
+const FILE_IDENTITIES = identities("m54");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
 /** Canonical task id / missionTask id per DAG node. */
-const NODE = {
-  A: { task: "m54-task-a", missionTask: "m54-mt-a" },
-  B: { task: "m54-task-b", missionTask: "m54-mt-b" },
-  C: { task: "m54-task-c", missionTask: "m54-mt-c" },
-} as const;
+let NODE: Record<"A" | "B" | "C", { task: string; missionTask: string }>;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  NODE = {
+    A: { task: ids.task("a"), missionTask: ids.missionTask("a") },
+    B: { task: ids.task("b"), missionTask: ids.missionTask("b") },
+    C: { task: ids.task("c"), missionTask: ids.missionTask("c") },
+  };
+});
 
 const handles: DatabaseHandle[] = [];
 

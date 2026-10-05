@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
 import { loadEnv } from "@/config/env";
@@ -16,6 +16,7 @@ import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { missionTasks, missions, tasks } from "@/server/database/schema";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { identities, type TestIdentity } from "@/test/test-identity";
 
 /*
  * CORE3 AUTONOMOUS ORCHESTRATION — the DEFAULT path, from the REAL container.
@@ -37,12 +38,45 @@ import { workflowIdForAttempt } from "@/server/execution/workflow-id";
  */
 
 const DATABASE_URL = TEST_DATABASE_URL;
-const MISSION_ID = "core3-mission";
-const MISSION_TASK_ID = "core3-mt-1";
-const TASK_ID = "core3task1";
 const WORKER_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const CAPABILITY = "code-generation";
-const WORKFLOW_ID = workflowIdForAttempt(TASK_ID, 1);
+
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each case built its own executor, so two cases sharing a task id could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-<taskId>` was therefore shared by every case in this file, by every rerun of
+ * it, and by every process running it at once: the first case of a fresh run passed, and
+ * from then on each one collided with the closed workflow its predecessor left behind.
+ *
+ * Nothing here cleans Temporal, deliberately: correctness must not depend on a cleanup
+ * step a crashed run never reaches. A fresh namespace per run makes leftover state
+ * irrelevant rather than merely unlikely.
+ *
+ * `beforeEach` takes a new namespace, so a RETRIED case gets one too instead of colliding
+ * with its own first run. Within a case every id is deterministic, so the business
+ * assertions stay exactly as exact as they were.
+ */
+const FILE_IDENTITIES = identities("core3");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+let MISSION_TASK_ID: string;
+let TASK_ID: string;
+let WORKFLOW_ID: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  MISSION_TASK_ID = ids.missionTask("1");
+  TASK_ID = ids.task("1");
+  WORKFLOW_ID = ids.workflow(TASK_ID, 1);
+});
 
 /* A REAL worker: writes inside its declared scope and commits. */
 const WORKER_SCRIPT = `
@@ -64,10 +98,14 @@ const containers: Container[] = [];
 const started: ProductionServices[] = [];
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-    cwd,
-    encoding: "utf8",
-  }).trim();
+  execFileSync(
+    "git",
+    ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args],
+    {
+      cwd,
+      encoding: "utf8",
+    },
+  ).trim();
 
 function makeRepo() {
   tmp = realpathSync(mkdtempSync(path.join(tmpdir(), "core3-cert-")));
@@ -449,7 +487,9 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     const c = await container();
     await seed(c);
     /* Planning forgot the scope: the task cannot be governed, so it must not run. */
-    await c.db!.execute(sql.raw(`UPDATE tasks SET allowed_file_scope = '[]'::jsonb WHERE id = '${TASK_ID}'`));
+    await c.db!.execute(
+      sql.raw(`UPDATE tasks SET allowed_file_scope = '[]'::jsonb WHERE id = '${TASK_ID}'`),
+    );
     const before = git(repo, "rev-parse", "integration/phase-7");
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
@@ -475,11 +515,19 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      * already holds its worktree and branch, never fork a second one.
      */
     const first = await coordinator.allocateWorkspace(
-      MISSION_ID, TASK_ID, WORKER_ID, "retry_a", WORKFLOW_ID,
+      MISSION_ID,
+      TASK_ID,
+      WORKER_ID,
+      "retry_a",
+      WORKFLOW_ID,
       { owns: ["src/core3/**"], shared: [], forbidden: [] },
     );
     const again = await coordinator.allocateWorkspace(
-      MISSION_ID, TASK_ID, WORKER_ID, "retry_a", WORKFLOW_ID,
+      MISSION_ID,
+      TASK_ID,
+      WORKER_ID,
+      "retry_a",
+      WORKFLOW_ID,
       { owns: ["src/core3/**"], shared: [], forbidden: [] },
     );
     expect(again.workspaceId).toBe(first.workspaceId);
@@ -493,7 +541,11 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      */
     await expect(
       coordinator.allocateWorkspace(
-        MISSION_ID, TASK_ID, WORKER_ID, "retry_b", workflowIdForAttempt(TASK_ID, 2),
+        MISSION_ID,
+        TASK_ID,
+        WORKER_ID,
+        "retry_b",
+        workflowIdForAttempt(TASK_ID, 2),
         { owns: ["src/core3/**"], shared: [], forbidden: [] },
       ),
     ).rejects.toThrow(/WORKFLOW_COLLISION/);
@@ -528,7 +580,10 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
       message: "REVIEW_REFUSED: an independent review asked for changes; correcting.",
     });
     await c.workspaceManager!.transition(
-      first!.workspaceId, "abandoned", first!.leaseOwner!, first!.fencingToken,
+      first!.workspaceId,
+      "abandoned",
+      first!.leaseOwner!,
+      first!.fencingToken,
     );
     await c.workspaceManager!.cleanup(first!.workspaceId, first!.leaseOwner!, first!.fencingToken);
 
@@ -570,7 +625,9 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     makeRepo();
     const c = await container();
     await seed(c);
-    await c.db!.execute(sql.raw(`UPDATE tasks SET risk_class = 'read_only' WHERE id = '${TASK_ID}'`));
+    await c.db!.execute(
+      sql.raw(`UPDATE tasks SET risk_class = 'read_only' WHERE id = '${TASK_ID}'`),
+    );
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
 
