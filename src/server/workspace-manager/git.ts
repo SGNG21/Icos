@@ -215,6 +215,23 @@ export class Git {
    * pas le garde-fou, et un CAS dit en plus ce qu'il attendait.
    */
   async setBranchToCommit(branch: string, commit: string, expectedOldCommit: string): Promise<void> {
+    /*
+     * REFUSE une branche MONTÉE dans un worktree. Déplacer une ref sous un worktree attaché
+     * désynchronise son index et son arbre de travail de HEAD, et tout `git status` ultérieur
+     * y devient faux — la même raison qui fait refuser `compareAndSwapBranch`.
+     *
+     * Un worktree gouverné est DÉTACHÉ, donc ce refus ne se déclenche jamais sur le chemin
+     * prévu : son HEAD est un SHA, qu'aucun déplacement de branche ne concerne. Le garde
+     * existe pour que, si quelque chose allouait un jour en attaché, le relais échoue FERMÉ
+     * au lieu de corrompre silencieusement l'arbre de ce worker.
+     */
+    const checkedOut = (await this.worktrees()).find((w) => w.branch === branch);
+    if (checkedOut) {
+      throw new WorkspaceError(
+        "BRANCH_CHECKED_OUT",
+        `${branch} est monté dans ${checkedOut.path} : nommer la ref désynchroniserait ce worktree`,
+      );
+    }
     await this.exec(["update-ref", `refs/heads/${branch}`, commit, expectedOldCommit]);
   }
 

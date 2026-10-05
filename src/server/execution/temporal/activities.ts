@@ -523,6 +523,17 @@ export async function runGovernedWorker(
       env: {
         HOME: home.path,
         /*
+         * AND ITS TEMPORARY DIRECTORY TOO. `TMPDIR` is on the child-environment allowlist, so
+         * without this the worker inherits the SERVER's — a path the sandbox never grants, so
+         * every temp write fails with « Operation not permitted ». git only complains
+         * (`xcrun_db`) and commits anyway, but any worker that genuinely needs a temp file
+         * would fail for a reason that reads like a bug in the worker.
+         *
+         * The answer is not to grant another path: the disposable HOME is already writable
+         * and already destroyed with the run, so pointing temp INTO it widens nothing.
+         */
+        TMPDIR: home.path,
+        /*
          * WHERE TO REPORT. Hermes is told through `--usage-file` in its declaration;
          * every other executor is told here, so "which program ran" and "how success is
          * reported" stay separate questions and the result contract is not the private

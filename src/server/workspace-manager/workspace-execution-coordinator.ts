@@ -983,8 +983,19 @@ export class WorkspaceExecutionCoordinator {
           // Lease expired - check if work was committed
           const dirty = await this.git.statusPorcelain(ws.worktreePath);
           if (dirty.length === 0) {
-            // Clean worktree - check if branch has commits beyond base
-            const changed = await this.git.changedFiles(ws.baseCommit, ws.branch);
+            /*
+             * COMMITTED WORK LIVES ON A DETACHED HEAD until ICOS names the branch, and on
+             * THIS path nobody has: the lease expired, which means the runner died before
+             * the result was ever collected. Asking the BRANCH whether work exists therefore
+             * answered "nothing" for a worker that had committed, and the work was abandoned
+             * instead of recovered — the orphan case is exactly where the branch is least
+             * likely to have been named.
+             *
+             * The worktree is the truth here, and it is present: `statusPorcelain` just read
+             * it clean on the line above.
+             */
+            const tip = await this.git.headCommit(ws.worktreePath).catch(() => null);
+            const changed = await this.git.changedFiles(ws.baseCommit, tip ?? ws.branch);
             if (changed.length > 0) {
               // Has committed work - transition to ready_for_integration
               await this.manager.transition(
