@@ -26,9 +26,7 @@ export interface RecordMissionTaskExecutionInput {
 }
 
 export interface MissionAutonomyWakeup {
-  wake(
-    missionId: string,
-  ): Promise<unknown>;
+  wake(missionId: string): Promise<unknown>;
 }
 
 export interface RecordMissionTaskExecutionDeps {
@@ -89,17 +87,12 @@ async function continueMission(
   missionId: string,
 ): Promise<void> {
   if (deps.autonomyWakeup) {
-    await deps.autonomyWakeup.wake(
-      missionId,
-    );
+    await deps.autonomyWakeup.wake(missionId);
     return;
   }
 
-  await deps.supervisor.run(
-    missionId,
-  );
+  await deps.supervisor.run(missionId);
 }
-
 
 /**
  * Applies the review gate between an execution result and MissionTask state.
@@ -248,6 +241,11 @@ export async function recordMissionTaskExecution(
         await deps.taskExecution.dispatch({
           taskId: input.taskId,
           workflowId,
+          /*
+           * Same attempt the ledger recorded above. A correction IS a new attempt, issued
+           * here by ICOS; the adapter must never derive one of its own.
+           */
+          attempt: prepared.attempt.attempt,
           prompt,
           workerKind: missionTask.workerKind ?? undefined,
           capability: missionTask.capability ?? undefined,

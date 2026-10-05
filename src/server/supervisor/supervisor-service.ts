@@ -50,7 +50,8 @@ function executionLeaseFor(attempt: { workflowId: string }): ExecutionLeaseGrant
   const configured = Number(loadEnv().ICOS_WORKER_EXECUTION_LEASE_MS);
   return {
     owner: attempt.workflowId,
-    leaseMs: Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
+    leaseMs:
+      Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EXECUTION_LEASE_MS,
   };
 }
 
@@ -343,6 +344,14 @@ export class SupervisorService {
             ?.title,
           prompt: attempt.prompt,
           workflowId: attempt.workflowId,
+          /*
+           * WHICH ATTEMPT this replay is replaying. The durable adapter needs it to prove
+           * that an execution already holding this workflow id is THIS attempt rather
+           * than a neighbouring one; without it a replay can only be refused, which is
+           * the correct but useless answer for the recovery path that exists precisely to
+           * stand on an execution that may already be running.
+           */
+          attempt: attempt.attempt,
           workerKind: attempt.workerKind,
           capability: attempt.capability,
           digitalosFacadePath,
@@ -605,6 +614,13 @@ export class SupervisorService {
             digitalosFacadePath,
             signal,
             workflowId: prepared.attempt.workflowId,
+            /*
+             * The attempt the ledger holds, carried through the coordinator to the durable
+             * adapter. This is the governed WRITER path, so it is the one that most needs
+             * it: a correction attempt reuses the task's identity and only the attempt
+             * number tells its execution apart from the one the reviewer refused.
+             */
+            attempt: prepared.attempt.attempt,
           };
 
           // Execute in workspace (this will dispatch and handle the workspace lifecycle)
@@ -690,6 +706,8 @@ export class SupervisorService {
             taskTitle: task.title,
             prompt,
             workflowId: attempt.workflowId,
+            /* The attempt the ledger just created — the one durable record of it. */
+            attempt: attempt.attempt,
             workerKind: routedWorkerKind,
             capability: task.capability || undefined,
             digitalosFacadePath,
