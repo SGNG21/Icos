@@ -14,7 +14,8 @@ describe("TemporalTaskExecutionDispatcher", () => {
     mockStart = vi.fn();
     mockClient = {
       workflow: { start: mockStart },
-      workflowService: {},
+      /* Models the production contract: a reachable server that reports its pollers. */
+      workflowService: { describeTaskQueue: vi.fn(async () => ({ pollers: [{ identity: "w1" }] })) },
       connection: {},
       loadedDataConverter: {},
       withDeadline: vi.fn(async (_deadline: number, start: () => Promise<unknown>) => start()),
@@ -151,5 +152,122 @@ describe("TemporalTaskExecutionDispatcher", () => {
     ).rejects.toThrow("TEMPORAL_DISPATCH_ABORTED");
     expect(mockStart).not.toHaveBeenCalled();
     expect(mockClient.withDeadline).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A DISPATCH NOBODY CAN CONSUME IS NOT A DISPATCH.
+ *
+ * Connecting to Temporal proves the server is up and says nothing about a worker. A
+ * workflow started on a queue with no poller succeeds, returns a workflowId and leaves
+ * the attempt recorded `dispatched` — and then nothing happens, for ever, with no error
+ * anywhere. An entire integration family sat exactly like that: `dispatched`, no result,
+ * no QC job, the reviewer never asked, and the only visible symptom was a missing review.
+ *
+ * So the queue's pollers are checked BEFORE anything durable is written.
+ */
+describe("durable dispatch fails closed when no worker is polling", () => {
+  const input = {
+    missionId: "m1",
+    taskId: "t1",
+    taskTitle: "T",
+    prompt: "do it",
+    executionClass: "DURABLE_MISSION_TASK",
+  } as never;
+
+  function dispatcherWith(pollers: unknown[] | Error, start = vi.fn()) {
+    const describeTaskQueue = vi.fn(async () => {
+      if (pollers instanceof Error) throw pollers;
+      return { pollers };
+    });
+    const client = {
+      workflow: { start },
+      workflowService: { describeTaskQueue },
+      withDeadline: vi.fn(async (_d: number, run: () => Promise<unknown>) => run()),
+      withAbortSignal: vi.fn(async (_s: AbortSignal, run: () => Promise<unknown>) => run()),
+    } as unknown as Client;
+    return {
+      describeTaskQueue,
+      start,
+      dispatcher: new TemporalTaskExecutionDispatcher(
+        "localhost:7233",
+        "icos-tasks",
+        "runIcosTask",
+        true,
+        client,
+        10_000,
+      ),
+    };
+  }
+
+  it("refuses, naming the queue, and starts no workflow", async () => {
+    const { dispatcher, start } = dispatcherWith([]);
+
+    await expect(dispatcher.dispatch(input)).rejects.toThrow("TEMPORAL_NO_CONSUMER");
+    await expect(dispatcher.dispatch(input)).rejects.toThrow("icos-tasks");
+    /* NO SILENT STRANDED TASK: nothing was enqueued, so nothing can sit dispatched. */
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("refuses when it cannot prove a consumer either way", async () => {
+    /* Being unable to answer is not a yes. */
+    const { dispatcher, start } = dispatcherWith(new Error("UNAVAILABLE"));
+
+    await expect(dispatcher.dispatch(input)).rejects.toThrow("TEMPORAL_CONSUMER_UNKNOWN");
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("dispatches normally once a worker is polling", async () => {
+    const start = vi.fn(async () => ({ workflowId: "icos-task-t1" }));
+    const { dispatcher } = dispatcherWith([{ identity: "worker-1" }], start);
+
+    await expect(dispatcher.dispatch(input)).resolves.toEqual({ workflowId: "icos-task-t1" });
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask again for every dispatch in a burst", async () => {
+    const start = vi.fn(async () => ({ workflowId: "icos-task-t1" }));
+    const { dispatcher, describeTaskQueue } = dispatcherWith([{ identity: "worker-1" }], start);
+
+    await dispatcher.dispatch(input);
+    await dispatcher.dispatch(input);
+    await dispatcher.dispatch(input);
+
+    expect(describeTaskQueue).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
+  it("never caches a refusal, so a worker coming back takes effect at once", async () => {
+    let pollers: unknown[] = [];
+    const start = vi.fn(async () => ({ workflowId: "icos-task-t1" }));
+    const client = {
+      workflow: { start },
+      workflowService: { describeTaskQueue: vi.fn(async () => ({ pollers })) },
+      withDeadline: vi.fn(async (_d: number, run: () => Promise<unknown>) => run()),
+      withAbortSignal: vi.fn(async (_s: AbortSignal, run: () => Promise<unknown>) => run()),
+    } as unknown as Client;
+    const dispatcher = new TemporalTaskExecutionDispatcher(
+      "localhost:7233",
+      "icos-tasks",
+      "runIcosTask",
+      true,
+      client,
+      10_000,
+    );
+
+    await expect(dispatcher.dispatch(input)).rejects.toThrow("TEMPORAL_NO_CONSUMER");
+    pollers = [{ identity: "worker-1" }];
+    await expect(dispatcher.dispatch(input)).resolves.toEqual({ workflowId: "icos-task-t1" });
+  });
+
+  it("does not disguise the refusal as an uncertain dispatch", async () => {
+    /*
+     * `dispatch` turns every start failure into TEMPORAL_DISPATCH_UNCERTAIN, which
+     * recovery treats as "it may have landed, go and check". A refusal is certain: it
+     * must not enter that path or recovery would hunt for a workflow that never existed.
+     */
+    const { dispatcher } = dispatcherWith([]);
+
+    await expect(dispatcher.dispatch(input)).rejects.not.toThrow("TEMPORAL_DISPATCH_UNCERTAIN");
   });
 });
