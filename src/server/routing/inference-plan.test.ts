@@ -493,12 +493,18 @@ describe("inference plan — diversity and independence", () => {
         id: "22222222-2222-4222-8222-222222222222",
         metadata: { model: "oc/nemotron-3-ultra-free", provider: "oc" },
       }),
+      /*
+       * A third model, for the aggregation. Without it this test passed only because the
+       * aggregator was a second route to a member's own model — the independence default the
+       * second falsifier closed.
+       */
+      candidate("opus"),
     ];
     const p = expectPlan(
       plan(workers, await base(workers), {
         topology: "ensemble",
         governed: NO_CEILINGS,
-        width: 4,
+        width: 2,
       }),
     );
     const families = p.stages[0]!.candidates.map((c) => c.family);
@@ -1273,5 +1279,83 @@ describe("inference plan — shape coherence", () => {
     );
     expect(p.stages[0]!.advanceWhen).toContain("REVIEW_REQUEST_CHANGES");
     expect(p.terminateWhen).toContain("REVIEW_APPROVED");
+  });
+});
+
+describe("inference plan — second falsifier: defaults and edge cases", () => {
+  /* Writers [sonnet, nemotron-3-ultra-550b]; the only remaining judge is a second route to n550. */
+  const twoRoutesPlusOne = () => [candidate("sonnet"), candidate("n550"), candidate("n550alt")];
+
+  it("a mission-specific review defaults to REQUIRED independence, like the reviewer topology", async () => {
+    const workers = twoRoutesPlusOne();
+    const r = expectRefusal(
+      plan(workers, await base(workers), {
+        topology: "mission-specific",
+        governed: NO_CEILINGS,
+        stages: [
+          { role: "writer", purpose: "produce" },
+          { role: "reviewer", purpose: "review" },
+        ],
+      }),
+    );
+    expect(r.purpose).toBe("review");
+    expect(r.refused.flatMap((x) => x.because)).toContain("NOT_INDEPENDENT_OF_WRITER");
+  });
+
+  it("the ensemble aggregation is independent of every member by default", async () => {
+    const workers = twoRoutesPlusOne();
+    const r = expectRefusal(
+      plan(workers, await base(workers), { topology: "ensemble", governed: NO_CEILINGS }),
+    );
+    expect(r.purpose).toBe("aggregate");
+    expect(r.refused.flatMap((x) => x.because)).toContain("NOT_INDEPENDENT_OF_WRITER");
+
+    const fleet = [candidate("sonnet"), candidate("n550"), candidate("sol"), candidate("opus")];
+    const p = expectPlan(
+      plan(fleet, await base(fleet), { topology: "ensemble", governed: NO_CEILINGS }),
+    );
+    expect(p.independence).toBe("required");
+    const members = p.stages[0]!.candidates.map((c) => c.model!);
+    const judge = p.stages[1]!.candidates[0]!.model!;
+    expect(members.some((m) => sameEffectiveModel(m, judge))).toBe(false);
+  });
+
+  it("a plan with no judging stage keeps the router's preference", async () => {
+    const workers = [candidate("sonnet"), candidate("n120")];
+    const p = expectPlan(
+      plan(workers, await base(workers), { topology: "fallback", governed: NO_CEILINGS }),
+    );
+    expect(p.independence).toBe("preferred");
+  });
+
+  it("a fractional token ceiling is floored, so a KNOWN price still meets the money ceiling", async () => {
+    const workers = [candidate("n120")];
+    const prices: PriceRegistry = [
+      {
+        provider: "nvidia",
+        modelId: "nvidia/nemotron-3-super-120b",
+        currency: "EUR",
+        promptMicrosPerMillion: 3 * MICROS_PER_UNIT,
+        completionMicrosPerMillion: 3 * MICROS_PER_UNIT,
+        provenance: "fixture de test, pas un tarif réel",
+        effectiveAt: "2026-10-01T00:00:00.000Z",
+        staleAfter: "2026-12-01T00:00:00.000Z",
+      },
+    ];
+    const r = expectRefusal(
+      plan(
+        workers,
+        await base(workers),
+        { topology: "single", governed: { tokens: 1_000.5, moneyMicros: 10 } },
+        prices,
+      ),
+    );
+    expect(r.ceilings.tokens).toBe(1_000);
+    expect(r.refused[0]!.because).toContain("MONEY_CEILING_EXCEEDED");
+  });
+
+  it("a token ceiling below one whole token is no ceiling, on either side", () => {
+    expect(effectiveCeilings({ tokens: 0.5 }).ceilings.tokens).toBeUndefined();
+    expect(effectiveCeilings({ tokens: 100 }, { tokens: 99.9 }).ceilings.tokens).toBe(99);
   });
 });

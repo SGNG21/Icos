@@ -171,7 +171,10 @@ export interface InferencePlanRequest {
   /**
    * `required`: a judge sharing the writer's effective model is a refusal, not a preference.
    * `preferred`: decision 0054's existing behaviour (avoided while anything else qualifies).
-   * Defaults to `required` for `reviewer` and `critique`, which exist to be independent.
+   * Defaults to `required` whenever the plan has a JUDGING stage (review, critique, aggregate) —
+   * whatever topology declared it. It keyed on the topology name, so a `mission-specific` review
+   * and the `ensemble` aggregation (documented as "independent") defaulted to `preferred`, and a
+   * second route to a writer's own model was seated as their judge.
    */
   independence?: "required" | "preferred";
   /**
@@ -353,9 +356,18 @@ const CEILING_KEYS = [
  * where the authority set none gets its own (tighter) one. An enforcement flag takes the OR: a
  * caller can turn fail-closed ON, never off.
  */
-/** A numeric ceiling is usable only if it is a positive, finite number. Anything else is absent. */
-function usable(value: number | boolean | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+/**
+ * A numeric ceiling is usable only if it is a positive, finite number. Anything else is absent.
+ *
+ * A TOKEN ceiling is a count, so it is floored to a whole number — a narrowing, never a widening.
+ * Measured: `tokens: 1000.5` made the worst-case cost NOT_REPRESENTABLE for a candidate whose
+ * price IS known, so a money ceiling of 10 micros admitted a ~3 000-micro worst case: the money
+ * ceiling silently gated nothing. A ceiling that floors below one token is no ceiling.
+ */
+function usable(value: number | boolean | undefined, whole = false): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const v = whole ? Math.floor(value) : value;
+  return v > 0 ? v : undefined;
 }
 
 export function effectiveCeilings(
@@ -381,8 +393,8 @@ export function effectiveCeilings(
      * i.e. "no ceiling at all" on reload. Zero and negatives were accepted as narrowings too.
      * Both sides are validated, and an unusable value is DISCARDED rather than compared.
      */
-    const g = usable(governed[key]);
-    const r = usable(requested[key]);
+    const g = usable(governed[key], key === "tokens");
+    const r = usable(requested[key], key === "tokens");
     if (g === undefined && r === undefined) {
       sources[key] = "unset";
       continue;
@@ -736,11 +748,11 @@ export function planInference(
   const plannedAt = base.compute.now;
   const now = new Date(plannedAt);
   const { ceilings, sources } = effectiveCeilings(request.governed, request.requested);
+  const shape = shapeOf(request);
   const independence =
     request.independence ??
-    (request.topology === "reviewer" || request.topology === "critique" ? "required" : "preferred");
+    (shape.stages.some((s) => JUDGE_PURPOSES.has(s.purpose)) ? "required" : "preferred");
   const diversity = request.diversity ?? (request.topology === "ensemble" ? "distinct-model" : "none");
-  const shape = shapeOf(request);
   const byId = new Map(pool.map((w) => [w.id, w] as const));
 
   /*

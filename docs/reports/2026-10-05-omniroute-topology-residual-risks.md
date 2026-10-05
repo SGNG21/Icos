@@ -282,6 +282,33 @@ module would be exactly the cross-lane debt this freeze exists to avoid.
 
 ---
 
+## Second falsifier (defaults and edge cases) — lane freeze
+
+Run against `3ca0504`, narrow scope: request defaults and ceiling edge values. Six probes; two
+findings, both internal to this lane and fixed in the lane, each with a regression test
+(`inference plan — second falsifier: defaults and edge cases`).
+
+1. **Independence default keyed on the topology name, not on the shape.** `mission-specific`
+   with a `review` stage and `ensemble`'s `aggregate` stage (documented as "independent")
+   defaulted to `independence: "preferred"`; measured, `oc/nemotron-3-ultra-free` was seated to
+   judge work whose writer candidates included `nvidia/nemotron-3-ultra-550b`. Fix: the default is
+   `required` whenever the plan has any judging stage. A caller may still pass `preferred`.
+2. **A fractional token ceiling disarmed a money ceiling.** `tokens: 1000.5` made the worst-case
+   cost `NOT_REPRESENTABLE` for a candidate whose price IS known, so `moneyMicros: 10` admitted a
+   ~3 000-micro worst case. Fix: a token ceiling is floored to a whole count (narrowing only);
+   below one token it is no ceiling.
+
+Probes that held: an unreadable clock with money enforced refuses (`UNUSABLE_CLOCK`); an ensemble
+with `diversity: "none"` over two routes to one model cannot seat an aggregator and refuses;
+repeated writer stages in `mission-specific` are coherent.
+
+Noted, not changed: a known price whose worst case overflows a safe integer is "unprovable", so it
+is gated only under `moneyEnforced` — consistent with the documented "a money ceiling without
+enforcement is a preference". Both lane files were already non-conformant to Prettier before
+this pass; reformatting them is left out of the freeze to keep the diff reviewable.
+
+---
+
 ## Summary
 
 | # | Risk | Classification | Future owner | Blocks `moneyEnforced`? |
