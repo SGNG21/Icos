@@ -99,7 +99,7 @@ describe("cognition boundary", () => {
     expect(
       OmniRouteCognitionEngine.fromEnv({
         OMNIROUTE_BASE_URL: "http://x",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toBeInstanceOf(NotConnectedCognitionEngine);
     const out = await new NotConnectedCognitionEngine().think();
     expect(out.result).toMatchObject({ kind: "ANSWER_ONLY" });
@@ -205,6 +205,59 @@ describe("system prompt: no static capability claims", () => {
     // The precise, true statement replaces it.
     expect(prompt).toContain("tu n'exécutes rien directement");
     expect(prompt).toContain("tu PROPOSES");
+describe("workload routing: the model is chosen per turn, before the call", () => {
+  const requestedModel = async (
+    engine: OmniRouteCognitionEngine,
+    workload?: "VOICE" | "CONVERSATION_FAST" | "CONVERSATION_DEEP",
+  ) => {
+    let body = "";
+    const fake = (async (_url: string, init: RequestInit) => {
+      body = String(init.body);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const routed = new OmniRouteCognitionEngine(
+      "http://o.test",
+      "k",
+      engine.modelFor(workload),
+      fake,
+    );
+    await routed.think({ ...input, workload }, new AbortController().signal);
+    return (JSON.parse(body) as { model: string }).model;
+  };
+
+  it("a class with an override gets its model; the others get the default", async () => {
+    const engine = new OmniRouteCognitionEngine("http://o.test", "k", {
+      default: "deep",
+      VOICE: "fast-voice",
+    });
+    expect(await requestedModel(engine, "VOICE")).toBe("fast-voice");
+    expect(await requestedModel(engine, "CONVERSATION_DEEP")).toBe("deep");
+    expect(await requestedModel(engine)).toBe("deep");
+    expect(engine.label).toBe("omniroute:deep (voice=fast-voice)");
+  });
+
+  it("fromEnv reads the per-class overrides and stays NOT_CONNECTED without a default", () => {
+    expect(
+      OmniRouteCognitionEngine.fromEnv({
+        OMNIROUTE_BASE_URL: "http://o",
+        OMNIROUTE_API_KEY: "k",
+        ICOS_COGNITIVE_MODEL_FAST: "f",
+      }).label,
+    ).toBe("not_connected");
+    const engine = OmniRouteCognitionEngine.fromEnv({
+      OMNIROUTE_BASE_URL: "http://o",
+      OMNIROUTE_API_KEY: "k",
+      ICOS_COGNITIVE_MODEL: "d",
+      ICOS_COGNITIVE_MODEL_FAST: "f",
+    }) as OmniRouteCognitionEngine;
+    expect(engine.modelFor("CONVERSATION_FAST")).toBe("f");
+    expect(engine.modelFor("VOICE")).toBe("d");
+  });
+});
+
   });
 
   it("states that an approved mission then runs durably without a human", async () => {

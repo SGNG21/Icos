@@ -96,9 +96,16 @@ export const submitTurnSchema = z
       .min(8)
       .max(128)
       .regex(/^[A-Za-z0-9._:-]+$/),
+    /**
+     * Where the turn came in. Set by the TRANSPORT (the voice adapter says `voice`), never by
+     * the model: it selects the conversational workload class (a spoken reply must be fast and
+     * short) and is recorded nowhere else.
+     */
+    channel: z.enum(["text", "voice"]).default("text"),
   })
   .strict();
-export type SubmitTurnInput = z.infer<typeof submitTurnSchema>;
+/** Input shape: `channel` is optional for callers (the schema defaults it to `text`). */
+export type SubmitTurnInput = z.input<typeof submitTurnSchema>;
 
 export interface Turn {
   readonly id: string;

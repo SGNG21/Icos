@@ -16,6 +16,7 @@ import { rememberSchema } from "@/core/cognitive/contracts";
 import { isScopeChange, type ContextResolution } from "@/core/cognitive/client-resolution";
 import { maxSensitivityFor } from "@/core/cognitive/context-selection";
 import { governOutcome } from "@/core/cognitive/turn-policy";
+import { classifyWorkload } from "@/core/cognitive/workload";
 import { runWithAttribution } from "@/server/budget/attribution-context";
 import type { z } from "zod";
 
@@ -146,7 +147,7 @@ export class CognitiveRuntime {
       return { ...(await this.turnOutcome(conversationId, accepted.turn)), replayed: true };
     }
     return {
-      ...(await this.process(actor, accepted.conversation, accepted.turn)),
+      ...(await this.process(actor, accepted.conversation, accepted.turn, input.channel)),
       replayed: false,
     };
   }
@@ -168,7 +169,7 @@ export class CognitiveRuntime {
       const id = accepted.turn.id;
       this.background.set(
         id,
-        this.process(actor, accepted.conversation, accepted.turn)
+        this.process(actor, accepted.conversation, accepted.turn, input.channel)
           .catch(() => undefined) // failures are durable (turn.failed), never thrown here
           .finally(() => this.background.delete(id)),
       );
@@ -197,6 +198,7 @@ export class CognitiveRuntime {
     actor: CognitiveActor,
     conversation: Conversation,
     begun: Turn,
+    channel: SubmitTurnInput["channel"] = "text",
   ): Promise<Omit<TurnResult, "replayed">> {
     const { conversations } = this.deps;
     const conversationId = conversation.id;
@@ -270,12 +272,16 @@ export class CognitiveRuntime {
        * Dès que la parole devient une demande de TRAVAIL, un Goal est créé et tout ce qui
        * suit (planification, tâches, workers, relectures) passe sur le budget du goal.
        */
+      const userText = textOf(turn);
       const thought = await runWithAttribution({ conversationId }, () =>
         this.deps.engine.think(
           {
-            userText: textOf(turn),
+            userText,
             context: renderContext(snapshot),
             conversationTitle: conversation.title,
+            // Decided before the model runs, from the transport and the text — never from
+            // the intent the model will produce, which does not exist yet.
+            workload: classifyWorkload({ text: userText, channel }),
           },
           abort.signal,
         ),

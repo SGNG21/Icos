@@ -50,6 +50,9 @@ export class CognitiveTurnStream {
     const accepted = await this.runtime.acceptTurn(this.actor, turn.conversationId, {
       text: turn.text,
       idempotencyKey: turn.clientTurnId,
+      // The transport says it is spoken: the runtime routes the turn to the VOICE workload
+      // (decision 0067, item 9) — same cognitive path, same memory, a faster model.
+      channel: "voice",
     });
     const turnId = accepted.turn.id;
     const onAbort = () => {

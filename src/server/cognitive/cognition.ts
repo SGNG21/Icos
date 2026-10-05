@@ -3,6 +3,12 @@ import { cognitionOutputSchema, type CognitionOutput } from "@/core/cognitive/co
 /**
  * Model-independent cognition boundary (decision 0056). An engine turns (context, user
  * text) into a validated CognitionOutput. It has no access to any store or tool: it can
+import {
+  modelFor,
+  modelRoutesFromEnv,
+  type ModelRoutes,
+  type WorkloadClass,
+} from "@/core/cognitive/workload";
  * only PROPOSE; the runtime governs what happens next. Engines are replaceable compute.
  */
 export interface CognitionInput {
@@ -13,6 +19,8 @@ export interface CognitionInput {
 
 export interface CognitionEngine {
   /** Compute label recorded in provenance (never an identity or authority). */
+  /** Classified by the runtime before the call; absent ⇒ the default model. */
+  readonly workload?: WorkloadClass;
   readonly label: string;
   think(input: CognitionInput, signal: AbortSignal): Promise<CognitionOutput>;
 }
@@ -125,10 +133,21 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
-    private readonly model: string,
+    model: string | ModelRoutes,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
-    this.label = `omniroute:${model}`;
+    this.routes = typeof model === "string" ? { default: model } : model;
+    // The label names the whole routing table: the one model, or the default plus overrides.
+    const overrides = (["CONVERSATION_FAST", "CONVERSATION_DEEP", "VOICE"] as const)
+      .filter((k) => this.routes[k] && this.routes[k] !== this.routes.default)
+      .map((k) => `${k.toLowerCase()}=${this.routes[k]}`);
+    this.label = `omniroute:${this.routes.default}${overrides.length ? ` (${overrides.join(",")})` : ""}`;
+  }
+
+  /** The model a workload class resolves to. Exposed so routing is testable without a call. */
+  modelFor(workload: WorkloadClass | undefined): string {
+    return workload ? modelFor(this.routes, workload) : this.routes.default;
+  private readonly routes: ModelRoutes;
   }
 
   /**
@@ -137,12 +156,15 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
    * journal, sans réservation et sans borne de sortie. La composition lui passe
    * `spend.conversation`, qui plafonne PAR CONVERSATION et ne touche à aucun budget de goal.
    */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env, fetchImpl?: typeof fetch): CognitionEngine {
+  static fromEnv(
+    env: Readonly<Record<string, string | undefined>> = process.env,
+    fetchImpl?: typeof fetch,
+  ): CognitionEngine {
     const base = env.OMNIROUTE_BASE_URL;
     const key = env.OMNIROUTE_API_KEY;
-    const model = env.ICOS_COGNITIVE_MODEL ?? env.ICOS_CEO_MODEL;
-    if (!base || !key || !model) return new NotConnectedCognitionEngine();
-    return new OmniRouteCognitionEngine(base.replace(/\/+$/, ""), key, model, fetchImpl ?? fetch);
+    const routes = modelRoutesFromEnv(env);
+    if (!base || !key || !routes) return new NotConnectedCognitionEngine();
+    return new OmniRouteCognitionEngine(base.replace(/\/+$/, ""), key, routes, fetchImpl ?? fetch);
   }
 
   async think(input: CognitionInput, signal: AbortSignal): Promise<CognitionOutput> {
@@ -150,7 +172,7 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify({
-        model: this.model,
+        model: this.modelFor(input.workload),
         temperature: 0.1,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
