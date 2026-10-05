@@ -107,6 +107,7 @@ describe("AutonomousMissionRunner replanning recovery", () => {
     };
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         tasks = [{ ...tasks[0], status: "queued" }];
       }),
@@ -183,6 +184,7 @@ describe("AutonomousMissionRunner replanning recovery", () => {
     };
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn(),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new AutonomousMissionRunner(
@@ -225,6 +227,7 @@ describe("AutonomousMissionRunner replanning recovery", () => {
     const planner: AutonomousMissionPlanner = { plan: vi.fn() };
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn(),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn(),
     };
     const runner = new AutonomousMissionRunner(

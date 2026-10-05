@@ -67,7 +67,7 @@ function harness(seed: ImprovementCandidate[] = []) {
     ignite: {
       missions,
       runtimeRepository,
-      supervisor: { run: vi.fn(async () => undefined), reconcilePreparedDispatches: vi.fn(async () => undefined) } as never,
+      supervisor: { run: vi.fn(async () => undefined), reconcilePreparedDispatches: vi.fn(async () => undefined), settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })) } as never,
       planner: { plan } as never,
     },
   });
@@ -157,7 +157,7 @@ describe("DEFECT 25 LINK 1 — self-development chain owner", () => {
       ignite: {
         missions: h.missions,
         runtimeRepository: h.runtimeRepository,
-        supervisor: { run: vi.fn(async () => undefined), reconcilePreparedDispatches: vi.fn(async () => undefined) } as never,
+        supervisor: { run: vi.fn(async () => undefined), reconcilePreparedDispatches: vi.fn(async () => undefined), settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })) } as never,
         planner: { plan: h.plan } as never,
       },
     });

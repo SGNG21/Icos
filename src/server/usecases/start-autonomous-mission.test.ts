@@ -107,6 +107,7 @@ function deps(
   const supervisor: AutonomousSupervisor = {
     run: vi.fn().mockRejectedValue(new Error("SUPERVISOR_MUST_NOT_RUN_IN_THIS_TEST")),
     reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+    settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
   };
 
   return {

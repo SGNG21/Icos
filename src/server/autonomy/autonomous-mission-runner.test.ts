@@ -121,6 +121,9 @@ describe(
 
         const supervisor:
           AutonomousSupervisor = {
+            settleIfComplete: vi.fn(
+              async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" }),
+            ),
             reconcilePreparedDispatches:
               vi.fn().mockResolvedValue(
                 undefined,
@@ -203,6 +206,9 @@ describe(
 
         const supervisor:
           AutonomousSupervisor = {
+            settleIfComplete: vi.fn(
+              async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" }),
+            ),
             reconcilePreparedDispatches:
               vi.fn().mockResolvedValue(
                 undefined,
@@ -281,6 +287,9 @@ describe(
 
         const supervisor:
           AutonomousSupervisor = {
+            settleIfComplete: vi.fn(
+              async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" }),
+            ),
             reconcilePreparedDispatches:
               vi.fn().mockResolvedValue(
                 undefined,
@@ -341,6 +350,9 @@ describe(
 
         const supervisor:
           AutonomousSupervisor = {
+            settleIfComplete: vi.fn(
+              async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" }),
+            ),
             reconcilePreparedDispatches:
               vi.fn().mockResolvedValue(
                 undefined,
@@ -409,6 +421,9 @@ describe(
 
         const supervisor:
           AutonomousSupervisor = {
+            settleIfComplete: vi.fn(
+              async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" }),
+            ),
             reconcilePreparedDispatches:
               vi.fn().mockResolvedValue(
                 undefined,

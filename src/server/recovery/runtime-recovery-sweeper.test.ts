@@ -51,7 +51,7 @@ function actions(overrides: Partial<RuntimeRecoveryActions> = {}): RuntimeRecove
 const probe = (status: WorkflowStatus): WorkflowProbe => ({ status: async () => status });
 const waiting = (at = 1): WaitingSettledCandidate => ({
   missionId: "m1",
-  runtimeUpdatedAt: new Date(at),
+  settledSince: new Date(at),
 });
 
 function make(

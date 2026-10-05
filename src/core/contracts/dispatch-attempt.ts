@@ -271,4 +271,19 @@ export interface DispatchAttemptRepository {
    * after a restart.
    */
   listActiveWorkerAssignments(): Promise<string[]>;
+
+  /**
+   * How many attempts for this mission are still `prepared` or `dispatched`.
+   *
+   * THE evidence that no execution is still in flight, used by mission settlement. A task
+   * can read `succeeded` while the ledger still carries a live intent for it, and a
+   * durable Temporal execution IS such an intent, so the task statuses alone cannot
+   * answer the question.
+   *
+   * Deliberately a first-class method rather than something a caller derives from a
+   * wider list: the guard that preceded it called `listByMissionId?.()`, which does not
+   * exist on this repository, so optional chaining returned `undefined` and the check
+   * passed without ever asking the database.
+   */
+  countActiveByMissionId(missionId: string): Promise<number>;
 }

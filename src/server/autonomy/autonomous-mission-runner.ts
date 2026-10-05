@@ -13,6 +13,7 @@ import type {
 
 import { randomUUID } from "node:crypto";
 import { runWithAttribution } from "@/server/budget/attribution-context";
+import type { MissionSettlement } from "@/core/mission/settlement";
 
 export interface AutonomousMissionPlanner {
   plan(input: {
@@ -27,6 +28,16 @@ export interface AutonomousSupervisor {
   run(missionId: string, signal?: AbortSignal): Promise<unknown>;
 
   reconcilePreparedDispatches(missionId?: string, signal?: AbortSignal): Promise<void>;
+
+  /**
+   * Settles the mission if, and only if, all of its work is genuinely over. Read-only
+   * until it decides, which is what lets the runner ask BEFORE spending its budget.
+   *
+   * REQUIRED, not optional: an optional seam here would be probed with `?.()` and answer
+   * `undefined` on every composition that forgot it, which is precisely how a mission
+   * stays `draft` with nothing left to run.
+   */
+  settleIfComplete(missionId: string): Promise<MissionSettlement>;
 }
 
 export interface AutonomousMissionRunnerOptions {
@@ -224,6 +235,33 @@ export class AutonomousMissionRunner {
         await leaseRenewal.guard(() => this.saveRuntime(runtime, ownerToken));
 
         leaseRenewal.assertOwned();
+
+        /*
+         * IS IT ALREADY FINISHED? Asked before any budget is consulted.
+         *
+         * A mission whose work is all terminal needs no runtime, no cycles and no time;
+         * it needs to be settled. The budget guards below used to come first, and
+         * because `startedAt` is never reset they returned on EVERY later wake-up once
+         * an hour had passed — so the settlement at the end of `supervisor.run()` became
+         * unreachable and five live missions sat at `draft` with every task long since
+         * succeeded or failed, still holding their workforce assignments.
+         *
+         * Budgets bound NEW work. They must not bound finishing.
+         */
+        const settlement = await leaseRenewal.guard(() =>
+          this.supervisor.settleIfComplete(missionId),
+        );
+
+        if (settlement.settled) {
+          return await leaseRenewal.guard(() =>
+            this.finish(
+              runtime,
+              settlement.status,
+              `MISSION_SETTLED:${settlement.reason}`,
+              ownerToken,
+            ),
+          );
+        }
 
         if (heartbeat.getTime() - runtime.startedAt.getTime() >= runtime.maxRuntimeMs) {
           return await leaseRenewal.guard(() =>

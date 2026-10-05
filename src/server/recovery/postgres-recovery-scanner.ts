@@ -10,6 +10,16 @@ import type { Database } from "@/server/database/client";
 
 const TERMINAL_MISSION = sql`('succeeded','failed','blocked','cancelled')`;
 const ACTIVE_TASK = sql`('queued','running','review_pending','awaiting_approval')`;
+const ACTIVE_ATTEMPT = sql`('prepared','dispatched')`;
+
+/**
+ * When this mission's work last moved. Falls back to the runtime's start so a mission
+ * that never planned a task still ages, instead of being excluded for ever by a null.
+ */
+const SETTLED_SINCE = sql`coalesce(
+        (select max(t.updated_at) from mission_tasks t where t.mission_id = r.mission_id),
+        r.started_at
+      )`;
 
 function positiveInt(value: number, code: string): number {
   if (!Number.isInteger(value) || value < 0) throw new Error(code);
@@ -45,36 +55,53 @@ export class PostgresRecoveryScanner implements RecoveryScanner {
     limit,
     olderThanMs,
   }: RecoveryScanOptions): Promise<WaitingSettledCandidate[]> {
+    const grace = sql`(${positiveInt(olderThanMs, "RECOVERY_INVALID_AGE")} * interval '1 millisecond')`;
     const rows = await this.db.execute(sql`
-      select r.mission_id, r.updated_at
+      select r.mission_id, ${SETTLED_SINCE} as settled_since
       from autonomous_mission_runtime r
       join missions m on m.id = r.mission_id
       /*
-       * NOT just 'waiting'. Keyed on the runtime state alone, this missed the case that
-       * actually leaks: a runtime that ESCALATED or FAILED while the mission row was
-       * still draft and no task was active. Nothing then re-ran the supervisor, so the
-       * mission never reached a terminal state, releaseDelegation never fired, and its
-       * brains stayed occupied for ever -- two live missions sat exactly that way with
-       * every task already succeeded.
+       * A SEMANTIC trigger: this asks whether the WORK is over, never whether a row looks
+       * stale.
        *
-       * The invariant is about the WORK, not the runtime's label: a non-terminal mission
-       * with nothing active is unreconciled whatever its runtime says. The not-exists
-       * clause below is what keeps live work out, and it is unchanged.
+       * It used to require that the runtime row had not been touched for the grace
+       * period. That could not work, because the sweep's own wake-up writes exactly that
+       * column: the age it measured was the age of the last sweep, so it reset on every
+       * pass and the key derived from it made a fresh recovery unit each time, whose
+       * attempt budget therefore never ran down.
+       *
+       * NOT just 'waiting' either. Keyed on the runtime state alone this missed the case
+       * that actually leaks: a runtime that ESCALATED or FAILED while the mission row was
+       * still draft and no task was active. Nothing re-ran the supervisor, the mission
+       * never reached a terminal state, releaseDelegation never fired, and its brains
+       * stayed occupied -- five live missions sat exactly that way, one for sixteen days.
        */
       where r.state in ('waiting', 'escalated', 'failed')
         and m.status not in ${TERMINAL_MISSION}
+        /* No live runner owns it: an owner reconciles the mission itself. */
         and (r.owner_token is null or r.lease_until is null or r.lease_until <= now())
-        and r.updated_at <= now() - (${positiveInt(olderThanMs, "RECOVERY_INVALID_AGE")} * interval '1 millisecond')
+        /* Nothing is still being worked on, reviewed, or waiting on a human. */
         and not exists (
           select 1 from mission_tasks t
           where t.mission_id = r.mission_id and t.status in ${ACTIVE_TASK}
         )
-      order by r.updated_at asc
+        /*
+         * And no execution is still in flight. A task can read terminal while the ledger
+         * still carries a live intent for it, and a durable Temporal execution IS such an
+         * intent, so the task statuses alone cannot answer this.
+         */
+        and not exists (
+          select 1 from dispatch_attempts d
+          where d.mission_id = r.mission_id and d.state in ${ACTIVE_ATTEMPT}
+        )
+        /* Quiet since the work itself last moved -- a clock the sweep does not touch. */
+        and ${SETTLED_SINCE} <= now() - ${grace}
+      order by ${SETTLED_SINCE} asc
       limit ${positiveInt(limit, "RECOVERY_INVALID_LIMIT")}
     `);
-    return (rows as unknown as Array<{ mission_id: string; updated_at: Date }>).map((row) => ({
+    return (rows as unknown as Array<{ mission_id: string; settled_since: Date }>).map((row) => ({
       missionId: row.mission_id,
-      runtimeUpdatedAt: new Date(row.updated_at),
+      settledSince: new Date(row.settled_since),
     }));
   }
 

@@ -147,6 +147,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
      */
     const supervisorA: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockImplementation(async () => {
         tasks = [
@@ -217,6 +218,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisorB: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockResolvedValue(undefined),
     };
@@ -351,6 +353,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
@@ -560,6 +563,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
@@ -781,6 +785,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
@@ -986,6 +991,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
         await supervisorBlocked;
@@ -1119,6 +1125,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
         await supervisorBlocked;
@@ -1298,6 +1305,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async (_missionId: string, signal?: AbortSignal) => {
         observedSupervisorSignal = signal;
 
@@ -1481,6 +1489,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async (_missionId: string, signal?: AbortSignal) => {
         markSupervisorEntered?.();
 
@@ -1638,6 +1647,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisorA: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async (_missionId: string, signal?: AbortSignal) => {
         markSupervisorAEntered?.();
 
@@ -1700,6 +1710,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
 
     const supervisorB: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         tasks = [
           {
@@ -1823,6 +1834,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
       missionPort,
       {
         reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+        settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
         run: vi.fn().mockResolvedValue(undefined),
       },
       planner,
@@ -1945,6 +1957,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
       missionPort,
       {
         reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+        settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
         run: vi.fn().mockResolvedValue(undefined),
       },
       {
@@ -2097,6 +2110,7 @@ describe("N2.7 durable AutonomousMissionRunner restart", () => {
       missionPort,
       {
         reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+        settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
         run: vi.fn().mockResolvedValue(undefined),
       },
       { plan: vi.fn() },

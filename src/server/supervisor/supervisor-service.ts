@@ -18,6 +18,7 @@ import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute
 
 import type { RuntimeControlGuard } from "@/server/control/runtime-control";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
+import { settleMission, type MissionSettlement } from "@/core/mission/settlement";
 import { loadEnv } from "@/config/env";
 import { loadMissionCheckpoint } from "@/server/usecases/load-mission-checkpoint";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
@@ -734,28 +735,59 @@ export class SupervisorService {
 
     signal?.throwIfAborted();
 
-    if (tasks.some((task) => task.status === "failed")) {
-      await this.missionRepository.updateMissionStatus(mission.id, "failed");
-      /* A failed mission gives its brains back too: they are not still working on it. */
-      await this.releaseDelegation?.(mission.id, "MISSION_FAILED");
-      return;
-    }
-
-    if (tasks.some((task) => task.status === "blocked")) {
-      await this.missionRepository.updateMissionStatus(mission.id, "blocked");
-      return;
-    }
-
+    /*
+     * `awaiting_approval` is NOT settlement: the mission is waiting on a human, so it
+     * keeps its brains and stays recoverable. Everything terminal goes through the one
+     * settlement path below.
+     */
     if (tasks.some((task) => task.status === "awaiting_approval")) {
       await this.missionRepository.updateMissionStatus(mission.id, "awaiting_approval");
       return;
     }
 
-    if (tasks.every((task) => task.status === "succeeded" || task.status === "superseded")) {
-      await this.missionRepository.updateMissionStatus(mission.id, "succeeded");
-      await this.releaseDelegation?.(mission.id, "MISSION_SUCCEEDED");
-      return;
-    }
+    await this.settleIfComplete(missionId);
+  }
+
+  /**
+   * THE one place a mission becomes terminal, and the one place its capacity comes back.
+   *
+   * Public and read-only until it decides, so the autonomous runner can ask it BEFORE
+   * spending any budget. That ordering is the fix for the stranding defect: the runner's
+   * wall-clock guard returns at the top of its loop once `maxRuntimeMs` has elapsed since
+   * a `startedAt` that is never reset, so settlement at the end of `run()` became
+   * unreachable exactly for the long-lived missions that had finished.
+   *
+   * IDEMPOTENT. A mission already in a terminal status is left alone by the predicate, so
+   * repeated sweeps neither re-release assignments nor overwrite the first outcome.
+   */
+  async settleIfComplete(missionId: string): Promise<MissionSettlement> {
+    const mission = await this.missionRepository.findById(missionId);
+    if (!mission) throw new Error("Mission not found");
+
+    const tasks = await this.missionRepository.listTasks(missionId);
+
+    /*
+     * No ledger composed means no durable dispatch exists at all in this composition, so
+     * there is nothing in flight to miss. This is the repository being absent, not a
+     * method being probed for.
+     */
+    const activeAttempts = this.dispatchAttempts
+      ? await this.dispatchAttempts.countActiveByMissionId(missionId)
+      : 0;
+
+    const settlement = settleMission({
+      missionStatus: mission.status,
+      taskStatuses: tasks.map((task) => task.status),
+      activeAttempts,
+    });
+
+    if (!settlement.settled) return settlement;
+
+    await this.missionRepository.updateMissionStatus(mission.id, settlement.status);
+    /* Every terminal outcome gives the brains back — a blocked mission is not still working. */
+    await this.releaseDelegation?.(mission.id, `MISSION_${settlement.status.toUpperCase()}`);
+
+    return settlement;
   }
 }
 

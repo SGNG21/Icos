@@ -165,6 +165,7 @@ describe("Phase 2 PostgreSQL recovery scheduler", () => {
 
     const supervisor: AutonomousSupervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         markSupervisorEntered?.();
         await supervisorBlocked;

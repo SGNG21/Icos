@@ -73,7 +73,17 @@ export interface RecoveryDispatchRef {
 
 export interface WaitingSettledCandidate {
   missionId: string;
-  runtimeUpdatedAt: Date;
+  /**
+   * When this mission's WORK last moved — its newest task transition, or the runtime's
+   * start if it never planned one.
+   *
+   * Deliberately not the runtime row's `updated_at`. The sweep's own wake-up writes that
+   * column on every tick, so an age measured on it describes how recently the sweeper
+   * ran rather than how long the mission has been finished: it can never grow, and it
+   * changes on every pass, which also gave each pass a brand-new recovery unit whose
+   * attempt budget therefore never ran down.
+   */
+  settledSince: Date;
 }
 
 export interface RecoveryScanOptions {

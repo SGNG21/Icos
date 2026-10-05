@@ -74,6 +74,21 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     return rows.map((row) => row.workerId as string).sort((a, b) => a.localeCompare(b));
   }
 
+  /** Counted in the database: the ledger decides, never a page of rows fetched and filtered. */
+  async countActiveByMissionId(missionId: string): Promise<number> {
+    const rows = await this.db
+      .select({ active: sql<number>`count(*)::int` })
+      .from(dispatchAttempts)
+      .where(
+        and(
+          eq(dispatchAttempts.missionId, missionId),
+          inArray(dispatchAttempts.state, ACTIVE_ATTEMPT_STATES),
+        ),
+      );
+
+    return rows[0]?.active ?? 0;
+  }
+
   /**
    * Terminal attempts that name a worker, settled at or after `since`, newest first, with the
    * independent review verdict on each (decision 0054). Bounded by `limit`: routing history is

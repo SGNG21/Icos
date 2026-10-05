@@ -48,6 +48,7 @@ describe("N2.7 event-driven autonomy wakeup", () => {
       run: vi.fn().mockResolvedValue(undefined),
 
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
     };
 
     const runtimeRepo: AutonomousMissionRuntimeRepository = {
@@ -156,6 +157,7 @@ describe("N2.7 event-driven autonomy wakeup", () => {
 
     const supervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
 
       run: vi.fn().mockImplementation(async () => {
         tasks = [
@@ -245,6 +247,7 @@ describe("N2.7 event-driven autonomy wakeup", () => {
     };
     const supervisor = {
       reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       run: vi.fn().mockImplementation(async () => {
         tasks = [{ ...tasks[0], status: "queued" }];
       }),
@@ -319,6 +322,7 @@ describe("N2.7 event-driven autonomy wakeup", () => {
       run: vi.fn(),
 
       reconcilePreparedDispatches: vi.fn(),
+      settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
     };
 
     const wakeup = new AutonomyWakeupService(

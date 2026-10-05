@@ -90,7 +90,7 @@ export class RuntimeRecoverySweeper {
       candidates.push({
         unit: {
           kind: "waiting_settled",
-          key: `${w.missionId}@${w.runtimeUpdatedAt.getTime()}`,
+          key: `${w.missionId}@${w.settledSince.getTime()}`,
           missionId: w.missionId,
         },
         run: () => this.wake(w.missionId),

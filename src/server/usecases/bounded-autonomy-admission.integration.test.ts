@@ -41,6 +41,7 @@ function handlersWith(policy: AutonomyCompositionPolicy = {}) {
       supervisor: {
         run: vi.fn().mockResolvedValue(undefined),
         reconcilePreparedDispatches: vi.fn().mockResolvedValue(undefined),
+        settleIfComplete: vi.fn(async () => ({ settled: false as const, reason: "TEST_NOT_SETTLED" })),
       },
       planner: {
         plan: vi.fn().mockResolvedValue({
