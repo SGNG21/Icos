@@ -136,6 +136,14 @@ export const goalProposalSchema = z
     successCriteria: z.array(text(500)).max(20).default([]),
     constraints: z.array(text(500)).max(20).default([]),
     riskLevel: z.enum(["read_only", "reversible", "sensitive"]).default("reversible"),
+    /**
+     * What the mission will NEED, in the intake's closed vocabulary (`research`, `code_write`,
+     * `deploy`, …). Declared by the model, so it can only ever NARROW: `classifyMissionAutonomy`
+     * auto-allows a goal solely from a fixed allowlist, a declared gated capability escalates,
+     * and an empty list is "unverifiable", which asks a human. A model cannot talk its way past
+     * that table; it can only describe honestly and get the autonomy the table grants.
+     */
+    capabilities: z.array(key).max(10).optional(),
   })
   .strict();
 export type GoalProposal = z.infer<typeof goalProposalSchema>;

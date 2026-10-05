@@ -8,6 +8,7 @@ import type {
   ConversationEvent,
   ConversationEventType,
   CreateConversationInput,
+  GoalProposal,
   Participant,
   RefStatus,
   SubmitTurnInput,
@@ -503,7 +504,12 @@ export class PostgresConversationStore {
       });
       let ref: TurnReference | null = null;
       if (result.proposal) {
-        const policy = launchPolicy(result.proposal.kind);
+        const policy = launchPolicy(
+          result.proposal.kind,
+          result.proposal.kind === "goal_proposal"
+            ? (result.proposal.payload as GoalProposal)
+            : undefined,
+        );
         const [row] = await tx
           .insert(cognitiveTurnRefs)
           .values({

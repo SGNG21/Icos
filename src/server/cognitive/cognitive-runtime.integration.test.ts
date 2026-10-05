@@ -420,7 +420,7 @@ describe("Cognitive runtime on real PostgreSQL", () => {
     expect(res.turn.outcome).toBe("MISSION_REQUEST");
     expect(res.proposal).toMatchObject({
       status: "approval_required",
-      policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+      policyReason: "APPROVAL_REQUIRED: aucune capacité déclarée : portée non vérifiable",
       missionId: null,
     });
     const count = async (t: "goals" | "missions" | "scheduled_jobs") =>

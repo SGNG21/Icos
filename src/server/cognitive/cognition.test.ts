@@ -141,11 +141,36 @@ describe("cognition boundary", () => {
   });
 
   it("launch policy: a model-asserted risk never skips human approval", () => {
+    // No declared capability: unverifiable, so a human is asked and told why.
     expect(launchPolicy("goal_proposal")).toEqual({
       status: "approval_required",
-      reason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+      reason: "APPROVAL_REQUIRED: aucune capacité déclarée : portée non vérifiable",
     });
     expect(launchPolicy("action_request").status).toBe("approval_required");
+  });
+
+  it("launch policy: the autonomy verdict is written on the proposal, the human step stays", () => {
+    const goal = { title: "t", objective: "o", successCriteria: [], constraints: [] };
+    // Confined work: policy WOULD allow it, and says so; the approval is still a human's.
+    const safe = launchPolicy("goal_proposal", {
+      ...goal,
+      riskLevel: "read_only",
+      capabilities: ["research", "code_write"],
+    });
+    expect(safe.status).toBe("approval_required");
+    expect(safe.reason).toMatch(/^AUTO_ALLOWED: /);
+    // A declared external effect escalates, whatever risk the model claims.
+    const external = launchPolicy("goal_proposal", {
+      ...goal,
+      riskLevel: "read_only",
+      capabilities: ["research", "deploy"],
+    });
+    expect(external.reason).toMatch(/^APPROVAL_REQUIRED: .*deploy/);
+    // A self-declared "sensitive" goal can only raise the bar, never lower it.
+    expect(
+      launchPolicy("goal_proposal", { ...goal, riskLevel: "sensitive", capabilities: ["research"] })
+        .reason,
+    ).toMatch(/^APPROVAL_REQUIRED: /);
   });
 
   it("canonical scheduler: start_mission carries goal lineage and is idempotent on the key", async () => {
@@ -180,31 +205,6 @@ describe("cognition boundary", () => {
  * contradicted ICOS's own governed execution. Capability must come from the
  * runtime context, so the prompt must not contain capability absolutes.
  */
-describe("system prompt: no static capability claims", () => {
-  const systemPromptOf = async (): Promise<string> => {
-    let body = "";
-    const fake = (async (_url: string, init: RequestInit) => {
-      body = String(init.body);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
-        { status: 200 },
-      );
-    }) as unknown as typeof fetch;
-    await new OmniRouteCognitionEngine("http://o.test", "k", "m", fake).think(
-      { userText: "De quoi es-tu capable ?", context: "(vide)", conversationTitle: null },
-      new AbortController().signal,
-    );
-    const messages = (JSON.parse(body) as { messages: { role: string; content: string }[] })
-      .messages;
-    return messages.find((m) => m.role === "system")!.content;
-  };
-
-  it("no longer claims ICOS can never execute anything", async () => {
-    const prompt = await systemPromptOf();
-    expect(prompt).not.toContain("Tu n'exécutes jamais rien toi-même");
-    // The precise, true statement replaces it.
-    expect(prompt).toContain("tu n'exécutes rien directement");
-    expect(prompt).toContain("tu PROPOSES");
 describe("workload routing: the model is chosen per turn, before the call", () => {
   const requestedModel = async (
     engine: OmniRouteCognitionEngine,
@@ -258,6 +258,31 @@ describe("workload routing: the model is chosen per turn, before the call", () =
   });
 });
 
+describe("system prompt: no static capability claims", () => {
+  const systemPromptOf = async (): Promise<string> => {
+    let body = "";
+    const fake = (async (_url: string, init: RequestInit) => {
+      body = String(init.body);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    await new OmniRouteCognitionEngine("http://o.test", "k", "m", fake).think(
+      { userText: "De quoi es-tu capable ?", context: "(vide)", conversationTitle: null },
+      new AbortController().signal,
+    );
+    const messages = (JSON.parse(body) as { messages: { role: string; content: string }[] })
+      .messages;
+    return messages.find((m) => m.role === "system")!.content;
+  };
+
+  it("no longer claims ICOS can never execute anything", async () => {
+    const prompt = await systemPromptOf();
+    expect(prompt).not.toContain("Tu n'exécutes jamais rien toi-même");
+    // The precise, true statement replaces it.
+    expect(prompt).toContain("tu n'exécutes rien directement");
+    expect(prompt).toContain("tu PROPOSES");
   });
 
   it("states that an approved mission then runs durably without a human", async () => {

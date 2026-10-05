@@ -120,6 +120,9 @@ export class CanonicalGoalLauncher implements MissionGateway {
       constraints: p.constraints,
       successCriteria: p.successCriteria,
       riskLevel: p.riskLevel,
+      // The proposal's declared needs reach intake as the goal's capability allowlist, so the
+      // planner and the autonomy policy read the same declaration the human approved.
+      allowedCapabilities: p.capabilities,
       humanApprovalPolicy: "always",
       metadata,
       correlationId: r.refId,
@@ -150,7 +153,8 @@ export class CanonicalGoalLauncher implements MissionGateway {
           })
           .then(({ job }) => ({ jobId: job.id, missionId: job.missionId }));
 
-    if (!admitted.missionId) return { status: "failed", reason: "scheduler_returned_no_mission_id" };
+    if (!admitted.missionId)
+      return { status: "failed", reason: "scheduler_returned_no_mission_id" };
     /*
      * A DEFERRED admission is still `launched`: the durable job exists and the missionId is
      * fixed. Reporting a failure would push the caller to launch a second time.

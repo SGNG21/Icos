@@ -1,3 +1,5 @@
+import { classifyMissionAutonomy } from "@/core/autonomy/mission-autonomy-policy";
+
 import type {
   ActionProposal,
   CognitionResult,
@@ -47,19 +49,29 @@ export interface LaunchPolicyDecision {
 }
 
 /**
- * Launch policy for a conversational proposal. The goal's risk level and scope are
- * asserted by the MODEL, i.e. unverified, so the existing approval semantics
- * (`humanApprovalPolicy`) cannot be relaxed on the model's word: every conversational
- * goal and action requires an explicit human approval before launch. The approval is a
- * policy step taken by the conversation's human, not an operator stage advancement: once
- * approved, launch is automatic and durable.
+ * Launch policy for a conversational proposal.
+ *
+ * Every conversational goal and action still requires an explicit human approval before
+ * launch: the approval is a policy step taken by the conversation's human, and once given
+ * the launch is automatic and durable.
+ *
+ * What changed (decision 0067, item 7, first half): the REASON is no longer a blanket
+ * "risk asserted by the model". A goal is now classified by `classifyMissionAutonomy` from
+ * the capabilities the proposal declares — the model may only narrow, never widen — and the
+ * verdict is written on the proposal, so the approving human reads WHY policy would or
+ * would not have let it start on its own. Turning an `AUTO_ALLOWED` verdict into a launch
+ * without the human step is the second half, and it is deliberately a separate change.
  */
-export function launchPolicy(kind: RefKind): LaunchPolicyDecision {
-  return {
-    status: "approval_required",
-    reason:
-      kind === "goal_proposal"
-        ? "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED"
-        : "CONVERSATIONAL_ACTION_ALWAYS_APPROVED_BY_HUMAN",
-  };
+export function launchPolicy(kind: RefKind, payload?: GoalProposal): LaunchPolicyDecision {
+  if (kind !== "goal_proposal") {
+    return {
+      status: "approval_required",
+      reason: "CONVERSATIONAL_ACTION_ALWAYS_APPROVED_BY_HUMAN",
+    };
+  }
+  const verdict = classifyMissionAutonomy({
+    capabilities: payload?.capabilities ?? [],
+    assertedRisk: payload?.riskLevel,
+  });
+  return { status: "approval_required", reason: `${verdict.policyClass}: ${verdict.reason}` };
 }

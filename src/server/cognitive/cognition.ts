@@ -1,26 +1,30 @@
+import {
+  APPROVAL_REQUIRED_CAPABILITIES,
+  AUTO_ALLOWED_CAPABILITIES,
+} from "@/core/autonomy/mission-autonomy-policy";
 import { cognitionOutputSchema, type CognitionOutput } from "@/core/cognitive/contracts";
-
-/**
- * Model-independent cognition boundary (decision 0056). An engine turns (context, user
- * text) into a validated CognitionOutput. It has no access to any store or tool: it can
 import {
   modelFor,
   modelRoutesFromEnv,
   type ModelRoutes,
   type WorkloadClass,
 } from "@/core/cognitive/workload";
+
+/**
+ * Model-independent cognition boundary (decision 0056). An engine turns (context, user
+ * text) into a validated CognitionOutput. It has no access to any store or tool: it can
  * only PROPOSE; the runtime governs what happens next. Engines are replaceable compute.
  */
 export interface CognitionInput {
   readonly userText: string;
   readonly context: string;
   readonly conversationTitle: string | null;
+  /** Classified by the runtime before the call; absent ⇒ the default model. */
+  readonly workload?: WorkloadClass;
 }
 
 export interface CognitionEngine {
   /** Compute label recorded in provenance (never an identity or authority). */
-  /** Classified by the runtime before the call; absent ⇒ the default model. */
-  readonly workload?: WorkloadClass;
   readonly label: string;
   think(input: CognitionInput, signal: AbortSignal): Promise<CognitionOutput>;
 }
@@ -66,8 +70,11 @@ const SYSTEM_PROMPT = [
   "où <R> est l'un de :",
   '{"kind":"ANSWER_ONLY","text":"..."} | {"kind":"CLARIFICATION","question":"..."} | {"kind":"NO_ACTION","text":"..."}',
   '| {"kind":"ACTION_REQUEST","text":"...","action":{"kind":"cle-action","description":"...","riskLevel":"read_only|reversible|sensitive"}}',
-  '| {"kind":"MISSION_REQUEST","text":"...","goal":{"title":"...","objective":"...","successCriteria":["..."],"constraints":["..."],"riskLevel":"read_only|reversible|sensitive"}}',
-  "Utilise MISSION_REQUEST quand la demande exige un travail multi-étapes (analyse + correction). C'est une proposition : son lancement est soumis à approbation humaine parce que tu affirmes toi-même son niveau de risque et que cette affirmation n'est pas vérifiable.",
+  '| {"kind":"MISSION_REQUEST","text":"...","goal":{"title":"...","objective":"...","successCriteria":["..."],"constraints":["..."],"riskLevel":"read_only|reversible|sensitive","capabilities":["..."]}}',
+  "Utilise MISSION_REQUEST quand la demande exige un travail multi-étapes (analyse + correction). C'est une proposition : son lancement est soumis à approbation humaine.",
+  // The closed vocabulary of `classifyMissionAutonomy`. Declaring is the only way a goal can
+  // be classified at all; an undeclared goal is unverifiable and always asks a human.
+  `goal.capabilities : ce dont la mission aura BESOIN, uniquement parmi ${[...AUTO_ALLOWED_CAPABILITIES, ...APPROVAL_REQUIRED_CAPABILITIES].join(", ")}. Déclare honnêtement : une capacité à effet externe omise ne rend pas la mission plus sûre, elle la rend non vérifiable.`,
   "memorySuggestions : seulement des faits durables utiles ; ce sont des inférences, pas des vérités.",
 ].join("\n");
 
@@ -130,6 +137,7 @@ export function parseCognitionOutput(raw: string): CognitionOutput {
 /** OmniRoute-backed engine (OpenAI-compatible chat completions). */
 export class OmniRouteCognitionEngine implements CognitionEngine {
   readonly label: string;
+  private readonly routes: ModelRoutes;
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -147,7 +155,6 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
   /** The model a workload class resolves to. Exposed so routing is testable without a call. */
   modelFor(workload: WorkloadClass | undefined): string {
     return workload ? modelFor(this.routes, workload) : this.routes.default;
-  private readonly routes: ModelRoutes;
   }
 
   /**

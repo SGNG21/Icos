@@ -265,7 +265,7 @@ describe("durable proposals: the only mission state the phone can show", () => {
       constraints: [],
       riskLevel: "read_only",
     },
-    policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+    policyReason: "APPROVAL_REQUIRED: aucune capacité déclarée : portée non vérifiable",
     decidedBy: "user_1",
     decidedAt: "2026-10-01T10:00:00.000Z",
     goalId: "goal_1",
@@ -300,7 +300,7 @@ describe("durable proposals: the only mission state the phone can show", () => {
       refId: "tref_1",
       kind: "goal_proposal",
       status: "approval_required",
-      policyReason: "CONVERSATIONAL_GOAL_RISK_MODEL_ASSERTED",
+      policyReason: "APPROVAL_REQUIRED: aucune capacité déclarée : portée non vérifiable",
     };
     expect(operationalEvent({ kind: "MISSION_EVENT", payload: eventPayload })).toBeNull();
     expect(proposalCard(eventPayload)).toBeNull();
