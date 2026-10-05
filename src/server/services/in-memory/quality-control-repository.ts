@@ -116,7 +116,18 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
         job.state === "review_pending" || job.state === "review_unavailable"
           ? "reviewing"
           : job.state,
-      // A recovered unavailable review gets a fresh review budget.
+      /*
+       * A recovered unavailable review gets a fresh review budget — which this
+       * implementation always did, while the Postgres one incremented monotonically
+       * instead. Two implementations of one port answering differently is why no unit test
+       * could see the real defect: on Postgres the first reclaim was already over budget,
+       * so the job re-parked for ever. The total is bounded by the job's age, in the
+       * service (REVIEW_LIFETIME_DEADLINE_MS), not by this counter.
+       */
+      lastError:
+        job.state === "review_unavailable"
+          ? "QUALITY_CONTROL_REVIEW_RETRY_CYCLE_STARTED"
+          : job.lastError,
       reviewAttemptCount:
         job.state === "review_unavailable"
           ? 1

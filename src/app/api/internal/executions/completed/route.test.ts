@@ -319,7 +319,11 @@ describe("POST /api/internal/executions/completed", () => {
       }),
     );
 
-    expect(apiError).toHaveBeenCalledWith("invalid_input", "workflow d'exécution non corrélé");
+    /* And WHICH invariant refused: the two shared one message, which is what made a
+     * refused callback unreadable from the worker side. */
+    expect(apiError).toHaveBeenCalledWith("invalid_input", "workflow d'exécution non corrélé", {
+      reason: "EXECUTION_ATTEMPT_UNKNOWN",
+    });
     expect(recordTaskExecution).not.toHaveBeenCalled();
   });
 
@@ -352,7 +356,10 @@ describe("POST /api/internal/executions/completed", () => {
       }),
     );
 
-    expect(apiError).toHaveBeenCalledWith("invalid_input", "workflow d'exécution non corrélé");
+    /* The MISSION-TASK invariant, told apart from the attempt one. */
+    expect(apiError).toHaveBeenCalledWith("invalid_input", "workflow d'exécution non corrélé", {
+      reason: "MISSION_TASK_ATTEMPT_MISMATCH",
+    });
     expect(recordTaskExecution).not.toHaveBeenCalled();
   });
 });

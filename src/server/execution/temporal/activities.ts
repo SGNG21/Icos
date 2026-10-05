@@ -240,8 +240,20 @@ async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
     body: JSON.stringify({ taskId: ctx.taskId, workflowId: ctx.workflowId }),
   });
   if (!response.ok) {
-    /* No grant, no run. Status only: the body is ICOS's and may name internals. */
-    throw new Error(`WORKER_GRANT_REFUSED: HTTP ${response.status}`);
+    /*
+     * No grant, no run — and a 4xx says WHICH refusal, for the same reason `postJson`
+     * does: both sides of this call are ICOS, so a 4xx is a contract bug rather than a
+     * runtime condition, and the body is bounded to stable codes and zod field paths.
+     * 5xx stays status-only.
+     */
+    let detail = "";
+    if (response.status >= 400 && response.status < 500) {
+      detail = await response
+        .text()
+        .then((text) => (text ? ` ${text.slice(0, 500)}` : ""))
+        .catch(() => "");
+    }
+    throw new Error(`WORKER_GRANT_REFUSED: HTTP ${response.status}${detail}`);
   }
   const payload = (await response.json()) as { grant?: ExecutionGrant };
   if (!payload.grant) throw new Error("WORKER_GRANT_MALFORMED");

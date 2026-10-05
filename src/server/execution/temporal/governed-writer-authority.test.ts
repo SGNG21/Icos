@@ -358,7 +358,19 @@ describe("the governed Temporal writer", () => {
     it("a refused grant starts no process", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => ({ ok: false, status: 403 }) as unknown as Response),
+        /*
+         * A refusal carries a BODY, as the real route's does: a 4xx on an internal callback
+         * is a contract violation, so the activity reads the body to say which one. A fake
+         * without `text()` was standing in for a Response that always has it.
+         */
+        vi.fn(
+          async () =>
+            ({
+              ok: false,
+              status: 403,
+              text: async () => '{"error":{"code":"forbidden","message":"refus"}}',
+            }) as unknown as Response,
+        ),
       );
 
       await expect(run()).rejects.toThrow("WORKER_GRANT_REFUSED");
