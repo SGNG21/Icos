@@ -523,6 +523,28 @@ export class WorkspaceExecutionCoordinator {
           ],
           ws.worktreePath,
         );
+        /*
+         * AND NAME THE BRANCH, or the preservation preserves nothing reachable.
+         *
+         * The worktree is DETACHED, so this commit — made by ICOS on the worker's behalf —
+         * lands on a detached HEAD and no reference carries it. The sentence above ("the
+         * edits are committed to the superseded attempt's OWN branch") only stays true if
+         * the branch is moved to it, and that is this side's job precisely because the
+         * worker is not allowed to move references itself.
+         *
+         * Cleanup fast-forwards the branch too, as a last line of defence for the paths
+         * that never reach here; doing it now is what makes the branch correct for anyone
+         * who reads it BEFORE the workspace is reaped.
+         */
+        /*
+         * BEST-EFFORT HERE, and only here. This runs while REAPING a superseded workspace,
+         * where a throw would become the reason the reap failed — the defect c4f1be2
+         * closed, in which a cleanup failure replaced the real one. Cleanup fast-forwards
+         * the branch from the worktree HEAD as well, so a refusal here costs nothing and
+         * the work stays reachable. On the collection path it still throws: there, naming
+         * the branch IS the result being handed over.
+         */
+        await this.nameGovernedBranch(ws.workspaceId).catch(() => undefined);
       }
       try {
         await this.manager.cleanup(ws.workspaceId, this.ownerToken, fencingToken!);

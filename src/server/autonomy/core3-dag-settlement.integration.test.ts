@@ -486,6 +486,29 @@ async function until<T>(
   }
 }
 const ticks = (n: number) => new Promise((r) => setTimeout(r, n * 250 + 200));
+
+/**
+ * THE DURABLE RESULT, because the dispatch is ASYNCHRONOUS.
+ *
+ * `supervisor.run` used to execute the work inline, on the in-process executor, so when it
+ * returned the result was already recorded. Temporal orchestrates mission work now
+ * (ADR 0067): `run` only DISPATCHES, and the completion callback records the outcome from
+ * another process afterwards.
+ *
+ * A case that cancels, registers a QC job, or inspects state straight after `run` was
+ * therefore talking about an execution that did not exist yet — which surfaces as
+ * QUALITY_CONTROL_EXECUTION_NOT_FOUND, or as a review that was never written. The wait is
+ * on the row the callback writes, never a sleep.
+ */
+async function awaitExecution(c: Container, workflowId: string): Promise<string> {
+  return until(`the execution result of ${workflowId}`, async () => {
+    const [row] = await rows<{ outcome: string }>(
+      c,
+      `select outcome from task_execution_results where workflow_id = '${workflowId}'`,
+    );
+    return row?.outcome;
+  });
+}
 const targetHead = () => git(repo, "rev-parse", TARGET);
 
 /**
@@ -834,6 +857,17 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
     const dispatch = c.taskExecution.dispatch.bind(c.taskExecution);
     vi.spyOn(c.taskExecution, "dispatch").mockImplementation(async (input) => {
       const result = await dispatch(input);
+      /*
+       * THE RACE HAS TO BE BUILT ON THE RESULT, not on the dispatch returning.
+       *
+       * `dispatch` used to run the work; now it only starts a Temporal workflow, so at this
+       * point there is no execution to review and `registerExecution` would register a job
+       * for a result that does not exist (QUALITY_CONTROL_EXECUTION_NOT_FOUND). Waiting for
+       * the callback's row keeps the ORDERING this case exists to prove — a review already
+       * written when the coordinator comes looking — while putting it after the only moment
+       * at which a review is possible at all.
+       */
+      await awaitExecution(c, WF_A);
       await runtime.qualityControl.registerExecution({
         missionId: MISSION_ID,
         missionTaskId: MT_A,
@@ -895,6 +929,8 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
       const applySpy = vi.spyOn(c.integrationApplier!, "apply");
       const runtime = composeAutonomyRuntime(c);
       await runtime.supervisor.run(MISSION_ID);
+      /* AWAITING REVIEW is a state the worker reaches, not one the dispatch returns in. */
+      await awaitExecution(c, WF_A);
       await c.mission.updateMissionTaskStatus(MISSION_ID, MT_A, "cancelled");
       if (viaCallback) {
         /* What the execution-completed route does for a recorded result. */
