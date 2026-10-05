@@ -317,7 +317,27 @@ export class CognitiveRuntime {
         done.ref.decidedBy === POLICY_DECIDER &&
         done.ref.conversationId === conversationId &&
         done.ref.turnId === turn.id
-          ? await this.launch(conversation, done.ref).catch(() => done.ref)
+          ? await this.launch(conversation, done.ref).catch(async (error: unknown) => {
+              /*
+               * Not silent: the recovery sweep will retry, but an operator must be able to
+               * see that an auto-launch failed. The ref is re-read, not echoed — `beginLaunch`
+               * may already have moved it to `launching`, and the turn must say so.
+               */
+              console.error(
+                JSON.stringify({
+                  event: "COGNITIVE_AUTO_LAUNCH_FAILED",
+                  conversationId,
+                  refId: done.ref!.id,
+                  error: `${error instanceof Error ? error.name : "Error"}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`,
+                }),
+              );
+              return (
+                (await conversations
+                  .listRefs(conversationId)
+                  .then((refs) => refs.find((r) => r.id === done.ref!.id))
+                  .catch(() => undefined)) ?? done.ref
+              );
+            })
           : done.ref;
       return {
         turn: (await conversations.getTurn(conversationId, turn.id))!,

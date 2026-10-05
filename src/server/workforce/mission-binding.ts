@@ -1,7 +1,11 @@
 import type { HighLevelGoal } from "@/core/contracts/high-level-goal";
 import type { MissionTask } from "@/core/mission/contracts";
 
-import type { ChiefDelegation, ChiefDelegationOutcome } from "./chief-delegation";
+import {
+  reviewAssignmentTaskId,
+  type ChiefDelegation,
+  type ChiefDelegationOutcome,
+} from "./chief-delegation";
 import type { BrainComputeNeed, WorkforceTaskCompute } from "./core3-task-compute";
 
 /**
@@ -106,6 +110,26 @@ export function boundTaskCompute(
           rejected: g.rejected.map((r) => ({ agentId: r.agentId, violations: r.violations })),
         })),
       });
+      /*
+       * THE REVIEWER, named on its own line. Before this bridge an unplaced Reviewer failed the
+       * ignition closed (`CHIEF_DELEGATION_REVIEWER_UNPLACED`, 7a0f8c2). Delegation now happens
+       * at first routing and stays non-fatal: the review GATE itself still runs (ReviewerService
+       * reviews every attempt, brain or not), only the Reviewer brain's attribution is missing.
+       * That is a change of governance the owner rules on (decision 0070, open item); until then
+       * signal is kept, distinct and greppable, never folded into a generic partial.
+       */
+      const reviewerGap = outcome.gaps.find(
+        (g) => g.request.taskId === reviewAssignmentTaskId(missionId),
+      );
+      if (reviewerGap) {
+        report({
+          event: "CHIEF_DELEGATION_REVIEWER_UNPLACED",
+          missionId,
+          goalId: mission.goalId,
+          brainId: reviewerGap.request.requiredAgentId ?? null,
+          reason: reviewerGap.reason,
+        });
+      }
     }
     bound.set(missionId, fingerprint);
     return outcome;

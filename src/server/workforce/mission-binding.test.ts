@@ -123,6 +123,46 @@ describe("boundTaskCompute", () => {
     );
   });
 
+  it("an unplaced Reviewer is reported on its own line, and only the Reviewer", async () => {
+    const h = harness({
+      goalId: "g-1",
+      outcome: ok({
+        gaps: [
+          {
+            request: { taskId: "m-1:review", requiredAgentId: "brain-reviewer" },
+            reason: "CONCURRENCY_LIMIT",
+            rejected: [],
+          } as never,
+        ],
+      }),
+    });
+    await h.compute.forTask("m-1", "task-1");
+    expect(h.report).toHaveBeenCalledWith({
+      event: "CHIEF_DELEGATION_REVIEWER_UNPLACED",
+      missionId: "m-1",
+      goalId: "g-1",
+      brainId: "brain-reviewer",
+      reason: "CONCURRENCY_LIMIT",
+    });
+
+    const other = harness({
+      goalId: "g-1",
+      outcome: ok({
+        gaps: [
+          {
+            request: { taskId: "task-1", requiredAgentId: "brain-planner" },
+            reason: "CONCURRENCY_LIMIT",
+            rejected: [],
+          } as never,
+        ],
+      }),
+    });
+    await other.compute.forTask("m-1", "task-1");
+    expect(other.report).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "CHIEF_DELEGATION_REVIEWER_UNPLACED" }),
+    );
+  });
+
   it("nothing in a task, a plan or a request can name a brain: the binding reads only Chief", async () => {
     const h = harness({
       goalId: "g-1",

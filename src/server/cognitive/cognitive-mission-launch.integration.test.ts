@@ -219,6 +219,43 @@ describe("Conversation → canonical CORE3 mission", () => {
     expect(await count("scheduled_jobs")).toBe(1);
   });
 
+  it("L6 — a failed auto-launch is reported, the turn shows the durable LAUNCHING ref, and recovery launches it", async () => {
+    const autoAllowed: CognitionOutput = {
+      ...missionRequest,
+      result: {
+        ...missionRequest.result,
+        kind: "MISSION_REQUEST",
+        text: "Je lance l'analyse.",
+        goal: {
+          ...(missionRequest.result as { goal: GoalProposal }).goal,
+          riskLevel: "read_only",
+          capabilities: ["research"],
+        },
+      },
+    };
+    const down: MissionGateway = {
+      launch: async () => {
+        throw new Error("PERSISTENCE_DOWN");
+      },
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rt = runtimeWith(new ScriptedCognitionEngine(() => autoAllowed), down);
+    const conv = await rt.createConversation(ME, { clientId: "lds-renov" });
+    const res = await rt.submitTurn(ME, conv.id, {
+      text: "Analyse les leads.",
+      idempotencyKey: k(),
+    });
+    expect(res.proposal).toMatchObject({
+      status: "launching",
+      decidedBy: "policy:mission-autonomy",
+    });
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('"COGNITIVE_AUTO_LAUNCH_FAILED"'));
+    errors.mockRestore();
+    await runtimeWith(new ScriptedCognitionEngine(() => answer("x"))).recoverLaunches(TENANT);
+    const store = new PostgresConversationStore(container.db!);
+    expect((await store.listRefs(conv.id))[0].status).toBe("launched");
+  });
+
   it("L2 — a crash after the approval commit (before or during launch) is finished by recovery, exactly once", async () => {
     const a = await proposeGoal();
     const store = new PostgresConversationStore(container.db!);

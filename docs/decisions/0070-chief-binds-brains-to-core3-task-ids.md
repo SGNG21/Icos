@@ -77,6 +77,15 @@ tasks)` — then defers to the inner seam, unchanged. The ignition-time delegati
    undelegated, exactly as a goal-less mission does. A planning decision must not strand work
    the owner asked for.
 
+   **Open item for the owner — the unplaced Reviewer.** Before this decision an unplaced
+   Reviewer brain failed the ignition closed (`CHIEF_DELEGATION_REVIEWER_UNPLACED`, commit
+   `7a0f8c2`). Delegation now happens at first routing and is non-fatal, so that fail-closed
+   rule no longer holds. What still holds: the review gate itself runs on every attempt
+   (ReviewerService, brain or not); what is lost is only the Reviewer brain's attribution.
+   The signal is kept as its own structured event, `CHIEF_DELEGATION_REVIEWER_UNPLACED`
+   (`mission-binding.ts`). Whether an unplaced Reviewer must HOLD the dispatch (a new
+   deferral reason in the supervisor and quality control) is the owner's ruling, not made here.
+
 ## Consequences
 
 - No schema change. `ChiefDelegation.delegateGoal` takes the tasks; `ChiefDelegationDeps`
