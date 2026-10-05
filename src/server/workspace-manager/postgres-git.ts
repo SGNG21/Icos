@@ -18,10 +18,24 @@ export class PostgresGit extends Git {
     this.sql = postgres(url.toString(), { max: 1, onnotice: () => {} });
   }
 
+  /**
+   * THE SAME CONTRACT AS THE BASE CLASS, including the part that FAILS.
+   *
+   * This override delegated to git and resolved with whatever exit code came back — it
+   * never threw, whatever `okCodes` said, while `Git.exec` throws GIT_FAILED for a code it
+   * was not told to expect. Two implementations of one method disagreeing about whether a
+   * failed write is an error made every unchecked write on this adapter silent: the
+   * superseded-work commit and the branch compare-and-swap both resolved "fine" having
+   * done nothing, and the work was simply missing from the branch afterwards.
+   *
+   * It keeps the command allow-list OFF deliberately — the coordinator's preserve path
+   * needs `add` and `commit`, which the governed list forbids — but refusing to notice a
+   * failure was never part of that, and a write whose outcome nobody checks is not a
+   * write.
+   */
   async exec(args: string[], cwd = this.repoDir, okCodes: number[] = [0]): Promise<{ code: number; stdout: string; stderr: string }> {
-    // For PostgresGit, we delegate to the actual git binary
     const { execFile } = await import("node:child_process");
-    return new Promise((resolve) => {
+    const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       execFile(
         "git",
         args,
@@ -36,6 +50,13 @@ export class PostgresGit extends Git {
         },
       );
     });
+    if (!okCodes.includes(result.code)) {
+      throw new WorkspaceError(
+        "GIT_FAILED",
+        `git ${args.join(" ")} -> ${result.code}: ${result.stderr.trim()}`,
+      );
+    }
+    return result;
   }
 
   protected async out(args: string[], cwd?: string): Promise<string> {
