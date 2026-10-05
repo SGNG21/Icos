@@ -26,6 +26,7 @@ import {
 } from "./context-assembler";
 import { ContextResolver } from "./context-resolver";
 import { CombinedSelfModel, OperationalStateSource } from "./operational-state";
+import { capabilityFacts } from "@/core/cognitive/self-model";
 import { RuntimeSelfModel, type RuntimeProbes } from "./runtime-self-model";
 import { PostgresConversationStore, systemClock, type Clock } from "./conversation-store";
 import {
@@ -163,8 +164,6 @@ function runtimeProbesFor(
       return Number(row?.n ?? 0);
     },
     countCapabilities: () => count(capabilitiesTable),
-    cognitionConfigured: () => engine.label !== "not_connected",
-    missionIntakeConnected: () => missionsConnected,
     /*
      * The fleet as the routing probes left it, grouped by the provider each worker DECLARED
      * at registration (`metadata.provider`). Undeclared is reported as such, never guessed.
@@ -187,6 +186,8 @@ function runtimeProbesFor(
         .sort((a, b) => a.provider.localeCompare(b.provider));
     },
     providerConfigured: () => Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY),
+    cognitionConfigured: () => engine.label !== "not_connected",
+    missionIntakeConnected: () => missionsConnected,
     // The sweepers that advance an approved mission only run in this mode
     // (startProductionServices); without them nothing continues after a disconnect.
     durableSchedulerRunning: () => env.NODE_ENV === "production" && env.PERSISTENCE === "postgres",
@@ -195,6 +196,18 @@ function runtimeProbesFor(
     textToSpeech: () =>
       Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY && env.ICOS_VOICE_TTS_MODEL),
   };
+}
+
+/**
+ * The SAME measurement the conversation receives as `[runtime:capability.*]`, for the
+ * cockpit (decision 0069): one probe set, two readers, so the screen and the voice can never
+ * disagree about what ICOS can do. Read-only: it counts, it never composes or launches.
+ */
+export async function measureRuntimeCapabilities(container: Container) {
+  if (!container.db) return null;
+  const engine = OmniRouteCognitionEngine.fromEnv();
+  const probes = runtimeProbesFor(container.db, engine, true);
+  return capabilityFacts(await new RuntimeSelfModel(probes).probe());
 }
 
 export function buildCognitiveRuntime(

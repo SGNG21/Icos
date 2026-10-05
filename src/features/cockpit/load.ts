@@ -20,6 +20,15 @@ import {
   type CockpitSources,
   type MissionWithTasks,
 } from "./snapshot";
+import { count, gte, sql } from "drizzle-orm";
+
+import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
+import { measureRuntimeCapabilities } from "@/server/cognitive/index";
+import { memoryRecords } from "@/server/cognitive/schema";
+import { memoryRetrievalLog } from "@/server/database/memory-schema";
+import { spendLedger } from "@/server/database/schema";
+
+import type { TruthProjection } from "./truth-projection";
 import { isReal, missing, real, type Truth } from "./truth";
 import { notConnectedWorkforce, workforceReadPort } from "./workforce";
 
@@ -70,6 +79,78 @@ async function nonTerminalAttempts(
   );
   return lists.flat();
 }
+
+/**
+ * The measured sources behind tiles that used to say NOT AVAILABLE (decision 0069). Each
+ * read is independent and fails to an explicit miss, so one unreadable table never darkens
+ * the others. Owner/admin scope only: memory, spend and the backlog are tenant-wide.
+ */
+export const loadTruthProjection = cache(async (): Promise<TruthProjection | null> => {
+  const ctx = await getCockpitContext();
+  if (!ctx) return null;
+  const { container, scope } = ctx;
+  if (scope.kind !== "global") {
+    const scoped = missing<never>(
+      "not_available",
+      "Memory, spend and self-development are visible to owner/admin scope only.",
+    );
+    return { memory: scoped, spend: scoped, selfDevelopment: scoped, capabilities: scoped };
+  }
+  const db = container.db;
+  if (!db) {
+    const noDb = missing<never>("not_connected", "This process has no durable database.");
+    return { memory: noDb, spend: noDb, selfDevelopment: noDb, capabilities: noDb };
+  }
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [memory, spend, selfDevelopment, capabilities] = await Promise.all([
+    read("Durable memory", async () => {
+      const [m] = await db
+        .select({
+          records: count(),
+          active: sql<number>`count(*) filter (where ${memoryRecords.status} = 'active')`,
+        })
+        .from(memoryRecords);
+      const [r] = await db
+        .select({ n: count() })
+        .from(memoryRetrievalLog)
+        .where(gte(memoryRetrievalLog.retrievedAt, since));
+      return {
+        records: Number(m?.records ?? 0),
+        active: Number(m?.active ?? 0),
+        retrievals24h: Number(r?.n ?? 0),
+      };
+    }),
+    read("Spend ledger", async () => {
+      const [row] = await db
+        .select({
+          calls: count(),
+          tokens: sql<number>`coalesce(sum(${spendLedger.totalTokens}), 0)`,
+          unpriced: sql<number>`count(*) filter (where ${spendLedger.amount} is null)`,
+          amount: sql<number | null>`sum(${spendLedger.amount})`,
+          currency: sql<string | null>`min(${spendLedger.currency})`,
+        })
+        .from(spendLedger)
+        .where(gte(spendLedger.observedAt, since));
+      const unpriced = Number(row?.unpriced ?? 0);
+      return {
+        calls24h: Number(row?.calls ?? 0),
+        tokens24h: Number(row?.tokens ?? 0),
+        unpriced24h: unpriced,
+        amount24h: unpriced === 0 && row?.amount != null ? Number(row.amount) : null,
+        currency: row?.currency ?? null,
+      };
+    }),
+    read("Improvement backlog", () =>
+      new DurableImprovementBacklog(container.durableMemory).list({ limit: 200 }),
+    ),
+    read("Measured capabilities", async () => {
+      const facts = await measureRuntimeCapabilities(container);
+      if (!facts) throw new Error("no database");
+      return facts;
+    }),
+  ]);
+  return { memory, spend, selfDevelopment, capabilities };
+});
 
 export const loadSources = cache(async (): Promise<CockpitSources | null> => {
   const ctx = await getCockpitContext();
@@ -195,6 +276,7 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
     qualityJobs,
     escalatedJobs,
     workspaces,
+    truth: (await loadTruthProjection()) ?? undefined,
   };
 });
 

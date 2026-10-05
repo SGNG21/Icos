@@ -23,7 +23,15 @@ export default async function ProvidersPage() {
       : null;
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const tree = snapshot.workers.kind === "real" ? buildResourceTree(snapshot.workers.value) : null;
-  const cost = missing<number>("not_available", "No cost ledger.", "BR-05");
+  // Money is real only when every call in the window is priced; otherwise the tile says
+  // UNPRICED with the count (decision 0066). Breakdowns by provider/mission/client stay
+  // unavailable: the ledger carries goal and model, not provider or client.
+  const cost = snapshot.metrics.cost;
+  const breakdown = missing<number>(
+    "not_available",
+    "The spend ledger attributes calls to goals and models, not to providers or clients.",
+    "BR-05",
+  );
 
   return (
     <>
@@ -35,13 +43,13 @@ export default async function ProvidersPage() {
       </div>
 
       <div className="cx-metrics">
-        <MetricTile label="Provider health" truth={providerTelemetry()} />
+        <MetricTile label="Routable workers" truth={snapshot.metrics.providerHealth} />
         <MetricTile label="Latency p95" truth={providerTelemetry()} />
-        <MetricTile label="Token throughput" truth={providerTelemetry()} />
-        <MetricTile label="Cost today" truth={cost} />
-        <MetricTile label="Cost by provider" truth={cost} />
-        <MetricTile label="Cost by mission" truth={cost} />
-        <MetricTile label="Cost by client" truth={cost} />
+        <MetricTile label="Tokens 24h" truth={snapshot.metrics.tokenThroughput} />
+        <MetricTile label="Cost 24h" truth={cost} />
+        <MetricTile label="Cost by provider" truth={breakdown} />
+        <MetricTile label="Cost by mission" truth={breakdown} />
+        <MetricTile label="Cost by client" truth={breakdown} />
         <MetricTile label="Queue pressure" truth={snapshot.metrics.readyQueue} />
       </div>
 
@@ -248,10 +256,12 @@ export default async function ProvidersPage() {
       </Panel>
 
       <Unavailable
-        title="Billing, per-provider latency and token metering have no ICOS source"
+        title="Per-provider latency and cost breakdowns have no ICOS source"
         requirement="BR-04 · BR-05"
       >
-        These views stay empty rather than estimated.
+        Tokens and call counts come from the spend ledger; money appears only once a price table
+        prices every call in the window. Latency is not measured. These views stay empty rather than
+        estimated.
       </Unavailable>
     </>
   );

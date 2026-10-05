@@ -12,6 +12,14 @@ import {
   type QualityFact,
   type WorkspaceFact,
 } from "./pipeline";
+import {
+  costMetric,
+  memoryMetric,
+  providerHealthMetric,
+  selfDevelopmentMetric,
+  tokenThroughputMetric,
+  type TruthProjection,
+} from "./truth-projection";
 import { isReal, missing, real, type Truth } from "./truth";
 
 /**
@@ -50,6 +58,11 @@ export interface CockpitSources {
   escalatedJobs: Truth<number>;
   /** Workspace registry: integration lifecycle, leases, fencing tokens. */
   workspaces: Truth<WorkspaceFact[]>;
+  /**
+   * Measured sources behind tiles that were NOT AVAILABLE (decision 0069). Optional so a
+   * caller that cannot read them keeps the honest miss, requirement code included.
+   */
+  truth?: TruthProjection;
 }
 
 export type MetricKey =
@@ -716,6 +729,24 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
   const mustNow = real(alerts.filter((a) => a.severity === "P0").length, "P0 alerts");
   const telemetry = (what: string) =>
     missing<number>("not_available", `${what} is not measured by any ICOS source yet.`, "BR-04");
+  const truth = sources.truth;
+  const providerHealth = providerHealthMetric(sources.workers);
+  const memoryMetricValue: Truth<number> = truth
+    ? memoryMetric(truth.memory)
+    : missing("not_available", "Durable memory exposes no health or volume metric.", "BR-02");
+  const selfDevMetric: Truth<number> = truth
+    ? selfDevelopmentMetric(truth.selfDevelopment)
+    : missing("not_available", "Improvement candidates are not persisted.", "BR-08");
+  const cost: Truth<number | string> = truth
+    ? costMetric(truth.spend)
+    : missing(
+        "not_available",
+        "No cost ledger exists; cost is never estimated in the UI.",
+        "BR-05",
+      );
+  const tokenThroughput: Truth<number> = truth
+    ? tokenThroughputMetric(truth.spend)
+    : telemetry("Token throughput");
 
   const workerCount = workers
     ? real(workers.filter((w) => w.routable).length, "routable workers")
@@ -793,23 +824,25 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     {
       key: "providers",
       label: "Providers",
-      tone: "unknown",
-      metric: telemetry("Provider health"),
-      metricLabel: "healthy",
-      activity: 0,
+      tone: !isReal(providerHealth)
+        ? "unknown"
+        : providerHealth.value === 0
+          ? "critical"
+          : providerHealth.value < (isReal(sources.workers) ? sources.workers.value.length : 0)
+            ? "warn"
+            : "ok",
+      metric: providerHealth,
+      metricLabel: "routable",
+      activity: isReal(providerHealth) ? providerHealth.value : 0,
       href: "/cockpit/providers",
     },
     {
       key: "memory",
       label: "Memory",
-      tone: "unknown",
-      metric: missing(
-        "not_available",
-        "Durable memory exposes no health or volume metric.",
-        "BR-02",
-      ),
-      metricLabel: "",
-      activity: 0,
+      tone: !isReal(memoryMetricValue) ? "unknown" : "ok",
+      metric: memoryMetricValue,
+      metricLabel: isReal(memoryMetricValue) ? "records" : "",
+      activity: truth && isReal(truth.memory) ? truth.memory.value.retrievals24h : 0,
       href: "/cockpit/system",
     },
     {
@@ -842,10 +875,10 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     {
       key: "self-development",
       label: "Self-dev",
-      tone: "unknown",
-      metric: missing("not_available", "Improvement candidates are not persisted.", "BR-08"),
-      metricLabel: "",
-      activity: 0,
+      tone: !isReal(selfDevMetric) ? "unknown" : "autonomy",
+      metric: selfDevMetric,
+      metricLabel: isReal(selfDevMetric) ? "candidates" : "",
+      activity: isReal(selfDevMetric) ? selfDevMetric.value : 0,
       href: "/cockpit/self-development",
     },
     {
@@ -882,13 +915,9 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
       reviewBacklog,
       integrationBacklog: backlog,
       mustNow,
-      providerHealth: telemetry("Provider health"),
-      cost: missing(
-        "not_available",
-        "No cost ledger exists; cost is never estimated in the UI.",
-        "BR-05",
-      ),
-      tokenThroughput: telemetry("Token throughput"),
+      providerHealth,
+      cost,
+      tokenThroughput,
       latency: telemetry("Provider latency"),
       humanInterventions,
     },

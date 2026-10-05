@@ -1,7 +1,9 @@
 import { CommandButton, NotCommandable } from "@/components/cockpit/command-button";
 import { ControlStatePanel } from "@/components/cockpit/control-state";
-import { Panel, ToneBadge } from "@/components/cockpit/primitives";
-import { loadSnapshot, loadSystemFacts } from "@/features/cockpit/load";
+import { Panel, ToneBadge, TruthValue } from "@/components/cockpit/primitives";
+import { loadSnapshot, loadSystemFacts, loadTruthProjection } from "@/features/cockpit/load";
+import { CAPABILITY_TONE } from "@/features/cockpit/truth-projection";
+import type { Truth } from "@/features/cockpit/truth";
 
 export const metadata = { title: "System" };
 
@@ -16,7 +18,11 @@ const NOT_COMMANDABLE = [
 ];
 
 export default async function SystemPage() {
-  const [facts, snapshot] = await Promise.all([loadSystemFacts(), loadSnapshot()]);
+  const [facts, snapshot, truth] = await Promise.all([
+    loadSystemFacts(),
+    loadSnapshot(),
+    loadTruthProjection(),
+  ]);
   if (!facts || !snapshot) return null;
 
   return (
@@ -62,6 +68,46 @@ export default async function SystemPage() {
             <li>an unreadable flag row is treated as everything off (fail closed)</li>
           </ul>
         </div>
+      </Panel>
+
+      <Panel
+        title="Measured capabilities"
+        eyebrow="What ICOS can do right now — the same measurement it answers with in conversation"
+      >
+        {!truth || truth.capabilities.kind !== "real" ? (
+          <TruthValue
+            truth={(truth?.capabilities ?? snapshot.metrics.autonomyLevel) as Truth<string>}
+          />
+        ) : (
+          <table className="cx-table">
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Capability</th>
+                <th>Evidence (measured now)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {truth.capabilities.value.map((f) => (
+                <tr key={f.key}>
+                  <td>
+                    <ToneBadge tone={CAPABILITY_TONE[f.state]} label={f.state} size="sm" />
+                  </td>
+                  <td>
+                    {f.label} <code className="cx-dim">{f.key}</code>
+                  </td>
+                  <td className="cx-dim">{f.evidence}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="cx-dim">
+          AUTONOMOUS = no approval needed · GOVERNED = through a governed path · DEGRADED = part of
+          it is measurably down · NOT_CONFIGURED = a setting is missing · NOT_CONNECTED = not
+          available in this runtime. Nothing here is declared; every row is a probe of this process
+          and this database (decision 0062).
+        </p>
       </Panel>
 
       <div className="cx-grid2">

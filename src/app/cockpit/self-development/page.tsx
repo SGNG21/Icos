@@ -1,5 +1,6 @@
-import { Panel, Unavailable } from "@/components/cockpit/primitives";
-import { getCockpitContext } from "@/features/cockpit/load";
+import { Panel, ToneBadge, TruthValue, Unavailable } from "@/components/cockpit/primitives";
+import { getCockpitContext, loadTruthProjection } from "@/features/cockpit/load";
+import { candidatesByStatus } from "@/features/cockpit/truth-projection";
 
 export const metadata = { title: "Self-development" };
 
@@ -17,22 +18,35 @@ const LIFECYCLE = [
 ];
 const COLUMNS = [
   "Candidate",
-  "Source",
-  "Impact",
-  "Risk",
-  "Reversibility",
-  "Effort",
-  "Confidence",
-  "Autonomy gain",
-  "Reliability gain",
-  "Security gain",
-  "Cost gain",
-  "Throughput gain",
+  "Category",
+  "Target",
+  "Priority",
+  "Proposed by",
+  "Proposed at",
   "State",
 ];
 
+/** Backlog statuses mapped onto the lifecycle stages they evidence. Others have no source yet. */
+const STAGE_OF_STATUS: Partial<Record<string, string>> = {
+  proposed: "CANDIDATE",
+  under_review: "CANDIDATE",
+  approved: "GOAL",
+  implemented: "INTEGRATION",
+};
+
 export default async function SelfDevelopmentPage() {
   if (!(await getCockpitContext())) return null;
+  const truth = await loadTruthProjection();
+  const backlog = truth?.selfDevelopment;
+  const candidates = backlog?.kind === "real" ? backlog.value : null;
+  const byStatus = candidates ? candidatesByStatus(candidates) : null;
+  const stageCount = (stage: string): number | null => {
+    if (!byStatus) return null;
+    const statuses = Object.entries(STAGE_OF_STATUS)
+      .filter(([, s]) => s === stage)
+      .map(([status]) => status as keyof typeof byStatus);
+    return statuses.length ? statuses.reduce((n, s) => n + byStatus[s], 0) : null;
+  };
 
   return (
     <>
@@ -45,21 +59,30 @@ export default async function SelfDevelopmentPage() {
 
       <Panel title="Improvement lifecycle" eyebrow="Governed path of every self-change">
         <ol className="cx-lifecycle" aria-label="Improvement lifecycle">
-          {LIFECYCLE.map((s) => (
-            <li key={s}>
-              {s}
-              <span
-                className="cx-missing"
-                data-kind="not_available"
-                title="Candidates ARE persisted; no cockpit read path counts them (BR-08)."
-              >
-                —
-              </span>
-            </li>
-          ))}
+          {LIFECYCLE.map((s) => {
+            const n = stageCount(s);
+            return (
+              <li key={s}>
+                {s}
+                {n === null ? (
+                  <span
+                    className="cx-missing"
+                    data-kind="not_available"
+                    title="No durable source records this stage yet."
+                  >
+                    —
+                  </span>
+                ) : (
+                  <strong>{n}</strong>
+                )}
+              </li>
+            );
+          })}
         </ol>
         <p className="cx-dim">
-          Stage counts appear here once a cockpit read path exposes the durable backlog.
+          CANDIDATE, GOAL and INTEGRATION are counted from the durable backlog (proposed / under
+          review, approved, implemented). The other stages have no durable source yet and stay
+          unmarked rather than guessed.
         </p>
       </Panel>
 
@@ -74,16 +97,57 @@ export default async function SelfDevelopmentPage() {
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td colSpan={COLUMNS.length}>
-                  <Unavailable title="Improvement candidates are NOT AVAILABLE" requirement="BR-08">
-                    The backlog IS durable: <code>DurableImprovementBacklog</code> persists every
-                    candidate in durable memory, so a restart no longer forgets them. What is
-                    missing is a cockpit read path — nothing here can read that store yet, so no
-                    candidate is shown rather than an invented one.
-                  </Unavailable>
-                </td>
-              </tr>
+              {!candidates ? (
+                <tr>
+                  <td colSpan={COLUMNS.length}>
+                    {backlog ? (
+                      <TruthValue truth={backlog} />
+                    ) : (
+                      <Unavailable
+                        title="Improvement candidates are NOT AVAILABLE"
+                        requirement="BR-08"
+                      >
+                        The durable backlog could not be read in this scope.
+                      </Unavailable>
+                    )}
+                  </td>
+                </tr>
+              ) : candidates.length === 0 ? (
+                <tr>
+                  <td colSpan={COLUMNS.length}>
+                    <p className="cx-empty">The durable backlog holds no candidate.</p>
+                  </td>
+                </tr>
+              ) : (
+                candidates.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      <strong>{c.title}</strong>
+                      <p className="cx-dim">{c.rationale}</p>
+                    </td>
+                    <td>{c.category}</td>
+                    <td>
+                      <code>{c.targetComponent}</code>
+                    </td>
+                    <td>{c.priority}</td>
+                    <td>{c.proposedBy}</td>
+                    <td>{new Date(c.proposedAt).toISOString().slice(0, 16).replace("T", " ")}</td>
+                    <td>
+                      <ToneBadge
+                        tone={
+                          c.status === "implemented"
+                            ? "ok"
+                            : c.status === "rejected" || c.status === "superseded"
+                              ? "unknown"
+                              : "autonomy"
+                        }
+                        label={c.status}
+                        size="sm"
+                      />
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
