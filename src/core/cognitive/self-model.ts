@@ -23,6 +23,14 @@ export const CAPABILITY_STATES = [
   "APPROVAL_REQUIRED",
   /** Architecturally supported, not available in THIS runtime. Never claimed as usable. */
   "NOT_CONNECTED",
+  /**
+   * Reachable, but a configuration VALUE is unset (a model id, a connector instance). The
+   * fix is a setting, not code — which is what the owner needs to know. Collapsing this into
+   * NOT_CONNECTED made "set one env var" indistinguishable from "nothing is wired".
+   */
+  "NOT_CONFIGURED",
+  /** Available, and measurably impaired: part of the fleet behind it is down. */
+  "DEGRADED",
   /** Genuinely absent from ICOS. */
   "NOT_SUPPORTED",
 ] as const;
@@ -42,7 +50,22 @@ export type CapabilityFact = {
  * `undefined` means "could not be determined" — which fails closed to
  * NOT_CONNECTED rather than being assumed available.
  */
+/** One compute provider as the worker registry sees it, after the durable health probes. */
+export type ComputeProviderProbe = {
+  /** Declared in registration metadata; `(non déclaré)` when the worker names none. */
+  readonly provider: string;
+  readonly registered: number;
+  /** Healthy AND available right now. */
+  readonly routable: number;
+};
+
 export type RuntimeCapabilityProbe = {
+  /**
+   * The model PROVIDER (OmniRoute) is configured: URL and key present. Read from the same
+   * source the compute fleet and voice probes use. Reachability of a provider is NOT
+   * capability — it only decides whether a missing model is NOT_CONFIGURED or NOT_CONNECTED.
+   */
+  readonly providerConfigured: boolean | undefined;
   readonly cognitionConfigured: boolean | undefined;
   readonly conversationDurable: boolean | undefined;
   readonly memoryDurable: boolean | undefined;
@@ -73,6 +96,8 @@ export type RuntimeCapabilityProbe = {
   readonly realtimeConnectors: number | undefined;
   /** Canonical durable brains. Logical roles — never counted as compute workers. */
   readonly durableBrains: number | undefined;
+  /** Per-provider fleet health, from the worker registry's probe evidence. */
+  readonly computeProviders: readonly ComputeProviderProbe[] | undefined;
   readonly registeredCapabilities: number | undefined;
   readonly speechToText: boolean | undefined;
   readonly textToSpeech: boolean | undefined;
@@ -88,14 +113,52 @@ const some = (n: number | undefined) => typeof n === "number" && n > 0;
 export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[] {
   const toolsUsable = some(probe.toolConnectors) && some(probe.toolGrants);
   const canThink = yes(probe.cognitionConfigured);
+  /* Provider present, model id absent: a setting is missing, not a subsystem. */
+  const unconfigured = (configured: boolean | undefined): CapabilityState =>
+    yes(probe.providerConfigured) && configured === false ? "NOT_CONFIGURED" : "NOT_CONNECTED";
+  const noEngine = yes(probe.providerConfigured)
+    ? "fournisseur de modèles configuré, aucun modèle de conversation réglé (ICOS_COGNITIVE_MODEL)"
+    : "aucun moteur cognitif configuré";
+  const providers = probe.computeProviders;
+  const fleet = {
+    registered: providers?.reduce((n, p) => n + p.registered, 0) ?? 0,
+    routable: providers?.reduce((n, p) => n + p.routable, 0) ?? 0,
+  };
+  const fleetEvidence = providers
+    ?.map((p) => `${p.provider} ${p.routable}/${p.registered}`)
+    .join(", ");
   const facts: CapabilityFact[] = [
     {
       key: "conversation.context",
       label: "converser en gardant le contexte de la conversation",
-      state: canThink && yes(probe.conversationDurable) ? "AUTONOMOUS" : "NOT_CONNECTED",
-      evidence: canThink
-        ? "moteur cognitif configuré, tours persistés"
-        : "aucun moteur cognitif configuré",
+      state:
+        canThink && yes(probe.conversationDurable)
+          ? "AUTONOMOUS"
+          : unconfigured(probe.cognitionConfigured),
+      evidence: canThink ? "moteur cognitif configuré, tours persistés" : noEngine,
+    },
+    {
+      key: "compute.providers",
+      label: "joindre des fournisseurs de calcul (modèles) pour le travail délégué",
+      /*
+       * MEASURED PER PROVIDER, from the same probe evidence that decides routing. A fleet
+       * of 15 with 12 routable is DEGRADED — true and actionable — where "15 workers" would
+       * describe a fleet ICOS does not have, and "12 workers" would hide the three dead ones.
+       */
+      state: !providers
+        ? "NOT_CONNECTED"
+        : providers.length === 0
+          ? unconfigured(false)
+          : fleet.routable === 0
+            ? "NOT_CONNECTED"
+            : fleet.routable < fleet.registered
+              ? "DEGRADED"
+              : "GOVERNED",
+      evidence: !providers
+        ? "flotte de calcul non mesurable"
+        : providers.length === 0
+          ? "aucun worker enregistré (flotte non amorcée)"
+          : `workers routables ${fleet.routable}/${fleet.registered} — ${fleetEvidence}`,
     },
     {
       key: "memory.durable",
@@ -106,8 +169,8 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
     {
       key: "reasoning.propose",
       label: "raisonner, planifier et proposer un objectif ou une action",
-      state: canThink ? "AUTONOMOUS" : "NOT_CONNECTED",
-      evidence: canThink ? "moteur cognitif configuré" : "aucun moteur cognitif configuré",
+      state: canThink ? "AUTONOMOUS" : unconfigured(probe.cognitionConfigured),
+      evidence: canThink ? "moteur cognitif configuré" : noEngine,
     },
     {
       key: "mission.launch",
@@ -172,20 +235,33 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
     {
       key: "workforce.delegate",
       label: "déléguer du travail à des workers ou agents",
-      state: some(probe.registeredWorkers) ? "GOVERNED" : "NOT_CONNECTED",
+      /* Registered is not routable: delegation needs a worker that can take work NOW. */
+      state: !some(probe.registeredWorkers)
+        ? "NOT_CONNECTED"
+        : !some(probe.routableWorkers)
+          ? "NOT_CONNECTED"
+          : (probe.routableWorkers ?? 0) < (probe.registeredWorkers ?? 0)
+            ? "DEGRADED"
+            : "GOVERNED",
       evidence: some(probe.registeredWorkers)
-        ? `${probe.registeredWorkers} worker(s) enregistré(s)`
+        ? `${probe.routableWorkers ?? "?"} worker(s) routable(s) sur ${probe.registeredWorkers} enregistré(s)${some(probe.durableBrains) ? `, ${probe.durableBrains} cerveau(x) durable(s)` : ", aucun cerveau durable"}`
         : "aucun worker enregistré",
     },
     {
       key: "voice.speech",
       label: "écouter et répondre à la voix",
-      state: yes(probe.speechToText) ? "AUTONOMOUS" : "NOT_CONNECTED",
+      state: yes(probe.speechToText)
+        ? yes(probe.textToSpeech)
+          ? "AUTONOMOUS"
+          : "DEGRADED"
+        : unconfigured(probe.speechToText),
       evidence: yes(probe.speechToText)
         ? yes(probe.textToSpeech)
           ? "reconnaissance et synthèse vocale configurées"
-          : "reconnaissance vocale configurée, synthèse indisponible (réponse en texte)"
-        : "reconnaissance vocale non configurée",
+          : "reconnaissance vocale configurée, synthèse non réglée (réponse en texte)"
+        : yes(probe.providerConfigured)
+          ? "modèle de reconnaissance vocale non réglé (ICOS_VOICE_STT_MODEL)"
+          : "reconnaissance vocale non configurée",
     },
   ];
   return facts;

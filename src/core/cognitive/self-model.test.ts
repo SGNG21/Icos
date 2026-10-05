@@ -17,6 +17,7 @@ import {
 
 /** Everything connected: the shape a fully wired ICOS reports. */
 const FULL: RuntimeCapabilityProbe = {
+  providerConfigured: true,
   cognitionConfigured: true,
   conversationDurable: true,
   memoryDurable: true,
@@ -29,6 +30,7 @@ const FULL: RuntimeCapabilityProbe = {
   governedExecutors: 2,
   realtimeConnectors: 1,
   durableBrains: 12,
+  computeProviders: [{ provider: "nvidia", registered: 4, routable: 4 }],
   registeredCapabilities: 7,
   speechToText: true,
   textToSpeech: true,
@@ -44,6 +46,7 @@ const PHONE_RUNTIME: RuntimeCapabilityProbe = {
   governedExecutors: 0,
   realtimeConnectors: 0,
   durableBrains: 0,
+  computeProviders: [],
   registeredCapabilities: 0,
 };
 
@@ -118,6 +121,7 @@ describe("self-model: the description is a measurement, not prose", () => {
 
   it("fails closed: an unmeasurable capability is NOT_CONNECTED, never assumed", () => {
     const unknown: RuntimeCapabilityProbe = {
+      providerConfigured: undefined,
       cognitionConfigured: undefined,
       conversationDurable: undefined,
       memoryDurable: undefined,
@@ -127,10 +131,11 @@ describe("self-model: the description is a measurement, not prose", () => {
       toolGrants: undefined,
       registeredWorkers: undefined,
       routableWorkers: undefined,
-  governedExecutors: undefined,
-  realtimeConnectors: undefined,
-  durableBrains: undefined,
-  registeredCapabilities: undefined,
+      governedExecutors: undefined,
+      realtimeConnectors: undefined,
+      durableBrains: undefined,
+      computeProviders: undefined,
+      registeredCapabilities: undefined,
       speechToText: undefined,
       textToSpeech: undefined,
     };
@@ -139,20 +144,63 @@ describe("self-model: the description is a measurement, not prose", () => {
   });
 
   it("withdraws everything cognitive when no engine is configured", () => {
-    const noEngine = { ...FULL, cognitionConfigured: false };
+    const noEngine = { ...FULL, providerConfigured: false, cognitionConfigured: false };
     expect(stateOf(noEngine, "conversation.context")).toBe("NOT_CONNECTED");
     expect(stateOf(noEngine, "reasoning.propose")).toBe("NOT_CONNECTED");
   });
 
-  it("says text-only, honestly, when TTS is missing but STT works", () => {
+  it("distinguishes a missing SETTING from a missing subsystem (decision 0067 item 4)", () => {
+    // Provider reachable, model id unset: one env var away. Say so.
+    const unset = { ...FULL, cognitionConfigured: false, speechToText: false };
+    expect(stateOf(unset, "conversation.context")).toBe("NOT_CONFIGURED");
+    expect(stateOf(unset, "reasoning.propose")).toBe("NOT_CONFIGURED");
+    expect(stateOf(unset, "voice.speech")).toBe("NOT_CONFIGURED");
+    expect(capabilityFacts(unset).find((f) => f.key === "voice.speech")?.evidence).toContain(
+      "ICOS_VOICE_STT_MODEL",
+    );
+    // No provider at all: nothing is one setting away.
+    const none = { ...unset, providerConfigured: false };
+    expect(stateOf(none, "conversation.context")).toBe("NOT_CONNECTED");
+    expect(stateOf(none, "voice.speech")).toBe("NOT_CONNECTED");
+  });
+
+  it("reports the compute fleet per provider, DEGRADED when part of it is down", () => {
+    const mixed = {
+      ...FULL,
+      registeredWorkers: 15,
+      routableWorkers: 12,
+      computeProviders: [
+        { provider: "nvidia", registered: 11, routable: 11 },
+        { provider: "oc", registered: 3, routable: 0 },
+        { provider: "groq", registered: 1, routable: 1 },
+      ],
+    };
+    const fact = capabilityFacts(mixed).find((f) => f.key === "compute.providers")!;
+    expect(fact.state).toBe("DEGRADED");
+    expect(fact.evidence).toBe("workers routables 12/15 — nvidia 11/11, oc 0/3, groq 1/1");
+    expect(stateOf(mixed, "workforce.delegate")).toBe("DEGRADED");
+    // All routable: governed. None routable: not connected, however many are registered.
+    expect(stateOf(FULL, "compute.providers")).toBe("GOVERNED");
+    expect(stateOf({ ...mixed, routableWorkers: 0 }, "workforce.delegate")).toBe("NOT_CONNECTED");
+    expect(
+      stateOf(
+        { ...FULL, computeProviders: [{ provider: "oc", registered: 3, routable: 0 }] },
+        "compute.providers",
+      ),
+    ).toBe("NOT_CONNECTED");
+    // Empty registry with a provider configured: the fleet was never bootstrapped — a setting.
+    expect(stateOf({ ...FULL, computeProviders: [] }, "compute.providers")).toBe("NOT_CONFIGURED");
+  });
+
+  it("voice with STT but no TTS is DEGRADED, and says it answers in text", () => {
     const fact = capabilityFacts({ ...FULL, textToSpeech: false }).find(
       (f) => f.key === "voice.speech",
     );
-    expect(fact?.state).toBe("AUTONOMOUS");
+    expect(fact?.state).toBe("DEGRADED");
     expect(fact?.evidence).toContain("texte");
   });
 
-  it("only ever uses the five declared states", () => {
+  it("only ever uses the declared states", () => {
     for (const probe of [FULL, PHONE_RUNTIME]) {
       for (const fact of capabilityFacts(probe)) {
         expect(CAPABILITY_STATES).toContain(fact.state);

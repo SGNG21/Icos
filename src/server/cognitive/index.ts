@@ -34,7 +34,7 @@ import {
 } from "./current-state-source";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { workforceAgents } from "@/server/database/workforce-schema";
 import {
   executableRuntimes,
@@ -164,6 +164,28 @@ function runtimeProbesFor(
     countCapabilities: () => count(capabilitiesTable),
     cognitionConfigured: () => engine.label !== "not_connected",
     missionIntakeConnected: () => missionsConnected,
+    /*
+     * The fleet as the routing probes left it, grouped by the provider each worker DECLARED
+     * at registration (`metadata.provider`). Undeclared is reported as such, never guessed.
+     */
+    computeProviders: async () => {
+      const rows = await db
+        .select({
+          provider: sql<string | null>`${workers.metadata}->>'provider'`,
+          registered: sqlCount(),
+          routable: sql<number>`count(*) filter (where ${workers.health} = 'healthy' and ${workers.availability} = 'available')`,
+        })
+        .from(workers)
+        .groupBy(sql`${workers.metadata}->>'provider'`);
+      return rows
+        .map((r) => ({
+          provider: r.provider ?? "(non déclaré)",
+          registered: Number(r.registered),
+          routable: Number(r.routable),
+        }))
+        .sort((a, b) => a.provider.localeCompare(b.provider));
+    },
+    providerConfigured: () => Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY),
     // The sweepers that advance an approved mission only run in this mode
     // (startProductionServices); without them nothing continues after a disconnect.
     durableSchedulerRunning: () => env.NODE_ENV === "production" && env.PERSISTENCE === "postgres",

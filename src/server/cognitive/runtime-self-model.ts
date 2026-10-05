@@ -1,5 +1,9 @@
 import type { CognitiveScope } from "@/core/cognitive/contracts";
-import { capabilityCandidates, type RuntimeCapabilityProbe } from "@/core/cognitive/self-model";
+import {
+  capabilityCandidates,
+  type ComputeProviderProbe,
+  type RuntimeCapabilityProbe,
+} from "@/core/cognitive/self-model";
 import type { ContextCandidate } from "@/core/cognitive/context-selection";
 import type { SelfModelSource } from "@/server/cognitive/context-assembler";
 
@@ -27,6 +31,10 @@ export type RuntimeProbes = {
   /** Canonical durable brains — logical roles, never compute workers. */
   readonly countDurableBrains: () => Promise<number | undefined>;
   readonly countCapabilities: () => Promise<number | undefined>;
+  /** Fleet health per provider, from the registry's durable probe evidence. */
+  readonly computeProviders: () => Promise<readonly ComputeProviderProbe[] | undefined>;
+  /** URL and key of the model provider are set. Not a capability: a classifier of absence. */
+  readonly providerConfigured: () => boolean;
   readonly cognitionConfigured: () => boolean;
   readonly missionIntakeConnected: () => boolean;
   readonly durableSchedulerRunning: () => boolean;
@@ -35,7 +43,7 @@ export type RuntimeProbes = {
 };
 
 /** A probe that throws is a probe that did not answer: `undefined`, never `0`. */
-const safely = async (probe: () => Promise<number | undefined>): Promise<number | undefined> => {
+const safely = async <T>(probe: () => Promise<T | undefined>): Promise<T | undefined> => {
   try {
     return await probe();
   } catch {
@@ -56,6 +64,7 @@ export class RuntimeSelfModel implements SelfModelSource {
       governedExecutors,
       realtimeConnectors,
       durableBrains,
+      computeProviders,
     ] = await Promise.all([
       safely(this.probes.countToolConnectors),
       safely(this.probes.countToolGrants),
@@ -65,8 +74,10 @@ export class RuntimeSelfModel implements SelfModelSource {
       safely(this.probes.countGovernedExecutors),
       safely(this.probes.countRealtimeConnectors),
       safely(this.probes.countDurableBrains),
+      safely(this.probes.computeProviders),
     ]);
     return {
+      providerConfigured: this.probes.providerConfigured(),
       cognitionConfigured: this.probes.cognitionConfigured(),
       // Reaching this class at all means the PostgreSQL runtime was composed.
       conversationDurable: true,
@@ -80,6 +91,7 @@ export class RuntimeSelfModel implements SelfModelSource {
       governedExecutors,
       realtimeConnectors,
       durableBrains,
+      computeProviders,
       registeredCapabilities,
       speechToText: this.probes.speechToText(),
       textToSpeech: this.probes.textToSpeech(),
