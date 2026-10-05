@@ -6,7 +6,7 @@ import {
 import { WorkflowIdConflictPolicy, WorkflowIdReusePolicy } from "@temporalio/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { TaskExecutionDispatchInput } from "./ports";
+import type { DurableExecutionReconciler, TaskExecutionDispatchInput } from "./ports";
 import { EXECUTION_IDENTITY_MEMO } from "./temporal-existing-execution";
 import { TemporalTaskExecutionDispatcher } from "./temporal-task-execution-dispatcher";
 
@@ -232,7 +232,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
 
   function dispatcherWhereIdIsTaken(
     description: ReturnType<typeof describedAs> | Error,
-    reconciler?: { hasTerminalResult: ReturnType<typeof vi.fn> },
+    reconciler?: DurableExecutionReconciler,
   ) {
     /* The id is taken, so Temporal refuses to start: the only way to an existing one. */
     const start = vi.fn(async () => {
@@ -321,7 +321,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
   });
 
   it("CLOSED_WITH_DURABLE_RESULT_RECONCILES: settled work is not run again", async () => {
-    const hasTerminalResult = vi.fn(async () => true);
+    const hasTerminalResult = vi.fn(async (_workflowId: string) => true);
     const { dispatcher, start } = dispatcherWhereIdIsTaken(
       describedAs({ status: "COMPLETED", taskQueue: "icos-tasks", memo: SAME_IDENTITY }),
       { hasTerminalResult },
@@ -343,7 +343,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
      */
     const { dispatcher } = dispatcherWhereIdIsTaken(
       describedAs({ status: "COMPLETED", taskQueue: "icos-tasks", memo: SAME_IDENTITY }),
-      { hasTerminalResult: vi.fn(async () => false) },
+      { hasTerminalResult: vi.fn(async (_workflowId: string) => false) },
     );
 
     await expect(dispatcher.dispatch(INPUT)).rejects.toThrow(
@@ -359,7 +359,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
      */
     const { dispatcher, start } = dispatcherWhereIdIsTaken(
       describedAs({ status: "TERMINATED", taskQueue: "icos-tasks", memo: SAME_IDENTITY }),
-      { hasTerminalResult: vi.fn(async () => false) },
+      { hasTerminalResult: vi.fn(async (_workflowId: string) => false) },
     );
 
     await expect(dispatcher.dispatch(INPUT)).rejects.toThrow(
@@ -383,7 +383,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
     const { dispatcher } = dispatcherWhereIdIsTaken(
       describedAs({ status: "COMPLETED", taskQueue: "icos-tasks", memo: SAME_IDENTITY }),
       {
-        hasTerminalResult: vi.fn(async () => {
+        hasTerminalResult: vi.fn(async (_workflowId: string): Promise<boolean> => {
           throw new Error("database down");
         }),
       },
@@ -428,7 +428,7 @@ describe("USE_EXISTING semantics: reuse is earned, never assumed", () => {
 
     for (const description of collisions) {
       const { dispatcher } = dispatcherWhereIdIsTaken(description, {
-        hasTerminalResult: vi.fn(async () => false),
+        hasTerminalResult: vi.fn(async (_workflowId: string) => false),
       });
       const outcome = await dispatcher.dispatch(INPUT).then(
         (result) => result.disposition,

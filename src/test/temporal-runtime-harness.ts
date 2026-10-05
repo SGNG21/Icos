@@ -23,6 +23,7 @@ import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { AddressInfo } from "node:net";
 
+import { Client, Connection } from "@temporalio/client";
 import { Worker, NativeConnection } from "@temporalio/worker";
 
 import { POST as executionsCompleted } from "@/app/api/internal/executions/completed/route";
@@ -141,6 +142,30 @@ export async function startTemporalRuntime(taskQueue: string): Promise<TemporalR
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
+  /*
+   * AND NOT MERELY RUNNING: until the SERVER reports the poller, the dispatcher's
+   * consumer check still answers "nobody is polling" and refuses the first dispatch.
+   *
+   * `RUNNING` is the worker's own view of itself and is reached before the first
+   * long-poll has been registered, so waiting on it alone leaves a race that shows up as
+   * TEMPORAL_NO_CONSUMER in whichever test happens to dispatch first — a failure that
+   * looks like the guard misfiring and is really the harness returning too early. The
+   * readiness condition is therefore the same question the dispatcher asks.
+   */
+  const pollerConnection = await Connection.connect({ address, connectTimeout: 15_000 });
+  const pollerClient = new Client({ connection: pollerConnection, namespace });
+  try {
+    while (Date.now() < readyBy) {
+      const described = await pollerClient.workflowService
+        .describeTaskQueue({ namespace, taskQueue: { name: taskQueue } })
+        .catch(() => undefined);
+      if ((described?.pollers?.length ?? 0) > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } finally {
+    await pollerConnection.close().catch(() => undefined);
+  }
+
   return {
     baseUrl,
     taskQueue,
@@ -151,4 +176,30 @@ export async function startTemporalRuntime(taskQueue: string): Promise<TemporalR
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+/**
+ * Waits until the SERVER reports a poller on `taskQueue`, which is the condition the
+ * dispatcher's consumer guard actually tests.
+ *
+ * Exported for suites that build their own worker rather than using the runtime above:
+ * `Worker.getState() === "RUNNING"` is the worker's own view and is reached before its
+ * first long-poll is registered, so a dispatch issued on that signal alone can still be
+ * refused for want of a consumer.
+ */
+export async function waitForQueuePoller(
+  client: Pick<Client, "workflowService">,
+  taskQueue: string,
+  options: { namespace?: string; timeoutMs?: number } = {},
+): Promise<void> {
+  const namespace = options.namespace ?? process.env.TEMPORAL_NAMESPACE ?? "default";
+  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+  for (;;) {
+    const described = await client.workflowService
+      .describeTaskQueue({ namespace, taskQueue: { name: taskQueue } })
+      .catch(() => undefined);
+    if ((described?.pollers?.length ?? 0) > 0) return;
+    if (Date.now() > deadline) throw new Error(`TEST_TEMPORAL_NO_POLLER: ${taskQueue}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
