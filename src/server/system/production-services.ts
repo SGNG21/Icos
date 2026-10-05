@@ -171,12 +171,25 @@ function chiefRelease(
 function workforceDispatchBridge(container: Container): WorkforceTaskCompute | undefined {
   const workforce = container.workforce;
   if (!workforce) return undefined;
-  const system = workforce.runtime.system("core3-dispatch");
-  const chief = workforce.runtime.actAsAgent(system, CHIEF_BRAIN_ID);
+  /*
+   * Chief is resolved LAZILY, at the first delegation, never at composition: a runtime whose
+   * brains were never seeded (every test database, a fresh deployment) must still start and
+   * dispatch exactly as before, and a refusal to act as brain-chief is then one more
+   * reported, non-fatal delegation failure — not a boot failure.
+   */
+  let chief: ReturnType<typeof workforce.chiefDelegation> | undefined;
+  const lazily: ReturnType<typeof workforce.chiefDelegation> = {
+    delegateGoal: (goal, missionId, tasks) => {
+      chief ??= workforce.chiefDelegation(
+        workforce.runtime.actAsAgent(workforce.runtime.system("core3-dispatch"), CHIEF_BRAIN_ID),
+      );
+      return chief.delegateGoal(goal, missionId, tasks);
+    },
+  };
   return boundTaskCompute(workforce.core3Compute, {
     missions: container.mission,
     goals: container.goalRepository,
-    chief: workforce.chiefDelegation(chief),
+    chief: lazily,
   });
 }
 
