@@ -531,7 +531,6 @@ describe("Phase 7C — crash/restart recovery (PostgreSQL, icos_test_7c)", () =>
     await admin.db.execute(
       sql`update mission_tasks set status = 'succeeded' where mission_id = ${settledId}`,
     );
-    const cyclesBefore = (await seed.runtime.get(settledId))!.cycleCount;
     // Unit B: prepared dispatch of a runtime-less mission (process killed after Temporal accepted).
     const legacy = await seed.missions.create({
       title: "Legacy",
@@ -554,7 +553,16 @@ describe("Phase 7C — crash/restart recovery (PostgreSQL, icos_test_7c)", () =>
     await Promise.all([a.tick(), b.tick(), a.recovery7c.sweep(), b.recovery7c.sweep()]);
 
     expect(temporal.callsFor(prepared.workflowId)).toBe(2); // original + exactly ONE replay
-    expect((await seed.runtime.get(settledId))!.cycleCount).toBe(cyclesBefore + 1); // woken once
+    /*
+     * The wake-up did its job: a mission whose every task is terminal comes back SETTLED.
+     *
+     * This used to assert `cycleCount === cyclesBefore + 1`, using "a cycle was burned" as
+     * the proxy for "woken once". Settlement is now decided before the runner spends
+     * anything, so a finished mission costs zero cycles — the proxy reads 0 while the
+     * mission is correctly succeeded. "Once, not twice" is not weakened by dropping it:
+     * that is asserted directly below, as exactly one resolved `waiting_settled` unit.
+     */
+    expect((await seed.missions.findById(settledId))!.status).toBe("succeeded");
     expect(await count(sql`select count(*) n from decisions where "workflowId" = ${wfC}`)).toBe(1);
     expect(llm.calls).toBe(1);
     // Each recovery unit was resolved exactly once (PK (kind, unit_key) + fenced claim).
