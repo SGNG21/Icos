@@ -138,3 +138,64 @@ Everything below is certified and must survive unchanged:
 the system's self-description and its autonomy honest. 4 is small and makes the rest
 observable. 5 is the only genuinely new capability. 6–9 are improvements on paths that
 already work.
+
+---
+
+## Amendment A — the governed Temporal writer (2026-10-05)
+
+### What forced it
+
+The execution-path fork fixed a real defect — declaring `ICOS_WORKER_EXEC_COMMANDS` was
+silently moving durable mission work onto a non-durable path — by making every
+`DURABLE_MISSION_TASK` go to Temporal. That part stands.
+
+What it did not account for is that the two execution paths were never equivalent. The
+in-process dispatcher ran a worker in a **governed writer worktree**: a branch, a base
+commit, a declared file scope, and an evidence trail the IntegrationGate consumes. The
+Temporal activity binds the repository **read-only** and hands the worker a scratch
+directory. Routing all mission work to the activity therefore did not relocate
+code-writing work; it removed it. ICOS could still analyse and could no longer build —
+including build itself. The symptom reached us as eight integration files in which the
+reviewer was never asked, because no worker result ever existed to review.
+
+### The decision
+
+**Temporal remains the only orchestrator for `DURABLE_MISSION_TASK`.** No second durable
+executor, no in-process production writer, no fallback. A dispatch that Temporal cannot
+consume fails closed (`TEMPORAL_NO_CONSUMER`) rather than enqueuing work nobody will run.
+
+The activity gains the writer capability instead, under this constraint:
+
+> **Write authority is granted by ICOS, never claimed by the worker.**
+
+The activity may execute write-capable work only when ICOS's own durable state says the
+task is entitled to it. Write authority is never inferred from executor presence, model
+choice, command name, task prose, or anything the caller supplies in the workflow payload
+or the process environment.
+
+### How the grant travels
+
+The worker asks ICOS what it is allowed to do, over the same authenticated internal
+callback seam it already uses to report. It is told:
+
+- the task, mission and goal it is executing for;
+- the worktree it owns, its branch and base commit, from the WorkspaceManager;
+- whether writing is permitted, and the file scope that bounds it;
+- the lease and fencing token under which the grant is valid.
+
+Nothing in that list is readable from the payload. The payload names the workflow; the
+grant comes from the registry, keyed on it. A caller who forges a payload field changes
+nothing, because the field is never read. The worker additionally refuses a worktree path
+outside the workspace root it was itself configured with, so a compromised answer cannot
+redirect a write onto the canonical checkout or another task's worktree.
+
+### What does not change
+
+- The IntegrationGate remains the only authority that merges anything. The activity
+  produces a branch and evidence; it never integrates.
+- The reviewer remains independent and routed (decision 0054, unchanged).
+- Exit code 0 is not success for a code-writing task: the completion contract still
+  requires the expected mutation, the evidence, the review and the gate.
+- The sandbox stays `(deny default)` with a disposable HOME. The widening is precise —
+  the allocated worktree becomes writable, and nothing else does. The canonical checkout
+  stays read-only for every task, writer or not.
