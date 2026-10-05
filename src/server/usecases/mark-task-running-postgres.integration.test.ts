@@ -36,7 +36,7 @@ describe("markTaskRunning integration with PostgreSQL", () => {
     // Clean up the tables we use
     await db.db.execute(
       sql.raw(
-        "TRUNCATE TABLE missions, tasks, mission_tasks, dispatch_attempts RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE workforce_assignments, missions, tasks, mission_tasks, dispatch_attempts RESTART IDENTITY CASCADE",
       ),
     );
 

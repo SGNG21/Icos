@@ -179,7 +179,7 @@ describe.runIf(ENABLED)("ICOS_SELF_BUILD_E2E — from one instruction to an inte
 
     await container.db!.execute(
       sql.raw(
-        "TRUNCATE TABLE missions, tasks, mission_tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry, goals RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE workforce_assignments, missions, tasks, mission_tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry, goals RESTART IDENTITY CASCADE",
       ),
     );
 

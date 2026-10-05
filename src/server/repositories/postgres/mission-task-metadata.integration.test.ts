@@ -41,7 +41,7 @@ describe("DEFECT 24 — inline mission task metadata", () => {
   beforeEach(async () => {
     await seed.handle.db.execute(
       sql.raw(
-        "TRUNCATE TABLE missions, tasks, mission_tasks, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE workforce_assignments, missions, tasks, mission_tasks, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items RESTART IDENTITY CASCADE",
       ),
     );
   });
