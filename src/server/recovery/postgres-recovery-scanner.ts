@@ -49,7 +49,19 @@ export class PostgresRecoveryScanner implements RecoveryScanner {
       select r.mission_id, r.updated_at
       from autonomous_mission_runtime r
       join missions m on m.id = r.mission_id
-      where r.state = 'waiting'
+      /*
+       * NOT just 'waiting'. Keyed on the runtime state alone, this missed the case that
+       * actually leaks: a runtime that ESCALATED or FAILED while the mission row was
+       * still draft and no task was active. Nothing then re-ran the supervisor, so the
+       * mission never reached a terminal state, releaseDelegation never fired, and its
+       * brains stayed occupied for ever -- two live missions sat exactly that way with
+       * every task already succeeded.
+       *
+       * The invariant is about the WORK, not the runtime's label: a non-terminal mission
+       * with nothing active is unreconciled whatever its runtime says. The not-exists
+       * clause below is what keeps live work out, and it is unchanged.
+       */
+      where r.state in ('waiting', 'escalated', 'failed')
         and m.status not in ${TERMINAL_MISSION}
         and (r.owner_token is null or r.lease_until is null or r.lease_until <= now())
         and r.updated_at <= now() - (${positiveInt(olderThanMs, "RECOVERY_INVALID_AGE")} * interval '1 millisecond')
