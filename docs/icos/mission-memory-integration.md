@@ -9,18 +9,18 @@ Conversation turns write memory (`memory.written` on every completed turn). Miss
 does not: on the live database, every mission that reached a terminal state on 2026-10-04 left
 **zero** `memory_records` rows with its `mission_id`. ICOS can run work, review it, settle it,
 and then not remember having done it. Asked "qu'as-tu fait hier ?", it answers from
-conversation turns about the *proposal*, never from the *result*.
+conversation turns about the _proposal_, never from the _result_.
 
 ## What exists (reuse, do not rebuild)
 
-| Need | Already there |
-|---|---|
-| A durable, scoped, governed memory store | `PostgresCognitiveMemoryStore.write` (`src/server/cognitive/memory-store.ts`) |
-| A `mission_id` column and a `mission` provenance source | `memory_records.mission_id`, `MemoryProvenance.sourceType: "mission"` |
-| Idempotency | `decideAgainstExisting`: same subject + same normalized content + same scope ⇒ `duplicate` |
-| Epistemic labelling | `SYSTEM_OBSERVED` ⇒ `active`, `statementKind: fact`, confidence capped by the store |
-| A terminal-mission seam on the critical path | `chiefRelease(container)` is already passed to `SupervisorService` and invoked once when a mission reaches a terminal state (`src/server/system/production-services.ts`) |
-| The client the mission belongs to | `goals.metadata.clientId` / `projectId`, written by `CanonicalGoalLauncher` |
+| Need                                                    | Already there                                                                                                                                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A durable, scoped, governed memory store                | `PostgresCognitiveMemoryStore.write` (`src/server/cognitive/memory-store.ts`)                                                                                            |
+| A `mission_id` column and a `mission` provenance source | `memory_records.mission_id`, `MemoryProvenance.sourceType: "mission"`                                                                                                    |
+| Idempotency                                             | `decideAgainstExisting`: same subject + same normalized content + same scope ⇒ `duplicate`                                                                               |
+| Epistemic labelling                                     | `SYSTEM_OBSERVED` ⇒ `active`, `statementKind: fact`, confidence capped by the store                                                                                      |
+| A terminal-mission seam on the critical path            | `chiefRelease(container)` is already passed to `SupervisorService` and invoked once when a mission reaches a terminal state (`src/server/system/production-services.ts`) |
+| The client the mission belongs to                       | `goals.metadata.clientId` / `projectId`, written by `CanonicalGoalLauncher`                                                                                              |
 
 ## The delta
 
@@ -54,7 +54,7 @@ await recordMissionSettlement(cognitiveMemory, tenantId, mission.userId, {
   missionId: mission.id,
   goalId: mission.goalId,
   title: mission.title,
-  outcome: mission.status,            // succeeded | failed | cancelled
+  outcome: mission.status, // succeeded | failed | cancelled
   reviewVerdict: lastReview?.verdict ?? null,
   resultRef: workspace?.branch ?? null,
   clientId: goal?.metadata.clientId ?? null,
