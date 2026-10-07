@@ -265,6 +265,44 @@ describe("meteredFetch — ne mesure que les complétions", () => {
   });
 });
 
+describe("meteredFetch — la mesure ne corrompt jamais une réponse réussie", () => {
+  /*
+   * DÉFAUT MESURÉ (commentaire de `observe`) : un objet qui a la FORME utile d'un `Response`
+   * mais pas `headers.get` faisait lever un TypeError à la mesure, et ce TypeError remontait
+   * à l'appelant. Une réponse de fournisseur parfaitement valide devenait une panne parce
+   * qu'ICOS n'avait pas su la compter. Compter est subordonné à servir.
+   */
+  it("rend la réponse du fournisseur quand la mesure ne sait pas l'inspecter", async () => {
+    const ledger = new FakeLedger();
+    /* Pas de `headers`, pas de `clone` : la forme minimale qu'un adaptateur peut rendre. */
+    const shaped = { ok: true, status: 200, json: async () => COMPLETION_BODY };
+    const fetchImpl = meteredFetch(async () => shaped as unknown as Response, { ledger });
+
+    const response = await fetchImpl(URL_UNDER_TEST, chatInit());
+
+    expect(response).toBe(shaped);
+    expect(await response.json()).toEqual(COMPLETION_BODY);
+    /* La dépense n'est pas effacée pour autant : elle est inscrite NON MESURÉE, jamais 0. */
+    expect(ledger.recorded).toHaveLength(1);
+    expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "NON_JSON_BODY" });
+    expect(ledger.recorded[0]?.modelId).toBe("test/model");
+  });
+
+  it("une consommation illisible n'empêche pas l'appelant de lire le corps", async () => {
+    const ledger = new FakeLedger();
+    const fetchImpl = meteredFetch(
+      async () => jsonResponse({ ...COMPLETION_BODY, usage: { prompt_tokens: "beaucoup" } }),
+      { ledger },
+    );
+
+    const response = await fetchImpl(URL_UNDER_TEST, chatInit());
+
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toMatchObject({ choices: [{ message: { content: "bonjour" } }] });
+    expect(ledger.recorded[0]?.usage).toMatchObject({ kind: "UNMETERED" });
+  });
+});
+
 describe("meteredFetch — ne corrompt pas le journal", () => {
   it("n'enregistre rien sur une réponse non 2xx et la rend inchangée", async () => {
     const ledger = new FakeLedger();
