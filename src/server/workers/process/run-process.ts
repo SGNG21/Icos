@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 
+import { bubblewrapArgs } from "./bubblewrap-args";
 import { childEnvironment, parseEnvPassthrough } from "./child-environment";
+import { nodeHostView, sandboxBackend, type SandboxBackend } from "./sandbox-backend";
 import {
   networkEnforced,
   seatbeltProfile,
+  type ConfiningMechanism,
   type SandboxMechanism,
   type SandboxPolicy,
 } from "./sandbox-profile";
+
+export { BWRAP, SANDBOX_EXEC } from "./sandbox-backend";
 
 /**
  * THE non-interactive process runner (M6.3).
@@ -75,9 +79,10 @@ export interface NonInteractiveProcessSpec {
   /**
    * CONFINEMENT RÉEL DU DISQUE ET DU RÉSEAU (verrou C8).
    *
-   * Absent = aucun bac à sable, comme avant. Présent = le processus est lancé SOUS
-   * `sandbox-exec` avec un profil `(deny default)` : il ne voit que son worktree, son HOME
-   * jetable et les chemins système, et n'a de réseau que si la politique l'accorde.
+   * Absent = aucun bac à sable, comme avant. Présent = le processus est lancé SOUS le
+   * backend réellement disponible — `sandbox-exec` (Seatbelt, `(deny default)`) sur macOS,
+   * `bwrap` (racine vide + espaces de noms) sur Linux : il ne voit que son worktree, son
+   * HOME jetable et les chemins système, et n'a de réseau que si la politique l'accorde.
    *
    * `cwd` n'a jamais été une barrière ; ceci en est une, appliquée par le noyau.
    */
@@ -88,7 +93,7 @@ export interface NonInteractiveProcessSpec {
    * `required` (défaut quand `sandbox` est fourni) REFUSE de lancer : une exécution
    * annoncée confinée qui ne l'est pas est pire qu'un échec, parce que l'audit mentirait.
    * `best-effort` lance quand même et le RÉSULTAT le dit (`confinement: "none"`), ce qui
-   * laisse un déploiement non-macOS fonctionner sans jamais prétendre être isolé.
+   * laisse un hôte sans backend fonctionner sans jamais prétendre être isolé.
    */
   confinement?: "required" | "best-effort";
 }
@@ -128,9 +133,6 @@ export const KILL_GRACE_MS = 2_000;
  */
 export const OUTPUT_DRAIN_MS = 150;
 
-/** `sandbox-exec` : présent sur macOS, absent ailleurs. Résolu une fois par processus. */
-export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-
 /**
  * LA DÉCISION DE CONFINEMENT, pure et donc testable sans retirer `sandbox-exec` de l'hôte.
  *
@@ -140,38 +142,46 @@ export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
  */
 export function decideConfinement(
   wantsSandbox: boolean,
-  available: boolean,
+  available: ConfiningMechanism | null,
   mode: "required" | "best-effort" = "required",
 ): { mechanism: SandboxMechanism; refuse: boolean } {
   if (!wantsSandbox) return { mechanism: "none", refuse: false };
-  if (available) return { mechanism: "seatbelt", refuse: false };
+  if (available !== null) return { mechanism: available, refuse: false };
   return { mechanism: "none", refuse: mode === "required" };
 }
 
-function sandboxAvailable(): boolean {
-  try {
-    return process.platform === "darwin" && existsSync(SANDBOX_EXEC);
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Enveloppe argv dans `sandbox-exec -p <profil>`.
+ * Enveloppe argv dans le backend. Aucun shell dans aucun des deux cas : la politique est
+ * rendue en ARGUMENTS, jamais réinterprétée.
  *
- * `-p` prend le profil en ARGUMENT, pas par un fichier : un fichier temporaire serait un
- * chemin de plus à créer, à autoriser dans le profil lui-même, et à nettoyer — trois
- * occasions de laisser une porte ouverte. Et comme on n'utilise pas de shell, le profil
- * n'est jamais réinterprété.
+ * Seatbelt : `sandbox-exec -p <profil>`. `-p` prend le profil en ARGUMENT, pas par un
+ * fichier : un fichier temporaire serait un chemin de plus à créer, à autoriser dans le
+ * profil lui-même, et à nettoyer — trois occasions de laisser une porte ouverte.
+ *
+ * Bubblewrap : `bwrap <montages…> -- <commande>`. Le `--` ferme les options : une commande
+ * ne peut pas être lue comme une option de `bwrap`.
  */
 function confine(
+  backend: SandboxBackend,
   command: string,
   args: readonly string[],
   policy: SandboxPolicy,
+  cwd: string | undefined,
 ): { command: string; args: string[] } {
+  if (backend.mechanism === "seatbelt") {
+    return {
+      command: backend.executable,
+      args: ["-p", seatbeltProfile(policy), command, ...args],
+    };
+  }
   return {
-    command: SANDBOX_EXEC,
-    args: ["-p", seatbeltProfile(policy), command, ...args],
+    command: backend.executable,
+    args: [
+      ...bubblewrapArgs(policy, nodeHostView, cwd === undefined ? {} : { cwd }),
+      "--",
+      command,
+      ...args,
+    ],
   };
 }
 
@@ -191,11 +201,20 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
      * et un audit qui ment est pire que pas d'audit.
      */
     const wantsSandbox = spec.sandbox !== undefined;
-    const confinement: SandboxMechanism = wantsSandbox && sandboxAvailable() ? "seatbelt" : "none";
-    if (wantsSandbox && confinement === "none" && (spec.confinement ?? "required") === "required") {
+    const detection = wantsSandbox ? sandboxBackend() : null;
+    const backend = detection?.backend ?? null;
+    const decision = decideConfinement(
+      wantsSandbox,
+      backend?.mechanism ?? null,
+      spec.confinement ?? "required",
+    );
+    const confinement: SandboxMechanism = decision.mechanism;
+    if (decision.refuse) {
       return resolve({
         stdout: "",
-        stderr: "SANDBOX_UNAVAILABLE: aucun mécanisme de confinement sur cette plateforme",
+        stderr:
+          "SANDBOX_UNAVAILABLE: aucun mécanisme de confinement sur cette plateforme" +
+          (detection?.reason ? ` (${detection.reason})` : ""),
         exitCode: null,
         signal: null,
         timedOut: false,
@@ -206,8 +225,8 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
       });
     }
     const launch =
-      confinement === "seatbelt" && spec.sandbox
-        ? confine(spec.command, spec.args ?? [], spec.sandbox)
+      confinement !== "none" && backend && spec.sandbox
+        ? confine(backend, spec.command, spec.args ?? [], spec.sandbox, spec.cwd)
         : { command: spec.command, args: [...(spec.args ?? [])] };
 
     /* Calculé AVANT le spawn : l'enfant n'hérite que de ce qui est explicitement autorisé. */
@@ -298,9 +317,9 @@ export const runNonInteractive: NonInteractiveRunner = (spec) =>
         durationMs: Date.now() - startedAt,
         truncated,
         confinement,
-        /* Faux dès qu'un endpoint est requis : Seatbelt ne filtre pas par nom d'hôte. */
+        /* Faux dès qu'un endpoint est requis : aucun backend ne filtre par nom d'hôte. */
         networkEnforced:
-          confinement === "seatbelt" && spec.sandbox ? networkEnforced(spec.sandbox) : false,
+          confinement !== "none" && spec.sandbox ? networkEnforced(spec.sandbox) : false,
       });
     };
 

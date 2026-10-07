@@ -1,6 +1,10 @@
+import type { ConfinementMechanism } from "@/core/workers/execution-record";
+
 /**
- * CONFINEMENT RÉEL DU SYSTÈME DE FICHIERS ET DU RÉSEAU (verrou C8). Pur : ce module ne fait
- * que RENDRE un profil Seatbelt ; c'est `run-process.ts` qui l'applique.
+ * CONFINEMENT RÉEL DU SYSTÈME DE FICHIERS ET DU RÉSEAU (verrou C8). Pur : ce module porte
+ * la POLITIQUE ({@link SandboxPolicy}, source canonique) et la rend en profil Seatbelt pour
+ * macOS ; `bubblewrap-args.ts` la rend en argv `bwrap` pour Linux, `sandbox-backend.ts`
+ * choisit le backend réellement disponible, et `run-process.ts` l'applique.
  *
  * ── POURQUOI UN PROFIL OS ET PAS UN `cwd` ───────────────────────────────────────────────
  * `cwd` n'est pas un bac à sable : un processus lancé dans un worktree peut lire
@@ -27,9 +31,21 @@
  * `networkEnforced`.
  */
 
-/** Ce qui applique réellement la politique. `none` est un aveu, pas un mode. */
-export type SandboxMechanism = "seatbelt" | "none";
+/**
+ * Ce qui applique réellement la politique. `none` est un aveu, pas un mode.
+ *
+ * Le type vit dans `core` parce que l'enregistrement durable d'une exécution le porte ; il
+ * n'y a qu'UNE liste, et le runner la reprend telle quelle.
+ */
+export type SandboxMechanism = ConfinementMechanism;
+/** Un mécanisme qui confine RÉELLEMENT. `none` n'en fait pas partie, par construction. */
+export type ConfiningMechanism = Exclude<SandboxMechanism, "none">;
 
+/**
+ * LA politique de confinement — source canonique pour TOUS les backends. Seatbelt la rend
+ * en S-expression (ci-dessous), Bubblewrap en argv (`bubblewrap-args.ts`). Aucun backend
+ * n'a sa propre notion de ce qui est autorisé : il traduit celle-ci, ou il refuse.
+ */
 export interface SandboxPolicy {
   /** Lecture ET écriture. Le worktree du worker, son HOME éphémère. */
   readonly readWritePaths: readonly string[];
@@ -38,7 +54,7 @@ export interface SandboxPolicy {
   /** `false` = aucune sortie réseau. Appliqué par l'OS, pas déclaré. */
   readonly allowNetwork: boolean;
   /**
-   * Les endpoints dont la tâche a besoin. DÉCLARATIF : Seatbelt ne filtre pas par nom
+   * Les endpoints dont la tâche a besoin. DÉCLARATIF : ni Seatbelt ni Bubblewrap ne filtrent par nom
    * d'hôte, donc ceci documente l'intention et alimente l'audit. Ne jamais le présenter
    * comme une isolation réseau.
    */
@@ -144,7 +160,8 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
  * Le réseau est-il RÉELLEMENT appliqué par l'OS pour cette politique ?
  *
  * `true` seulement quand la politique est « aucun réseau » : c'est la seule forme que
- * Seatbelt sait tenir. Dès qu'un endpoint est nécessaire, le processus a le réseau ENTIER,
+ * Seatbelt (`deny network*`) et Bubblewrap (espace de noms réseau vide) savent tenir.
+ * Ni l'un ni l'autre ne connaît les noms d'hôtes. Dès qu'un endpoint est nécessaire, le processus a le réseau ENTIER,
  * et le dire autrement serait une isolation imaginaire.
  */
 export const networkEnforced = (policy: SandboxPolicy): boolean => !policy.allowNetwork;

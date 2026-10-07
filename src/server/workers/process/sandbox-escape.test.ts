@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { brokerCredentials, seedHome } from "./credential-broker";
 import { createEphemeralHome, isSafeHomeRelativePath } from "./ephemeral-home";
 import { decideConfinement, runNonInteractive, SANDBOX_EXEC } from "./run-process";
+import { sandboxBackend } from "./sandbox-backend";
 import { networkEnforced, seatbeltProfile } from "./sandbox-profile";
 
 /**
@@ -16,12 +17,15 @@ import { networkEnforced, seatbeltProfile } from "./sandbox-profile";
  * variable d'environnement, écriture dans un autre worktree. Un test qui se contente de
  * vérifier qu'un worker écrit bien SON répertoire ne prouve rien du tout.
  *
- * Ces preuves lancent de VRAIS processus sous `sandbox-exec`. Sur une plateforme sans ce
- * mécanisme elles se sautent, et le dire est préférable à les faire passer sur une
- * simulation : une barrière simulée n'est pas une barrière.
+ * Ces preuves lancent de VRAIS processus sous le backend RÉELLEMENT disponible —
+ * `sandbox-exec` sur macOS, `bwrap` sur Linux. Sur un hôte sans backend elles se sautent,
+ * et le dire est préférable à les faire passer sur une simulation : une barrière simulée
+ * n'est pas une barrière. (Le refus fermé sur un hôte SANS backend est prouvé, lui, par
+ * `bubblewrap-sandbox.test.ts`.)
  */
 
-const onDarwin = process.platform === "darwin";
+/** Le backend de CET hôte, mesuré par une vraie sonde — pas déduit de `process.platform`. */
+const backend = sandboxBackend().backend;
 
 let root: string;
 let workspace: string;
@@ -55,10 +59,10 @@ const confined = (args: string[], overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 
-describe.skipIf(!onDarwin)("évasion du bac à sable — tentatives réelles", () => {
+describe.skipIf(!backend)("évasion du bac à sable — tentatives réelles", () => {
   it("ÉCRIT son propre worktree : la barrière n'empêche pas le travail", async () => {
     const result = await confined(["echo ok > fichier.txt && cat fichier.txt"]);
-    expect(result.confinement).toBe("seatbelt");
+    expect(result.confinement).toBe(backend!.mechanism);
     expect(result.stdout.trim()).toBe("ok");
     expect(result.exitCode).toBe(0);
   });
@@ -78,8 +82,8 @@ describe.skipIf(!onDarwin)("évasion du bac à sable — tentatives réelles", (
   it("NE PEUT PAS suivre un LIEN SYMBOLIQUE qui pointe dehors", async () => {
     /*
      * L'évasion la plus intéressante : le lien est À L'INTÉRIEUR du worktree, donc un
-     * contrôle de chemin applicatif le laisserait passer. Seatbelt évalue la cible RÉSOLUE,
-     * et c'est précisément pourquoi un contrôle applicatif ne remplace pas un bac à sable.
+     * contrôle de chemin applicatif le laisserait passer. Seatbelt évalue la cible RÉSOLUE ;
+     * sous Bubblewrap la cible n'est pas montée, donc n'existe pas. C'est précisément pourquoi un contrôle applicatif ne remplace pas un bac à sable.
      */
     await symlink(secretFile, join(workspace, "lien-vers-secret")).catch(() => undefined);
     const result = await confined(["cat lien-vers-secret"]);
@@ -110,7 +114,7 @@ describe.skipIf(!onDarwin)("évasion du bac à sable — tentatives réelles", (
 
   it("un enfant du worker HÉRITE du bac à sable : pas d'élargissement par sous-processus", async () => {
     /*
-     * C8 §5. Seatbelt s'applique à l'ARBRE de processus : un worker qui lance son propre
+     * C8 §5. Le confinement (Seatbelt ou espaces de noms) s'applique à l'ARBRE de processus : un worker qui lance son propre
      * sous-processus ne peut pas lui donner plus que ce qu'il a. On le vérifie plutôt que
      * de le supposer, parce que c'est l'hypothèse sur laquelle repose « child <= parent ».
      */
@@ -152,11 +156,14 @@ describe.skipIf(!onDarwin)("évasion du bac à sable — tentatives réelles", (
     }
   });
 
-  it("utilise bien `sandbox-exec`, et le résultat le DIT", async () => {
-    expect(SANDBOX_EXEC).toBe("/usr/bin/sandbox-exec");
-    const result = await confined(["true"]);
-    expect(result.confinement).toBe("seatbelt");
-  });
+  it.skipIf(backend?.mechanism !== "seatbelt")(
+    "utilise bien `sandbox-exec`, et le résultat le DIT",
+    async () => {
+      expect(SANDBOX_EXEC).toBe("/usr/bin/sandbox-exec");
+      const result = await confined(["true"]);
+      expect(result.confinement).toBe("seatbelt");
+    },
+  );
 });
 
 describe("décision de confinement — FERMÉE par défaut", () => {
@@ -166,7 +173,7 @@ describe("décision de confinement — FERMÉE par défaut", () => {
      * l'hôte, donc la décision est extraite en fonction PURE et testée telle quelle —
      * plutôt que de prétendre l'avoir prouvée sur un cas qu'on ne peut pas produire.
      */
-    expect(decideConfinement(true, false, "required")).toEqual({
+    expect(decideConfinement(true, null, "required")).toEqual({
       mechanism: "none",
       refuse: true,
     });
@@ -174,19 +181,29 @@ describe("décision de confinement — FERMÉE par défaut", () => {
 
   it("`best-effort` lance, mais ne prétend JAMAIS être confiné", () => {
     /* Le mode qui laisse un déploiement non-macOS tourner, sans mentir dans la trace. */
-    expect(decideConfinement(true, false, "best-effort")).toEqual({
+    expect(decideConfinement(true, null, "best-effort")).toEqual({
       mechanism: "none",
       refuse: false,
     });
   });
 
   it("sans bac à sable demandé, rien ne change pour les appelants existants", () => {
-    expect(decideConfinement(false, false)).toEqual({ mechanism: "none", refuse: false });
-    expect(decideConfinement(false, true)).toEqual({ mechanism: "none", refuse: false });
+    expect(decideConfinement(false, null)).toEqual({ mechanism: "none", refuse: false });
+    expect(decideConfinement(false, "seatbelt")).toEqual({ mechanism: "none", refuse: false });
+    expect(decideConfinement(false, "bubblewrap")).toEqual({ mechanism: "none", refuse: false });
   });
 
-  it("disponible et demandé : Seatbelt, et c'est le seul cas qui confine", () => {
-    expect(decideConfinement(true, true)).toEqual({ mechanism: "seatbelt", refuse: false });
+  it("disponible et demandé : le mécanisme RÉEL est rapporté, et c'est le seul cas qui confine", () => {
+    expect(decideConfinement(true, "seatbelt")).toEqual({ mechanism: "seatbelt", refuse: false });
+    expect(decideConfinement(true, "bubblewrap")).toEqual({
+      mechanism: "bubblewrap",
+      refuse: false,
+    });
+    /* `best-effort` ne change rien quand un backend existe : on confine. */
+    expect(decideConfinement(true, "bubblewrap", "best-effort")).toEqual({
+      mechanism: "bubblewrap",
+      refuse: false,
+    });
   });
 });
 

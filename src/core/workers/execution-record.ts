@@ -22,6 +22,15 @@ import type { WorkerUsageReading } from "@/core/budget/worker-budget";
  * une fabrication ; son absence est la vérité.
  */
 
+/**
+ * CE QUI A RÉELLEMENT CONFINÉ un processus worker — la seule liste, partagée par le runner
+ * (`server/workers/process`) et par l'enregistrement durable.
+ *
+ * `seatbelt` : `sandbox-exec` sur macOS. `bubblewrap` : `bwrap` sur Linux (espaces de noms
+ * noyau). `none` est un AVEU, pas un mode : rien n'a confiné ce processus.
+ */
+export type ConfinementMechanism = "seatbelt" | "bubblewrap" | "none";
+
 /** Comment l'exécution s'est terminée. Un état, pas une interprétation. */
 export const EXECUTION_OUTCOMES = [
   "COMPLETED",
@@ -64,7 +73,7 @@ export interface ExecutionRecord {
   /* --- où --------------------------------------------------------------------------- */
   readonly worktree: string;
   /** Ce qui a RÉELLEMENT confiné, pas ce qu'on croyait configurer. */
-  readonly confinement: "seatbelt" | "none";
+  readonly confinement: ConfinementMechanism;
   /** Le réseau a-t-il été refusé PAR L'OS ? Faux dès qu'un endpoint est nécessaire. */
   readonly networkEnforced: boolean;
   /* --- quand ------------------------------------------------------------------------ */

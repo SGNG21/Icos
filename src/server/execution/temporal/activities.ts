@@ -506,8 +506,9 @@ export async function runGovernedWorker(
          * READ_ONLY. The repository is readable and NOT writable: the only writable paths
          * stay the scratch workspace and the disposable HOME, so an analysis mission
          * cannot mutate the checkout it is reading. ~/.ssh, ~/.aws, the real HOME and
-         * every unrelated worktree remain outside the profile entirely — `(deny default)`
-         * means a path that is not listed does not exist for this process.
+         * every unrelated worktree remain outside the profile entirely — Seatbelt's
+         * `(deny default)` and Bubblewrap's empty root both mean a path that is not listed
+         * does not exist for this process.
          */
         /*
          * The allocated worktree is writable; the canonical checkout never is. For a
@@ -521,9 +522,9 @@ export async function runGovernedWorker(
          */
         readOnlyPaths: [workspaceRoot(), ...access.programPaths],
         /*
-         * A remote provider needs the network, so it is granted. Seatbelt cannot filter by
-         * hostname, so this is all-or-nothing and the audit says so rather than implying a
-         * per-endpoint policy that does not exist.
+         * A remote provider needs the network, so it is granted. Neither Seatbelt nor
+         * Bubblewrap can filter by hostname, so this is all-or-nothing and the audit says
+         * so rather than implying a per-endpoint policy that does not exist.
          */
         allowNetwork: true,
       },
