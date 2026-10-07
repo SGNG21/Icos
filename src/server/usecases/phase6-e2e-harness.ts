@@ -222,6 +222,8 @@ export function createHarness(options: HarnessOptions) {
       taskId: string;
       prompt: string;
       workflowId: string;
+      /** The attempt the ledger prepared: dispatch identity, same as production. */
+      attempt: number;
       workerKind?: string;
       capability?: string;
     },
@@ -233,6 +235,7 @@ export function createHarness(options: HarnessOptions) {
       taskTitle: (await missions.getMissionTaskById(prepared.missionTaskId))?.title,
       prompt: prepared.prompt,
       workflowId: prepared.workflowId,
+      attempt: prepared.attempt,
       workerKind: prepared.workerKind,
       capability: prepared.capability,
       signal,
@@ -268,7 +271,11 @@ export function createHarness(options: HarnessOptions) {
 
   const recoverySweeper = new AutonomyRecoverySweeper(runtimeRepository, autonomyWakeup);
 
-  async function ignite(input: { title: string; objective: string; goalId: string }): Promise<Mission> {
+  async function ignite(input: {
+    title: string;
+    objective: string;
+    goalId: string;
+  }): Promise<Mission> {
     const mission = await missions.create({
       title: input.title,
       objective: input.objective,

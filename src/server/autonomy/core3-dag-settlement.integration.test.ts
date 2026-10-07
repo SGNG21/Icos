@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   startTemporalRuntime,
@@ -19,6 +19,7 @@ import { buildPostgresContainer, resetContainer, type Container } from "@/server
 import { missionTasks, missions, tasks } from "@/server/database/schema";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
+import { identities, type TestIdentity } from "@/test/test-identity";
 import { computeReadyTasks } from "@/server/supervisor/readiness";
 import {
   composeAutonomyRuntime,
@@ -50,15 +51,52 @@ import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-rev
  */
 
 const DATABASE_URL = TEST_DATABASE_URL;
-const MISSION_ID = "d36-mission";
-const MT_A = "d36-mt-a";
-const MT_B = "d36-mt-b";
-const TASK_A = "d36taska";
-const TASK_B = "d36taskb";
 const CAPABILITY = "code-generation";
-const WF_A = workflowIdForAttempt(TASK_A, 1);
-const WF_B = workflowIdForAttempt(TASK_B, 1);
 const TARGET = "integration/phase-7";
+
+/**
+ * IDENTITY PER CASE, not per file.
+ *
+ * These were fixed constants, which was harmless while mission work ran on the in-process
+ * executor — each test built its own executor, so two tests sharing `d36taska` could not
+ * see each other. `DURABLE_MISSION_TASK` is orchestrated by Temporal now, and a Temporal
+ * workflow id is GLOBAL to the namespace and OUTLIVES the execution that used it. One
+ * `icos-task-d36taska` was therefore shared by all fourteen cases below, by every rerun of
+ * this file, and by every process running it at once: the first case of a fresh run
+ * passed, and from then on each one collided with the closed workflow its predecessor had
+ * left behind.
+ *
+ * The database is truncated per case by `seed()`, so Temporal was the only shared state —
+ * and the one nothing here may clean, because correctness must not depend on a cleanup
+ * step a crashed run never reaches.
+ *
+ * `beforeEach` takes a fresh namespace, so a RETRIED case gets one too instead of
+ * colliding with its own first run. Within a case every id is deterministic, so the
+ * business assertions are exactly as exact as they were.
+ */
+const FILE_IDENTITIES = identities("d36");
+let caseNumber = 0;
+let ids: TestIdentity;
+
+let MISSION_ID: string;
+let MT_A: string;
+let MT_B: string;
+let TASK_A: string;
+let TASK_B: string;
+let WF_A: string;
+let WF_B: string;
+
+beforeEach(() => {
+  caseNumber += 1;
+  ids = FILE_IDENTITIES.forCase(`c${caseNumber}`);
+  MISSION_ID = ids.mission();
+  MT_A = ids.missionTask("a");
+  MT_B = ids.missionTask("b");
+  TASK_A = ids.task("a");
+  TASK_B = ids.task("b");
+  WF_A = ids.workflow(TASK_A, 1);
+  WF_B = ids.workflow(TASK_B, 1);
+});
 
 /** `normal` writes inside the declared scope; `rogue` makes A write OUTSIDE it (gate REJECT). */
 type WorkerMode = "normal" | "rogue" | "fail-once";
@@ -209,6 +247,23 @@ function makeRepo() {
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "base");
   git(repo, "branch", TARGET);
+
+  /*
+   * AND PUBLISH THE PATHS THE ACTIVITY ACTUALLY READS.
+   *
+   * `beforeAll` assigns `process.env` once, before any repository exists — so
+   * `ICOS_REPO_PATH` and `ICOS_WORKER_WORKSPACE_ROOT` were literally the string
+   * "undefined" for the whole file. Containers and the production process never noticed,
+   * because they are built with `loadEnv(envOverrides())` AFTER this function runs and so
+   * get the real values; the Temporal ACTIVITY does notice, because it reads
+   * `process.env` directly at run time, in this same process.
+   *
+   * The result was `WORKER_WORKSPACE_ROOT_UNREADABLE: racine déclarée introuvable` on
+   * every governed write — the worktree-root boundary refusing a root that did not exist,
+   * which is the correct answer to the wrong question. Re-published here, where the paths
+   * are finally real, and per case because `afterEach` deletes the whole tree.
+   */
+  Object.assign(process.env, envOverrides());
 }
 
 function envOverrides(extra: Record<string, string> = {}) {
@@ -236,6 +291,15 @@ function envOverrides(extra: Record<string, string> = {}) {
     }),
     ICOS_REPO_PATH: repo,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    /*
+     * The CHECKOUT the activity binds read-only — a separate deployment variable from the
+     * worktree root above, read straight from `process.env` by the activity (see
+     * `workspaceRoot()`), and never set here before. A governed write needs both: its own
+     * worktree to write in, and the canonical checkout it branched from to read. Missing,
+     * every write failed `ICOS_WORKSPACE_ROOT manquant` — fail-closed and correct, and
+     * indistinguishable from the work simply never running.
+     */
+    ICOS_WORKSPACE_ROOT: repo,
     /* A queue of this file's own, so no other worker can consume its workflows. */
     TEMPORAL_TASK_QUEUE: TASK_QUEUE,
     ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,

@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * import — which is the property under test, not a workaround for it.
  */
 vi.hoisted(() => {
-  process.env.ICOS_WORKER_EXECUTABLE_ALLOWLIST = JSON.stringify([process.execPath, "node", "hermes"]);
+  process.env.ICOS_WORKER_EXECUTABLE_ALLOWLIST = JSON.stringify([
+    process.execPath,
+    "node",
+    "hermes",
+  ]);
 });
 
 import { runGovernedWorker } from "./activities";
@@ -32,18 +36,42 @@ const CALLBACK_SECRET = "a".repeat(48);
 
 let root: string;
 let canonical: string;
-let sandboxArgs: Parameters<typeof import("@/server/workers/process/run-process").runNonInteractive>[0][];
+let sandboxArgs: Parameters<
+  typeof import("@/server/workers/process/run-process").runNonInteractive
+>[0][];
 
 vi.mock("@/server/workers/process/run-process", () => ({
   runNonInteractive: vi.fn(async (options: never) => {
     sandboxArgs.push(options);
+    /*
+     * Models the runner DECLINING TO LAUNCH: a sandbox was asked for, none is available,
+     * and `required` is the default — so nothing spawned and the refusal is on stderr.
+     * `confinement: "none"` is the only positive evidence of it, because stdout is empty
+     * exactly as it would be for a worker that ran and printed nothing.
+     */
+    if (unconfinedRun) {
+      return {
+        stdout: "",
+        stderr: "SANDBOX_UNAVAILABLE: aucun mécanisme de confinement sur cette plateforme",
+        timedOut: false,
+        aborted: false,
+        exitCode: null,
+        confinement: "none",
+      };
+    }
     const signal = (options as { abortSignal?: AbortSignal }).abortSignal;
     /*
      * Models the real runner: a long run that ends when its authority is revoked. A mock
      * that returned at once could never show that revocation stops anything.
      */
     if (signal && !slowRun) {
-      return { stdout: "RESULT_SENTINEL", stderr: "", timedOut: false, aborted: false, exitCode: 0 };
+      return {
+        stdout: "RESULT_SENTINEL",
+        stderr: "",
+        timedOut: false,
+        aborted: false,
+        exitCode: 0,
+      };
     }
     if (signal) {
       await new Promise<void>((resolve) => {
@@ -58,6 +86,8 @@ vi.mock("@/server/workers/process/run-process", () => ({
 
 /** Set by the lease-loss tests: makes the mocked run wait for revocation. */
 let slowRun = false;
+/** Set by the confinement test: makes the mocked runner refuse to launch. */
+let unconfinedRun = false;
 
 /*
  * Every test starts from the same declaration. The scope test deliberately re-declares
@@ -66,6 +96,7 @@ let slowRun = false;
  */
 beforeEach(() => {
   slowRun = false;
+  unconfinedRun = false;
   process.env.ICOS_WORKER_EXEC_COMMANDS = JSON.stringify({
     binary: { command: WORKER_COMMAND, args: ["-e", ""], timeoutMs: 5_000 },
   });
@@ -116,6 +147,7 @@ function baseGrant(worktreePath: string | null, writeAllowed: boolean) {
 describe("the governed Temporal writer", () => {
   beforeEach(() => {
     slowRun = false;
+    unconfinedRun = false;
     sandboxArgs = [];
     root = realpathSync(mkdtempSync(join(tmpdir(), "icos-root-")));
     canonical = realpathSync(mkdtempSync(join(tmpdir(), "icos-canonical-")));
@@ -135,7 +167,10 @@ describe("the governed Temporal writer", () => {
   const ctx = { taskId: "task-1", workflowId: "icos-task-task-1" };
   const run = () => runGovernedWorker(ctx, "do the thing");
   const answerWith = (grant: Record<string, unknown>) =>
-    vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grant)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => grantResponse(grant)),
+    );
 
   it("CAN_WRITE_ALLOCATED_WORKTREE: the granted worktree is writable and is the cwd", async () => {
     const worktree = allocate("task-1");
@@ -240,6 +275,29 @@ describe("the governed Temporal writer", () => {
     expect(sandboxArgs).toHaveLength(0);
   });
 
+  it("UNCONFINED_RUN_REFUSED: a run that could not be confined says so, truthfully", async () => {
+    /*
+     * The runner refuses to launch when a sandbox is asked for and none exists, because a
+     * run announced as confined that is not confined would make the audit lie. It reports
+     * that on stderr — and the result contract reads stdout only, so the refusal used to
+     * surface as `worker returned no structured status: no output`, which is exactly what
+     * a worker that started and printed nothing looks like.
+     *
+     * Those need different answers: one is a deployment fact (no governed write can run on
+     * this platform at all), the other is a broken worker. The refusal now names itself.
+     *
+     * Note `classifyWorkerRun` is stubbed to ok in this suite, so this also pins the
+     * ORDER: confinement is settled before any output is believed.
+     */
+    unconfinedRun = true;
+    const worktree = allocate("task-1");
+    answerWith(baseGrant(worktree, true));
+
+    await expect(run()).rejects.toThrow("WORKER_SANDBOX_UNAVAILABLE");
+    /* It still ASKED for the sandbox: the refusal is the runner's, not a missing request. */
+    expect(sandboxArgs[0]?.sandbox?.readWritePaths).toContain(worktree);
+  });
+
   describe("CALLER_ENV_SPOOF_BLOCKED", () => {
     it("identity comes from the grant, not from the environment", async () => {
       process.env.ICOS_TASK_ID = "spoofed-task";
@@ -283,7 +341,9 @@ describe("the governed Temporal writer", () => {
     it("a malformed grant starts no process", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }) as unknown as Response),
+        vi.fn(
+          async () => ({ ok: true, status: 200, json: async () => ({}) }) as unknown as Response,
+        ),
       );
 
       await expect(run()).rejects.toThrow("WORKER_GRANT_MALFORMED");
@@ -412,7 +472,10 @@ describe("the deployment cannot widen a task's secret scope", () => {
     });
     const grant = baseGrant(allocate("task-1"), true);
     grant.credentialScope = ["codex"];
-    vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grant)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => grantResponse(grant)),
+    );
 
     await expect(runGovernedWorker(ctx, "x")).rejects.toThrow("WORKER_CREDENTIAL_SCOPE_MISMATCH");
   });
@@ -432,7 +495,10 @@ describe("bounded authority revalidation", () => {
 
   function grantWithLease(worktreePath: string, msFromNow: number) {
     const grant = baseGrant(worktreePath, true);
-    grant.workspace = { ...grant.workspace!, leaseExpiresAt: new Date(Date.now() + msFromNow).toISOString() };
+    grant.workspace = {
+      ...grant.workspace!,
+      leaseExpiresAt: new Date(Date.now() + msFromNow).toISOString(),
+    };
     return grant;
   }
 
@@ -479,7 +545,10 @@ describe("bounded authority revalidation", () => {
     process.env.ICOS_WORKER_AUTHORITY_CHECK_MS = "10";
     const worktree = allocate("task-1");
     /* ICOS is perfectly reachable and still reports a lease that has already run out. */
-    vi.stubGlobal("fetch", vi.fn(async () => grantResponse(grantWithLease(worktree, -1_000))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => grantResponse(grantWithLease(worktree, -1_000))),
+    );
 
     await expect(runGovernedWorker(ctx, "write it")).rejects.toThrow(
       "WORKER_AUTHORITY_LOST: AUTHORITY_REVALIDATION_TIMEOUT",

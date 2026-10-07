@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { processIsAlive, waitForProcessExit } from "@/test/process-liveness";
+
 import { runNonInteractive } from "./run-process";
 
 /**
@@ -24,14 +26,14 @@ describe("an aborted run dies, with its descendants", () => {
     setTimeout(() => {}, 60000);
   `;
 
-  const alive = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  /*
+   * A ZOMBIE IS NOT A SURVIVOR. `process.kill(pid, 0)` was the probe here and cannot tell
+   * the two apart: a killed grandchild whose parent died first is reparented to pid 1 and
+   * stays addressable until pid 1 reaps it, so the signal probe answered "alive" for a
+   * process that held no memory and ran no code. Under a container pid 1 that never reaps
+   * orphans that window never closes, and the proof failed where the behaviour was right.
+   */
+  const alive = processIsAlive;
 
   it("kills the worker and the grandchild it spawned", async () => {
     const controller = new AbortController();
@@ -59,9 +61,9 @@ describe("an aborted run dies, with its descendants", () => {
     expect(result.timedOut).toBe(false);
     expect(Date.now() - started).toBeLessThan(20_000);
 
-    /* DESCENDANTS_KILLED_ON_LEASE_LOSS — give the group a moment to reap. */
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    /* DESCENDANTS_KILLED_ON_LEASE_LOSS — a kill is asynchronous, so poll for the teardown. */
     expect(Number.isFinite(grandchildPid)).toBe(true);
+    expect(await waitForProcessExit(grandchildPid, 5_000)).toBe(true);
     expect(alive(grandchildPid)).toBe(false);
   }, 40_000);
 

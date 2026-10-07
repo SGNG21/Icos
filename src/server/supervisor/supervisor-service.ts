@@ -375,6 +375,14 @@ export class SupervisorService {
             ?.title,
           prompt: attempt.prompt,
           workflowId: attempt.workflowId,
+          /*
+           * WHICH ATTEMPT this replay is replaying. The durable adapter needs it to prove
+           * that an execution already holding this workflow id is THIS attempt rather
+           * than a neighbouring one; without it a replay can only be refused, which is
+           * the correct but useless answer for the recovery path that exists precisely to
+           * stand on an execution that may already be running.
+           */
+          attempt: attempt.attempt,
           workerKind: attempt.workerKind,
           capability: attempt.capability,
           digitalosFacadePath,
@@ -528,6 +536,8 @@ export class SupervisorService {
          * intent as "claimed", and the correction never ran.
          */
         let releaseUndispatchedClaim: (() => Promise<void>) | null = null;
+        /* Whether the work below threw, so cleanup cannot stand in for its reason. */
+        let failedInBody = false;
         try {
           if (!this.dispatchAttempts) {
             throw new Error(
@@ -637,6 +647,13 @@ export class SupervisorService {
             digitalosFacadePath,
             signal,
             workflowId: prepared.attempt.workflowId,
+            /*
+             * The attempt the ledger holds, carried through the coordinator to the durable
+             * adapter. This is the governed WRITER path, so it is the one that most needs
+             * it: a correction attempt reuses the task's identity and only the attempt
+             * number tells its execution apart from the one the reviewer refused.
+             */
+            attempt: prepared.attempt.attempt,
           };
 
           // Execute in workspace (this will dispatch and handle the workspace lifecycle)
@@ -659,15 +676,43 @@ export class SupervisorService {
           } else if (coordResult.success) {
             await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "succeeded");
           } else {
+            /*
+             * The coordinator REPORTS a failure rather than throwing it, so the body ends
+             * normally and the cleanup below would otherwise be free to overwrite the
+             * reason with its own CLEANUP_REFUSED. A reported failure is a failure.
+             */
+            failedInBody = true;
             await this.missionRepository.updateMissionTaskStatus(mission.id, task.id, "failed");
           }
         } catch (error) {
+          /* Recorded so the `finally` below cannot bury this in a cleanup failure. */
+          failedInBody = true;
           await releaseUndispatchedClaim?.();
           throw error;
         } finally {
           if (allocated && !awaitingReview) {
-            // Release workspace
-            await this.workspaceExecutionCoordinator.releaseWorkspace(task.taskId);
+            /*
+             * RELEASING THE WORKSPACE MUST NOT REPLACE THE REASON WE GOT HERE.
+             *
+             * A `finally` that throws DISCARDS the exception in flight. When the dispatch
+             * or the run failed, the workspace is left in a non-terminal state, so
+             * `releaseWorkspace` refuses it with CLEANUP_REFUSED — and that refusal, a
+             * consequence, became the only error anybody saw. The cause (the dispatch
+             * refusal, the worker failure, the lost authority) was gone, and every
+             * distinct failure on this path reported the same useless message about a
+             * workspace status.
+             *
+             * So a cleanup failure never overwrites a real error. When the body already
+             * failed it is swallowed — the reaper owns an abandoned workspace, and this is
+             * not the last chance to collect it. When the body SUCCEEDED there is no
+             * error to protect, and a cleanup that fails is then the only news there is,
+             * so it propagates exactly as before.
+             */
+            try {
+              await this.workspaceExecutionCoordinator.releaseWorkspace(task.taskId);
+            } catch (cleanupError) {
+              if (!failedInBody) throw cleanupError;
+            }
           }
         }
 
@@ -722,6 +767,8 @@ export class SupervisorService {
             taskTitle: task.title,
             prompt,
             workflowId: attempt.workflowId,
+            /* The attempt the ledger just created — the one durable record of it. */
+            attempt: attempt.attempt,
             workerKind: routedWorkerKind,
             capability: task.capability || undefined,
             digitalosFacadePath,

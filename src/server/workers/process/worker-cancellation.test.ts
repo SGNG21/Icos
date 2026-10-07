@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { processIsAlive, waitForProcessExit } from "@/test/process-liveness";
+
 import { runNonInteractive } from "./run-process";
 
 /**
@@ -30,15 +32,12 @@ afterAll(async () => {
 });
 
 /** `pid 0` = le fichier n'existe pas ; un pid mort lève, un pid vivant ne lève pas. */
-const isAlive = (pid: number): boolean => {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
+/*
+ * A ZOMBIE IS NOT A SURVIVOR. The signal probe that stood here cannot tell a killed
+ * grandchild from a running one: once its parent dies it is reparented to pid 1 and stays
+ * addressable until pid 1 reaps it, which a minimal container entrypoint never does.
+ */
+const isAlive = processIsAlive;
 
 describe("annulation d'un worker — l'arbre entier, pas seulement le processus", () => {
   it("un dépassement de délai REND LA MAIN, même sur un worker qui ignore SIGTERM", async () => {
@@ -66,11 +65,14 @@ describe("annulation d'un worker — l'arbre entier, pas seulement le processus"
     });
     expect(result.timedOut).toBe(true);
 
-    /* Petite attente : la mort du groupe n'est pas instantanée pour l'observateur. */
-    await new Promise((resolve) => setTimeout(resolve, 500));
     const pid = Number((await readFile(pidFile, "utf8").catch(() => "0")).trim());
     expect(pid).toBeGreaterThan(0); // le petit-enfant a bien existé
-    /* LA propriété : il n'a pas survécu à son parent. Avant le correctif : il survivait. */
+    /*
+     * LA propriété : il n'a pas survécu à son parent. Avant le correctif : il survivait.
+     * La mise à mort du groupe n'est pas instantanée pour l'observateur, donc on l'attend
+     * au lieu de dormir un délai fixe.
+     */
+    expect(await waitForProcessExit(pid, 5_000)).toBe(true);
     expect(isAlive(pid)).toBe(false);
     if (isAlive(pid)) process.kill(pid, "SIGKILL");
   }, 30_000);

@@ -12,10 +12,7 @@ export interface RecoveryActionDeps {
   dispatcher: TaskExecutionDispatcher;
   missions: Pick<MissionRepository, "getMissionTaskById">;
   executionResults: Pick<TaskExecutionResultRepository, "getByWorkflowId" | "record">;
-  dispatchAttempts: Pick<
-    DispatchAttemptRepository,
-    "getByWorkflowId" | "recordExecutionFailure"
-  >;
+  dispatchAttempts: Pick<DispatchAttemptRepository, "getByWorkflowId" | "recordExecutionFailure">;
   digitalosFacadePath?: string;
   now?: () => Date;
 }
@@ -37,8 +34,14 @@ export function createRecoveryActions(deps: RecoveryActionDeps): RuntimeRecovery
         taskId: attempt.taskId,
         taskTitle: (await deps.missions.getMissionTaskById(attempt.missionTaskId))?.title,
         prompt: attempt.prompt,
-        // Same deterministic workflowId: Temporal (REJECT_DUPLICATE + USE_EXISTING) can never fork it.
+        /*
+         * Same deterministic workflowId, and the attempt it belongs to. Temporal is asked
+         * to START it (REJECT_DUPLICATE + FAIL), so it can never fork; if the id is
+         * already taken the adapter proves whether that execution is this very attempt
+         * before standing on it, which is what the attempt number is for.
+         */
         workflowId: attempt.workflowId,
+        attempt: attempt.attempt,
         workerKind: attempt.workerKind,
         capability: attempt.capability,
         digitalosFacadePath: deps.digitalosFacadePath,

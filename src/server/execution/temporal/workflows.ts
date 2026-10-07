@@ -14,6 +14,8 @@
  */
 import { proxyActivities, workflowInfo } from "@temporalio/workflow";
 
+import { reportableWorkerKind } from "./worker-run";
+
 import type * as activities from "./activities";
 
 /**
@@ -43,10 +45,19 @@ const { reportStarted, reportSuccess, reportFailure } = proxyActivities<typeof a
   },
 });
 
-/** The payload ICOS's dispatcher sends. */
+/**
+ * The payload ICOS's dispatcher sends.
+ *
+ * `workerKind` is the KIND ICOS routed this task to — one of a closed set the callback
+ * contract validates (`workerKindSchema`). It was missing from this interface while the
+ * dispatcher had always been sending it, and a payload field the workflow cannot see is a
+ * field the workflow will eventually invent a substitute for, which is exactly what went
+ * wrong below.
+ */
 export interface RunTaskInput {
   taskId: string;
   prompt: string;
+  workerKind?: string;
 }
 
 export async function runIcosTask(input: RunTaskInput): Promise<string> {
@@ -63,8 +74,12 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
     const run = await runGovernedWorker(ctx, input.prompt);
     await reportSuccess({
       ctx,
-      /* Reported by the run, not asserted here: the executor is configuration. */
-      workerKind: run.actualExecutor,
+      /*
+       * The routed KIND, which the callback contract validates — never the executable,
+       * which goes in `actualExecutor` below and is still reported by the run rather than
+       * asserted here.
+       */
+      workerKind: reportableWorkerKind(input.workerKind),
       result: run.result,
       actualExecutor: run.actualExecutor,
       ...(run.actualProvider ? { actualProvider: run.actualProvider } : {}),
@@ -78,8 +93,13 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
       error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
     await reportFailure({
       ctx,
-      /* A failure before the run resolved its executor cannot name one. */
-      workerKind: "unknown",
+      /*
+       * A failure before the run resolved its executor cannot name one — so it reports
+       * the kind ICOS routed, falling back to the closed set's own name for "none of the
+       * named ones". It must not be `"unknown"`: that is not a member of the set, so the
+       * callback was refused and the failure was never recorded at all.
+       */
+      workerKind: reportableWorkerKind(input.workerKind),
       errorCode: "WORKER_FAILED",
       errorMessage: message,
       startedAt,

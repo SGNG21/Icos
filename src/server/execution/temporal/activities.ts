@@ -346,9 +346,7 @@ export async function runGovernedWorker(
   prompt: string,
 ): Promise<GovernedRun> {
   /* The declared command for this runtime. No declaration, no execution. */
-  const declared = parseWorkerExecCommands(process.env.ICOS_WORKER_EXEC_COMMANDS)[
-    EXECUTOR_RUNTIME
-  ];
+  const declared = parseWorkerExecCommands(process.env.ICOS_WORKER_EXEC_COMMANDS)[EXECUTOR_RUNTIME];
   if (!declared) {
     throw new Error(
       `WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no '${EXECUTOR_RUNTIME}' runtime`,
@@ -415,9 +413,7 @@ export async function runGovernedWorker(
    * Only a WRITER needs watching: a reader holds no worktree, so there is no authority
    * over one to lose, and polling for it would be noise.
    */
-  const authority = worktree
-    ? watchAuthority(ctx, grant, authorityCheckIntervalMs())
-    : null;
+  const authority = worktree ? watchAuthority(ctx, grant, authorityCheckIntervalMs()) : null;
   const home = await createEphemeralHome();
   try {
     const capabilities = access.credentials.map((relativePath) => ({
@@ -518,9 +514,7 @@ export async function runGovernedWorker(
          * reader this is unchanged — scratch and HOME only — so granting the writer
          * capability widened nothing for the tasks that do not have it.
          */
-        readWritePaths: worktree
-          ? [worktree, workspace, home.path]
-          : [workspace, home.path],
+        readWritePaths: worktree ? [worktree, workspace, home.path] : [workspace, home.path],
         /*
          * A writer still READS the canonical checkout (it branched from it) but may not
          * write there, so it appears in the read-only list even when a worktree exists.
@@ -543,6 +537,31 @@ export async function runGovernedWorker(
     const lostAuthority = authority?.reason();
     if (lostAuthority) {
       throw new Error(`WORKER_AUTHORITY_LOST: ${lostAuthority}`);
+    }
+
+    /*
+     * A CONFINEMENT REFUSAL IS NOT AN EMPTY RESULT.
+     *
+     * The run asks for a sandbox, and `required` is the default: a run announced as
+     * confined that is not confined would make the audit lie, so the runner REFUSES to
+     * spawn anything and says why — on stderr. The result contract reads stdout only, so
+     * the refusal arrived here as `worker returned no structured status: no output`, which
+     * is indistinguishable from a worker that started and produced nothing.
+     *
+     * Those need different answers. One is a deployment fact — there is no confinement
+     * mechanism on this platform, so no governed write can run here at all — and the other
+     * is a broken worker. Reporting the first as the second cost a long hunt through a
+     * governed path that had never executed a single process.
+     *
+     * The evidence is already in hand: a sandbox was requested and `confinement` came back
+     * `"none"`, which the runner only reports when it declined to launch. Still fails
+     * closed, with the reason it actually had.
+     */
+    if (run.confinement === "none") {
+      throw new Error(
+        "WORKER_SANDBOX_UNAVAILABLE: no confinement mechanism on this platform; " +
+          "a governed run is refused rather than executed unconfined",
+      );
     }
 
     if (run.timedOut) {

@@ -873,6 +873,32 @@ export async function buildPostgresContainer(
     true,
     undefined,
     env.TEMPORAL_DISPATCH_TIMEOUT_MS,
+    /*
+     * THE SAME NAMESPACE THE WORKER POLLS. Both the consumer guard and the
+     * existing-execution probe are namespace-scoped reads, so asking in `default` while a
+     * worker polls elsewhere makes the guard refuse every dispatch for want of a consumer
+     * that is in fact there.
+     */
+    env.TEMPORAL_NAMESPACE,
+    /* Consumer-proof TTL keeps its default; it is not configured here. */
+    undefined,
+    /*
+     * HOW A FINISHED EXECUTION IS TOLD FROM AN ABANDONED ONE.
+     *
+     * A workflow id that is already taken by a CLOSED execution of this very attempt is
+     * either settled work — in which case re-running it would be a duplicate integration
+     * — or an execution that died without ever reporting, in which case claiming a
+     * successful dispatch strands the task at `dispatched` for ever. The canonical
+     * terminal result is the only evidence that distinguishes them, and it lives in the
+     * execution-results ledger, keyed by exactly that workflow id.
+     *
+     * Read-only, and the narrow port rather than the repository: the transport may ASK
+     * whether ICOS has settled an execution, never write settlement itself.
+     */
+    {
+      hasTerminalResult: async (workflowId) =>
+        (await executionResults.getByWorkflowId(workflowId)) !== null,
+    },
   );
   const externalExecution = buildWorkerExecutor(env);
   assertExecutionLeaseOutlivesWorkers(env);

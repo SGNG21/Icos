@@ -62,6 +62,13 @@ export async function createAndDispatchTask(
     const dispatched = await deps.taskExecution.dispatch({
       taskId: created.task.id,
       prompt: input.description ?? input.title,
+      /*
+       * The task was created by the call above, so this is its first attempt by
+       * construction. Stated rather than left out: the durable adapter can only prove an
+       * existing execution is this one if the attempt is declared, and a freshly created
+       * task declaring nothing would make a workflow-id collision unresolvable.
+       */
+      attempt: 1,
     });
     workflowId = dispatched.workflowId;
   } catch (error) {
