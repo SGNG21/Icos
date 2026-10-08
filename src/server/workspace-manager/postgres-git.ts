@@ -1,10 +1,23 @@
-import { WorkspaceError } from "./types";
 import { Git } from "./git";
 import postgres from "postgres";
 
-import { TEST_DATABASE_URL, assertSafeTestDatabaseUrl } from "@/server/database/test-database-guard";
+import {
+  TEST_DATABASE_URL,
+  assertSafeTestDatabaseUrl,
+} from "@/server/database/test-database-guard";
 
-/** PostgreSQL-backed git implementation. */
+/**
+ * Le port `Git` du conteneur PostgreSQL.
+ *
+ * IL NE LANCE PAS GIT LUI-MÊME (ADR 0072, phase 0). Il redéfinissait `exec` sans le filtre
+ * de verbes du port, sans options destructives refusées, sans code de sortie vérifié — et
+ * c'est lui que la production utilise. Le garde de 0041 n'y était donc pas appliqué, et un
+ * `git add`/`commit` passait sans que personne l'ait autorisé. Il redéfinissait aussi
+ * `listDir`, `mergeConflicts` et `diffCheck` avec des commandes qui ne répondent pas à la
+ * question posée (un `ls-tree` qui renvoie le dossier lui-même, un `merge-tree` à deux
+ * arguments qui échoue en silence) : les contrôles de migration et de conflit du gate ne
+ * voyaient rien. Tout est désormais hérité de `Git`, donc de l'autorité unique.
+ */
 export class PostgresGit extends Git {
   private readonly sql: postgres.Sql<Record<string, postgres.PostgresType>>;
 
@@ -16,153 +29,6 @@ export class PostgresGit extends Git {
     const url = new URL(dbUrl);
     url.pathname = "/postgres";
     this.sql = postgres(url.toString(), { max: 1, onnotice: () => {} });
-  }
-
-  async exec(args: string[], cwd = this.repoDir, okCodes: number[] = [0]): Promise<{ code: number; stdout: string; stderr: string }> {
-    // For PostgresGit, we delegate to the actual git binary
-    const { execFile } = await import("node:child_process");
-    return new Promise((resolve) => {
-      execFile(
-        "git",
-        args,
-        {
-          cwd,
-          maxBuffer: 64 * 1024 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-        },
-        (error, stdout, stderr) => {
-          const code = error ? (typeof error.code === "number" ? error.code : 128) : 0;
-          resolve({ code, stdout, stderr });
-        },
-      );
-    });
-  }
-
-  protected async out(args: string[], cwd?: string): Promise<string> {
-    const result = await this.exec(args, cwd);
-    return result.stdout.trim();
-  }
-
-  async resolveCommit(ref: string, cwd?: string): Promise<string> {
-    return this.out(["rev-parse", "--verify", `${ref}^{commit}`], cwd);
-  }
-
-  async commitExists(ref: string): Promise<boolean> {
-    return (
-      (await this.exec(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], this.repoDir, [0, 1])).code === 0
-    );
-  }
-
-  async branchExists(branch: string): Promise<boolean> {
-    return (
-      (await this.exec(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], this.repoDir, [0, 1])).code === 0
-    );
-  }
-
-  async worktrees(): Promise<{ path: string; branch: string | null; head: string }[]> {
-    const text = await this.out(["worktree", "list", "--porcelain"]);
-    return text
-      .split("\n\n")
-      .filter(Boolean)
-      .map((block) => {
-        const lines = block.split("\n");
-        const field = (k: string) =>
-          lines.find((l) => l.startsWith(`${k} `))?.slice(k.length + 1) ?? null;
-        return {
-          path: field("worktree") ?? "",
-          head: field("HEAD") ?? "",
-          branch: field("branch")?.replace(/^refs\/heads\//, "") ?? null,
-        };
-      });
-  }
-
-  async addWorktree(worktreePath: string, branch: string, baseCommit: string): Promise<void> {
-    await this.exec(["worktree", "add", worktreePath, "-b", branch, baseCommit]);
-  }
-
-  async removeWorktree(worktreePath: string): Promise<void> {
-    await this.exec(["worktree", "remove", worktreePath]);
-  }
-
-  async deleteBranchIfMerged(branch: string): Promise<boolean> {
-    return (await this.exec(["branch", "-d", branch], this.repoDir, [0, 1])).code === 0;
-  }
-
-  async statusPorcelain(cwd: string): Promise<string[]> {
-    const text = (await this.exec(["status", "--porcelain", "--untracked-files=all"], cwd)).stdout;
-    return text.split("\n").filter(Boolean);
-  }
-
-  async headCommit(cwd: string): Promise<string> {
-    return this.resolveCommit("HEAD", cwd);
-  }
-
-  async changedFiles(from: string, to: string): Promise<{ status: string; path: string }[]> {
-    const text = await this.out(["diff", "--name-status", "--no-renames", from, to]);
-    return text
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => {
-        const [status = "", ...rest] = l.split("\t");
-        return { status, path: rest.join("\t") };
-      });
-  }
-
-  async addedLines(from: string, to: string): Promise<{ file: string; line: string }[]> {
-    const text = await this.out(["diff", "-U0", "--no-renames", "--no-color", from, to]);
-    const added: { file: string; line: string }[] = [];
-    let file = "";
-    for (const line of text.split("\n")) {
-      if (line.startsWith("+++ ")) file = line.slice(4).replace(/^b\//, "");
-      else if (line.startsWith("+") && !line.startsWith("+++"))
-        added.push({ file, line: line.slice(1) });
-    }
-    return added;
-  }
-
-  async diffCheck(from: string, to: string): Promise<{ ok: boolean; output: string }> {
-    const result = await this.exec(["merge-tree", from, to], this.repoDir, [0, 1]);
-    return { ok: result.code === 0, output: result.stdout };
-  }
-
-  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
-    return (await this.exec(["merge-base", "--is-ancestor", ancestor, descendant], this.repoDir, [0, 1])).code === 0;
-  }
-
-  async mergeBase(a: string, b: string): Promise<string> {
-    return this.out(["merge-base", a, b]);
-  }
-
-  async countCommits(range: string): Promise<number> {
-    const text = await this.out(["rev-list", "--count", range]);
-    return parseInt(text.trim(), 10) || 0;
-  }
-
-  async mergeConflicts(target: string, head: string): Promise<string[]> {
-    const text = await this.out(["merge-tree", target, head]);
-    const conflicts: string[] = [];
-    const lines = text.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes("<<<<<<< ")) {
-        // Find the file path from the merge-tree output
-        for (let j = i - 1; j >= 0; j--) {
-          if (lines[j].startsWith("changed in ")) {
-            conflicts.push(lines[j].slice("changed in ".length));
-            break;
-          }
-        }
-      }
-    }
-    return [...new Set(conflicts)];
-  }
-
-  async listDir(ref: string, dir: string): Promise<string[]> {
-    const text = await this.out(["ls-tree", "--name-only", ref, dir]);
-    return text.split("\n").filter(Boolean);
-  }
-
-  async showFile(ref: string, file: string): Promise<string> {
-    return this.out(["show", `${ref}:${file}`]);
   }
 
   async close(): Promise<void> {

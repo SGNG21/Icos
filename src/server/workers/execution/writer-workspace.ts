@@ -4,9 +4,11 @@ import { join, resolve } from "node:path";
 
 import type { WorkerCommitEvidence } from "@/core/contracts/worker-execution";
 import {
-  runNonInteractive,
-  type NonInteractiveRunner,
-} from "@/server/workers/process/run-process";
+  addAdHocWorktree,
+  pruneWorktrees,
+  removeAdHocWorktree,
+  runGuardedGit,
+} from "@/server/workspace-manager/git-authority";
 
 /**
  * WRITER ISOLATION (M6.3, requirement 6).
@@ -45,6 +47,12 @@ export interface WorkerWorkspace {
   branch: string | null;
   /** The commit the branch started from, so evidence can be diffed against it. */
   baseCommit: string | null;
+  /**
+   * The CANONICAL repository this worktree belongs to. Required to read a writer's
+   * evidence: its gitdir is derived from here, never discovered from the worktree, whose
+   * `.git` the worker controls (ADR 0072, phase 0).
+   */
+  repoPath?: string;
   /** Removes the worktree. The BRANCH is kept: it is the evidence. */
   dispose(): Promise<void>;
 }
@@ -62,26 +70,23 @@ export interface ProvisionWorkspaceInput {
   baseRef?: string;
   /** Where worktrees are created. Defaults to the OS temp directory. */
   rootDir?: string;
-  run?: NonInteractiveRunner;
 }
 
 export const GIT_TIMEOUT_MS = 30_000;
 /** Branch namespace, so a worker branch is never mistaken for a human's. */
 export const WORKER_BRANCH_PREFIX = "icos/worker";
 
-class GitError extends Error {}
-
-async function git(
-  run: NonInteractiveRunner,
-  cwd: string,
-  args: string[],
-): Promise<string> {
-  const result = await run({ command: "git", args, cwd, timeoutMs: GIT_TIMEOUT_MS });
-  if (result.exitCode !== 0) {
-    throw new GitError(
-      `GIT_FAILED(${args[0]}): exit ${result.exitCode} ${result.stderr.split("\n")[0] ?? ""}`.trim(),
-    );
-  }
+/**
+ * Git through the ONE privileged authority (ADR 0072, phase 0): fixed binary, constructed
+ * environment, neutralised config surfaces. A `worktree` is addressed with a gitdir derived
+ * from the canonical repository — its own `.git` belongs to the worker and is never read.
+ */
+async function git(repoPath: string, args: string[], worktree?: string): Promise<string> {
+  const result = await runGuardedGit(args, {
+    repoDir: repoPath,
+    ...(worktree === undefined ? {} : { worktree }),
+    timeoutMs: GIT_TIMEOUT_MS,
+  });
   return result.stdout.trim();
 }
 
@@ -94,7 +99,6 @@ export function workerBranchName(attemptKey: string, unique: string): string {
 export async function provisionWorkspace(
   input: ProvisionWorkspaceInput,
 ): Promise<WorkerWorkspace> {
-  const run = input.run ?? runNonInteractive;
   const repoPath = resolve(input.repoPath);
 
   if (input.mode === "reader") {
@@ -113,7 +117,7 @@ export async function provisionWorkspace(
   }
 
   const baseRef = input.baseRef ?? "HEAD";
-  const baseCommit = await git(run, repoPath, ["rev-parse", baseRef]);
+  const baseCommit = await git(repoPath, ["rev-parse", baseRef]);
 
   const root = await mkdtemp(join(input.rootDir ?? tmpdir(), "icos-worker-"));
   const path = join(root, "workspace");
@@ -122,7 +126,7 @@ export async function provisionWorkspace(
   try {
     // -b creates the branch; git refuses if it already exists, so two runs can
     // never silently share one branch.
-    await git(run, repoPath, ["worktree", "add", "-b", branch, path, baseCommit]);
+    await addAdHocWorktree(repoPath, branch, path, baseCommit, GIT_TIMEOUT_MS);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
@@ -146,16 +150,17 @@ export async function provisionWorkspace(
     mode: "writer",
     branch,
     baseCommit,
+    repoPath,
     dispose: async () => {
       // Never let cleanup mask the run's own outcome.
       try {
-        await git(run, repoPath, ["worktree", "remove", "--force", path]);
+        await removeAdHocWorktree(repoPath, path, GIT_TIMEOUT_MS);
       } catch {
         /* fall through to the filesystem */
       }
       await rm(root, { recursive: true, force: true });
       try {
-        await git(run, repoPath, ["worktree", "prune"]);
+        await pruneWorktrees(repoPath, GIT_TIMEOUT_MS);
       } catch {
         /* nothing to do */
       }
@@ -174,22 +179,28 @@ export const MAX_DIFF_BYTES = 64 * 1024;
 
 export async function collectCommitEvidence(
   workspace: WorkerWorkspace,
-  options: { run?: NonInteractiveRunner } = {},
 ): Promise<WorkerCommitEvidence | undefined> {
   if (workspace.mode !== "writer" || !workspace.branch || !workspace.baseCommit) {
     /* A reader produces no commits: absent evidence, not empty evidence. */
     return undefined;
   }
+  if (!workspace.repoPath) {
+    /* No canonical repository, no derivable gitdir: never fall back to discovery. */
+    throw new Error(
+      "WORKER_EVIDENCE_REPO_UNKNOWN: a writer workspace must name its canonical repository",
+    );
+  }
 
-  const run = options.run ?? runNonInteractive;
-  const head = await git(run, workspace.path, ["rev-parse", "HEAD"]);
+  const repo = workspace.repoPath;
+  const inWorktree = (args: string[]) => git(repo, args, workspace.path);
+  const head = await inWorktree(["rev-parse", "HEAD"]);
   const range = `${workspace.baseCommit}..${head}`;
 
-  const commitsRaw = await git(run, workspace.path, ["rev-list", "--reverse", range]);
+  const commitsRaw = await inWorktree(["rev-list", "--reverse", range]);
   const commits = commitsRaw ? commitsRaw.split("\n").filter(Boolean) : [];
 
   const committedFiles = commits.length
-    ? (await git(run, workspace.path, ["diff", "--name-only", range])).split("\n").filter(Boolean)
+    ? (await inWorktree(["diff", "--name-only", range])).split("\n").filter(Boolean)
     : [];
 
   /*
@@ -197,7 +208,7 @@ export async function collectCommitEvidence(
    * committing has still changed something, and hiding that would make the
    * evidence claim less than actually happened.
    */
-  const status = await git(run, workspace.path, ["status", "--porcelain"]);
+  const status = await inWorktree(["status", "--porcelain", "--ignore-submodules=dirty"]);
   const dirtyFiles = status
     ? status
         .split("\n")
@@ -213,7 +224,7 @@ export async function collectCommitEvidence(
    * the reviewer knows whether it saw the whole change.
    */
   const diffRaw = commits.length
-    ? await git(run, workspace.path, ["diff", "--unified=3", range])
+    ? await inWorktree(["diff", "--unified=3", range])
     : "";
   const diff = diffRaw.slice(0, MAX_DIFF_BYTES);
 

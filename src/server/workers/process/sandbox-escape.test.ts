@@ -239,6 +239,36 @@ describe("profil Seatbelt — la forme, sans lancer de processus", () => {
     expect(profile.match(/\(allow file-read\* file-write\*/g) ?? []).toHaveLength(1);
   });
 
+  it("un chemin RO IMBRIQUÉ dans un chemin RW reste RO : refus d'écriture APRÈS l'autorisation", () => {
+    /* ADR 0072, phase 0 : le pointeur `.git` d'un worktree, même sémantique que Bubblewrap. */
+    const profile = seatbeltProfile({
+      readWritePaths: ["/tmp/wt"],
+      readOnlyPaths: ["/tmp/wt/.git", "/repo"],
+      allowNetwork: false,
+    });
+    const allow = profile.indexOf("(allow file-read* file-write*");
+    const deny = profile.indexOf("(deny file-write*");
+    expect(allow).toBeGreaterThan(-1);
+    /* Seatbelt applique la DERNIÈRE règle qui correspond : le refus doit suivre. */
+    expect(deny).toBeGreaterThan(allow);
+    const denyLine = profile.slice(deny).split("\n")[0]!;
+    expect(denyLine).toContain('"/tmp/wt/.git"');
+    expect(denyLine).toContain('"/private/tmp/wt/.git"');
+    /* Un RO hors de tout RW n'a pas besoin de refus : il n'a jamais été autorisé en écriture. */
+    expect(denyLine).not.toContain('"/repo"');
+    /* La lecture reste accordée. */
+    expect(profile).toMatch(/\(allow file-read\*[^\n]*"\/tmp\/wt\/\.git"/);
+  });
+
+  it("sans chemin RO imbriqué, aucun refus n'est ajouté", () => {
+    const profile = seatbeltProfile({
+      readWritePaths: ["/tmp/wt"],
+      readOnlyPaths: ["/repo"],
+      allowNetwork: false,
+    });
+    expect(profile).not.toContain("(deny file-write*");
+  });
+
   it("ne prétend PAS isoler le réseau dès qu'un endpoint est nécessaire", () => {
     /*
      * Seatbelt ne filtre pas par nom d'hôte. Une politique « NVIDIA seulement » est donc

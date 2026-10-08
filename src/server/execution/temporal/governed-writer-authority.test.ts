@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -117,9 +117,14 @@ function grantResponse(grant: Record<string, unknown>) {
 const WORKER_COMMAND = process.execPath;
 
 /** A worktree the WorkspaceManager would really have created. */
+/**
+ * A worktree as git leaves it: a directory whose `.git` is a regular FILE naming its gitdir.
+ * The activity requires that pointer before it runs anything (ADR 0072, phase 0).
+ */
 function allocate(name: string): string {
   const path = join(root, name);
   mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, ".git"), `gitdir: ${join(canonical, ".git", "worktrees", name)}\n`);
   return path;
 }
 
@@ -243,6 +248,57 @@ describe("the governed Temporal writer", () => {
 
     await expect(run()).rejects.toThrow("WORKER_WORKSPACE_OUTSIDE_ROOT");
     expect(sandboxArgs).toHaveLength(0);
+  });
+
+  describe("WORKTREE_GIT_POINTER (ADR 0072, phase 0)", () => {
+    it("the pointer is bound READ-ONLY inside the writable worktree", async () => {
+      const worktree = allocate("task-1");
+      answerWith(baseGrant(worktree, true));
+
+      await run();
+
+      const sandbox = sandboxArgs[0]!.sandbox!;
+      const pointer = join(realpathSync(worktree), ".git");
+      expect(sandbox.readOnlyPaths).toContain(pointer);
+      expect(sandbox.readWritePaths).not.toContain(pointer);
+      expect(sandbox.readWritePaths).toContain(realpathSync(worktree));
+    });
+
+    it("a MISSING pointer is refused: it could not be bound, so the worker could create one", async () => {
+      const worktree = join(root, "task-1");
+      mkdirSync(worktree, { recursive: true });
+      answerWith(baseGrant(worktree, true));
+
+      await expect(run()).rejects.toThrow("WORKER_WORKSPACE_GIT_POINTER_INVALID");
+      expect(sandboxArgs).toHaveLength(0);
+    });
+
+    it("a pointer replaced by a DIRECTORY is refused before anything runs", async () => {
+      const worktree = join(root, "task-1");
+      mkdirSync(join(worktree, ".git"), { recursive: true });
+      answerWith(baseGrant(worktree, true));
+
+      await expect(run()).rejects.toThrow("WORKER_WORKSPACE_GIT_POINTER_INVALID");
+      expect(sandboxArgs).toHaveLength(0);
+    });
+
+    it("a pointer replaced by a SYMLINK is refused before anything runs", async () => {
+      const worktree = join(root, "task-1");
+      mkdirSync(worktree, { recursive: true });
+      symlinkSync(join(canonical, "elsewhere"), join(worktree, ".git"));
+      answerWith(baseGrant(worktree, true));
+
+      await expect(run()).rejects.toThrow("WORKER_WORKSPACE_GIT_POINTER_INVALID");
+      expect(sandboxArgs).toHaveLength(0);
+    });
+
+    it("a reader holds no worktree, so no pointer is bound or required", async () => {
+      answerWith(baseGrant(null, false));
+
+      await run();
+
+      expect(sandboxArgs[0]!.sandbox!.readOnlyPaths.some((p) => p.endsWith("/.git"))).toBe(false);
+    });
   });
 
   it("CANNOT_WRITE_OTHER_WORKTREE: only the granted worktree is writable", async () => {

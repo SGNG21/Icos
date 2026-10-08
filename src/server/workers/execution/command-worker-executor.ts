@@ -319,9 +319,7 @@ export class CommandWorkerExecutor implements WorkerExecutorPort {
        * still have committed work, and discarding that would make the next attempt
        * redo it — the opposite of resuming.
        */
-      const evidence = await collectCommitEvidence(workspace, { run: this.run }).catch(
-        () => undefined,
-      );
+      const evidence = await collectCommitEvidence(workspace).catch(() => undefined);
 
       if (!parsed.ok) {
         /* Claimed the protocol, broke it. Not trustworthy enough to call success. */

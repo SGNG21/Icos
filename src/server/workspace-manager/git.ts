@@ -1,42 +1,17 @@
-import { execFile } from "node:child_process";
-
+import {
+  deleteRefIfAt,
+  preserveWorktreeChanges,
+  runGuardedGit,
+  type GitExecResult,
+} from "./git-authority";
 import { WorkspaceError } from "./types";
 
-/** Sous-commandes autorisées. Tout le reste (reset, push, clean, merge, rebase, checkout…) est refusé. */
-const ALLOWED = new Set([
-  "worktree",
-  "branch",
-  "rev-parse",
-  "rev-list",
-  "show-ref",
-  "status",
-  "diff",
-  "merge-base",
-  "merge-tree",
-  "ls-tree",
-  "show",
-  /*
-   * `update-ref` is the ONE write that advances the integration target (M8, defect 19).
-   *
-   * It is deliberately preferred over `merge`. With an expected-old-value argument it is
-   * an atomic COMPARE-AND-SWAP on the ref, which is exactly the exactly-once primitive
-   * integration needs: a second integrator whose expected value is stale simply fails,
-   * with no window between reading and writing. `merge` would additionally need a
-   * checked-out tree, could create merge commits, and could attempt machine conflict
-   * resolution — none of which an autonomous path should ever do.
-   *
-   * `merge`, `rebase`, `reset`, `checkout`, `push` and `clean` remain FORBIDDEN.
-   */
-  "update-ref",
-]);
-const FORBIDDEN_FLAGS = new Set([
-  "--force",
-  "-f",
-  "-D",
-  "--hard",
-  "--force-with-lease",
-  "--delete",
-]);
+/*
+ * Le filtre de verbes, l'environnement durci et la dérivation du gitdir vivent dans
+ * `git-authority.ts`, l'unique endroit qui lance `git`. Ce port n'en est qu'un client : une
+ * sous-classe ne peut plus contourner le garde en relançant `git` elle-même.
+ */
+export { ALLOWED_GIT_SUBCOMMANDS, FORBIDDEN_GIT_FLAGS } from "./git-authority";
 
 export interface ChangedFile {
   status: string;
@@ -52,47 +27,26 @@ export interface AddedLine {
   line: string;
 }
 
-interface ExecResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
+type ExecResult = GitExecResult;
 
 /**
  * Accès git minimal, sans shell, fail-closed. Ne modifie jamais le dépôt maître :
  * seules `worktree add/remove` et `branch -d` écrivent, jamais avec --force.
  */
 export class Git {
-  /** @param repoDir n'importe quel worktree du dépôt (jamais utilisé pour écrire dans son arbre de travail). */
+  /** @param repoDir le checkout CANONIQUE : le seul que git ait jamais le droit de découvrir. */
   constructor(readonly repoDir: string) {}
 
+  /**
+   * `cwd` désigne un WORKTREE dès qu'il diffère du canonique : son gitdir est alors dérivé
+   * du canonique, et le `.git` qu'il contient n'est jamais lu (ADR 0072, phase 0).
+   */
   async exec(args: string[], cwd = this.repoDir, okCodes: number[] = [0]): Promise<ExecResult> {
-    if (!ALLOWED.has(args[0] ?? ""))
-      throw new WorkspaceError("GIT_FORBIDDEN", `git ${args[0]} interdit`);
-    if (args.some((a) => FORBIDDEN_FLAGS.has(a)))
-      throw new WorkspaceError("GIT_FORBIDDEN", `option destructive: ${args.join(" ")}`);
-    const result = await new Promise<ExecResult>((resolve) => {
-      execFile(
-        "git",
-        args,
-        {
-          cwd,
-          maxBuffer: 64 * 1024 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-        },
-        (error, stdout, stderr) => {
-          const code = error ? (typeof error.code === "number" ? error.code : 128) : 0;
-          resolve({ code, stdout, stderr });
-        },
-      );
+    return runGuardedGit(args, {
+      repoDir: this.repoDir,
+      ...(cwd === this.repoDir ? {} : { worktree: cwd }),
+      okCodes,
     });
-    if (!okCodes.includes(result.code)) {
-      throw new WorkspaceError(
-        "GIT_FAILED",
-        `git ${args.join(" ")} -> ${result.code}: ${result.stderr.trim()}`,
-      );
-    }
-    return result;
   }
 
   /** Internal helper for git commands that return stdout. */
@@ -226,42 +180,36 @@ export class Git {
      * only if it still points where we checked. Safer than `branch -D`, which deletes
      * unconditionally.
      *
-     * This bypasses the FORBIDDEN_FLAGS guard deliberately and narrowly. That guard exists
-     * to stop a CALLER smuggling a destructive flag into an arbitrary command; here the
-     * argv is built entirely inside this method from validated inputs, no caller can
-     * influence it, and the precondition above is strictly stronger than the one the
-     * blocked command would have applied itself.
+     * This bypasses the FORBIDDEN_GIT_FLAGS guard deliberately and narrowly, inside the git
+     * authority (`deleteRefIfAt`). That guard exists to stop a CALLER smuggling a
+     * destructive flag into an arbitrary command; here the argv is built entirely from
+     * validated inputs, no caller can influence it, and the precondition above is strictly
+     * stronger than the one the blocked command would have applied itself. The hardening
+     * (environment, `-c` neutralisation, config audit) is NOT bypassed.
      */
-    const { code } = await this.runInternal([
-      "update-ref",
-      "-d",
-      `refs/heads/${branch}`,
-      tip,
-    ]);
-    return code === 0;
+    return deleteRefIfAt(this.repoDir, `refs/heads/${branch}`, tip);
   }
 
-  /** Runs an argv built entirely inside this class. Never reachable with caller input. */
-  private runInternal(args: string[]): Promise<ExecResult> {
-    return new Promise<ExecResult>((resolve) => {
-      execFile(
-        "git",
-        args,
-        {
-          cwd: this.repoDir,
-          maxBuffer: 64 * 1024 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-        },
-        (error, stdout, stderr) => {
-          const code = error ? (typeof error.code === "number" ? error.code : 128) : 0;
-          resolve({ code, stdout, stderr });
-        },
-      );
-    });
+  /**
+   * Commite le travail non commité d'un worktree sur SA branche, pour le préserver avant
+   * un retrait (SUPERSEDED_DIRTY_WORKSPACE_HELD). Opération interne, durcie.
+   */
+  async preserveWorktreeChanges(worktreePath: string, message: string): Promise<void> {
+    await preserveWorktreeChanges(this.repoDir, worktreePath, message);
   }
 
+  /**
+   * `--ignore-submodules=dirty` : un sous-module ENREGISTRÉ n'est pas visité, donc aucun git
+   * n'est lancé dans un `.git` qu'un worker aurait pu y créer. Un changement de gitlink
+   * reste visible.
+   */
   async statusPorcelain(cwd: string): Promise<string[]> {
-    const text = (await this.exec(["status", "--porcelain", "--untracked-files=all"], cwd)).stdout;
+    const text = (
+      await this.exec(
+        ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"],
+        cwd,
+      )
+    ).stdout;
     return text.split("\n").filter(Boolean);
   }
 

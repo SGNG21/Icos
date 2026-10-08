@@ -122,6 +122,27 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     lines.push(`(allow file-read* file-write* ${subpaths})`);
   }
 
+  /*
+   * LE PLUS ÉTROIT GAGNE (ADR 0072, phase 0) — même sémantique que Bubblewrap.
+   *
+   * Un chemin accordé en LECTURE SEULE à l'intérieur d'un chemin accordé en écriture (le
+   * pointeur `.git` d'un worktree) resterait sinon modifiable : les `allow` s'additionnent.
+   * Seatbelt applique la DERNIÈRE règle qui correspond, donc ce refus, placé après
+   * l'autorisation, l'emporte. Il ne retire que l'écriture : la lecture reste accordée.
+   */
+  const shadowed = policy.readOnlyPaths.filter((ro) =>
+    policy.readWritePaths.some(
+      (rw) => ro === rw || ro.startsWith(rw.endsWith("/") ? rw : `${rw}/`),
+    ),
+  );
+  if (shadowed.length > 0) {
+    const subpaths = shadowed
+      .flatMap(pathForms)
+      .map((p) => `(subpath ${quote(p)})`)
+      .join(" ");
+    lines.push(`(deny file-write* ${subpaths})`);
+  }
+
   /* Un enfant qui ne peut pas écrire /dev/null se bloque sur sa propre sortie. */
   lines.push('(allow file-write-data (literal "/dev/null"))');
 

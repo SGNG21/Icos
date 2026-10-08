@@ -24,6 +24,9 @@ export class InMemoryGit extends Git {
     return { code: 0, stdout: "", stderr: "" };
   }
 
+  /** Comme `exec` ici : aucun dépôt, donc rien à préserver. */
+  async preserveWorktreeChanges(_worktreePath: string, _message: string): Promise<void> {}
+
   protected async out(args: string[], cwd?: string): Promise<string> {
     const result = await this.exec(args, cwd);
     return result.stdout.trim();

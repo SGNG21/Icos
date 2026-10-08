@@ -940,6 +940,8 @@ export async function buildPostgresContainer(
                 mode: "writer",
                 branch: registered.branch,
                 baseCommit: registered.baseCommit,
+                /* Evidence derives this worktree's gitdir from here (ADR 0072, phase 0). */
+                repoPath: externalExecution.repoPath,
                 /* The WorkspaceManager owns this worktree's lifecycle, not the executor. */
                 dispose: async () => {},
               };

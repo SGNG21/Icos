@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readdirSync, readFileSync } from "node:fs";
@@ -449,6 +450,60 @@ describe.skipIf(!onBubblewrap)("Bubblewrap — tentatives d'évasion RÉELLES", 
     } finally {
       delete process.env.ICOS_PROOF_FAKE_SECRET;
     }
+  });
+
+  it("le POINTEUR `.git` d'un vrai worktree : ni écrit, ni supprimé, ni renommé, ni remplacé", async () => {
+    /*
+     * ADR 0072, phase 0 : le vecteur était de remplacer ce fichier par un dossier dont la
+     * config exécute une commande. Le pointeur est monté en LECTURE SEULE dans le worktree
+     * modifiable, comme le compose l'activité Temporal.
+     */
+    const repo = join(root, "git-canonical");
+    const tree = join(root, "git-trees", "wt");
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        cwd,
+        encoding: "utf8",
+      }).trim();
+    await mkdir(repo, { recursive: true });
+    git(repo, "init", "-q", "-b", "main");
+    await writeFile(join(repo, "README.md"), "canon\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "worktree", "add", "-q", tree, "-b", "ws/wt", base);
+    const pointer = join(tree, ".git");
+    const before = await readFile(pointer, "utf8");
+
+    const result = await sh(
+      [
+        'echo "gitdir: /tmp/evil" > .git && echo ECRIT',
+        "rm -f .git && echo EFFACE",
+        "mv .git .git.bak && echo RENOMME",
+        "rm -rf .git; mkdir .git && echo REMPLACE",
+        "git init -q . && echo REINIT",
+        "echo travail > travail.txt && echo TRAVAIL_OK",
+        "git add -A && git -c user.name=w -c user.email=w@w commit -qm w && echo COMMIT",
+        "true",
+      ].join("; "),
+      {
+        cwd: tree,
+        sandbox: {
+          readWritePaths: [tree, home.path],
+          readOnlyPaths: [repo, pointer],
+          allowNetwork: false,
+        },
+      },
+    );
+    expect(result.confinement).toBe("bubblewrap");
+    for (const forbidden of ["ECRIT", "EFFACE", "RENOMME", "REMPLACE", "REINIT", "COMMIT"]) {
+      expect(result.stdout, forbidden).not.toContain(forbidden);
+    }
+    /* La barrière n'empêche pas le travail. */
+    expect(result.stdout).toContain("TRAVAIL_OK");
+    expect(await readFile(pointer, "utf8")).toBe(before);
+    /* Le dépôt canonique n'a rien reçu : ni commit, ni ref. */
+    expect(git(repo, "rev-parse", "ws/wt")).toBe(base);
   });
 
   /** Processus de l'HÔTE dont la ligne de commande porte ce marqueur. */

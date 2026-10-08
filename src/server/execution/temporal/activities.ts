@@ -17,7 +17,7 @@
  * authenticated by a constant-time secret comparison — a second, in-process writer would
  * be a second settlement authority.
  */
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -328,6 +328,30 @@ async function assertWorktreeWithinRoot(worktreePath: string): Promise<string> {
 }
 
 /**
+ * THE WORKTREE'S GIT POINTER IS NOT THE WORKER'S (ADR 0072, phase 0).
+ *
+ * A linked worktree holds a `.git` FILE naming its gitdir. Writable, it let a worker swap
+ * it for a directory whose config runs a command (`core.fsmonitor`) the next time ICOS ran
+ * git there — outside the sandbox, with the server's environment. ICOS's own git no longer
+ * reads it (`git-authority.ts`), and the worker may no longer change it: the pointer is
+ * bound READ-ONLY inside the writable worktree.
+ *
+ * It must exist as a REGULAR file before the run. A missing pointer would not be bound at
+ * all (a backend mounts only what exists), leaving the worker free to create a `.git`; a
+ * directory or a link is already tampering. Either is refused before anything starts.
+ */
+async function assertGitPointer(worktree: string): Promise<string> {
+  const pointer = join(worktree, ".git");
+  const entry = await lstat(pointer).catch(() => null);
+  if (!entry || !entry.isFile()) {
+    throw new Error(
+      "WORKER_WORKSPACE_GIT_POINTER_INVALID: the worktree's .git must be the regular file git created",
+    );
+  }
+  return pointer;
+}
+
+/**
  * Runs the worker under the governed gateway and returns its text result.
  *
  * Throws on failure, which Temporal turns into an activity failure and the workflow turns
@@ -408,6 +432,7 @@ export async function runGovernedWorker(
   if (grant.writeAllowed && !worktree) {
     throw new Error("WORKER_WORKSPACE_MISSING: écriture accordée sans worktree alloué");
   }
+  const gitPointer = worktree ? await assertGitPointer(worktree) : null;
   const workspace = scratch;
   /*
    * Only a WRITER needs watching: a reader holds no worktree, so there is no authority
@@ -520,7 +545,15 @@ export async function runGovernedWorker(
          * A writer still READS the canonical checkout (it branched from it) but may not
          * write there, so it appears in the read-only list even when a worktree exists.
          */
-        readOnlyPaths: [workspaceRoot(), ...access.programPaths],
+        readOnlyPaths: [
+          workspaceRoot(),
+          ...access.programPaths,
+          /*
+           * Nested inside the writable worktree and still READ-ONLY: both backends let the
+           * narrower grant win (ADR 0072, phase 0). A narrowing, never a widening.
+           */
+          ...(gitPointer ? [gitPointer] : []),
+        ],
         /*
          * A remote provider needs the network, so it is granted. Neither Seatbelt nor
          * Bubblewrap can filter by hostname, so this is all-or-nothing and the audit says

@@ -501,14 +501,10 @@ export class WorkspaceExecutionCoordinator {
        * superseded attempt's OWN branch, which cleanup keeps (it is not in the target).
        */
       if ((await this.git.statusPorcelain(ws.worktreePath).catch(() => [])).length > 0) {
-        await this.git.exec(["add", "-A"], ws.worktreePath);
-        await this.git.exec(
-          [
-            "-c", "user.name=icos", "-c", "user.email=icos@local",
-            "commit", "-q", "--no-verify",
-            "-m", `icos: preserve uncommitted work of superseded attempt ${ws.workflowId}`,
-          ],
+        /* Durci : gitdir dérivé du canonique, sans hooks ni pilotes (ADR 0072, phase 0). */
+        await this.git.preserveWorktreeChanges(
           ws.worktreePath,
+          `icos: preserve uncommitted work of superseded attempt ${ws.workflowId}`,
         );
       }
       try {
