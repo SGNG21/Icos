@@ -317,8 +317,30 @@ function envOverrides(extra: Record<string, string> = {}) {
   };
 }
 
+/**
+ * THE CONTAINER AND THE ACTIVITY MUST READ THE SAME DEPLOYMENT.
+ *
+ * `envOverrides()` is evaluated here and handed to the container, but the Temporal ACTIVITY
+ * reads `process.env` directly at run time — so whatever was published LAST wins for the
+ * worker, and `makeRepo` publishes before a case has chosen its worker mode.
+ *
+ * Measured consequence: `workerMode = "fail-once"` is set on the line AFTER `makeRepo()`,
+ * so the activity ran the NORMAL worker with a 30s timeout. Attempt 1 therefore SUCCEEDED,
+ * there was never a failed attempt, never a QC RETRY, never an attempt 2 and never any
+ * uncommitted work to preserve — the case was asserting about a supersession that had not
+ * happened. It worked before only because the in-process executor took its command from
+ * the container's own configuration rather than from the environment.
+ *
+ * Re-published at every build point, so the two can no longer disagree by construction.
+ */
+function publishDeployment(): ReturnType<typeof envOverrides> {
+  const env = envOverrides();
+  Object.assign(process.env, env);
+  return env;
+}
+
 async function container(): Promise<Container> {
-  const built = await buildPostgresContainer(DATABASE_URL, undefined, loadEnv(envOverrides()));
+  const built = await buildPostgresContainer(DATABASE_URL, undefined, loadEnv(publishDeployment()));
   containers.push(built);
   return built;
 }
@@ -326,7 +348,11 @@ async function container(): Promise<Container> {
 /** The REAL process entry point with a fast recovery tick. */
 async function boot(): Promise<ProductionServices> {
   const services = await startProductionServices({
-    env: loadEnv(envOverrides({ NODE_ENV: "production", AUTONOMY_RECOVERY_INTERVAL_MS: "250" })),
+    env: loadEnv({
+      ...publishDeployment(),
+      NODE_ENV: "production",
+      AUTONOMY_RECOVERY_INTERVAL_MS: "250",
+    }),
     registerSignals: false,
     signals: { onSignal: () => {}, removeSignal: () => {}, exit: () => {} },
   });
@@ -336,13 +362,48 @@ async function boot(): Promise<ProductionServices> {
 
 const WORKER_IDS = ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "ffffffff-ffff-4fff-8fff-ffffffffffff"];
 
+const TRUNCATE_ALL =
+  "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry RESTART IDENTITY CASCADE";
+
+/**
+ * TRUNCATE TAKES AN EXCLUSIVE LOCK, AND THIS DATABASE HAS A LIVE PEER.
+ *
+ * The Temporal worker and the callback endpoint live for the whole FILE, by design — a
+ * workflow id outlives the execution that used it and nothing here may clean Temporal. So a
+ * workflow of the case that just ended can still be reporting its result while the next case
+ * truncates, and Postgres then resolves the lock cycle by killing one of them:
+ *
+ *   deadlock detected (40P01): AccessExclusiveLock (this TRUNCATE) vs RowShareLock (the
+ *   callback's write)
+ *
+ * Measured once in two full 8-file gate runs, in `seed`, and it has nothing to do with what
+ * any case asserts. It only became reachable now because the file got eight times faster
+ * (521 s → 60 s): the two cases that used to time out at 240 s each gave every late callback
+ * all the time in the world to drain, and a correction chain that now actually RUNS writes
+ * more rows per case than one that never did.
+ *
+ * Retried, not slept over. The distinction matters: this is not waiting for a business
+ * outcome to maybe happen — the TRUNCATE is setup, it was chosen as the deadlock victim by
+ * the server, and the answer to losing a lock race is to take the lock again. A bounded
+ * number of attempts, and a throw that still names the deadlock if the peer never lets go.
+ */
+async function truncateAll(c: Container): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await c.db!.execute(sql.raw(TRUNCATE_ALL));
+      return;
+    } catch (error) {
+      /* 40P01 deadlock, 55P03 lock not available: lock contention, nothing else. */
+      const code = (error as { cause?: { code?: string } }).cause?.code;
+      if ((code !== "40P01" && code !== "55P03") || attempt >= 10) throw error;
+      await new Promise((r) => setTimeout(r, 50 * attempt));
+    }
+  }
+}
+
 async function seed(c: Container, workers = 2) {
   const now = new Date();
-  await c.db!.execute(
-    sql.raw(
-      "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry RESTART IDENTITY CASCADE",
-    ),
-  );
+  await truncateAll(c);
   await c.db!.insert(missions).values({
     id: MISSION_ID,
     title: "D36",
@@ -412,11 +473,20 @@ async function missionStatus(c: Container) {
   );
   return row!.status;
 }
-/** STUCK_EXECUTION_CAPACITY_DEFECT: attempts still holding a worker slot. */
+/**
+ * STUCK_EXECUTION_CAPACITY_DEFECT: attempts still holding a worker slot.
+ *
+ * SCOPED TO THIS MISSION. It counted every row in the table, which is the same assertion
+ * only as long as the table holds nothing else — and the database has a live peer (see
+ * `truncateAll`), so a late callback from the previous case can land a row after this case
+ * truncated. Unscoped, that row fails a case for something another case did; scoped, the
+ * invariant is unchanged and belongs to the mission it is asserted about.
+ */
 async function nonTerminalAttempts(c: Container) {
   const [row] = await rows<{ n: number }>(
     c,
-    "select count(*)::int n from dispatch_attempts where state in ('prepared','dispatched')",
+    `select count(*)::int n from dispatch_attempts
+     where mission_id = '${MISSION_ID}' and state in ('prepared','dispatched')`,
   );
   return row!.n;
 }
@@ -500,6 +570,126 @@ const ticks = (n: number) => new Promise((r) => setTimeout(r, n * 250 + 200));
  * QUALITY_CONTROL_EXECUTION_NOT_FOUND, or as a review that was never written. The wait is
  * on the row the callback writes, never a sleep.
  */
+/**
+ * THE CANONICAL LIFECYCLE, AS THE DATABASE AND GIT ACTUALLY HOLD IT.
+ *
+ * Diagnostic only: it asserts nothing and changes nothing. It exists because three
+ * failures here were each explained by a plausible story that turned out to be wrong, and
+ * a story is not evidence. Printed at the exact moment a case gives up, so attempt state,
+ * workspace state, preservation and the git refs are read from one instant.
+ */
+async function dumpLifecycle(c: Container, label: string): Promise<void> {
+  const attempts = await rows<Record<string, unknown>>(
+    c,
+    `select id, attempt, workflow_id, state, worker_id from dispatch_attempts
+     where mission_id = '${MISSION_ID}' order by task_id, attempt`,
+  );
+  const results = await rows<Record<string, unknown>>(
+    c,
+    `select workflow_id, outcome, error_code from task_execution_results
+     where workflow_id like 'icos-task-${ids.runId}%' or workflow_id like '%${ids.caseId}%'`,
+  );
+  const spaces = await rows<Record<string, unknown>>(
+    c,
+    `select workspace_id, task_id, branch, status, released_at, source_commit,
+            lease_owner, fencing_token, workflow_id
+     from icos_workspace_registry where mission_id = '${MISSION_ID}' order by created_at`,
+  );
+  const qc = await rows<Record<string, unknown>>(
+    c,
+    `select workflow_id, state, action, review_attempt_count, last_error
+     from quality_control_jobs where mission_id = '${MISSION_ID}'`,
+  );
+  const mts = await rows<Record<string, unknown>>(
+    c,
+    `select id, task_id, status from mission_tasks where mission_id = '${MISSION_ID}' order by id`,
+  );
+  const reviews = await rows<Record<string, unknown>>(
+    c,
+    /* `decisions` is a CAMEL-CASE table: `mission_id` does not exist there, so this query
+       threw and the catch below reported "no reviews" on every dump — the one field that
+       would have named the verdict. */
+    `select "workflowId", decision, "reviewerKind" from decisions where "missionId" = '${MISSION_ID}'`,
+  ).catch(() => [] as Record<string, unknown>[]);
+  const refs = git(repo, "for-each-ref", "--format=%(refname:short) %(objectname:short)")
+    .split("\n")
+    .filter(Boolean);
+  const mission = await rows<{ status: string }>(
+    c,
+    `select status from missions where id = '${MISSION_ID}'`,
+  );
+  /* eslint-disable no-console */
+  console.log(
+    `\n===== LIFECYCLE [${label}] =====\n` +
+      JSON.stringify(
+        {
+          mission: mission[0]?.status,
+          missionTasks: mts,
+          attempts,
+          results,
+          workspaces: spaces,
+          qualityControl: qc,
+          reviews,
+          refs,
+          target: targetHead(),
+        },
+        null,
+        1,
+      ),
+  );
+  /* eslint-enable no-console */
+}
+
+/**
+ * WAITS FOR SETTLEMENT AND SAYS WHAT IT WAS WAITING ON.
+ *
+ * `until` alone reports only that the mission never settled, which is the one fact that
+ * was already known. This prints a compact lifecycle line while it waits and the full
+ * dump at the moment it gives up, so the LAST successful transition and the FIRST
+ * expected-but-absent one are read from the run that failed. It asserts nothing and
+ * changes nothing: the predicate and the timeout are exactly as they were.
+ */
+async function awaitSettled(c: Container, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  let traced = 0;
+  try {
+    await until(
+      "the mission settled",
+      async () => {
+        const elapsed = Date.now() - started;
+        if (elapsed > traced + 15_000) {
+          traced = elapsed;
+          const line = await rows<Record<string, unknown>>(
+            c,
+            `select
+               (select status from missions where id = '${MISSION_ID}') mission,
+               (select string_agg(task_id || '=' || status, ' ' order by task_id)
+                  from mission_tasks where mission_id = '${MISSION_ID}') tasks,
+               (select string_agg(task_id || '#' || attempt || '=' || state, ' ' order by task_id, attempt)
+                  from dispatch_attempts where mission_id = '${MISSION_ID}') attempts,
+               (select string_agg(coalesce(workflow_id,'-') || '=' || status, ' ' order by created_at)
+                  from icos_workspace_registry where mission_id = '${MISSION_ID}') workspaces,
+               (select string_agg(workflow_id || '=' || state || '/' || coalesce(action,'-'), ' ')
+                  from quality_control_jobs where mission_id = '${MISSION_ID}') qc,
+               (select string_agg(workflow_id || '=' || outcome || coalesce('/' || error_code, ''), ' ')
+                  from task_execution_results
+                  where workflow_id like '%' || '${ids.caseId}' || '%') results,
+               (select string_agg("workflowId" || '=' || decision, ' ')
+                  from decisions where "missionId" = '${MISSION_ID}') reviews`,
+          );
+          /* eslint-disable-next-line no-console */
+          console.log(`[t+${Math.round(elapsed / 1000)}s] ${JSON.stringify(line[0])}`);
+        }
+        return (await missionStatus(c)) === "succeeded";
+      },
+      timeoutMs,
+    );
+  } catch (error) {
+    await dumpLifecycle(c, "settlement never reached");
+    throw error;
+  }
+}
+
 async function awaitExecution(c: Container, workflowId: string): Promise<string> {
   return until(`the execution result of ${workflowId}`, async () => {
     const [row] = await rows<{ outcome: string }>(
@@ -679,11 +869,7 @@ describe("DEFECT 36 × 0050 — a correction attempt settles like any governed w
     const applySpy = vi.spyOn(c.integrationApplier!, "apply");
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
-    await until(
-      "the mission settled",
-      async () => (await missionStatus(c)) === "succeeded",
-      240_000,
-    );
+    await awaitSettled(c, 240_000);
 
     /* A was reviewed twice by the real reviewer client: changes, then approval of the correction. */
     expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual([
@@ -744,14 +930,11 @@ describe("SUPERSEDED_ATTEMPT_WORKSPACE_HELD — a retry after a FAILED execution
     const WF_A2 = workflowIdForAttempt(TASK_A, 2);
 
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
-    await until(
-      "the mission settled",
-      async () => (await missionStatus(c)) === "succeeded",
-      240_000,
-    );
+    await awaitSettled(c, 240_000);
 
     /* The failed attempt's workspace was retired, never integrated; the retry had its own. */
     const wsA1 = (await workspaceOf(c, WF_A))!;
+    await dumpLifecycle(c, "SUPERSEDED before branch assertion");
     /* Its uncommitted work was preserved on its own branch, never on the target. */
     expect(git(repo, "show", `${wsA1.branch}:src/${TASK_A}/half-done.txt`)).toBe("uncommitted");
     expect(git(repo, "ls-tree", "-r", "--name-only", TARGET)).not.toContain("half-done.txt");

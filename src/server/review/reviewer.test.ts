@@ -189,6 +189,42 @@ describe("DeterministicReviewer - Hard Rules", () => {
     expect(result.blockingDecision?.decision).toBe("RETRY");
   });
 
+  /**
+   * A WORKER KILLED BY ITS OWN BUDGET IS RE-EXECUTABLE, and must never be BLOCKED.
+   *
+   * The rule was already right; nothing upstream could reach it. The Temporal workflow
+   * reported `WORKER_FAILED` for every failure, so a timeout arrived here looking like a
+   * worker that had run and reported "this cannot be done" — critical, BLOCK, escalated, no
+   * retry. `failureCodeOf` is the producing side; this is the consequence it must buy.
+   */
+  it("D2: a worker killed by its own execution budget -> RETRY, never BLOCK", async () => {
+    const input = makeBaseInput({
+      executionResult: {
+        ...makeBaseInput().executionResult,
+        outcome: "failure",
+        error: { code: "WORKER_TIMEOUT", message: "WORKER_TIMEOUT: no result within 5000ms" },
+      },
+    });
+
+    const result = reviewer.apply(input);
+
+    expect(result.blockingDecision?.decision).toBe("RETRY");
+    expect(result.blockingDecision?.severity).toBe("warning");
+  });
+
+  /** Partial work of unknown extent is retryable too, and never a success. */
+  it("D3: UNKNOWN_EFFECT -> RETRY", async () => {
+    const input = makeBaseInput({
+      executionResult: {
+        ...makeBaseInput().executionResult,
+        outcome: "failure",
+        error: { code: "UNKNOWN_EFFECT", message: "WORKER_AUTHORITY_LOST: lease expired" },
+      },
+    });
+
+    expect(reviewer.apply(input).blockingDecision?.decision).toBe("RETRY");
+  });
+
   it("E: repairable finding -> REQUEST_CHANGES", async () => {
     const input = makeBaseInput({
       executionResult: {

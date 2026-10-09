@@ -98,3 +98,75 @@ const REPORTABLE_WORKER_KINDS: ReadonlySet<string> = new Set([
 export function reportableWorkerKind(routed: string | undefined): string {
   return routed && REPORTABLE_WORKER_KINDS.has(routed) ? routed : "other";
 }
+
+/**
+ * THE CODE A FAILURE ACTUALLY HAD, from the stable prefix the activity threw with.
+ *
+ * The workflow's catch reported `WORKER_FAILED` for EVERY failure, a constant. It reads
+ * like a detail and is not one: the canonical review's hard rule (DeterministicReviewer,
+ * RULE 1) decides from this very code whether a failed execution may be RE-EXECUTED or
+ * must be BLOCKED —
+ *
+ *   retryable = WORKER_TIMEOUT | WORKER_UNAVAILABLE | UNKNOWN_EFFECT  → RETRY
+ *   anything else                                                    → BLOCK
+ *
+ * — so a worker KILLED BY ITS OWN EXECUTION BUDGET arrived at the reviewer indistinguishable
+ * from a worker that ran and reported "this cannot be done". It was BLOCKed, escalated, and
+ * its task failed with no second attempt: the single most common real failure (an agent
+ * killed mid-task, self-build run 2) was the one QC could never retry.
+ *
+ * The codes below are not inferred from message text in general — they are the stable
+ * prefixes the activity DELIBERATELY throws:
+ *
+ *  - a timeout is named a timeout. `toExecutionErrorCode` answers `UNKNOWN_EFFECT` for the
+ *    EXECUTION_TIMEOUT class, and says why: it is a pure function of the class "with no
+ *    evidence in hand, so it must stay conservative". Here the cause is known exactly, and
+ *    `WORKER_TIMEOUT` is the business vocabulary's own word for it. Both codes are retryable,
+ *    so this names the cause more precisely without deciding anything differently;
+ *  - a lost authority (lease expired or revoked mid-run) is `UNKNOWN_EFFECT`, matching that
+ *    function's LEASE_EXPIRED: what the worker had already written is unknown — the honest
+ *    answer, never a success;
+ *  - a platform with no confinement mechanism never spawned anything, so nothing about the
+ *    TASK failed: `WORKER_UNAVAILABLE`, exactly as that function answers for a provider that
+ *    refused to serve.
+ *
+ * Unrecognised stays `WORKER_FAILED`: the default is the admission "I do not know", and
+ * what is forbidden is only that a KNOWN cause be lost in it.
+ */
+const FAILURE_CODE_BY_PREFIX: ReadonlyArray<readonly [string, string]> = [
+  ["WORKER_TIMEOUT", "WORKER_TIMEOUT"],
+  ["WORKER_AUTHORITY_LOST", "UNKNOWN_EFFECT"],
+  ["WORKER_SANDBOX_UNAVAILABLE", "WORKER_UNAVAILABLE"],
+];
+
+/**
+ * THE CAUSE CHAIN, DEEPEST CAUSE INCLUDED.
+ *
+ * What the workflow catches from a failed activity is Temporal's own wrapper, whose message
+ * is the constant `Activity task failed`; the activity's own message — the only one that
+ * says WHAT failed — hangs off `cause`. So the workflow reported `Activity task failed` as
+ * the error message of every single failure, and reading only that message is also why the
+ * first attempt at classifying them still answered `WORKER_FAILED` for a timeout.
+ *
+ * Bounded depth: a cause chain is data from a library, and an unbounded walk over data is a
+ * loop waiting for a cycle.
+ */
+export function causeMessages(error: unknown): string[] {
+  const messages: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!(current instanceof Error)) break;
+    if (current.message) messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.length > 0 ? messages : [String(error)];
+}
+
+/** The first cause in the chain that names itself; `WORKER_FAILED` when none does. */
+export function failureCodeOf(messages: readonly string[]): string {
+  for (const message of messages) {
+    const found = FAILURE_CODE_BY_PREFIX.find(([prefix]) => message.startsWith(`${prefix}:`));
+    if (found) return found[1];
+  }
+  return "WORKER_FAILED";
+}

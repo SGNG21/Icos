@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { FileScope } from "@/server/workspace-manager/types";
 import type { z } from "zod";
 import type { riskClassSchema } from "@/core/contracts/task";
@@ -36,6 +38,11 @@ export interface AllocationTaskView {
   allowedFileScope?: readonly string[];
 }
 
+/** `assertSlug`: `^[a-z0-9][a-z0-9_-]{0,31}$`, and it becomes a database name too. */
+const SLUG_MAX = 32;
+/** 32 bits of the task id. Four billion names per title, none of them truncatable away. */
+const FINGERPRINT_CHARS = 8;
+
 /**
  * Derives a stable slug from the task. Identity comes from the workflow id, not from this.
  *
@@ -45,25 +52,47 @@ export interface AllocationTaskView {
  * (The coordinator's own previous default, `task-<id>`, had exactly that bug; it was never
  * reached because the coordinator was dead code in production.)
  *
- * Bounded to 32 characters total for the same reason.
+ * IT MUST DISTINGUISH TWO TASKS, and truncation cannot be trusted to.
+ *
+ * The discriminator used to be the task id's FIRST 8 alphanumerics, after a title cut to 18
+ * — so two tasks of one mission whose titles agreed for 18 characters and whose ids agreed
+ * for 8 got the SAME slug, hence the same branch, the same worktree path and the same worker
+ * database. Sibling ids that differ in a late character (`…-c1-a` / `…-c1-b`, a uuid tail, a
+ * numbered plan) are the normal case, not a contrived one.
+ *
+ * Nothing noticed while every refused branch disappeared: a workspace is reaped once its
+ * commit is contained in the integration target, so an INTEGRATED predecessor freed the name
+ * before its sibling asked for it. A REFUSED one does not — `REQUEST_CHANGES` and a failed
+ * execution both keep their branch as evidence, deliberately — and from then on the sibling's
+ * allocation hit `COLLISION: branche … déjà utilisée` on every pass. The mission then had a
+ * prepared, correctly-retried, permanently un-allocatable intent: no false settlement, no
+ * progress either (DEFECT 36 × 0050, CORRECTION_DAG_E2E and SUPERSEDED_ATTEMPT_WORKSPACE_HELD).
+ *
+ * So the whole id is fingerprinted rather than cut, and the parts that carry identity — the
+ * fingerprint and the attempt — are budgeted first; only the human-readable title gives way
+ * to the 32-character bound.
  */
 export function workspaceSlug(task: AllocationTaskView, attempt = 1): string {
-  const fromTitle = task.title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 18);
-  const suffix = task.taskId.replace(/[^a-z0-9]+/gi, "").slice(0, 8).toLowerCase();
   /*
-   * THE ATTEMPT IS PART OF THE IDENTITY past the first one.
-   *
-   * The slug becomes the branch name, and a refused attempt's branch SURVIVES as evidence
-   * (it is only reaped once contained in the integration target). A correction attempt
-   * therefore collided with its own predecessor's branch and could not be provisioned. The
-   * first attempt keeps the bare slug so nothing already certified changes name.
+   * THE ATTEMPT IS PART OF THE IDENTITY past the first one, because a refused attempt's
+   * branch survives as evidence and a correction attempt would otherwise collide with its
+   * own predecessor. Reserved before the title, never sliced off the end: `_a10` truncated
+   * to `_a1` would name two different attempts the same thing.
    */
-  const base = `${fromTitle || "task"}_${suffix}`;
-  return attempt <= 1 ? base.slice(0, 32) : `${base.slice(0, 28)}_a${attempt}`.slice(0, 32);
+  const tail = attempt <= 1 ? "" : `_a${attempt}`;
+  const fingerprint = createHash("sha256")
+    .update(task.taskId)
+    .digest("hex")
+    .slice(0, FINGERPRINT_CHARS);
+  const room = SLUG_MAX - tail.length - 1 - fingerprint.length;
+  const readable =
+    task.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+/, "")
+      .slice(0, Math.max(room, 0))
+      .replace(/_+$/, "") || "task";
+  return `${readable}_${fingerprint}${tail}`;
 }
 
 export function decideWorkspaceAllocation(

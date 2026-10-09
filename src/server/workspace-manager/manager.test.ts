@@ -7,6 +7,7 @@ import { Git } from "./git";
 import { InMemoryWorkspaceRegistry } from "./registry";
 import { WorkspaceManager, type RequestWorkspaceInput } from "./manager";
 import { FakeProvisioner, makeRepoFixture, type RepoFixture } from "./test-fixtures";
+import { workspaceSlug } from "@/server/supervisor/workspace-allocation-policy";
 
 let fx: RepoFixture;
 let db: FakeProvisioner;
@@ -251,5 +252,42 @@ describe("cleanup", () => {
     const r = await manager.cleanup(id);
     expect(r).toMatchObject({ worktreeRemoved: true, branchDeleted: false, databaseDropped: true });
     expect(await new Git(fx.master).branchExists("ws/7a")).toBe(true);
+  });
+});
+
+/**
+ * THE NAMES THE CANONICAL POLICY GENERATES, AGAINST REAL GIT.
+ *
+ * The collision guard below is correct and stays: a branch that exists is a branch this
+ * allocation may not take. What was wrong was the NAME — `workspaceSlug` cut the task id to
+ * its first 8 alphanumerics, so two sibling tasks of one mission asked for the same branch,
+ * and the second could never be allocated once the first attempt's branch survived a refusal
+ * (CORRECTION_DAG_E2E, SUPERSEDED_ATTEMPT_WORKSPACE_HELD). Proven here because the defect was
+ * the PAIR: neither the generator nor the guard is wrong on its own.
+ */
+describe("slugs canoniques et branches survivantes", () => {
+  const TASK_A = "d36-eo8721b6b94-c1-a";
+  const TASK_B = "d36-eo8721b6b94-c1-b";
+  const slugOf = (taskId: string, attempt = 1) =>
+    workspaceSlug({ taskId, title: `Add ${taskId} feature` }, attempt);
+
+  it("un frère s'alloue alors que la branche d'un essai REFUSÉ survit", async () => {
+    /* L'état réel après un REQUEST_CHANGES ou un worker en échec : la branche reste. */
+    fx.git(fx.master, "branch", `ws/${slugOf(TASK_A)}`, "integration/phase-7");
+
+    const b = await manager.request(input(slugOf(TASK_B), { missionId: "m", taskId: TASK_B }));
+    expect(b.branch).toBe(`ws/${slugOf(TASK_B)}`);
+
+    /* Et l'essai correctif de A non plus ne collisionne pas avec son prédécesseur. */
+    const a2 = await manager.request(input(slugOf(TASK_A, 2), { missionId: "m", taskId: TASK_A }));
+    expect(a2.branch).toBe(`ws/${slugOf(TASK_A, 2)}`);
+  });
+
+  it("la garde de collision reste fermée : le MÊME nom est toujours refusé", async () => {
+    fx.git(fx.master, "branch", `ws/${slugOf(TASK_A)}`, "integration/phase-7");
+
+    await expect(
+      manager.request(input(slugOf(TASK_A), { missionId: "m", taskId: TASK_A })),
+    ).rejects.toThrow(/COLLISION.*branche/);
   });
 });

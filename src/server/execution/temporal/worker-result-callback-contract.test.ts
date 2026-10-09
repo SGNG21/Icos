@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { workerKindSchema } from "@/core/contracts/task-execution";
 import { executionCompletedBodySchema } from "@/server/http/execution-schemas";
 
-import { reportableWorkerKind } from "./worker-run";
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
+
+import { causeMessages, failureCodeOf, reportableWorkerKind } from "./worker-run";
 
 /**
  * THE TWO SIDES OF THE COMPLETION CALLBACK, HELD TOGETHER.
@@ -52,7 +54,7 @@ function failurePayload(routedKind: string | undefined, message: string) {
     ...IDENTIFIERS,
     outcome: "failure",
     workerKind: reportableWorkerKind(routedKind),
-    error: { code: "WORKER_FAILED", message },
+    error: { code: failureCodeOf([message]), message },
   };
 }
 
@@ -163,5 +165,118 @@ describe("every completion payload the workflow can build is ACCEPTED", () => {
         error: { code: "WORKER_FAILED", message: "boom" },
       }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * THE FAILURE CODE IS EVIDENCE, AND SOMETHING DECIDES ON IT.
+ *
+ * This side built `code: "WORKER_FAILED"` for every cause. The canonical review's hard rule
+ * reads that code to decide whether a failed execution may be RE-EXECUTED (RETRY) or must be
+ * BLOCKED, so the constant made a worker killed by its own execution budget — the commonest
+ * real failure there is — unretryable: BLOCK, escalate, task failed, no second attempt.
+ * `reviewer.test.ts` holds the rule; these hold what this side feeds it.
+ */
+describe("failureCodeOf", () => {
+  it("names the cause for every code the activity throws with", () => {
+    expect(failureCodeOf(["WORKER_TIMEOUT: no result within 5000ms"])).toBe("WORKER_TIMEOUT");
+    expect(failureCodeOf(["WORKER_AUTHORITY_LOST: lease expired"])).toBe("UNKNOWN_EFFECT");
+    expect(
+      failureCodeOf(["WORKER_SANDBOX_UNAVAILABLE: no confinement mechanism on this platform"]),
+    ).toBe("WORKER_UNAVAILABLE");
+  });
+
+  /**
+   * THE REAL SHAPE. This is what the workflow actually catches: Temporal's wrapper first,
+   * the activity's own message underneath. Classifying the wrapper alone answers
+   * `WORKER_FAILED` for every failure there has ever been — measured, after the first
+   * version of this fix changed nothing at all.
+   */
+  it("looks past Temporal's wrapper to the cause that names itself", () => {
+    const wrapped = new Error("Activity task failed", {
+      cause: new Error("WORKER_TIMEOUT: no result within 5000ms"),
+    });
+
+    expect(causeMessages(wrapped)).toEqual([
+      "Activity task failed",
+      "WORKER_TIMEOUT: no result within 5000ms",
+    ]);
+    expect(failureCodeOf(causeMessages(wrapped))).toBe("WORKER_TIMEOUT");
+  });
+
+  it("carries the cause into the reported message instead of the wrapper alone", () => {
+    const wrapped = new Error("Activity task failed", {
+      cause: new Error("WORKER_SANDBOX_UNAVAILABLE: no confinement mechanism"),
+    });
+
+    expect(causeMessages(wrapped).join(" <- ")).toContain("WORKER_SANDBOX_UNAVAILABLE");
+  });
+
+  it("walks a bounded depth and never loops on a cyclic chain", () => {
+    const a = new Error("WORKER_FAILED: a");
+    const b = new Error("Activity task failed", { cause: a });
+    (a as Error & { cause?: unknown }).cause = b;
+
+    expect(causeMessages(b).length).toBeLessThanOrEqual(5);
+  });
+
+  it("admits it does not know rather than inventing a cause", () => {
+    for (const message of [
+      "",
+      "worker returned no structured status: no output",
+      "WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no 'binary' runtime",
+      /* A prefix must be the WHOLE code, not a substring of a message. */
+      "the log mentions WORKER_TIMEOUT: but that is not what failed",
+      "worker_timeout: lowercase is not the contract",
+    ]) {
+      expect(failureCodeOf([message])).toBe("WORKER_FAILED");
+    }
+    expect(failureCodeOf([])).toBe("WORKER_FAILED");
+  });
+
+  it("never produces a code the completion route rejects", () => {
+    const messages = [
+      "WORKER_TIMEOUT: no result within 900000ms",
+      "WORKER_AUTHORITY_LOST: revoked",
+      "WORKER_SANDBOX_UNAVAILABLE: none",
+      "anything else at all",
+    ];
+
+    for (const message of messages) {
+      const parsed = executionCompletedBodySchema.safeParse(failurePayload("hermes", message));
+      expect(parsed.success).toBe(true);
+    }
+  });
+});
+
+/**
+ * WHAT A FAILURE IS ALLOWED TO CARRY INTO THE LEDGER.
+ *
+ * The activity attaches the worker's stderr to its reason, deliberately — a worker that
+ * died saying why is not a silent worker. That text is UNTRUSTED and now actually reaches
+ * `task_execution_results` and the Cockpit, because the failure report stopped discarding
+ * the activity's message in favour of Temporal's wrapper. So the exposure this opens is
+ * closed where the text is attached, with the rule ICOS already owns.
+ */
+describe("an untrusted failure reason cannot carry a credential", () => {
+  it("masks what a dying worker echoed, and keeps what diagnoses it", () => {
+    const leaked = firstLineRedacted(
+      "fatal: auth failed for Bearer sk-abcdef0123456789abcdef0123456789\nsecond line",
+    );
+
+    expect(leaked).not.toContain("sk-abcdef0123456789abcdef0123456789");
+    expect(leaked).toContain("<redacted>");
+    /* One line only: a stack or a response body is not a reason. */
+    expect(leaked).not.toContain("second line");
+    expect(leaked.length).toBeLessThanOrEqual(200);
+  });
+
+  it("still carries the short causes this lane actually debugged", () => {
+    expect(firstLineRedacted("index.lock: Operation not permitted")).toBe(
+      "index.lock: Operation not permitted",
+    );
+    expect(firstLineRedacted("WORKER_WORKSPACE_NOT_A_WORKTREE: .git illisible")).toContain(
+      "WORKER_WORKSPACE_NOT_A_WORKTREE",
+    );
   });
 });

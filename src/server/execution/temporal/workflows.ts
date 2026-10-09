@@ -14,7 +14,7 @@
  */
 import { proxyActivities, workflowInfo } from "@temporalio/workflow";
 
-import { reportableWorkerKind } from "./worker-run";
+import { causeMessages, failureCodeOf, reportableWorkerKind } from "./worker-run";
 
 import type * as activities from "./activities";
 
@@ -89,8 +89,15 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
     });
     return run.result;
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+    /*
+     * THE WHOLE CHAIN. `error.message` here is Temporal's wrapper — the constant
+     * `Activity task failed` — and the activity's own message, the only one that says what
+     * went wrong, is its `cause`. Reporting just the wrapper is what made every failure in
+     * the ledger read `Activity task failed`, and what let a timeout be recorded as a plain
+     * worker failure and therefore BLOCKED instead of retried.
+     */
+    const messages = causeMessages(error);
+    const message = messages.join(" <- ").slice(0, 500);
     await reportFailure({
       ctx,
       /*
@@ -100,7 +107,12 @@ export async function runIcosTask(input: RunTaskInput): Promise<string> {
        * callback was refused and the failure was never recorded at all.
        */
       workerKind: reportableWorkerKind(input.workerKind),
-      errorCode: "WORKER_FAILED",
+      /*
+       * THE CODE THIS FAILURE HAD, not a constant. This was `"WORKER_FAILED"` for every
+       * cause, and the canonical review decides RETRY vs BLOCK from it — so a worker killed
+       * by its own execution budget could never be re-executed. See `failureCodeOf`.
+       */
+      errorCode: failureCodeOf(messages),
       errorMessage: message,
       startedAt,
       completedAt: new Date().toISOString(),

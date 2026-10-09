@@ -32,6 +32,7 @@ import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
 import { decideExecutable } from "@/core/execution/executable-policy";
 
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 import { classifyWorkerRun } from "./worker-run";
 
 /** Correlates one run with its ICOS task and its durable Temporal workflow. */
@@ -432,6 +433,8 @@ export async function runGovernedWorker(
       `WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no '${EXECUTOR_RUNTIME}' runtime`,
     );
   }
+  /* The ONE budget this run is bounded by: declared per command, else the deployment's. */
+  const enforcedTimeoutMs = declared.timeoutMs ?? executionTimeoutMs();
   /*
    * ICOS decides what this execution may do, BEFORE anything is provisioned. Asking
    * first also means a refusal costs no worktree and no subprocess.
@@ -589,7 +592,7 @@ export async function runGovernedWorker(
           : {}),
         ...broker.env,
       },
-      timeoutMs: declared.timeoutMs ?? executionTimeoutMs(),
+      timeoutMs: enforcedTimeoutMs,
       /* Losing the workspace lease kills the run, and the process group with it. */
       ...(authority ? { abortSignal: authority.signal } : {}),
       sandbox: {
@@ -658,7 +661,13 @@ export async function runGovernedWorker(
     }
 
     if (run.timedOut) {
-      throw new Error(`WORKER_TIMEOUT: no result within ${executionTimeoutMs()}ms`);
+      /*
+       * THE BUDGET THAT ACTUALLY EXPIRED. This said `executionTimeoutMs()` — the
+       * deployment-wide default — while the run is bounded by the DECLARED command timeout
+       * when there is one. A worker killed after 5 s therefore reported "no result within
+       * 900000ms", and a diagnostic that names the wrong number is worse than none.
+       */
+      throw new Error(`WORKER_TIMEOUT: no result within ${enforcedTimeoutMs}ms`);
     }
 
     let usage: unknown;
@@ -682,8 +691,16 @@ export async function runGovernedWorker(
        *
        * stderr is therefore carried into the reason when stdout was silent — bounded, like
        * stdout already is, and never allowed to turn a failure into a success.
+       *
+       * AND REDACTED, through the rule ICOS already owns for exactly this situation. This
+       * text comes from OUTSIDE ICOS and now actually reaches the durable ledger and the
+       * Cockpit: until the failure report stopped discarding the activity's message in
+       * favour of Temporal's wrapper, nothing here could leave the worker. A worker that
+       * echoes its own credential while dying must not write it into the business record,
+       * and `firstLineRedacted` is the one place that rule lives — a second copy of a
+       * redaction rule is the copy that leaks.
        */
-      const reason = run.stderr.trim().slice(0, 300);
+      const reason = firstLineRedacted(run.stderr.trim());
       throw new Error(
         reason && !run.stdout.trim() ? `${classified.message} (stderr: ${reason})` : classified.message,
       );
