@@ -169,12 +169,28 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .set({
           state: sql`case when ${qualityControlJobs.state} in ('review_pending','review_unavailable') then 'reviewing' else ${qualityControlJobs.state} end`,
           /*
-           * MONOTONIC for the logical review cycle. Reclaiming an unavailable review used
-           * to reset this to 1, which made MAX_REVIEW_ATTEMPTS unreachable: attempts ran
-           * 1,2,3, the job parked, the cooldown lapsed, the count went back to 1 and it
-           * ran for ever. A retry budget that resets is not a budget.
+           * A FRESH BUDGET PER CYCLE, and the TOTAL bounded by something a retry cannot move.
+           *
+           * Within a cycle this is monotonic, so MAX_REVIEW_ATTEMPTS is reachable and a
+           * cycle always ends. Reclaiming a PARKED review starts a new cycle and resets it
+           * to 1 — that reset is what lets a reviewer which comes back finish work parked
+           * during its outage.
+           *
+           * Resetting used to be wrong because nothing else bounded the repetition: 1,2,3,
+           * park, reset, 1,2,3, park … for ever. Making it monotonic instead swapped one
+           * unbounded shape for another: the first reclaim was already over budget, so the
+           * job re-parked immediately and for ever, and the work was never reviewed, never
+           * integrated and never escalated. The bound now lives where a retry cannot touch
+           * it — the job's `created_at` age, checked by the service before it parks again
+           * (REVIEW_LIFETIME_DEADLINE_MS). A budget that resets is fine; a repetition that
+           * nothing ends is not.
            */
-          reviewAttemptCount: sql`case when ${qualityControlJobs.state} in ('review_pending','reviewing','review_unavailable') then ${qualityControlJobs.reviewAttemptCount} + 1 else ${qualityControlJobs.reviewAttemptCount} end`,
+          reviewAttemptCount: sql`case
+            when ${qualityControlJobs.state} = 'review_unavailable' then 1
+            when ${qualityControlJobs.state} in ('review_pending','reviewing') then ${qualityControlJobs.reviewAttemptCount} + 1
+            else ${qualityControlJobs.reviewAttemptCount} end`,
+          /* The retry cycle is observable: a reclaim from parked says so, in the one free-text column. */
+          lastError: sql`case when ${qualityControlJobs.state} = 'review_unavailable' then 'QUALITY_CONTROL_REVIEW_RETRY_CYCLE_STARTED' else ${qualityControlJobs.lastError} end`,
           claimToken: ownerToken,
           claimUntil: sql`now() + (${leaseMs} * interval '1 millisecond')`,
           updatedAt: sql`now()`,

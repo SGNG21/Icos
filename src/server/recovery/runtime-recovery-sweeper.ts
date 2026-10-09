@@ -16,7 +16,7 @@ export interface RuntimeRecoveryActions {
   wake(missionId: string): Promise<unknown>;
   /** `SupervisorService.reconcilePreparedDispatches` : `claimPrepared` + même workflowId. */
   reconcileDispatches(missionId: string): Promise<void>;
-  /** Redémarre le workflow avec le MÊME workflowId (Temporal : REJECT_DUPLICATE + USE_EXISTING). */
+  /** Redémarre le workflow avec le MÊME workflowId (Temporal : REJECT_DUPLICATE + FAIL). */
   redispatch(attempt: RecoveryDispatchRef): Promise<void>;
   /** Enregistre un ÉCHEC worker (jamais un succès) ; le QC décide ensuite (retry borné). */
   recordLostExecution(attempt: RecoveryDispatchRef): Promise<void>;

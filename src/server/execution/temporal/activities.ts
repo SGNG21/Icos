@@ -32,6 +32,7 @@ import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
 import { decideExecutable } from "@/core/execution/executable-policy";
 
+import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 import { classifyWorkerRun } from "./worker-run";
 
 /** Correlates one run with its ICOS task and its durable Temporal workflow. */
@@ -95,6 +96,7 @@ function workspaceRoot(): string {
   return resolve(configured);
 }
 
+
 /**
  * The execution budget. Matches `ICOS_WORKER_EXECUTION_TIMEOUT_MS` when the deployment
  * sets one, so the OWNER's budget is the binding constraint rather than a constant
@@ -130,8 +132,32 @@ async function postJson(path: string, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    /* Status only: the body is ICOS's and may name internals. */
-    throw new Error(`ICOS callback ${path} -> HTTP ${response.status}`);
+    /*
+     * A 4xx ON AN INTERNAL CALLBACK IS A CONTRACT VIOLATION, so it must say which one.
+     *
+     * Both sides of this call are ICOS: a 4xx means the worker built a body its own route
+     * refuses, which is always a bug and never a runtime condition. Reporting the status
+     * alone made that bug unreadable — and a refused completion callback is the exact
+     * defect shape this lane exists to remove, because Temporal then retries it twenty
+     * times and the attempt sits `dispatched` for ever with a missing review as the only
+     * symptom. It cost two long hunts before the reason was carried at all.
+     *
+     * What the body can hold is bounded by construction: `apiError` emits
+     * `{error:{code,message,details}}`, and the only details this route produces are
+     * `zodDetails` — field PATH, zod code and zod message — or a fixed correlation
+     * message. Never a field VALUE, so the prompt and the result cannot travel here.
+     *
+     * 5xx keeps status only: those bodies are ICOS's internals, and a 5xx is an outage to
+     * retry rather than a contract to fix.
+     */
+    let detail = "";
+    if (response.status >= 400 && response.status < 500) {
+      detail = await response
+        .text()
+        .then((text) => (text ? ` ${text.slice(0, 500)}` : ""))
+        .catch(() => "");
+    }
+    throw new Error(`ICOS callback ${path} -> HTTP ${response.status}${detail}`);
   }
 }
 
@@ -172,8 +198,20 @@ async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
     body: JSON.stringify({ taskId: ctx.taskId, workflowId: ctx.workflowId }),
   });
   if (!response.ok) {
-    /* No grant, no run. Status only: the body is ICOS's and may name internals. */
-    throw new Error(`WORKER_GRANT_REFUSED: HTTP ${response.status}`);
+    /*
+     * No grant, no run — and a 4xx says WHICH refusal, for the same reason `postJson`
+     * does: both sides of this call are ICOS, so a 4xx is a contract bug rather than a
+     * runtime condition, and the body is bounded to stable codes and zod field paths.
+     * 5xx stays status-only.
+     */
+    let detail = "";
+    if (response.status >= 400 && response.status < 500) {
+      detail = await response
+        .text()
+        .then((text) => (text ? ` ${text.slice(0, 500)}` : ""))
+        .catch(() => "");
+    }
+    throw new Error(`WORKER_GRANT_REFUSED: HTTP ${response.status}${detail}`);
   }
   const payload = (await response.json()) as { grant?: ExecutionGrant };
   if (!payload.grant) throw new Error("WORKER_GRANT_MALFORMED");
@@ -376,6 +414,8 @@ export async function runGovernedWorker(
       `WORKER_EXECUTOR_UNDECLARED: ICOS_WORKER_EXEC_COMMANDS has no '${EXECUTOR_RUNTIME}' runtime`,
     );
   }
+  /* The ONE budget this run is bounded by: declared per command, else the deployment's. */
+  const enforcedTimeoutMs = declared.timeoutMs ?? executionTimeoutMs();
   /*
    * ICOS decides what this execution may do, BEFORE anything is provisioned. Asking
    * first also means a refusal costs no worktree and no subprocess.
@@ -504,6 +544,17 @@ export async function runGovernedWorker(
       env: {
         HOME: home.path,
         /*
+         * AND ITS TEMPORARY DIRECTORY TOO. `TMPDIR` is on the child-environment allowlist, so
+         * without this the worker inherits the SERVER's — a path the sandbox never grants, so
+         * every temp write fails with « Operation not permitted ». git only complains
+         * (`xcrun_db`) and commits anyway, but any worker that genuinely needs a temp file
+         * would fail for a reason that reads like a bug in the worker.
+         *
+         * The answer is not to grant another path: the disposable HOME is already writable
+         * and already destroyed with the run, so pointing temp INTO it widens nothing.
+         */
+        TMPDIR: home.path,
+        /*
          * WHERE TO REPORT. Hermes is told through `--usage-file` in its declaration;
          * every other executor is told here, so "which program ran" and "how success is
          * reported" stay separate questions and the result contract is not the private
@@ -523,7 +574,7 @@ export async function runGovernedWorker(
           : {}),
         ...broker.env,
       },
-      timeoutMs: declared.timeoutMs ?? executionTimeoutMs(),
+      timeoutMs: enforcedTimeoutMs,
       /* Losing the workspace lease kills the run, and the process group with it. */
       ...(authority ? { abortSignal: authority.signal } : {}),
       sandbox: {
@@ -539,6 +590,16 @@ export async function runGovernedWorker(
          * The allocated worktree is writable; the canonical checkout never is. For a
          * reader this is unchanged — scratch and HOME only — so granting the writer
          * capability widened nothing for the tasks that do not have it.
+         */
+        /*
+         * NO WRITABLE GITDIR, EVER (ADR 0073). The worker modifies files in its workspace
+         * and writes its structured status; it holds no Git authority at all. An earlier
+         * design granted it `.git/worktrees/<id>` and `<commondir>/objects` so that it
+         * could commit its own work — that is precisely what this decision refuses: the
+         * trusted authority revalidates success, ownership, lease and fencing, verifies the
+         * declared scope, and materializes the commit itself through `git-authority`. The
+         * `.git` pointer stays bound READ-ONLY below, so the worker cannot even redirect
+         * its own gitdir.
          */
         readWritePaths: worktree ? [worktree, workspace, home.path] : [workspace, home.path],
         /*
@@ -599,7 +660,13 @@ export async function runGovernedWorker(
     }
 
     if (run.timedOut) {
-      throw new Error(`WORKER_TIMEOUT: no result within ${executionTimeoutMs()}ms`);
+      /*
+       * THE BUDGET THAT ACTUALLY EXPIRED. This said `executionTimeoutMs()` — the
+       * deployment-wide default — while the run is bounded by the DECLARED command timeout
+       * when there is one. A worker killed after 5 s therefore reported "no result within
+       * 900000ms", and a diagnostic that names the wrong number is worse than none.
+       */
+      throw new Error(`WORKER_TIMEOUT: no result within ${enforcedTimeoutMs}ms`);
     }
 
     let usage: unknown;
@@ -610,7 +677,33 @@ export async function runGovernedWorker(
     }
 
     const classified = classifyWorkerRun(run.stdout, usage);
-    if (!classified.ok) throw new Error(classified.message);
+    if (!classified.ok) {
+      /*
+       * A WORKER THAT DIED SAYING WHY IS NOT A SILENT WORKER.
+       *
+       * The result contract reads stdout, so a run that printed nothing there and failed on
+       * stderr reported `no structured status: no output` — indistinguishable from a worker
+       * that started and produced nothing. That is the same mistake as the confinement
+       * refusal (aa54ce1), one layer further in, and it cost this lane a second long hunt:
+       * `git add` was dying on « index.lock: Operation not permitted » and the only
+       * evidence anybody saw was "no output".
+       *
+       * stderr is therefore carried into the reason when stdout was silent — bounded, like
+       * stdout already is, and never allowed to turn a failure into a success.
+       *
+       * AND REDACTED, through the rule ICOS already owns for exactly this situation. This
+       * text comes from OUTSIDE ICOS and now actually reaches the durable ledger and the
+       * Cockpit: until the failure report stopped discarding the activity's message in
+       * favour of Temporal's wrapper, nothing here could leave the worker. A worker that
+       * echoes its own credential while dying must not write it into the business record,
+       * and `firstLineRedacted` is the one place that rule lives — a second copy of a
+       * redaction rule is the copy that leaks.
+       */
+      const reason = firstLineRedacted(run.stderr.trim());
+      throw new Error(
+        reason && !run.stdout.trim() ? `${classified.message} (stderr: ${reason})` : classified.message,
+      );
+    }
     return {
       result: classified.result,
       actualExecutor: declared.command,

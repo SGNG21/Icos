@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 
 import { loadEnv } from "@/config/env";
@@ -17,6 +17,11 @@ import { missionTasks, missions, tasks } from "@/server/database/schema";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { identities, type TestIdentity } from "@/test/test-identity";
+import {
+  startTemporalRuntime,
+  uniqueTaskQueue,
+  type TemporalRuntime,
+} from "@/test/temporal-runtime-harness";
 
 /*
  * CORE3 AUTONOMOUS ORCHESTRATION — the DEFAULT path, from the REAL container.
@@ -61,6 +66,46 @@ const CAPABILITY = "code-generation";
  * assertions stay exactly as exact as they were.
  */
 const FILE_IDENTITIES = identities("core3");
+
+/**
+ * THE ORCHESTRATOR THIS SUITE DRIVES, which it never used to start.
+ *
+ * `DURABLE_MISSION_TASK` is orchestrated by Temporal and by nothing else (ADR 0067), and
+ * this file drives the governed path through the REAL container — so every mission dispatch
+ * goes to Temporal. Nothing here started a worker and no queue was configured, so the
+ * dispatcher fell back to its default `hello-world`, found no poller and refused every
+ * dispatch (`TEMPORAL_NO_CONSUMER`). The workspace then sat `blocked`, which is what these
+ * cases were really asserting against when they expected `ready_for_integration`.
+ *
+ * The harness is the production workflow, activities and callbacks, on a queue of this
+ * file's own.
+ */
+const TASK_QUEUE = uniqueTaskQueue("core3");
+const CALLBACK_SECRET = "core3-callback-secret-at-least-32-chars-long";
+let temporal: TemporalRuntime | undefined;
+
+beforeAll(async () => {
+  /*
+   * BEFORE THE HARNESS STARTS, because the executable policy FREEZES ON IMPORT.
+   *
+   * `executable-policy.ts` reads ICOS_WORKER_EXECUTABLE_ALLOWLIST once, when first
+   * imported, and never again — deliberately, so nothing that later mutates the environment
+   * can widen it. `startTemporalRuntime` imports the production activities DYNAMICALLY, so
+   * that call is when the policy freezes; an allowlist published after it is too late, the
+   * set is empty, and every governed run is refused WORKER_EXECUTABLE_DENIED. These two are
+   * static, so they belong here; the path-dependent values are published per case by
+   * `makeRepo`, which the activity reads at call time rather than freezing.
+   */
+  Object.assign(process.env, {
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+  });
+  temporal = await startTemporalRuntime(TASK_QUEUE);
+});
+
+afterAll(async () => {
+  await temporal?.stop();
+});
 let caseNumber = 0;
 let ids: TestIdentity;
 
@@ -79,6 +124,20 @@ beforeEach(() => {
 });
 
 /* A REAL worker: writes inside its declared scope and commits. */
+/**
+ * THE CANONICAL WORKER RESULT CONTRACT, and why the sentinel was wrong here.
+ *
+ * `classifyWorkerRun` (`worker-run.ts`) reads a structured status FILE at
+ * `ICOS_WORKER_STATUS_FILE` — `{ completed: true, failed: false }` — and takes stdout as
+ * the recorded result. Stdout never decides success.
+ *
+ * This script used to report through `ICOS_RESULT_SENTINEL_START/END`, which is the
+ * IN-PROCESS executor's protocol (`command-worker-executor.ts`) and remains correct for
+ * INTERACTIVE_COMMAND. Mission work is orchestrated by Temporal and by nothing else
+ * (ADR 0067), and the activity reads the status file — so a sentinel-only worker could
+ * start, write, commit and still be classified `worker returned no structured status`,
+ * which is precisely what a broken worker looks like.
+ */
 const WORKER_SCRIPT = `
   const fs = require('fs');
   const { execFileSync } = require('child_process');
@@ -86,9 +145,15 @@ const WORKER_SCRIPT = `
   fs.writeFileSync('src/core3/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + '\\n');
   execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
   execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','core3 feature'], { stdio: 'ignore' });
-  process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
-    status: 'succeeded', summary: 'wrote src/core3/feature.txt', testsRun: ['unit'],
-  }) + process.env.ICOS_RESULT_SENTINEL_END);
+  /*
+   * The canonical result contract: a structured status FILE at the path ICOS gave us, plus
+   * a non-empty stdout which becomes the recorded result. Stdout never decides success.
+   * (No backticks in here: this comment lives inside a template literal.)
+   */
+  process.stdout.write('wrote ' + 'src/core3/feature.txt');
+  fs.writeFileSync(process.env.ICOS_WORKER_STATUS_FILE, JSON.stringify({
+    completed: true, failed: false,
+  }));
 `;
 
 let tmp: string | undefined;
@@ -119,6 +184,13 @@ function makeRepo() {
   git(repo, "commit", "-q", "-m", "base");
   /* The integration target the workspace manager defaults to. */
   git(repo, "branch", "integration/phase-7");
+  /*
+   * PUBLISH THE DEPLOYMENT TO THE PROCESS, because that is where the ACTIVITY reads it.
+   * `envOverrides()` configures the container, but the activity runs in the Temporal worker
+   * and reads `process.env` directly at call time. Done here rather than in `beforeAll`
+   * because `makeRepo` runs per case and the paths it publishes change with it.
+   */
+  Object.assign(process.env, envOverrides());
 }
 
 function envOverrides() {
@@ -135,6 +207,16 @@ function envOverrides() {
     }),
     ICOS_REPO_PATH: repo,
     ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    /*
+     * The CHECKOUT the activity binds read-only, read straight from `process.env`. A
+     * governed write needs both: its own worktree to write in, and the canonical checkout
+     * it branched from to read.
+     */
+    ICOS_WORKSPACE_ROOT: repo,
+    /* A queue of this file's own, so no other worker can consume its workflows. */
+    TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
     /*
      * The gate's verification commands, replaced by trivial passing ones. Running four
      * full pnpm suites inside a throwaway fixture would take many minutes and prove pnpm
@@ -229,6 +311,40 @@ async function seed(c: Container) {
  * hand-written review and no manual gate call — is proven in
  * `core3-natural-review-gate.integration.test.ts` (defect 28 closure, decision 0045).
  */
+/**
+ * RUN THE MISSION AND WAIT FOR THE DURABLE RESULT, because the dispatch is ASYNCHRONOUS.
+ *
+ * `supervisor.run` used to execute the work inline, on the in-process executor, so when it
+ * returned the worker had already written and committed. `DURABLE_MISSION_TASK` is
+ * orchestrated by Temporal now (ADR 0067): `run` only DISPATCHES, and the worker commits in
+ * another process afterwards.
+ *
+ * So gating straight after `run` inspected a worktree the worker was still writing, and the
+ * gate refused it — correctly — with `GATE_PRECONDITION: changements non commités : le gate
+ * n'évalue que des commits`. The gate was right; the test was asking too early.
+ *
+ * The wait is on the durable fact the completion callback writes, not a sleep, so it does
+ * not depend on how fast the worker happens to be. Applied only where a case drives work to
+ * completion: a reader produces no execution at all and must not wait for one.
+ */
+async function runMissionAndSettle(
+  runtime: { supervisor: { run(missionId: string): Promise<unknown> } },
+  c: Container,
+): Promise<void> {
+  await runtime.supervisor.run(MISSION_ID);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const [row] = (await c.db!.execute(
+      sql.raw(`select outcome from task_execution_results where workflow_id = '${WORKFLOW_ID}'`),
+    )) as unknown as Array<{ outcome: string }>;
+    if (row?.outcome) return;
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for the execution result of ${WORKFLOW_ID}`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 async function writeApprovalDirectly(c: Container) {
   await c.reviewDecisions.save({
     id: `review-${TASK_ID}`,
@@ -296,7 +412,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      * gates and integrates. Nothing is pre-seeded and no stage is advanced by hand.
      */
     const bootRuntime = composeAutonomyRuntime(services.container);
-    await bootRuntime.supervisor.run(MISSION_ID);
+    await runMissionAndSettle(bootRuntime, services.container);
     await writeApprovalDirectly(services.container);
     await services.container.workspaceExecutionCoordinator!.gatePendingReview();
 
@@ -320,7 +436,7 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
      * itself, the writer runs ad-hoc and this proof fails.
      */
     const { supervisor } = composeAutonomyRuntime(c);
-    await supervisor.run(MISSION_ID);
+    await runMissionAndSettle({ supervisor }, c);
 
     /*
      * NATURAL ORDER (M13, defect 28). Execution finished with NO review, so nothing was
@@ -370,14 +486,14 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     makeRepo();
     const first = await container();
     await seed(first);
-    await composeAutonomyRuntime(first).supervisor.run(MISSION_ID);
+    await runMissionAndSettle(composeAutonomyRuntime(first), first);
     await writeApprovalDirectly(first);
     await first.workspaceExecutionCoordinator!.gatePendingReview();
     const afterFirst = git(repo, "rev-parse", "integration/phase-7");
 
     /* A completely new container and supervisor, as a restarted process would build. */
     const second = await container();
-    await composeAutonomyRuntime(second).supervisor.run(MISSION_ID);
+    await runMissionAndSettle(composeAutonomyRuntime(second), second);
     await second.workspaceExecutionCoordinator!.gatePendingReview();
 
     /* Exactly-once dispatch AND exactly-once integration both hold across the restart. */

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,6 +165,233 @@ describe.skipIf(!backend)("évasion du bac à sable — tentatives réelles", ()
       expect(result.confinement).toBe("seatbelt");
     },
   );
+});
+
+/**
+ * L'ÉCRITURE GOUVERNÉE SOUS CONFINEMENT — ce que le writer peut, et tout ce qu'il ne peut pas.
+ *
+ * ── LE DÉFAUT QUE CES PREUVES FERMENT ───────────────────────────────────────────────────
+ * La preuve « écrit son propre worktree » ci-dessus écrit un fichier dans un répertoire
+ * ORDINAIRE, ce qui ne dit rien du travail pour lequel ce bac à sable existe : un COMMIT
+ * sur la branche que l'IntegrationGate relira. Or un worktree git ne garde pas son index
+ * chez lui — `<worktree>/.git` est un FICHIER qui pointe vers
+ * `<canonique>/.git/worktrees/<id>` — donc index, HEAD et verrous du worker vivent DANS le
+ * dépôt que la politique déclare en lecture seule.
+ *
+ * Mesuré sur HEAD : `git add` mourait sur « Unable to create
+ * '<canonique>/.git/worktrees/<id>/index.lock': Operation not permitted ». Aucune écriture
+ * gouvernée n'avait donc jamais abouti sous confinement, et comme le contrat de résultat ne
+ * lit que stdout, la seule trace était « worker returned no structured status: no output » —
+ * indistinguable d'un worker cassé.
+ *
+ * ── LA FORME RETENUE : WORKTREE DÉTACHÉ ─────────────────────────────────────────────────
+ * Un HEAD ATTACHÉ ferait verrouiller `refs/heads/<branche>.lock`, créé dans le RÉPERTOIRE
+ * `refs/heads/` du dépôt canonique ; accorder ce répertoire donnerait au worker le pouvoir
+ * de déplacer N'IMPORTE QUELLE branche, la CIBLE comprise — l'exact contournement de la
+ * revue. Détaché, il ne lui faut que son propre dossier d'administration et le dépôt
+ * d'objets, et c'est ICOS — hors bac à sable, après vérification — qui nomme la branche.
+ *
+ * Le worker rend donc un SHA, jamais une mutation de référence.
+ */
+describe.skipIf(!backend)("écriture gouvernée — le writer n'a AUCUNE autorité Git", () => {
+  let canonical: string;
+  let tree: string;
+  let otherTree: string;
+  let admin: string;
+  let otherAdmin: string;
+  let gitHome: string;
+  let base: string;
+
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("/usr/bin/git", args, { cwd, encoding: "utf8" }).trim();
+
+  /**
+   * EXACTEMENT ce que l'activité accorde (ADR 0073) : le worktree alloué et le HOME
+   * jetable. RIEN de `.git` — ni le dossier d'administration de ce worktree, ni le dépôt
+   * d'objets — et le pointeur `<worktree>/.git` est reclos en LECTURE à l'intérieur même
+   * du worktree accordé, un rétrécissement que les deux backends respectent.
+   *
+   * Une version antérieure accordait ici le gitdir et les objets pour que le writer puisse
+   * committer lui-même. C'est précisément ce que la décision refuse : le worker écrit des
+   * fichiers, et l'autorité de confiance matérialise le commit hors du bac à sable. Ces
+   * preuves mesurent donc la politique de PRODUCTION, pas une plus large écrite pour faire
+   * passer un test.
+   */
+  const asWriter = (script: string) =>
+    runNonInteractive({
+      command: "/bin/sh",
+      args: ["-c", script],
+      cwd: tree,
+      timeoutMs: 20_000,
+      /* `TMPDIR` dans le HOME jetable : le vrai /var/folders n'est pas accordé. */
+      env: { HOME: gitHome, TMPDIR: gitHome },
+      sandbox: {
+        readWritePaths: [tree, gitHome],
+        readOnlyPaths: [canonical, join(tree, ".git")],
+        allowNetwork: false,
+      },
+    });
+
+  beforeAll(async () => {
+    canonical = join(root, "canonique");
+    tree = join(root, "writer-worktree");
+    otherTree = join(root, "autre-writer-worktree");
+    gitHome = join(root, "home-writer");
+    await mkdir(canonical, { recursive: true });
+    await mkdir(gitHome, { recursive: true });
+
+    git(canonical, "init", "-q", "--initial-branch=main", ".");
+    await writeFile(join(canonical, "base.txt"), "base\n");
+    await mkdir(join(canonical, "src"), { recursive: true });
+    await writeFile(join(canonical, "src", "permis.txt"), "dans la portée\n");
+    git(canonical, "add", "-A");
+    git(canonical, "-c", "user.email=i@i", "-c", "user.name=i", "commit", "-q", "-m", "base");
+    base = git(canonical, "rev-parse", "HEAD");
+    /* La branche d'intégration que la revue protège, et une branche de tâche déjà nommée. */
+    git(canonical, "branch", "integration/cible");
+    git(canonical, "branch", "icos-task-branche");
+    /* Les deux worktrees sont DÉTACHÉS : c'est la forme que la production alloue. */
+    git(canonical, "worktree", "add", "-q", "--detach", tree, base);
+    git(canonical, "worktree", "add", "-q", "--detach", otherTree, base);
+    admin = git(tree, "rev-parse", "--absolute-git-dir");
+    otherAdmin = git(otherTree, "rev-parse", "--absolute-git-dir");
+    /* Un hook, pour que « ne peut pas le modifier » porte sur un fichier qui existe. */
+    await mkdir(join(canonical, ".git", "hooks"), { recursive: true });
+    await writeFile(join(canonical, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n");
+  });
+
+  /* ── WORKER_GIT_AUTHORITY=NONE / GITDIR_WRITABLE_BY_WORKER=NO ────────────────────────── */
+  it("NE PEUT PAS committer : il laisse des fichiers, ICOS matérialise (ADR 0073)", async () => {
+    const result = await asWriter(
+      "echo travail > src/feature.txt && " +
+        "git add -A 2>&1; echo ADD=$?; " +
+        "git -c user.email=w@w -c user.name=w commit -q -m travail 2>&1; echo COMMIT=$?",
+    );
+
+    expect(result.confinement).toBe(backend?.mechanism);
+    /* L'index vit dans le gitdir, qui n'est pas accordé : l'écriture Git échoue, fermée. */
+    expect(result.stdout).not.toContain("ADD=0");
+    expect(result.stdout).not.toContain("COMMIT=0");
+
+    /*
+     * L'ÉVIDENCE EST GIT, jamais ce que le worker a dit : aucun commit n'est né, ni sur le
+     * HEAD détaché du worktree ni sur une référence du dépôt canonique.
+     */
+    expect(git(tree, "rev-parse", "HEAD")).toBe(base);
+    expect(git(canonical, "rev-parse", "icos-task-branche")).toBe(base);
+    expect(git(canonical, "rev-parse", "integration/cible")).toBe(base);
+
+    /*
+     * ET LE TRAVAIL N'EST PAS PERDU — c'est tout l'objet de la décision. Le fichier est là,
+     * non suivi, exactement l'état que l'autorité de confiance capture et transforme en
+     * commit après revalidation du succès, de la propriété, du bail et du jeton de fencing.
+     */
+    expect(git(tree, "status", "--porcelain")).toContain("src/feature.txt");
+  });
+
+  /* ── le worker ne peut pas écrire SON PROPRE gitdir : le coeur d'ADR 0073 ────────────── */
+  it("NE PEUT PAS écrire son PROPRE dossier d'administration", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    const own = join(admin, "HEAD");
+    const before = await rf(own, "utf8");
+
+    const result = await asWriter(`echo ${base} > ${own} 2>&1; echo CODE=$?`);
+
+    expect(result.stdout).not.toContain("CODE=0");
+    expect(await rf(own, "utf8")).toBe(before);
+  });
+
+  /* ── ni rediriger son pointeur pour s'en fabriquer un autre ──────────────────────────── */
+  it("NE PEUT PAS réécrire `<worktree>/.git` pour détourner son gitdir", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    const pointer = join(tree, ".git");
+    const before = await rf(pointer, "utf8");
+
+    const result = await asWriter(`echo "gitdir: /tmp/pirate" > ${pointer} 2>&1; echo CODE=$?`);
+
+    expect(result.stdout).not.toContain("CODE=0");
+    expect(await rf(pointer, "utf8")).toBe(before);
+  });
+
+  /* ── WORKER_CANNOT_UPDATE_REFS ───────────────────────────────────────────────────────── */
+  it("NE PEUT PAS écrire une référence, même la sienne", async () => {
+    const before = git(canonical, "rev-parse", "icos-task-branche");
+    const result = await asWriter(
+      "git update-ref refs/heads/icos-task-branche $(git rev-parse HEAD) 2>&1; " +
+        "echo CODE=$?",
+    );
+    expect(result.stdout).toContain("CODE=");
+    expect(result.stdout).not.toContain("CODE=0");
+    expect(git(canonical, "rev-parse", "icos-task-branche")).toBe(before);
+  });
+
+  /* ── WORKER_CANNOT_MOVE_BRANCH ───────────────────────────────────────────────────────── */
+  it("NE PEUT PAS déplacer la branche d'INTÉGRATION : la revue n'est pas contournable", async () => {
+    const before = git(canonical, "rev-parse", "integration/cible");
+    const result = await asWriter(
+      "git branch -f integration/cible $(git rev-parse HEAD) 2>&1; echo CODE=$?",
+    );
+    expect(result.stdout).not.toContain("CODE=0");
+    expect(git(canonical, "rev-parse", "integration/cible")).toBe(before);
+  });
+
+  /* ── WORKER_CANNOT_WRITE_PACKED_REFS ─────────────────────────────────────────────────── */
+  it("NE PEUT PAS écrire `packed-refs`", async () => {
+    const result = await asWriter(
+      `echo compromis > ${join(canonical, ".git", "packed-refs")} 2>&1; echo CODE=$?`,
+    );
+    expect(result.stdout).not.toContain("CODE=0");
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(join(canonical, ".git"));
+    if (entries.includes("packed-refs")) {
+      const { readFile: rf } = await import("node:fs/promises");
+      expect(await rf(join(canonical, ".git", "packed-refs"), "utf8")).not.toContain("compromis");
+    }
+  });
+
+  /* ── WORKER_CANNOT_MODIFY_GIT_CONFIG ────────────────────────────────────────────────── */
+  it("NE PEUT PAS modifier la configuration du dépôt canonique", async () => {
+    const result = await asWriter(
+      `echo '[core] hooksPath = /tmp/pirate' >> ${join(canonical, ".git", "config")} 2>&1; echo CODE=$?`,
+    );
+    expect(result.stdout).not.toContain("CODE=0");
+    const { readFile: rf } = await import("node:fs/promises");
+    expect(await rf(join(canonical, ".git", "config"), "utf8")).not.toContain("pirate");
+  });
+
+  /* ── WORKER_CANNOT_MODIFY_GIT_HOOKS ─────────────────────────────────────────────────── */
+  it("NE PEUT PAS installer un hook : pas d'exécution de code dans le plan de contrôle", async () => {
+    const hook = join(canonical, ".git", "hooks", "pre-commit");
+    const result = await asWriter(`echo 'curl pirate' > ${hook} 2>&1; echo CODE=$?`);
+    expect(result.stdout).not.toContain("CODE=0");
+    const { readFile: rf } = await import("node:fs/promises");
+    expect(await rf(hook, "utf8")).not.toContain("pirate");
+  });
+
+  /* ── WORKER_CANNOT_WRITE_OTHER_WORKTREE_GITDIR ──────────────────────────────────────── */
+  it("NE PEUT PAS écrire le gitdir d'un AUTRE worker : l'accord porte sur LE SIEN", async () => {
+    const victim = join(otherAdmin, "HEAD");
+    const { readFile: rf } = await import("node:fs/promises");
+    const before = await rf(victim, "utf8");
+    const result = await asWriter(`echo ${base} > ${victim} 2>&1; echo CODE=$?`);
+    expect(result.stdout).not.toContain("CODE=0");
+    expect(await rf(victim, "utf8")).toBe(before);
+    /* Et son arbre de travail non plus. */
+    const intrusion = await asWriter(
+      `echo intrusion > ${join(otherTree, "pirate.txt")} 2>&1; echo CODE=$?`,
+    );
+    expect(intrusion.stdout).not.toContain("CODE=0");
+  });
+
+  /* ── la barrière ne doit pas non plus laisser écrire l'arbre canonique ──────────────── */
+  it("NE PEUT PAS écrire l'arbre de travail canonique", async () => {
+    const result = await asWriter(
+      `echo compromis > ${join(canonical, "base.txt")} 2>&1; echo CODE=$?`,
+    );
+    expect(result.stdout).not.toContain("CODE=0");
+    const { readFile: rf } = await import("node:fs/promises");
+    expect(await rf(join(canonical, "base.txt"), "utf8")).toBe("base\n");
+  });
 });
 
 describe("décision de confinement — FERMÉE par défaut", () => {

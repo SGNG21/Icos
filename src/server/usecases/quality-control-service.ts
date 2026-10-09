@@ -26,7 +26,22 @@ import { complexityFromRisk, type PriorAttemptFact } from "@/core/workers/comput
 const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
 /** Cool-down before a review parked as unavailable is retried with a fresh budget. */
 export const REVIEW_UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
+/** Attempts within ONE review cycle. A cycle that exhausts it parks; it never loops. */
 export const MAX_REVIEW_ATTEMPTS = 3;
+/**
+ * HOW LONG A REVIEW MAY GO ON TRYING, IN TOTAL. The bound that makes the whole thing finite.
+ *
+ * The per-cycle budget alone cannot bound anything: it is reset on every reclaim, which is
+ * what lets a recovered reviewer finish work that was parked during an outage. So the
+ * TOTAL is bounded by wall-clock age instead — past this, the review escalates to a human
+ * and is never parked again.
+ *
+ * Measured from the job's `created_at`, which is set once when the job is created and is
+ * never touched by a sweep. Age-gating on a column one's own sweep rewrites can never
+ * fire, and this deliberately does not: the deadline cannot be silently extended by the
+ * retrying itself.
+ */
+export const REVIEW_LIFETIME_DEADLINE_MS = 60 * 60_000;
 
 /** A review the Goal cannot pay for. Terminal: only the owner can change it. */
 export const QUALITY_CONTROL_BUDGET_EXHAUSTED = "QUALITY_CONTROL_BUDGET_EXHAUSTED";
@@ -44,6 +59,8 @@ export interface QualityControlServiceDeps {
   assertOwned?: (missionId: string, signal?: AbortSignal) => Promise<void>;
   dispatchPrepared?: DispatchPreparedQualityAttempt;
   reviewUnavailableCooldownMs?: number;
+  /** Total review lifetime; see {@link REVIEW_LIFETIME_DEADLINE_MS}. */
+  reviewLifetimeDeadlineMs?: number;
   /**
    * THE canonical routing authority (M7.1). Optional: a deployment with no registry
    * routes nothing and keeps its pre-M4 behaviour.
@@ -233,6 +250,32 @@ export class QualityControlService {
           if (job.reviewAttemptCount > MAX_REVIEW_ATTEMPTS) {
             const existing = await this.deps.reviewDecisions.getByWorkflowId(job.workflowId);
             if (!existing) {
+              /*
+               * THE PER-CYCLE BUDGET IS SPENT. Two ways out, and never a third.
+               *
+               * Reclaiming a parked review resets the budget (see the repository), which is
+               * what lets a reviewer that comes back finish work parked during its outage.
+               * That reset is also why the budget cannot bound the TOTAL: 3 attempts, park,
+               * reclaim, 3 attempts, park … is a loop unless something else ends it.
+               *
+               * The thing that ends it is the job's AGE. Past the lifetime deadline the
+               * review escalates to a human and is NOT parked again — so a reviewer that
+               * never recovers stops being retried instead of being retried for ever. The
+               * previous shape had neither half: the budget was monotonic, so the first
+               * reclaim was already over it and re-parked immediately, for ever, and the
+               * work was never reviewed, never integrated and never escalated.
+               */
+              const ageMs = Date.now() - job.createdAt.getTime();
+              const deadlineMs =
+                this.deps.reviewLifetimeDeadlineMs ?? REVIEW_LIFETIME_DEADLINE_MS;
+              if (ageMs >= deadlineMs) {
+                await this.deps.qualityJobs.escalateOwned(
+                  job.workflowId,
+                  ownerToken,
+                  "QUALITY_CONTROL_REVIEW_LIFETIME_EXCEEDED",
+                );
+                continue;
+              }
               // Reviewer outage, not a worker failure: park the review (worker
               // result and task state are left untouched) and retry later.
               await this.deps.qualityJobs.markReviewUnavailable(

@@ -409,11 +409,55 @@ export class WorkspaceManager {
           );
         }
       }
+      /*
+       * PRÉSERVER AVANT DE DÉTRUIRE — le commit du worker vit sur un HEAD DÉTACHÉ.
+       *
+       * Un writer est alloué détaché (voir `Git.addWorktree`) : son commit n'est porté par
+       * aucune référence tant que le coordinateur ne l'a pas nommé. Sur le chemin ABANDONNÉ
+       * personne ne le nomme — le runner est mort, c'est précisément pourquoi on reape — donc
+       * la branche était restée sur la base, le reap la jugeait « fusionnée » et la
+       * supprimait : le travail devenait inatteignable. « Conserver, jamais détruire » doit
+       * tenir ici, au PAS IRRÉVERSIBLE, et pas seulement sur le chemin heureux.
+       *
+       * Avance uniquement en FAST-FORWARD (`tip` ancêtre de `head`) : on rend le travail
+       * atteignable, on ne réécrit jamais une branche qui aurait déjà bougé ailleurs.
+       */
+      if (hasWorktree) {
+        const head = await this.git.headCommit(ws.worktreePath).catch(() => null);
+        const tip = await this.git.resolveCommit(ws.branch).catch(() => null);
+        if (head && tip && head !== tip && (await this.git.isAncestor(tip, head).catch(() => false))) {
+          await this.git.setBranchToCommit(ws.branch, head, tip);
+        }
+      }
+
       await mkdir(this.archiveDir, { recursive: true });
       const archivePath = path.join(this.archiveDir, `${ws.workspaceId}.json`);
       await writeFile(archivePath, JSON.stringify(ws, null, 2));
 
-      if (hasWorktree) await this.git.removeWorktree(ws.worktreePath);
+      /*
+       * A WORKTREE THAT WILL NOT UNREGISTER MUST NOT STRAND THE RELEASE.
+       *
+       * `git worktree remove` fails for reasons that are not this workspace's problem — a
+       * directory already gone, a stale registration another run left in
+       * `.git/worktrees`. It used to "succeed" regardless, because this adapter's `exec`
+       * dropped every exit code; now that it honours them, a failure here would abort
+       * cleanup and leave the workspace, its branch and its test database behind for ever.
+       *
+       * Nothing is risked by continuing: the UNCOMMITTED_CHANGES check above is what
+       * protects real work, and it has already passed. So the removal is attempted, a
+       * `prune` clears a stale registration, and the result reports what actually
+       * happened instead of asserting success.
+       */
+      let worktreeRemoved = false;
+      if (hasWorktree) {
+        try {
+          await this.git.removeWorktree(ws.worktreePath);
+          worktreeRemoved = true;
+        } catch {
+          await this.git.exec(["worktree", "prune"], undefined, [0, 1, 128]).catch(() => undefined);
+          worktreeRemoved = !existsSync(ws.worktreePath);
+        }
+      }
       /*
        * Reap against the INTEGRATION TARGET, not HEAD (M8, defect 19). `branch -d` asks
        * whether the branch is merged into HEAD, which for a worker branch integrated into
@@ -427,7 +471,7 @@ export class WorkspaceManager {
       ws.leaseExpiresAt = null;
       ws.updatedAt = now.toISOString();
       return {
-        worktreeRemoved: hasWorktree,
+        worktreeRemoved,
         branchDeleted,
         databaseDropped: true,
         archivePath,

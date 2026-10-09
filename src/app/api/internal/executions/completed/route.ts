@@ -43,7 +43,16 @@ export async function POST(request: Request): Promise<Response> {
 
     const attempt = await container.dispatchAttempts.getByWorkflowId(parsed.data.workflowId);
     if (!attempt || attempt.taskId !== parsed.data.taskId) {
-      return apiError("invalid_input", "workflow d'exécution non corrélé");
+      /*
+       * WHICH correlation failed. Two different invariants shared one message, and a
+       * refused callback is invisible from outside: the dispatch succeeded, the worker
+       * reported, ICOS refused, Temporal retried twenty times, and the attempt sat
+       * `dispatched` for ever. The message is unchanged — it is the stable contract — and
+       * the discriminator rides in `details`, a fixed code, never a field value.
+       */
+      return apiError("invalid_input", "workflow d'exécution non corrélé", {
+        reason: !attempt ? "EXECUTION_ATTEMPT_UNKNOWN" : "EXECUTION_ATTEMPT_TASK_MISMATCH",
+      });
     }
 
     const missionTask = await container.mission.getMissionTaskByCanonicalTaskId(parsed.data.taskId);
@@ -52,7 +61,14 @@ export async function POST(request: Request): Promise<Response> {
       missionTask.id !== attempt.missionTaskId ||
       missionTask.missionId !== attempt.missionId
     ) {
-      return apiError("invalid_input", "workflow d'exécution non corrélé");
+      /* Same discrimination for the MISSION-TASK invariant, which shared the message. */
+      return apiError("invalid_input", "workflow d'exécution non corrélé", {
+        reason: !missionTask
+          ? "MISSION_TASK_UNKNOWN"
+          : missionTask.id !== attempt.missionTaskId
+            ? "MISSION_TASK_ATTEMPT_MISMATCH"
+            : "MISSION_TASK_MISSION_MISMATCH",
+      });
     }
 
     /*

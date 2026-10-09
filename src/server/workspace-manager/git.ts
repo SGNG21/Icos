@@ -128,8 +128,65 @@ export class Git {
       });
   }
 
+  /**
+   * ALLOUE UN WORKTREE DÉTACHÉ, et la branche qui l'attend.
+   *
+   * Pas `-b`. Un HEAD attaché fait verrouiller `refs/heads/<branche>.lock`, créé dans le
+   * RÉPERTOIRE `refs/heads/` du dépôt canonique — que le bac à sable du worker refuse, et
+   * doit refuser : accorder ce répertoire lui donnerait le pouvoir de déplacer n'importe
+   * quelle branche, la CIBLE d'intégration comprise. Attaché, aucune écriture gouvernée ne
+   * pouvait donc aboutir sous confinement (preuves dans `sandbox-escape.test.ts`).
+   *
+   * Détaché, le worker commite avec son seul dossier d'administration et le dépôt d'objets,
+   * et rend un SHA. C'est ICOS — hors bac à sable, APRÈS vérification — qui nomme ensuite la
+   * branche via {@link setBranchToCommit}.
+   *
+   * La branche est créée D'ABORD, et sans `--force` : git refuse un nom qui existe déjà, donc
+   * deux exécutions ne peuvent jamais partager silencieusement une branche — la garantie que
+   * `-b` donnait, au même endroit du temps. Si l'ajout du worktree échoue ensuite, la branche
+   * tout juste créée est retirée pour ne pas réserver le nom à vide.
+   */
   async addWorktree(worktreePath: string, branch: string, baseCommit: string): Promise<void> {
-    await this.exec(["worktree", "add", worktreePath, "-b", branch, baseCommit]);
+    await this.exec(["branch", branch, baseCommit]);
+    try {
+      await this.exec(["worktree", "add", "--detach", worktreePath, baseCommit]);
+    } catch (error) {
+      await this.deleteBranchIfMerged(branch).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * NOMME LA BRANCHE GOUVERNÉE SUR UN COMMIT VÉRIFIÉ. Le worker ne fait jamais cela lui-même.
+   *
+   * `update-ref` avec une valeur ancienne ATTENDUE est un compare-and-swap atomique : un
+   * second appel dont la valeur attendue est périmée échoue, sans fenêtre entre la lecture et
+   * l'écriture. C'est la même primitive, et la même raison, que l'avancée de la cible
+   * d'intégration (M8) — et elle rend l'opération rejouable sans jamais écraser une avancée
+   * concurrente.
+   *
+   * `branch -f` serait l'équivalent fonctionnel et reste INTERDIT : `--force`/`-f` ne passent
+   * pas le garde-fou, et un CAS dit en plus ce qu'il attendait.
+   */
+  async setBranchToCommit(branch: string, commit: string, expectedOldCommit: string): Promise<void> {
+    /*
+     * REFUSE une branche MONTÉE dans un worktree. Déplacer une ref sous un worktree attaché
+     * désynchronise son index et son arbre de travail de HEAD, et tout `git status` ultérieur
+     * y devient faux — la même raison qui fait refuser `compareAndSwapBranch`.
+     *
+     * Un worktree gouverné est DÉTACHÉ, donc ce refus ne se déclenche jamais sur le chemin
+     * prévu : son HEAD est un SHA, qu'aucun déplacement de branche ne concerne. Le garde
+     * existe pour que, si quelque chose allouait un jour en attaché, le relais échoue FERMÉ
+     * au lieu de corrompre silencieusement l'arbre de ce worker.
+     */
+    const checkedOut = (await this.worktrees()).find((w) => w.branch === branch);
+    if (checkedOut) {
+      throw new WorkspaceError(
+        "BRANCH_CHECKED_OUT",
+        `${branch} est monté dans ${checkedOut.path} : nommer la ref désynchroniserait ce worktree`,
+      );
+    }
+    await this.exec(["update-ref", `refs/heads/${branch}`, commit, expectedOldCommit]);
   }
 
   /** Sans --force : git refuse si le worktree contient des changements. */
