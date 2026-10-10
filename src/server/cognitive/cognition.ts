@@ -181,6 +181,15 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
       body: JSON.stringify({
         model: this.modelFor(input.workload),
         temperature: 0.1,
+        /*
+         * EXPLICIT, because this function reads ONE JSON body. An OpenAI-compatible
+         * gateway may default either way when `stream` is absent: the owner's local build
+         * answers `application/json`, the published OmniRoute server answers
+         * `text/event-stream`, and against the latter `response.json()` below threw
+         * `Unexpected token 'd', "data: {"id"...` on every turn. The caller declares the
+         * shape it will parse instead of inheriting a default it cannot see.
+         */
+        stream: false,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           {
