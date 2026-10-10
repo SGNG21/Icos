@@ -13,7 +13,6 @@
  * Prints timings and verdicts only — never credentials, cookies or audio.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
 
 import { WebSocket } from "ws";
 
@@ -46,29 +45,55 @@ function pcm(path: string): Buffer {
  */
 async function readPasswordFromTty(): Promise<string> {
   if (process.env.ICOS_OWNER_PASSWORD) return process.env.ICOS_OWNER_PASSWORD;
-  if (!process.stdin.isTTY) {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
     throw new Error(
       "no ICOS_OWNER_PASSWORD and stdin is not a terminal: run this from an interactive shell",
     );
   }
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  process.stdout.write("Mot de passe owner (aucun echo) : ");
-  const stdin = process.stdin;
+
+  /*
+   * RAW MODE AND NOTHING ELSE.
+   *
+   * My own defect, one cause with two symptoms: a readline interface created with
+   * `terminal: true` ECHOES what it reads and CONSUMES stdin. Pairing it with raw mode
+   * therefore printed the password in the clear and swallowed the Enter key, so the prompt
+   * hung for ever. There is no need for readline here at all.
+   *
+   * This is the same reader as `scripts/auth-rotate-owner-password.ts`, which is proven on
+   * this host — with the restoration moved into `finally` so the terminal is handed back on
+   * every exit, Ctrl+C included, plus an `exit` listener in case anything escapes.
+   */
   const wasRaw = stdin.isRaw;
+  const restore = () => {
+    try {
+      stdin.setRawMode(wasRaw);
+    } catch {
+      /* the stream can already be gone while exiting */
+    }
+    stdin.pause();
+  };
+  process.once("exit", restore);
+
+  process.stdout.write("Mot de passe owner (aucun echo) : ");
   stdin.setRawMode(true);
+  stdin.resume();
+  stdin.setEncoding("utf8");
+
   let value = "";
   try {
-    await new Promise<void>((resolve, reject) => {
-      const onData = (chunk: Buffer) => {
-        for (const ch of chunk.toString("utf8")) {
+    return await new Promise<string>((resolve, reject) => {
+      const onData = (chunk: string) => {
+        for (const ch of chunk) {
           if (ch === "\r" || ch === "\n") {
             stdin.off("data", onData);
-            return resolve();
+            return resolve(value);
           }
           if (ch === "\u0003") {
             stdin.off("data", onData);
-            return reject(new Error("annulé"));
+            return reject(new Error("saisie annulee (Ctrl+C)"));
           }
+          /* Backspace edits; other control characters are ignored, never stored. */
           if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
           else if (ch >= " ") value += ch;
         }
@@ -76,11 +101,11 @@ async function readPasswordFromTty(): Promise<string> {
       stdin.on("data", onData);
     });
   } finally {
-    stdin.setRawMode(wasRaw);
-    rl.close();
+    restore();
+    process.removeListener("exit", restore);
+    /* The newline the echo would have written, so the next line starts clean. */
     process.stdout.write("\n");
   }
-  return value;
 }
 
 /** Why a sign-in failed, because "HTTP 401" alone sent us looking in the wrong places. */
