@@ -32,20 +32,45 @@ export type VoiceProviderStatus = "CONFIGURED" | "NOT_CONFIGURED";
 export const DEFAULT_VOICE_LANGUAGE = "fr";
 
 /**
- * A gateway voice id from a session language. The gateway's `/v1/audio/speech` takes
- * the OpenAI `voice` field as a language code and accepts "fr" but answers 502 to
- * "fr-FR", so this narrows to the 2-letter code — the same normalization STT does.
- * Returns null for anything that is not a language tag, so the caller can fall back.
+ * A gateway voice id from a session language. This is the FALLBACK only, for backends
+ * that have no voice concept: gTTS reads the OpenAI `voice` field as a language code
+ * and accepts "fr" but answers 502 to "fr-FR", so this narrows to the 2-letter code —
+ * the same normalization STT does. Returns null for anything that is not a language
+ * tag, so the caller can fall back.
+ *
+ * A real voice is NOT a language. Set ICOS_VOICE_TTS_VOICE and it is sent verbatim
+ * instead (see `ttsVoiceId`): narrowing it here is what made every premium backend
+ * unreachable — a Fish Audio `reference_id` or an ElevenLabs voice id arrived at the
+ * gateway sliced to its first two characters.
  */
 export function ttsVoice(language: string | undefined): string | null {
   const code = language?.trim().slice(0, 2).toLowerCase();
   return code && /^[a-z]{2}$/.test(code) ? code : null;
 }
 
+/**
+ * The provider-specific voice id from configuration, or null. Passed through
+ * UNTOUCHED: the gateway maps it per backend (Fish Audio `reference_id`, ElevenLabs
+ * voice id in the URL path, EdgeTTS `fr-FR-…Neural`, OpenAI `onyx`, gTTS language),
+ * so one opaque string covers every backend and ICOS needs no per-vendor branch.
+ * Bounded and charset-checked because it reaches an upstream URL path on some
+ * backends; a value that is not a plausible voice id is dropped, not sent.
+ */
+export function ttsVoiceId(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  return value && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value) ? value : null;
+}
+
 export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = process.env): {
   stt: SttProvider | null;
   tts: TtsProvider | null;
-  status: { stt: VoiceProviderStatus; tts: VoiceProviderStatus; language: string };
+  status: {
+    stt: VoiceProviderStatus;
+    tts: VoiceProviderStatus;
+    language: string;
+    /** The configured voice, or "language" when the language-code fallback is in use. */
+    voice: string;
+  };
 } {
   const baseUrl = env.OMNIROUTE_BASE_URL;
   const apiKey = env.OMNIROUTE_API_KEY;
@@ -55,9 +80,10 @@ export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = 
     gateway && env.ICOS_VOICE_STT_MODEL
       ? new OmniRouteStt(gateway, env.ICOS_VOICE_STT_MODEL, 1.5, language)
       : null;
+  const voiceId = ttsVoiceId(env.ICOS_VOICE_TTS_VOICE);
   const tts =
     gateway && env.ICOS_VOICE_TTS_MODEL
-      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL, language)
+      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL, language, voiceId)
       : null;
   return {
     stt,
@@ -66,6 +92,7 @@ export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = 
       stt: stt ? "CONFIGURED" : "NOT_CONFIGURED",
       tts: tts ? "CONFIGURED" : "NOT_CONFIGURED",
       language,
+      voice: voiceId ?? "language",
     },
   };
 }
@@ -248,8 +275,10 @@ export class OmniRouteTts implements TtsProvider {
     private readonly model: string,
     /** Used when the session states no language. */
     private readonly defaultLanguage = DEFAULT_VOICE_LANGUAGE,
+    /** Provider-specific voice id; when set it wins over any language code. */
+    private readonly voiceId: string | null = null,
   ) {
-    this.id = `omniroute:${model}`;
+    this.id = `omniroute:${model}${voiceId ? `:${voiceId}` : ""}`;
   }
 
   start(options: { language?: string }, onEvent: (event: TtsEvent) => void) {
@@ -260,7 +289,13 @@ export class OmniRouteTts implements TtsProvider {
      * French reply ("(NOT_CONNECTED)") flipped the whole answer to an English
      * voice reading French. Observed on a real phone; see omniroute-voice.test.ts.
      */
-    const voice = ttsVoice(options.language) ?? this.defaultLanguage;
+    /*
+     * A configured voice id is a VOICE and must survive untouched. Without this the
+     * `voice` field could only ever be a 2-letter language code, so the only backend
+     * ICOS could drive was one with no voice concept at all (gTTS) — the premium
+     * voices were unreachable by construction, not by configuration.
+     */
+    const voice = this.voiceId ?? ttsVoice(options.language) ?? this.defaultLanguage;
     const queue: string[] = [];
     const cancelled = new AbortController();
     let buffer = "";
@@ -298,8 +333,19 @@ export class OmniRouteTts implements TtsProvider {
         })
         .catch((error: unknown) => {
           if (cancelled.signal.aborted) return;
-          cancelled.abort(); // one failed sentence ends this stream; the text still reaches the user
-          onEvent({ type: "error", message: String(error), timeout: isTimeout(error) });
+          /*
+           * One lost sentence DEGRADES the answer; it does not end it. Aborting the
+           * whole stream here meant a single rate-limited sentence silenced every
+           * sentence after it — and gTTS is rate-limited per IP by Google without
+           * notice, so that was the common case, not the rare one. The loss is
+           * reported (non-fatal) and the queue keeps going, in order.
+           */
+          onEvent({
+            type: "error",
+            message: String(error),
+            timeout: isTimeout(error),
+            fatal: false,
+          });
         })
         .finally(() => {
           running = false;

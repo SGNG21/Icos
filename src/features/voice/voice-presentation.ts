@@ -64,6 +64,10 @@ export function userMessage(code: string): string {
     case "TTS_UNAVAILABLE":
     case "TTS_TIMEOUT":
       return "La voix d'ICOS est indisponible : la réponse s'affiche en texte.";
+    case "TTS_NOT_CONFIGURED":
+      return "La voix n'est pas configurée sur ce serveur ICOS : la réponse s'affiche en texte.";
+    case "TTS_DEGRADED":
+      return "Une partie de la réponse parlée a été perdue. Le texte est complet.";
     case "COGNITIVE_UNAVAILABLE":
       return "ICOS n'a pas pu recevoir votre message. Vous pouvez le renvoyer.";
     case "COGNITIVE_TIMEOUT":

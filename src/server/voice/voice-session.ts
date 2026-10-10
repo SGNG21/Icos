@@ -102,6 +102,11 @@ type Response = {
   /** Once true, nothing from this response reaches the client as audio. */
   stopped: boolean;
   textDone: boolean;
+  /** Both diagnostics are reported ONCE per response, however many sentences are lost. */
+  ttsUnconfiguredReported: boolean;
+  ttsDegradedReported: boolean;
+  /** Sentences lost to a failed synthesis while the answer kept playing. */
+  ttsSentencesLost: number;
   cancelTimer?: () => void;
 };
 
@@ -413,6 +418,9 @@ export class VoiceSession {
       audioSeq: 0,
       stopped: false,
       textDone: false,
+      ttsUnconfiguredReported: false,
+      ttsDegradedReported: false,
+      ttsSentencesLost: 0,
     };
     this.response = response;
     let events: AsyncIterable<CognitiveEvent>;
@@ -539,7 +547,28 @@ export class VoiceSession {
   }
 
   private speak(response: Response, text: string): void {
-    if (response.stopped || !this.deps.tts || !text) return;
+    if (response.stopped || !text) return;
+    /*
+     * No TTS provider AT ALL (ICOS_VOICE_TTS_MODEL unset). This used to `return` in
+     * silence, and that silence is what made the outage unreadable: compose() fails
+     * closed on STT and on cognition, but not on TTS, so the session reached "ready",
+     * transcribed, thought, answered in text — and never spoke, with no event, no
+     * error and no metric to say so. Reported once per response; it is a deployment
+     * fact, so it is not retryable.
+     */
+    if (!this.deps.tts) {
+      if (!response.ttsUnconfiguredReported) {
+        response.ttsUnconfiguredReported = true;
+        this.emit({
+          type: "error",
+          code: "TTS_NOT_CONFIGURED",
+          retryable: false,
+          turnId: response.turn.id,
+          message: "speech synthesis is not configured; the answer is text only",
+        });
+      }
+      return;
+    }
     if (!response.tts) {
       try {
         const tts = this.deps.tts.start(
@@ -584,6 +613,16 @@ export class VoiceSession {
       });
     } else if (event.type === "done") {
       if (response.textDone) this.endResponse(response);
+    } else if (event.fatal === false) {
+      /*
+       * One sentence was lost and the stream continues: do NOT stopAudio here. It
+       * marks the response stopped and flushes the client's queue, which would
+       * discard every sentence still coming — turning one lost sentence into a
+       * truncated answer. The loss is only COUNTED here: whether it was a degraded
+       * answer or a total outage is not knowable until the response ends, so the
+       * verdict is `reportTtsLosses` at endResponse.
+       */
+      response.ttsSentencesLost += 1;
     } else {
       this.emit({
         type: "error",
@@ -659,8 +698,32 @@ export class VoiceSession {
     });
   }
 
+  /**
+   * One diagnostic per response, emitted once the outcome IS known. Saying "part of
+   * the answer was lost" at the moment of the first loss would be a lie whenever
+   * every sentence then failed too — that is a mute voice, not a degraded one.
+   * Paths that already stopped the audio carry their own diagnostic, so they are left
+   * alone: a barge-in must not also complain about the answer it deliberately cut.
+   */
+  private reportTtsLosses(response: Response): void {
+    if (response.ttsSentencesLost === 0 || response.stopped) return;
+    if (response.ttsDegradedReported) return;
+    response.ttsDegradedReported = true;
+    const spokeNothing = response.audioSeq === 0;
+    this.emit({
+      type: "error",
+      code: spokeNothing ? "TTS_UNAVAILABLE" : "TTS_DEGRADED",
+      retryable: true,
+      turnId: response.turn.id,
+      message: spokeNothing
+        ? "speech synthesis failed; the answer continues as text"
+        : "part of the spoken answer was lost; the text is complete",
+    });
+  }
+
   private endResponse(response: Response): void {
     if (this.response !== response) return;
+    this.reportTtsLosses(response);
     this.response = null;
     response.cancelTimer?.();
     if (response.turn.phase !== "accepted") return; // no latency for a turn never accepted
@@ -682,6 +745,8 @@ export class VoiceSession {
       finalToFirstCognitiveEventMs: retried ? null : d(t.final, t.firstCognitive),
       firstCognitiveEventToFirstTtsAudioMs: d(t.firstCognitive, t.firstTtsAudio),
       speechEndToFirstAudioMs: retried ? null : d(t.speechEnd, t.firstTtsAudio),
+      tts: this.deps.tts ? "CONFIGURED" : "NOT_CONFIGURED",
+      ttsSentencesLost: response.ttsSentencesLost,
     };
     this.metrics.push(metrics);
     if (this.metrics.length > MAX_METRICS) this.metrics.shift();
