@@ -125,12 +125,16 @@ const TARGET = "integration/phase-7";
  */
 const WORKER_SCRIPT = `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   const dir = 'src/' + process.env.ICOS_TASK_ID;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(dir + '/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + ' attempt ' + process.env.ICOS_WORKFLOW_ID + '\\n');
-  execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-  execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','d28 feature'], { stdio: 'ignore' });
+  /*
+   * NO git HERE (ADR 0073). A confined worker holds no Git authority: its gitdir lives in
+   * the canonical .git directory, which the sandbox never grants. It leaves its change as
+   * FILES and ICOS — outside the sandbox, after revalidating success, ownership, the lease
+   * and the fencing token — materializes the commit through the hardened Git authority.
+   * (No backticks in here: this comment lives inside a template literal.)
+   */
   /*
    * The canonical result contract: a structured status FILE at the path ICOS gave us, plus
    * a non-empty stdout which becomes the recorded result. Stdout never decides success.
@@ -647,6 +651,15 @@ describe("DEFECT 28 closure — restart and concurrency", () => {
     expect(await leaseOwner(b)).toBe(deadOwner);
     expect(git(repo, "rev-parse", TARGET)).toBe(before);
 
+    /*
+     * PARKED FIRST, THEN AVAILABLE. QC parks the review only after its bounded attempts
+     * against an unavailable reviewer; making the reviewer available before that state is
+     * reached means it is never reached, because the next attempt simply succeeds.
+     */
+    await until(
+      "QC parked the review as unavailable",
+      async () => (await qcJobState(b)) === "review_unavailable",
+    );
     reviewerMode = "approve";
     await elapseReviewerCooldown(b);
     const after = await until("the restarted runtime integrated", async () => {

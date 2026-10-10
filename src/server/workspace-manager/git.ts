@@ -146,14 +146,22 @@ export class Git {
    * `-b` donnait, au même endroit du temps. Si l'ajout du worktree échoue ensuite, la branche
    * tout juste créée est retirée pour ne pas réserver le nom à vide.
    */
+  /**
+   * ATTACHED TO ITS OWN BRANCH (ADR 0073).
+   *
+   * A previous design allocated this DETACHED and let the worker commit on a nameless HEAD,
+   * with ICOS moving the branch afterwards — detachment being what stopped a committing
+   * worker from locking or moving `refs/heads/<branch>` inside the canonical repository.
+   *
+   * ADR 0073 removes the premise: the worker never receives a writable gitdir, so it cannot
+   * reach a reference whatever HEAD says. Detachment then protects nothing and costs the
+   * materialization, which requires HEAD to BE the granted branch — every governed write on
+   * the VPS failed `GIT_WORKTREE_BRANCH_MISMATCH` with the two models combined. One command,
+   * one state: the branch is created and checked out by the allocation, and ICOS's commit
+   * advances it.
+   */
   async addWorktree(worktreePath: string, branch: string, baseCommit: string): Promise<void> {
-    await this.exec(["branch", branch, baseCommit]);
-    try {
-      await this.exec(["worktree", "add", "--detach", worktreePath, baseCommit]);
-    } catch (error) {
-      await this.deleteBranchIfMerged(branch).catch(() => undefined);
-      throw error;
-    }
+    await this.exec(["worktree", "add", worktreePath, "-b", branch, baseCommit]);
   }
 
   /**

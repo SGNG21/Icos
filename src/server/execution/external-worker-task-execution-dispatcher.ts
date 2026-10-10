@@ -93,6 +93,17 @@ export interface ExternalWorkerDispatcherDeps {
    * gate needs the worktree to still exist after execution finishes.
    */
   workspaceFor?: (input: TaskExecutionDispatchInput) => Promise<WorkerWorkspace | null>;
+  /**
+   * THE TRUSTED MATERIALIZATION (ADR 0073), shared with the Temporal completion path.
+   *
+   * A confined worker cannot commit, so a successful governed run leaves FILES. This turns
+   * them into the commit the review and the gate judge. Optional: a composition with no
+   * workspace registry governs nothing and has nothing to materialize.
+   */
+  finalizeGovernedWork?: (input: {
+    workflowId: string;
+    taskId: string;
+  }) => Promise<{ finalized: boolean; reason: string }>;
   /** Identifies this runner in the lease. Defaults to a per-instance uuid. */
   owner?: string;
 }
@@ -239,6 +250,27 @@ export class ExternalWorkerTaskExecutionDispatcher implements TaskExecutionDispa
         outcome,
       });
       return;
+    }
+
+    /*
+     * MATERIALIZE BEFORE THE RESULT IS DURABLE (ADR 0073). This path runs the worker
+     * in-process, and it had no materialization at all: the governed change stayed
+     * uncommitted and the gate refused it with GATE_PRECONDITION. Same function the Temporal
+     * completion route calls — one implementation, two callers, never two copies.
+     */
+    if (input.workflowId && this.deps.finalizeGovernedWork) {
+      const finalized = await this.deps.finalizeGovernedWork({
+        workflowId: input.workflowId,
+        taskId: input.taskId,
+      });
+      if (!finalized.finalized) {
+        await this.settleFailure(attemptId, input, {
+          failureClass: "FAILED_TERMINAL",
+          message: `GOVERNED_WORK_NOT_MATERIALIZED: ${finalized.reason}`,
+          outcome,
+        });
+        return;
+      }
     }
 
     await this.record({

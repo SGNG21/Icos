@@ -140,11 +140,15 @@ beforeEach(() => {
  */
 const WORKER_SCRIPT = `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   fs.mkdirSync('src/core3', { recursive: true });
   fs.writeFileSync('src/core3/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + '\\n');
-  execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-  execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','core3 feature'], { stdio: 'ignore' });
+  /*
+   * NO git HERE (ADR 0073). A confined worker holds no Git authority: its gitdir lives in
+   * the canonical .git directory, which the sandbox never grants. It leaves its change as
+   * FILES and ICOS — outside the sandbox, after revalidating success, ownership, the lease
+   * and the fencing token — materializes the commit through the hardened Git authority.
+   * (No backticks in here: this comment lives inside a template literal.)
+   */
   /*
    * The canonical result contract: a structured status FILE at the path ICOS gave us, plus
    * a non-empty stdout which becomes the recorded result. Stdout never decides success.
@@ -242,14 +246,43 @@ async function container(): Promise<Container> {
   return built;
 }
 
+/* The workspace registry is durable and shared: a leftover lease blocks the next run. */
+const TRUNCATE_ALL =
+  "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry RESTART IDENTITY CASCADE";
+
+/**
+ * TRUNCATE TAKES AN EXCLUSIVE LOCK, AND THIS DATABASE HAS A LIVE PEER.
+ *
+ * The completion endpoint and the Temporal worker live for the whole FILE, by design — a
+ * workflow id outlives the execution that used it and nothing here may clean Temporal. So a
+ * workflow of the case that just ended can still be reporting its result while the next case
+ * truncates, and Postgres resolves the lock cycle by killing one of them:
+ *
+ *   deadlock detected (40P01): AccessExclusiveLock (this TRUNCATE) vs RowShareLock (the
+ *   write the completion callback is performing)
+ *
+ * Measured on `A WRITER WITH NO DECLARED SCOPE`, which asserts nothing about locks and failed
+ * inside `seed`. Retried, not slept over: the TRUNCATE is setup, the server chose it as the
+ * deadlock victim, and the answer to losing a lock race is to take the lock again. The same
+ * correction as the d36 settlement file, for the same measured cause.
+ */
+async function truncateAll(c: Container): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await c.db!.execute(sql.raw(TRUNCATE_ALL));
+      return;
+    } catch (error) {
+      /* 40P01 deadlock, 55P03 lock not available: lock contention, nothing else. */
+      const code = (error as { cause?: { code?: string } }).cause?.code;
+      if ((code !== "40P01" && code !== "55P03") || attempt >= 10) throw error;
+      await new Promise((r) => setTimeout(r, 50 * attempt));
+    }
+  }
+}
+
 async function seed(c: Container) {
   const now = new Date();
-  await c.db!.execute(
-    sql.raw(
-      /* The workspace registry is durable and shared: a leftover lease blocks the next run. */
-      "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, quality_control_jobs, recovery_units, icos_workspace_registry RESTART IDENTITY CASCADE",
-    ),
-  );
+  await truncateAll(c);
   await c.db!.insert(missions).values({
     id: MISSION_ID,
     title: "CORE3",
@@ -512,8 +545,17 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     await seed(c);
     const before = git(repo, "rev-parse", "integration/phase-7");
 
-    /* ---- Execution completes, with NO review anywhere. ---- */
-    await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
+    /*
+     * ---- Execution COMPLETES, with no review anywhere. ----
+     *
+     * Completes, which `supervisor.run()` alone does not prove: it returns when the workflow
+     * has been STARTED, and the worker, the trusted capture (ADR 0073) and the recorded result
+     * all land after it. Gating on the next line therefore judged a branch whose commit did
+     * not exist yet, and the gate answered `diff vide : rien a integrer` — a true statement
+     * about a premature question. Settled on the durable execution result instead, exactly as
+     * every other case here that drives work to completion.
+     */
+    await runMissionAndSettle(composeAutonomyRuntime(c), c);
 
     const ws = (await c.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
     expect(ws, "no governed workspace was allocated").toBeDefined();
@@ -561,7 +603,8 @@ describe("CORE3_AUTONOMOUS_ORCHESTRATION — default path from the real containe
     await seed(first);
     const before = git(repo, "rev-parse", "integration/phase-7");
 
-    await composeAutonomyRuntime(first).supervisor.run(MISSION_ID);
+    /* Settled, for the reason given above: a restart can only preserve work that exists. */
+    await runMissionAndSettle(composeAutonomyRuntime(first), first);
     const parked = (await first.workspaceManager!.list()).find((w) => w.workflowId === WORKFLOW_ID);
     expect(parked?.status).toBe("ready_for_integration");
     expect(git(repo, "rev-parse", "integration/phase-7")).toBe(before);

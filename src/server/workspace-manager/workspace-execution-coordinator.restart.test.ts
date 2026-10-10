@@ -58,6 +58,8 @@ function createMockWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     updatedAt: new Date().toISOString(),
     releasedAt: null,
     sourceCommit: null,
+    /* Lie a l allocation, comme une vraie ligne du registre (ADR 0073). */
+    canonicalRepo: "/repo",
     ...overrides,
   };
 }

@@ -1,3 +1,6 @@
+import { finalizeSuccessfulWorkerExecution } from "@/server/usecases/finalize-successful-worker-execution";
+import { Git } from "@/server/workspace-manager/git";
+import { commitWorkerChanges } from "@/server/workspace-manager/git-authority";
 import { composeControlPlane, type ControlPlane } from "@/server/control/compose";
 import {
   createWorkforceRuntime,
@@ -922,6 +925,27 @@ export async function buildPostgresContainer(
             repoPath: externalExecution.repoPath,
             workspaceRoot: env.ICOS_WORKER_WORKSPACE_ROOT,
             leaseMs: env.ICOS_WORKER_EXECUTION_LEASE_MS,
+            /*
+             * THE ONE MATERIALIZATION (ADR 0073), shared with the completion route.
+             *
+             * This path runs the worker in-process, and it had none: a confined worker cannot
+             * commit, so its governed change stayed a loose tree and the gate refused it as
+             * uncommitted. The same `finalizeSuccessfulWorkerExecution` runs here — never a
+             * second copy of it — so both production paths capture, revalidate and record
+             * identically.
+             */
+            finalizeGovernedWork: workspaceManager
+              ? (work) =>
+                  finalizeSuccessfulWorkerExecution(
+                    {
+                      workspaces: workspaceManager,
+                      gitFor: (repoDir) => new Git(repoDir),
+                      materialize: commitWorkerChanges,
+                      tasks,
+                    },
+                    work,
+                  )
+              : undefined,
             /*
              * Prefer the GOVERNED workspace when one is registered for this workflow (M8,
              * defect 19). The manager already indexes workspaces by `workflowId`, so this

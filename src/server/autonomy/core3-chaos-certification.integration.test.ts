@@ -1,7 +1,7 @@
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,13 @@ import { ReviewerServiceImpl } from "@/server/review/reviewer-service";
 import type { ReviewerPort } from "@/server/review/ports";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
 import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/external-worker-task-execution-dispatcher";
+import { finalizeSuccessfulWorkerExecution } from "@/server/usecases/finalize-successful-worker-execution";
+import { WorkspaceManager } from "@/server/workspace-manager/manager";
+import { PostgresWorkspaceRegistry } from "@/server/workspace-manager/postgres-workspace-registry";
+import { PostgresGit } from "@/server/workspace-manager/postgres-git";
+import { PostgresTestDatabaseProvisioner } from "@/server/workspace-manager/test-database";
+import { Git } from "@/server/workspace-manager/git";
+import { commitWorkerChanges } from "@/server/workspace-manager/git-authority";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { identities, type TestIdentity } from "@/test/test-identity";
 import { CommandWorkerExecutor } from "@/server/workers/execution/command-worker-executor";
@@ -120,6 +127,8 @@ const CAPABILITY = "code-generation";
 const handles: DatabaseHandle[] = [];
 let root: string;
 let repo: string;
+/** The governed worktree root: outside the canonical repository, which stays untouchable. */
+let trees: string;
 
 const git = async (cwd: string, args: string[]) => {
   const result = await runNonInteractive({ command: "git", args, cwd, timeoutMs: 30_000 });
@@ -139,10 +148,10 @@ const CHAOS_WORKER = `
     setTimeout(() => {}, 60000);
   } else {
     const fs = require('fs');
-    const { execFileSync } = require('child_process');
-    fs.writeFileSync('proof.txt', 'done by attempt ' + process.env.ICOS_ATTEMPT + '\\n');
-    execFileSync('git', ['add', '.'], { stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'chaos attempt ' + process.env.ICOS_ATTEMPT], { stdio: 'ignore' });
+    /* INSIDE the declared scope: anything else is refused at capture, before any commit. */
+    fs.mkdirSync('src/chaos', { recursive: true });
+    fs.writeFileSync('src/chaos/proof.txt', 'done by attempt ' + process.env.ICOS_ATTEMPT + '\\n');
+    /* NO git: the worker holds no Git authority; ICOS materializes the commit (ADR 0073). */
     process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
       status: 'succeeded',
       summary: 'wrote proof.txt on attempt ' + process.env.ICOS_ATTEMPT,
@@ -150,6 +159,85 @@ const CHAOS_WORKER = `
     }) + process.env.ICOS_RESULT_SENTINEL_END);
   }
 `;
+
+/** The scope this writer declares, and the only paths its capture may contain. */
+const SCOPE = "src/chaos/**";
+
+/** The integration target every governed workspace branches from. */
+const TARGET = "integration/phase-7";
+
+/**
+ * A GOVERNED WORKSPACE, ALLOCATED BEFORE THE WRITER RUNS.
+ *
+ * In production the execution coordinator does this; here the harness does it explicitly, at
+ * the same moment and with the same inputs, so that every dispatch below is a governed one.
+ * The lease matters: the trusted finalizer refuses to capture a workspace whose lease is not
+ * live, which is what stops a takeover being committed under our identity.
+ */
+async function grantGovernedWorkspace(
+  w: { workspaces: WorkspaceManager; workspaceRegistry: PostgresWorkspaceRegistry },
+  workflowId: string,
+  workerId: string,
+): Promise<void> {
+  await w.workspaceRegistry.initialize();
+  const existing = (await w.workspaces.list()).find(
+    (ws) => ws.workflowId === workflowId && ws.releasedAt === null,
+  );
+  const ws =
+    existing ??
+    (await w.workspaces.request({
+      slug: `chaos-${slugSeq++}`,
+      workerId,
+      missionId: MISSION_ID,
+      taskId: TASK_ID,
+      workflowId,
+      fileScope: { owns: [SCOPE], shared: [], forbidden: [] },
+      integrationTarget: TARGET,
+    }));
+  /* The lease FIRST: `create` and `transition` are fenced mutations and refuse without it. */
+  let current = await holdLease(w.workspaces, ws.workspaceId);
+  if (current.status === "requested") {
+    /* requested -> creating -> ready: the dedicated database, then `git worktree add`. */
+    current = await w.workspaces.create(ws.workspaceId, RUNNER_OWNER, current.fencingToken);
+  }
+  if (current.status === "ready") {
+    await w.workspaces.transition(ws.workspaceId, "working", RUNNER_OWNER, current.fencingToken);
+  }
+}
+
+let slugSeq = 1;
+
+/** Ours and still valid -> renew; otherwise acquire. The coordinator's rule, not a new one. */
+async function holdLease(workspaces: WorkspaceManager, workspaceId: string) {
+  const ws = await workspaces.get(workspaceId);
+  const oursAndValid =
+    ws.leaseOwner === RUNNER_OWNER &&
+    ws.leaseExpiresAt !== null &&
+    Date.parse(ws.leaseExpiresAt) > Date.now();
+  return oursAndValid
+    ? workspaces.renewLease(workspaceId, RUNNER_OWNER, ws.fencingToken, 10 * 60_000)
+    : workspaces.acquireLease(workspaceId, RUNNER_OWNER, 10 * 60_000);
+}
+
+/**
+ * THE REAPER'S JOB ON AN ABANDONED ATTEMPT (M7): free the task's slot, keep the work.
+ *
+ * `cleanup` refuses a workspace with uncommitted changes and deletes the branch only when it
+ * is already merged into the integration target, so an abandoned attempt keeps its branch as
+ * evidence while the task becomes allocatable again.
+ */
+async function reapAbandonedWorkspace(
+  w: { workspaces: WorkspaceManager },
+  workflowId: string,
+): Promise<void> {
+  const ws = (await w.workspaces.list()).find(
+    (candidate) => candidate.workflowId === workflowId && candidate.releasedAt === null,
+  );
+  if (!ws) return;
+  const leased = await holdLease(w.workspaces, ws.workspaceId);
+  await w.workspaces.transition(ws.workspaceId, "abandoned", RUNNER_OWNER, leased.fencingToken);
+  await w.workspaces.cleanup(ws.workspaceId, RUNNER_OWNER, leased.fencingToken);
+}
 
 /** A restart: new connection, new services, zero shared memory. */
 function restart() {
@@ -200,6 +288,20 @@ function restart() {
     ),
   });
 
+  /*
+   * THE GOVERNED WORKSPACE AUTHORITY, composed as `container.ts` composes it: the durable
+   * registry, a Git port bound to the DECLARED canonical repository, and the manager that
+   * owns branch naming and leases.
+   */
+  const workspaceRegistry = new PostgresWorkspaceRegistry(DATABASE_URL);
+  const workspaces = new WorkspaceManager({
+    git: new PostgresGit(DATABASE_URL, repo),
+    registry: workspaceRegistry,
+    provisioner: new PostgresTestDatabaseProvisioner(DATABASE_URL),
+    masterRepo: repo,
+    worktreeRoot: trees,
+  });
+
   const dispatcher = new ExternalWorkerTaskExecutionDispatcher({
     /* Named, so the attempt this runner marks dispatched is one it can still lease. */
     owner: RUNNER_OWNER,
@@ -213,6 +315,40 @@ function restart() {
     durableMemory,
     repoPath: repo,
     workspaceRoot: root,
+    /*
+     * THE WORKTREE COMES FROM THE REGISTRY ROW, and so does the repository it belongs to.
+     * `canonical_repo` was bound by the allocator before any worker existed; a row without it
+     * throws rather than falling back to the ambient deployment, because a wrong repository is
+     * worse than a stopped capture.
+     */
+    workspaceFor: async (dispatch) => {
+      if (!dispatch.workflowId) return null;
+      const registered = (await workspaces.list()).find(
+        (ws) => ws.workflowId === dispatch.workflowId && ws.releasedAt === null,
+      );
+      if (!registered) return null;
+      if (!registered.canonicalRepo) throw new Error("CANONICAL_REPO_UNBOUND");
+      return {
+        path: registered.worktreePath,
+        mode: "writer",
+        branch: registered.branch,
+        baseCommit: registered.baseCommit,
+        repoPath: registered.canonicalRepo,
+        /* The WorkspaceManager owns this worktree's lifecycle, not the executor. */
+        dispose: async () => {},
+      };
+    },
+    /* THE ONE MATERIALIZATION (ADR 0073), the same function both production paths call. */
+    finalizeGovernedWork: (work) =>
+      finalizeSuccessfulWorkerExecution(
+        {
+          workspaces,
+          gitFor: (repoDir) => new Git(repoDir),
+          materialize: commitWorkerChanges,
+          tasks: taskRepo,
+        },
+        work,
+      ),
   });
 
   /* Real deterministic hard rules; only the LLM half is stubbed. */
@@ -232,6 +368,16 @@ function restart() {
     /* M7.1 — QC routes its retries through the one canonical router. */
     capabilityRouter: router,
     dispatchPrepared: async (prepared) => {
+      /* A WRITER NEVER RUNS UNGOVERNED, retries included. */
+      if (!prepared.workerId) {
+        /* Fail closed: a retry with no routed worker cannot be governed, so it must not run. */
+        throw new Error("RETRY_WITHOUT_ROUTED_WORKER");
+      }
+      await grantGovernedWorkspace(
+        { workspaces, workspaceRegistry },
+        prepared.workflowId,
+        prepared.workerId,
+      );
       const result = await dispatcher.dispatch({
         /* Mission work: a DAG task with review and settlement. */
         executionClass: "DURABLE_MISSION_TASK",
@@ -260,6 +406,8 @@ function restart() {
     qualityControl,
     router,
     registration: new WorkerRegistrationService(store),
+    workspaces,
+    workspaceRegistry,
   };
 }
 
@@ -278,10 +426,17 @@ async function seedWorld() {
   await seed.handle.db.insert(tasks).values({
     id: TASK_ID,
     title: "Write proof.txt",
-    description: "Write proof.txt and commit it",
+    description: "Write src/chaos/proof.txt",
     status: "running",
     assignedAgentId: null,
     requiredCapabilities: [CAPABILITY],
+    /*
+     * THE CANONICAL DECLARATION, and the only thing allocation is allowed to read. Without it
+     * `requiresGovernedWorkspace` is false, this writer would run ungoverned, and ADR 0073
+     * would correctly refuse to capture anything it produced.
+     */
+    riskClass: "reversible",
+    allowedFileScope: [SCOPE],
     createdAt: now,
     updatedAt: now,
   });
@@ -323,19 +478,25 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
   beforeEach(async () => {
     await seed.handle.db.execute(
       sql.raw(
-        "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, recovery_units, quality_control_jobs RESTART IDENTITY CASCADE",
+        /* `icos_workspace_registry` included: it is durable, and a leftover lease or scope claim blocks the next case. */
+        "TRUNCATE TABLE missions, tasks, workers, dispatch_attempts, task_execution_results, decisions, checkpoints, context_items, recovery_units, quality_control_jobs, icos_workspace_registry RESTART IDENTITY CASCADE",
       ),
     );
 
     if (root) await rm(root, { recursive: true, force: true });
     root = await mkdtemp(join(tmpdir(), "icos-chaos-"));
     repo = join(root, "canonical");
+    /* Governed worktrees live OUTSIDE the canonical repository, which stays untouchable. */
+    trees = join(root, "trees");
+    await mkdir(trees, { recursive: true });
     await git(root, ["init", "--initial-branch=main", "canonical"]);
     await git(repo, ["config", "user.email", "test@icos.local"]);
     await git(repo, ["config", "user.name", "ICOS Test"]);
     await writeFile(join(repo, "README.md"), "canonical\n", "utf8");
     await git(repo, ["add", "."]);
     await git(repo, ["commit", "-m", "base"]);
+    /* The integration target a governed workspace branches from. Nothing here advances it. */
+    await git(repo, ["branch", TARGET]);
 
     await seedWorld();
   });
@@ -361,6 +522,9 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       capability: CAPABILITY,
     });
     await boot.ledger.markDispatched(attempt1.attempt.id, { owner: RUNNER_OWNER, leaseMs: 60_000 });
+
+    /* A WRITER NEVER RUNS UNGOVERNED: its workspace, branch and scope exist first. */
+    await grantGovernedWorkspace(boot, workflowIdForAttempt(TASK_ID, 1), firstWorker);
 
     /* ---- 2. THE FAULT: the worker hangs and is really killed. ---- */
     await boot.dispatcher.dispatch({
@@ -394,6 +558,13 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
       health: "unhealthy",
       availability: "unavailable",
     });
+
+    /*
+     * The killed attempt's workspace is reaped, as the abandoned-execution reaper does: the
+     * task becomes allocatable again and the dead branch is kept. Without this the retry
+     * cannot be governed at all — one live workspace per task is the registry's invariant.
+     */
+    await reapAbandonedWorkspace(afterFault, workflowIdForAttempt(TASK_ID, 1));
 
     /* ---- 4. RECOVERY drives the retry — the production path, not the test. ---- */
     /*
@@ -494,24 +665,37 @@ describe("CORE3 CHAOS CERTIFICATION", () => {
     /*
      * THE WORK IS REAL, AND IT LANDED EXACTLY ONCE.
      *
-     * TWO branches exist — one per attempt — because a writer gets its own branch and
-     * `dispose()` keeps it deliberately: the branch IS the evidence, including for the
-     * attempt that died. Only ONE of them carries the work. (That both survive is
-     * defect 19: nothing integrates or reaps worker branches yet.)
+     * ONE governed branch remains. The killed attempt's branch was reaped BECAUSE IT CARRIED
+     * NOTHING: the worker hung before writing, so the branch never left the integration
+     * target, and `cleanup` deletes a branch only when the target already contains it.
+     * Deleting an empty reference loses no work; preserving one that holds work is proven
+     * against the manager, where the rule lives.
      */
-    const branches = (await git(repo, ["branch", "--list", "icos/worker/*"]))
+    const branches = (await git(repo, ["branch", "--list", "ws/chaos-*"]))
       .split("\n")
-      .map((b) => b.trim())
+      /* `+` marks a branch checked out in another worktree: the governed one, still attached. */
+      .map((b) => b.replace(/^[*+]/, "").trim())
       .filter(Boolean);
-    expect(branches).toHaveLength(2);
+    expect(branches).toEqual([`ws/chaos-${slugSeq - 1}`]);
 
-    const withWork: string[] = [];
-    for (const branch of branches) {
-      const files = await git(repo, ["show", "--name-only", "--format=", branch]);
-      if (files.trim() === "proof.txt") withWork.push(branch);
-    }
-    /* The killed attempt committed nothing; the retry committed once. */
-    expect(withWork).toHaveLength(1);
+    const files = await git(repo, ["show", "--name-only", "--format=", branches[0]!]);
+    expect(files.trim()).toBe("src/chaos/proof.txt");
+
+    /*
+     * AND THE COMMIT IS ICOS'S, NOT THE WORKER'S. The worker runs no git at all — its gitdir
+     * is read-only in the sandbox — so a commit on that branch can only have come from the
+     * trusted finalizer. The registry row carries its identity, which is what the gate reads,
+     * and the repository it was made in is the one the row declared.
+     */
+    const workspaces = await verify.workspaces.list();
+    const retry = workspaces.find((ws) => ws.workflowId === workflowIdForAttempt(TASK_ID, 2));
+    expect(retry!.sourceCommit).toBe((await git(repo, ["rev-parse", branches[0]!])).trim());
+    expect(retry!.canonicalRepo).toBe(repo);
+
+    /* THE DEAD ATTEMPT CAPTURED NOTHING: released, with no commit ever recorded for it. */
+    const killed = workspaces.find((ws) => ws.workflowId === workflowIdForAttempt(TASK_ID, 1));
+    expect(killed!.releasedAt).not.toBeNull();
+    expect(killed!.sourceCommit).toBeNull();
 
     /* AND THE CANONICAL CHECKOUT NEVER MOVED. */
     expect(await git(repo, ["rev-parse", "HEAD"])).toBe(canonicalHead);

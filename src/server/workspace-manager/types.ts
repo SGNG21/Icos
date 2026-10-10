@@ -78,6 +78,16 @@ export interface Workspace {
   releasedAt: string | null;
   /** Dernier commit soumis à l'Integration Gate. */
   sourceCommit: string | null;
+  /**
+   * LE DÉPÔT CANONIQUE AUQUEL CE WORKSPACE APPARTIENT, lié à l'allocation.
+   *
+   * Décidé par l'allocateur de confiance avant qu'aucun worker n'existe, et porté par
+   * l'enregistrement : la matérialisation s'en sert au lieu de consulter un état de processus
+   * (`ICOS_REPO_PATH`, un conteneur singleton) qui peut avoir changé entre la fin de
+   * l'exécution et la capture. `null` = enregistrement antérieur à cette liaison, qui est
+   * REFUSÉ à la capture plutôt que deviné.
+   */
+  canonicalRepo: string | null;
 }
 
 export type IntegrationDecision = "ACCEPT" | "REJECT" | "NEEDS_REBASE" | "NEEDS_HUMAN_APPROVAL";

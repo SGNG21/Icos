@@ -32,6 +32,7 @@ interface RegistryRow {
   lease_expires_at: string | null;
   fencing_token: number;
   workflow_id: string | null;
+  canonical_repo: string | null;
   updated_at: string;
 }
 
@@ -77,7 +78,11 @@ export class PostgresWorkspaceRegistry {
     await this.sql`
       ALTER TABLE icos_workspace_registry
         ADD COLUMN IF NOT EXISTS fencing_token INTEGER NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS workflow_id TEXT
+        ADD COLUMN IF NOT EXISTS workflow_id TEXT,
+        -- Le depot canonique lie a l allocation. Additif et idempotent, comme workflow_id :
+        -- les lignes anterieures restent NULL, et la capture les REFUSE plutot que de
+        -- retomber sur un etat ambiant. (SQL dans un template literal : pas de backtick.)
+        ADD COLUMN IF NOT EXISTS canonical_repo TEXT
     `;
     await this.sql`
       CREATE UNIQUE INDEX IF NOT EXISTS uq_icos_workspace_registry_active_workflow
@@ -132,7 +137,7 @@ export class PostgresWorkspaceRegistry {
             file_scope_owns, file_scope_shared, file_scope_forbidden,
             migration_from, migration_to, migration_namespace,
             status, created_at, released_at, source_commit,
-            lease_owner, lease_expires_at, fencing_token, workflow_id, updated_at
+            lease_owner, lease_expires_at, fencing_token, workflow_id, canonical_repo, updated_at
           ) VALUES (
             ${ws.workspaceId}, ${ws.workerId}, ${ws.missionId ?? null}, ${ws.taskId ?? null},
             ${ws.slug}, ${ws.branch}, ${ws.worktreePath}, ${ws.baseCommit},
@@ -140,7 +145,7 @@ export class PostgresWorkspaceRegistry {
             ${ws.fileScope.forbidden},
             ${ws.migrationReservation?.from ?? null}, ${ws.migrationReservation?.to ?? null}, ${ws.migrationReservation?.namespace ?? null},
             ${ws.status}, ${ws.createdAt}, ${ws.releasedAt ?? null}, ${ws.sourceCommit ?? null},
-            ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.fencingToken ?? 0}, ${ws.workflowId ?? null}, ${ws.updatedAt}
+            ${ws.leaseOwner ?? null}, ${ws.leaseExpiresAt ?? null}, ${ws.fencingToken ?? 0}, ${ws.workflowId ?? null}, ${ws.canonicalRepo ?? null}, ${ws.updatedAt}
           )
           ON CONFLICT (workspace_id) DO UPDATE SET
             worker_id = EXCLUDED.worker_id,
@@ -165,6 +170,7 @@ export class PostgresWorkspaceRegistry {
             lease_expires_at = EXCLUDED.lease_expires_at,
             fencing_token = EXCLUDED.fencing_token,
             workflow_id = EXCLUDED.workflow_id,
+            canonical_repo = EXCLUDED.canonical_repo,
             updated_at = EXCLUDED.updated_at
         `;
       }
@@ -203,6 +209,7 @@ export class PostgresWorkspaceRegistry {
       leaseExpiresAt: row.lease_expires_at ?? null,
       fencingToken: row.fencing_token ?? 0,
       workflowId: row.workflow_id ?? null,
+      canonicalRepo: row.canonical_repo ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       releasedAt: row.released_at ?? null,

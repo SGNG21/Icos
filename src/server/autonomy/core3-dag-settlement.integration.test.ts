@@ -98,13 +98,12 @@ beforeEach(() => {
   WF_B = ids.workflow(TASK_B, 1);
 });
 
-/** `normal` writes inside the declared scope; `rogue` makes A write OUTSIDE it (gate REJECT). */
+/** `normal` writes inside the declared scope; `rogue` makes A write OUTSIDE it (capture REFUSES). */
 type WorkerMode = "normal" | "rogue" | "fail-once";
 let workerMode: WorkerMode = "normal";
 
 const workerScript = (mode: WorkerMode) => `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   const id = process.env.ICOS_TASK_ID;
   if ('${mode}' === 'fail-once' && id === '${TASK_A}' && !process.env.ICOS_WORKFLOW_ID.includes('-attempt-')) {
     /*
@@ -122,8 +121,10 @@ const workerScript = (mode: WorkerMode) => `
   const dir = ('${mode}' === 'rogue' && id === '${TASK_A}' ? 'outside/' : 'src/') + id;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(dir + '/feature.txt', 'built by ' + id + ' ' + process.env.ICOS_WORKFLOW_ID + '\\n');
-  execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-  execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','d36 ' + id], { stdio: 'ignore' });
+  /*
+   * No \`git commit\`: a confined worker holds no Git authority — its gitdir is read-only
+   * in the sandbox — and ICOS records the tree it leaves (ADR 0073).
+   */
   process.stdout.write('wrote ' + dir + '/feature.txt');
   /*
    * The production worker result contract: a structured status the activity reads, at
@@ -982,19 +983,60 @@ describe("DEFECT 36 — B stays blocked unless A settles successfully", () => {
     await expectBBlocked(c);
   }, 240_000);
 
-  it("A APPROVED but the gate REJECTS its integration: A fails, B is never admitted", async () => {
+  it("A ROGUE WRITER IS REFUSED AT CAPTURE: A fails, nothing is ever committed, B is never admitted", async () => {
     makeRepo();
     workerMode = "rogue";
     await seed(await container());
     const base = targetHead();
+    /* APPROVE, deliberately: a reviewer that would say yes must not be able to make this pass. */
     reviewerMode = "approve";
     const c = (await boot()).container;
     const gateSpy = vi.spyOn(c.integrationGate!, "integrate");
     await composeAutonomyRuntime(c).supervisor.run(MISSION_ID);
 
     await until("A settled as failed", async () => (await status(c, MT_A)) === "failed");
-    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["APPROVE"]);
-    expect((await gateSpy.mock.results[0]!.value).decision).toBe("REJECT");
+
+    /*
+     * WHERE THE VIOLATION IS CAUGHT MOVED, AND IT MOVED EARLIER (ADR 0073).
+     *
+     * This case used to prove: the worker commits out-of-scope work, the reviewer approves the
+     * report, and the INTEGRATION GATE is the authority that refuses it. The worker now holds
+     * no Git authority, so the trusted finalizer is what sees the out-of-scope path — before
+     * anything is staged — and refuses to capture it at all. Everything downstream follows from
+     * a refusal rather than from a rejected commit, so the four assertions below are the same
+     * invariant stated at its new location.
+     */
+    const [execution] = await rows<{
+      outcome: string;
+      error_code: string | null;
+      error_message: string | null;
+    }>(
+      c,
+      `select outcome, error_code, error_message from task_execution_results
+       where task_id = '${TASK_A}' order by recorded_at desc limit 1`,
+    );
+    /* 1. THE REFUSAL IS DURABLE AND NAMES ITS CAUSE. A refusal nobody records is a hang. */
+    expect(execution!.outcome).toBe("failure");
+    expect(execution!.error_code).toBe("INVALID_RESULT");
+    expect(execution!.error_message).toContain("GOVERNED_WORK_NOT_MATERIALIZED");
+    expect(execution!.error_message).toContain("OUT_OF_SCOPE");
+
+    /*
+     * 2. THE REVIEW JUDGES A FAILED EXECUTION, so it BLOCKS — with `reviewerMode = approve`
+     * still set. The reviewer never gets to approve work that was never materialized, which is
+     * exactly the ordering ADR 0073 buys: capture, then record, then review, then gate.
+     */
+    expect((await reviews(c, TASK_A)).map((r) => r.decision)).toEqual(["BLOCK"]);
+
+    /* 3. THE GATE WAS NEVER ASKED. Stricter than the gate having rejected: there is no commit. */
+    expect(gateSpy).not.toHaveBeenCalled();
+
+    /* 4. AND THE OUT-OF-SCOPE PATH EXISTS IN NO COMMIT ANYWHERE — branch included. */
+    const wsA = (await workspaceOf(c, WF_A))!;
+    expect(wsA.sourceCommit).toBeNull();
+    expect(git(repo, "ls-tree", "-r", "--name-only", wsA.branch!)).not.toContain("outside/");
+    expect(git(repo, "ls-tree", "-r", "--name-only", TARGET)).not.toContain("outside/");
+
     await ticks(8);
     expect(targetHead()).toBe(base);
     await expectBBlocked(c);
