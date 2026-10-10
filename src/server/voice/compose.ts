@@ -91,6 +91,8 @@ export async function composeVoiceHost() {
       stt: providers.status.stt,
       tts: providers.status.tts,
       language: providers.status.language,
+      /* Which voice is actually live: "language" means the no-voice-concept fallback. */
+      voice: providers.status.voice,
       cognitive: "COGNITIVE_RUNTIME" as const,
       cognition: cognitionConfigured ? ("CONFIGURED" as const) : ("NOT_CONFIGURED" as const),
     },

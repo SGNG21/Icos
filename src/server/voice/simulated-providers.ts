@@ -56,6 +56,8 @@ export class SimulatedTts implements TtsProvider {
   readonly id = "simulated-tts";
   readonly simulated = true;
   failOnText = false;
+  /** Sentences to lose non-fatally (the stream survives); decremented per `text()`. */
+  loseSentences = 0;
   readonly streams: SimulatedTtsStream[] = [];
 
   start(_options: unknown, onEvent: (event: TtsEvent) => void) {
@@ -69,6 +71,10 @@ export class SimulatedTts implements TtsProvider {
     return {
       text: (chunk: string) => {
         if (this.failOnText) return onEvent({ type: "error", message: "simulated TTS outage" });
+        if (this.loseSentences > 0) {
+          this.loseSentences -= 1;
+          return onEvent({ type: "error", message: "simulated lost sentence", fatal: false });
+        }
         stream.pending.push(chunk);
       },
       finish: () => {

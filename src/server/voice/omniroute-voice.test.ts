@@ -10,6 +10,7 @@ import {
   speakable,
   takeSentences,
   ttsVoice,
+  ttsVoiceId,
   wav,
 } from "./omniroute-voice";
 
@@ -172,16 +173,59 @@ describe("OmniRouteTts", () => {
     expect(t.f.calls).toHaveLength(1);
   });
 
-  it("an HTTP error or a non-audio 200 is one error and no done", async () => {
+  it("an HTTP error or a non-audio 200 loses that sentence and moves to the next", async () => {
     for (const response of [json({}, 502), json({ ok: true })]) {
       const t = start();
       t.stream.text("Un. Deux.");
       t.stream.finish();
       t.f.calls[0].resolve(response);
       await flush();
-      expect(t.events).toEqual([{ type: "error", message: expect.any(String), timeout: false }]);
-      expect(t.f.calls).toHaveLength(1);
+      /*
+       * One error for the lost sentence, `fatal: false`, and NO done yet — the queue
+       * moved on to "Deux." instead of being abandoned. This used to assert a single
+       * request, because the first failure aborted the whole stream; that is what made
+       * one rate-limited sentence silence every sentence after it. The SESSION decides
+       * whether the result was a degraded answer or a mute voice (voice-session.ts).
+       */
+      expect(t.events).toEqual([
+        { type: "error", message: expect.any(String), timeout: false, fatal: false },
+      ]);
+      expect(t.f.calls).toHaveLength(2);
+      expect(t.input(1)).toBe("Deux.");
     }
+  });
+
+  it("one lost sentence does not cancel the sentences after it", async () => {
+    const t = start();
+    t.stream.text("Une. Deux. Trois.");
+    t.stream.finish();
+    // Sentence 1 fails (the gateway rate-limits); 2 and 3 must still be synthesized.
+    t.f.calls[0].resolve(json({ error: "rate limited" }, 429));
+    await flush();
+    expect(t.events).toEqual([
+      { type: "error", message: expect.stringContaining("429"), timeout: false, fatal: false },
+    ]);
+    expect(t.input(1)).toBe("Deux.");
+    t.f.calls[1].resolve(mp3("b"));
+    await flush();
+    expect(t.input(2)).toBe("Trois.");
+    t.f.calls[2].resolve(mp3("c"));
+    await flush();
+    // The answer completed: two sentences of audio, one non-fatal loss, one done.
+    expect(t.events.map((e) => e.type)).toEqual(["error", "audio", "audio", "done"]);
+    expect(t.events.filter((e) => e.type === "error")).toHaveLength(1);
+  });
+
+  it("an explicit cancel still stops everything, unlike a lost sentence", async () => {
+    const t = start();
+    t.stream.text("Une. Deux.");
+    t.stream.finish();
+    t.f.calls[0].resolve(json({ error: "nope" }, 500));
+    await flush();
+    t.stream.cancel();
+    await flush();
+    expect(t.events.map((e) => e.type)).toEqual(["error"]);
+    expect(t.f.calls).toHaveLength(2); // the second was in flight when cancelled
   });
 
   it("strips markdown before speaking", async () => {
@@ -252,6 +296,73 @@ describe("TTS language is sent, never guessed from the text", () => {
   });
 });
 
+describe("a premium voice is a VOICE, not a language code", () => {
+  const sent = (voiceId: string | null, options: { language?: string } = {}) => {
+    const f = fakeFetch();
+    new OmniRouteTts(config(f.fetch), "fishaudio/s1", DEFAULT_VOICE_LANGUAGE, voiceId)
+      .start(options, () => {})
+      .text("Bonsoir Geoffrey. ");
+    return JSON.parse(String(f.calls[0].body)) as { voice?: string; model: string };
+  };
+
+  it("sends a configured voice id VERBATIM, never narrowed to two letters", () => {
+    // Fish Audio reference_id: the gateway maps `voice` -> reference_id.
+    expect(sent("7f3a2b91c4de4f0a8b6d5e2c1a9f8e7d").voice).toBe("7f3a2b91c4de4f0a8b6d5e2c1a9f8e7d");
+    // ElevenLabs voice id: the gateway puts `voice` in the URL path.
+    expect(sent("21m00Tcm4TlvDq8ikWAM").voice).toBe("21m00Tcm4TlvDq8ikWAM");
+    // EdgeTTS neural voice name, and an OpenAI voice name.
+    expect(sent("fr-FR-RemyMultilingualNeural").voice).toBe("fr-FR-RemyMultilingualNeural");
+    expect(sent("onyx").voice).toBe("onyx");
+  });
+
+  it("the configured voice wins over the session language, which must not truncate it", () => {
+    // Before this, `voice` could only be /^[a-z]{2}$/ — so "fr-FR-HenriNeural" left
+    // ICOS as "fr" and every premium backend was unreachable by construction.
+    expect(sent("fr-FR-HenriNeural", { language: "fr-FR" }).voice).toBe("fr-FR-HenriNeural");
+    expect(sent("onyx", { language: "en-GB" }).voice).toBe("onyx");
+  });
+
+  it("without a configured voice the language-code fallback is unchanged", () => {
+    expect(sent(null, { language: "fr-FR" }).voice).toBe("fr");
+    expect(sent(null).voice).toBe(DEFAULT_VOICE_LANGUAGE);
+  });
+
+  it("ttsVoiceId drops anything that is not a plausible voice id, rather than sending it", () => {
+    for (const ok of [
+      "onyx",
+      "fr-FR-RemyMultilingualNeural",
+      "a.b_c:d-1",
+      "21m00Tcm4TlvDq8ikWAM",
+    ]) {
+      expect(ttsVoiceId(ok)).toBe(ok);
+    }
+    expect(ttsVoiceId("  onyx  ")).toBe("onyx");
+    for (const bad of [undefined, "", "   ", "a/b", "../etc/passwd", "a b", "x".repeat(129)]) {
+      expect(ttsVoiceId(bad)).toBeNull();
+    }
+  });
+
+  it("ICOS_VOICE_TTS_VOICE reaches the provider and is reported in the status", () => {
+    const gateway = { OMNIROUTE_BASE_URL: "http://gw", OMNIROUTE_API_KEY: "k" };
+    const configured = omniRouteVoiceFromEnv({
+      ...gateway,
+      ICOS_VOICE_TTS_MODEL: "fishaudio/s1",
+      ICOS_VOICE_TTS_VOICE: "7f3a2b91c4de4f0a8b6d5e2c1a9f8e7d",
+    });
+    expect(configured.status).toMatchObject({
+      tts: "CONFIGURED",
+      voice: "7f3a2b91c4de4f0a8b6d5e2c1a9f8e7d",
+    });
+    // The id is part of the provider identity, so metrics/logs name the live voice.
+    expect(configured.tts?.id).toBe("omniroute:fishaudio/s1:7f3a2b91c4de4f0a8b6d5e2c1a9f8e7d");
+    // A rejected value must not silently become the voice.
+    expect(
+      omniRouteVoiceFromEnv({ ...gateway, ICOS_VOICE_TTS_MODEL: "t", ICOS_VOICE_TTS_VOICE: "a/b" })
+        .status.voice,
+    ).toBe("language");
+  });
+});
+
 describe("helpers and configuration", () => {
   it("splits sentences and keeps the incomplete tail", () => {
     expect(takeSentences("Oui. Non ! Peut-être… ou pas")).toEqual({
@@ -286,6 +397,7 @@ describe("helpers and configuration", () => {
       stt: "NOT_CONFIGURED",
       tts: "NOT_CONFIGURED",
       language: "fr",
+      voice: "language",
     });
     expect(
       omniRouteVoiceFromEnv({ ICOS_VOICE_STT_MODEL: "m", ICOS_VOICE_TTS_MODEL: "t" }).status,
@@ -293,12 +405,14 @@ describe("helpers and configuration", () => {
       stt: "NOT_CONFIGURED",
       tts: "NOT_CONFIGURED",
       language: "fr",
+      voice: "language",
     });
     const configured = omniRouteVoiceFromEnv({ ...gateway, ICOS_VOICE_STT_MODEL: "m" });
     expect(configured.status).toEqual({
       stt: "CONFIGURED",
       tts: "NOT_CONFIGURED",
       language: "fr",
+      voice: "language",
     });
     expect(configured.stt?.simulated).toBe(false);
   });
