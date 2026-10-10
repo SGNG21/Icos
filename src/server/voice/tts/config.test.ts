@@ -121,6 +121,59 @@ describe("TTS configuration", () => {
     ]);
   });
 
+  it("fishaudio/<model> + ICOS_VOICE_TTS_VOICE: the voice id reaches Fish directly, once", async () => {
+    const f = scriptedFetch();
+    const env = {
+      FISH_AUDIO_API_KEY: "FISH-SECRET",
+      ICOS_VOICE_TTS_MODEL: "fishaudio/s1",
+      ICOS_VOICE_TTS_VOICE: "3bce5f0710f949888abe982ded1ef731",
+    };
+    const { tts, status } = ttsRouterFromEnv(env, {
+      gateway: gateway(f.fetch),
+      defaultLanguage: "fr",
+      fetch: f.fetch,
+    });
+    expect(tts?.id).toBe("router:fish");
+    expect(status.providers.at(-1)).toEqual({
+      provider: "gtts",
+      configured: false,
+      reason: "ICOS_VOICE_TTS_MODEL served directly by fish",
+    });
+    expect(tts?.health()[0]).toMatchObject({
+      provider: "fish",
+      model: "s1",
+      voice: "3bce5f0710f949888abe982ded1ef731",
+    });
+
+    const events: TtsEvent[] = [];
+    const stream = tts!.start({ language: "fr-FR" }, (e) => events.push(e));
+    stream.text("Bonjour Geoffrey, comment allez-vous ?");
+    stream.finish();
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0].url).toBe("https://api.fish.audio/v1/tts");
+    expect(f.calls[0].headers.get("model")).toBe("s1");
+    expect(f.calls[0].json).toMatchObject({ reference_id: "3bce5f0710f949888abe982ded1ef731" });
+    const body = f.calls[0].stream();
+    body.push("mp3");
+    body.end();
+    await flush();
+    expect(events.map((e) => e.type)).toEqual(["audio", "done"]);
+    expect(JSON.stringify(status) + JSON.stringify(tts?.health())).not.toContain("FISH-SECRET");
+
+    // Without the key, the same variables stay the OmniRoute path they always were.
+    const { tts: gatewayOnly } = ttsRouterFromEnv(
+      { ...env, FISH_AUDIO_API_KEY: undefined },
+      { gateway: gateway(), defaultLanguage: "fr" },
+    );
+    expect(gatewayOnly?.id).toBe("router:gtts");
+    // Explicit ICOS_FISH_TTS_* win over the shorthand.
+    const { tts: explicit } = ttsRouterFromEnv(
+      { ...env, ICOS_FISH_TTS_VOICE: "ref-123", ICOS_FISH_TTS_MODEL: "speech-1.6" },
+      { gateway: null, defaultLanguage: "fr" },
+    );
+    expect(explicit?.health()[0]).toMatchObject({ model: "speech-1.6", voice: "ref-123" });
+  });
+
   it("status and health never contain a secret", () => {
     const { tts, status } = ttsRouterFromEnv(
       { ...premium, ICOS_VOICE_TTS_MODEL: "gtts/fr" },

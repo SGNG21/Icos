@@ -16,7 +16,13 @@ import { TtsRouter } from "./tts-router";
  *   ICOS_TTS_PROVIDER_ORDER   fish,elevenlabs,edge,gtts (default)
  *   ICOS_VOICE_TTS_PROVIDER   primary — moved to the head of the order
  *   ICOS_TTS_FALLBACK_ENABLED true (default) | false: primary only
+ *
+ * ICOS_VOICE_TTS_MODEL=fishaudio/<model> + ICOS_VOICE_TTS_VOICE=<reference_id> also
+ * configures the direct Fish adapter (with FISH_AUDIO_API_KEY): the same voice, without
+ * the gateway hop. The ICOS_FISH_TTS_* variables win when both are set.
  */
+
+const FISH_VOICE_MODEL = /^fishaudio\/([\w.-]+)$/i;
 
 export const DEFAULT_TTS_ORDER: readonly TtsProviderName[] = ["fish", "elevenlabs", "edge", "gtts"];
 
@@ -81,6 +87,10 @@ export function ttsRouterFromEnv(
   },
 ): { tts: TtsRouter | null; status: TtsConfigStatus } {
   const { order, errors } = ttsOrder(env);
+  const fishShorthand = env.ICOS_VOICE_TTS_MODEL?.trim().match(FISH_VOICE_MODEL);
+  const fishVoice =
+    env.ICOS_FISH_TTS_VOICE?.trim() || (fishShorthand && env.ICOS_VOICE_TTS_VOICE?.trim());
+  const fishDirect = !!env.FISH_AUDIO_API_KEY && !!fishVoice && order.includes("fish");
   const providers: TtsProviderStatus[] = [];
   const synths: SpeechSynthesizer[] = [];
 
@@ -88,15 +98,15 @@ export function ttsRouterFromEnv(
     switch (name) {
       case "fish": {
         if (!env.FISH_AUDIO_API_KEY) return "FISH_AUDIO_API_KEY unset";
-        if (!env.ICOS_FISH_TTS_VOICE?.trim()) return "ICOS_FISH_TTS_VOICE unset";
+        if (!fishVoice) return "ICOS_FISH_TTS_VOICE unset";
         const format = (env.ICOS_FISH_TTS_FORMAT?.trim() || "mp3") as FishFormat;
         if (!(format in FISH_FORMATS)) return "ICOS_FISH_TTS_FORMAT must be mp3 or wav";
         const latency = env.ICOS_FISH_TTS_LATENCY?.trim() === "normal" ? "normal" : "balanced";
         const speed = num(env.ICOS_FISH_TTS_SPEED, 0.5, 2);
         return new FishAudioSynthesizer({
           apiKey: env.FISH_AUDIO_API_KEY,
-          model: env.ICOS_FISH_TTS_MODEL?.trim() || "s1",
-          voice: env.ICOS_FISH_TTS_VOICE.trim(),
+          model: env.ICOS_FISH_TTS_MODEL?.trim() || fishShorthand?.[1] || "s1",
+          voice: fishVoice,
           format,
           latency,
           ...(speed ? { speed } : {}),
@@ -143,6 +153,8 @@ export function ttsRouterFromEnv(
       case "gtts": {
         if (!deps.gateway) return "OMNIROUTE_BASE_URL/OMNIROUTE_API_KEY unset";
         if (!env.ICOS_VOICE_TTS_MODEL?.trim()) return "ICOS_VOICE_TTS_MODEL unset";
+        // Same vendor and voice as fish: a second hop to it is no fallback, only latency.
+        if (fishShorthand && fishDirect) return "ICOS_VOICE_TTS_MODEL served directly by fish";
         return new OmniRouteSpeech(
           deps.gateway,
           env.ICOS_VOICE_TTS_MODEL.trim(),
