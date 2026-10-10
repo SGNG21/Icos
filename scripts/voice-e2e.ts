@@ -13,12 +13,15 @@
  * Prints timings and verdicts only — never credentials, cookies or audio.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 import { WebSocket } from "ws";
 
 import type { ServerMessage } from "@/core/voice/contracts";
 
-const [base, ...wavs] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const authOnlyMode = argv.includes("--auth-only");
+const [base, ...wavs] = argv.filter((a) => a !== "--auth-only");
 const outDir = process.env.VOICE_E2E_OUT;
 const origin = new URL(base).origin;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -33,19 +36,103 @@ function pcm(path: string): Buffer {
   return wav.subarray(data + 8);
 }
 
+/**
+ * Reads the password from the TERMINAL, with no echo and no shell in the path.
+ *
+ * `ICOS_OWNER_PASSWORD` still wins when set, for CI. But a password typed into a shell
+ * variable first is a password that may already have been altered: `read -rs` strips
+ * leading and trailing IFS whitespace, which is invisible and produces exactly the 401
+ * this harness reported. Raw mode here means the bytes go from the TTY into the request.
+ */
+async function readPasswordFromTty(): Promise<string> {
+  if (process.env.ICOS_OWNER_PASSWORD) return process.env.ICOS_OWNER_PASSWORD;
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "no ICOS_OWNER_PASSWORD and stdin is not a terminal: run this from an interactive shell",
+    );
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  process.stdout.write("Mot de passe owner (aucun echo) : ");
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+  stdin.setRawMode(true);
+  let value = "";
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        for (const ch of chunk.toString("utf8")) {
+          if (ch === "\r" || ch === "\n") {
+            stdin.off("data", onData);
+            return resolve();
+          }
+          if (ch === "\u0003") {
+            stdin.off("data", onData);
+            return reject(new Error("annulé"));
+          }
+          if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
+          else if (ch >= " ") value += ch;
+        }
+      };
+      stdin.on("data", onData);
+    });
+  } finally {
+    stdin.setRawMode(wasRaw);
+    rl.close();
+    process.stdout.write("\n");
+  }
+  return value;
+}
+
+/** Why a sign-in failed, because "HTTP 401" alone sent us looking in the wrong places. */
+function signInDiagnosis(status: number): string {
+  if (status === 400) return "the password field never reached the request";
+  if (status === 401) return "the credential was rejected (email exists, value does not match)";
+  if (status === 403) return `the same-origin check refused Origin ${origin}`;
+  return "unexpected status";
+}
+
 async function signIn(): Promise<string> {
+  const email = process.env.ICOS_OWNER_EMAIL;
+  if (!email) throw new Error("ICOS_OWNER_EMAIL is not set");
+  const password = await readPasswordFromTty();
+  if (!password) throw new Error("empty password: nothing was typed");
+
   const response = await fetch(`${base}/api/auth/sign-in/email`, {
     method: "POST",
     headers: { "content-type": "application/json", origin },
-    body: JSON.stringify({
-      email: process.env.ICOS_OWNER_EMAIL,
-      password: process.env.ICOS_OWNER_PASSWORD,
-    }),
+    body: JSON.stringify({ email, password }),
   });
   const cookies = response.headers.getSetCookie().map((c) => c.split(";")[0]);
-  if (!response.ok || cookies.length === 0)
-    throw new Error(`sign-in failed: HTTP ${response.status}`);
+  if (!response.ok || cookies.length === 0) {
+    throw new Error(
+      `sign-in failed: HTTP ${response.status} — ${signInDiagnosis(response.status)}`,
+    );
+  }
   return cookies.join("; ");
+}
+
+/**
+ * AUTH ONLY: prove the credential and the session, and stop. No WebSocket, no audio, no
+ * model call — so a wrong password costs one prompt instead of a full voice run.
+ */
+async function authOnly(): Promise<void> {
+  const cookie = await signIn();
+  /* Names only: a cookie value is a bearer credential. */
+  const names = cookie.split("; ").map((c) => c.split("=")[0]);
+  console.log(`SET_COOKIE_RECEIVED=YES names=${names.join(",")}`);
+
+  /* A route that refuses anonymously (401 measured), so a 200 here IS the session. */
+  const api = await fetch(`${base}/api/cognitive/conversations`, {
+    headers: { cookie, origin },
+  });
+  console.log(`AUTHENTICATED_ROUTE=/api/cognitive/conversations HTTP=${api.status}`);
+
+  const page = await fetch(`${base}/cockpit`, { headers: { cookie, origin }, redirect: "manual" });
+  console.log(`COCKPIT=HTTP=${page.status}${page.status === 307 ? " (redirected — NOT authenticated)" : ""}`);
+
+  const ok = api.status === 200 && page.status === 200;
+  console.log(`AUTH_ONLY_E2E=${ok ? "PASS" : "FAIL"}`);
+  if (!ok) process.exitCode = 1;
 }
 
 type Client = {
@@ -110,6 +197,12 @@ const of = (c: Client, type: string, turnId?: string) =>
   );
 
 async function main() {
+  /*
+   * AUTH FIRST, and on its own when asked. The fixtures are parsed AFTER this branch so
+   * `--auth-only` needs no WAV at all, and a credential can be confirmed in one prompt.
+   */
+  if (authOnlyMode) return authOnly();
+
   const report: Record<string, unknown> = {};
   const [q1, q2, q3] = wavs.map(pcm);
 
