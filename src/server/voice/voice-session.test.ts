@@ -67,7 +67,7 @@ describe("voice session (SIMULATED providers)", () => {
     s.conn.receive(signal(T2, "VOICE_ACTIVITY_START")); // human speaks over ICOS
 
     expect(s.of("playback_stop")).toEqual([
-      { type: "playback_stop", turnId: T1, reason: "BARGE_IN" },
+      { type: "playback_stop", turnId: T1, generation: 1, reason: "BARGE_IN" },
     ]);
     expect(s.tts.streams[0].cancelled).toBe(true);
     expect(s.cognitive.aborts).toEqual([{ turnId: T1, reason: "BARGE_IN" }]);
@@ -179,7 +179,7 @@ describe("voice session (SIMULATED providers)", () => {
       expect.objectContaining({ code: "TTS_UNAVAILABLE", turnId: T1 }),
     ]);
     expect(s.of("playback_stop")).toEqual([
-      { type: "playback_stop", turnId: T1, reason: "TTS_FAILED" },
+      { type: "playback_stop", turnId: T1, generation: 1, reason: "TTS_FAILED" },
     ]);
     expect(s.of("response_delta").map((d) => d.text)).toEqual(["début", " fin"]);
     expect(s.of("response_final")).toHaveLength(1);
@@ -330,6 +330,8 @@ describe("voice session (SIMULATED providers)", () => {
         speechEndToFirstAudioMs: 190,
         tts: "CONFIGURED",
         ttsSentencesLost: 0,
+        // The simulated TTS does not name itself: no provider is claimed, no fallback seen.
+        ttsFallbackUsed: false,
       },
     ]);
 
@@ -513,7 +515,7 @@ describe("voice session (SIMULATED providers)", () => {
       s.advance(25);
       expect(s.of("error").map((e) => e.code)).toEqual(["TTS_TIMEOUT"]);
       expect(s.of("playback_stop")).toEqual([
-        { type: "playback_stop", turnId: T1, reason: "TIMEOUT" },
+        { type: "playback_stop", turnId: T1, generation: 1, reason: "TIMEOUT" },
       ]);
       expect(s.of("turn_metrics")).toHaveLength(1);
       expect(s.pendingTimers()).toBe(0);

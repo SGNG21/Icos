@@ -8,11 +8,11 @@ import {
   OmniRouteTts,
   omniRouteVoiceFromEnv,
   speakable,
-  takeSentences,
   ttsVoice,
   ttsVoiceId,
   wav,
 } from "./omniroute-voice";
+import { SENTENCE_CHUNKING, SpeechChunker } from "./tts/speech-text";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -365,18 +365,23 @@ describe("a premium voice is a VOICE, not a language code", () => {
 
 describe("helpers and configuration", () => {
   it("splits sentences and keeps the incomplete tail", () => {
-    expect(takeSentences("Oui. Non ! Peut-être… ou pas")).toEqual({
+    const split = (text: string) => {
+      const chunker = new SpeechChunker(SENTENCE_CHUNKING);
+      return { sentences: chunker.push(text), rest: chunker.flush() };
+    };
+    expect(split("Oui. Non ! Peut-être… ou pas")).toEqual({
       sentences: ["Oui.", "Non !", "Peut-être…"],
-      rest: " ou pas",
+      rest: ["ou pas"],
     });
-    expect(takeSentences("ligne un\nligne deux")).toEqual({
-      sentences: ["ligne un"],
-      rest: "ligne deux",
+    // A line break is a boundary, and the line gets its pause.
+    expect(split("ligne un\nligne deux")).toEqual({
+      sentences: ["ligne un."],
+      rest: ["ligne deux"],
     });
-    expect(takeSentences("")).toEqual({ sentences: [], rest: "" });
-    expect(takeSentences("Pi vaut 3.14 environ. Fin")).toEqual({
+    expect(split("")).toEqual({ sentences: [], rest: [] });
+    expect(split("Pi vaut 3.14 environ. Fin")).toEqual({
       sentences: ["Pi vaut 3.14 environ."],
-      rest: " Fin",
+      rest: ["Fin"],
     });
   });
 

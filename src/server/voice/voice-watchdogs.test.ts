@@ -85,7 +85,7 @@ describe("voice watchdogs: a hung dependency never blocks later turns", () => {
     ]);
     expect(s.cognitive.aborts).toEqual([{ turnId: T1, reason: "TIMEOUT" }]);
     expect(s.of("playback_stop")).toEqual([
-      { type: "playback_stop", turnId: T1, reason: "TIMEOUT" },
+      { type: "playback_stop", turnId: T1, generation: 1, reason: "TIMEOUT" },
     ]);
 
     say(s.conn, T2, ["suivant"]);

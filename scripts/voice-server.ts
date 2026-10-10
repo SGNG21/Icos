@@ -82,14 +82,22 @@ async function main(): Promise<void> {
     console.log(
       `ICOS voice host on ${cert && key ? "https" : "http"}://${hostname}:${port} ` +
         `${publicOrigin ? `, public ${publicOrigin.origin} ` : ""}` +
-        `(STT=${voice.status.stt} TTS=${voice.status.tts} LANG=${voice.status.language} ` +
-        // VOICE=language means no provider voice id is set, so only a backend with no
-        // voice concept (gTTS) can work — the premium voices are silently unreachable.
+        `(STT=${voice.status.stt} TTS=${voice.status.tts}[${voice.status.ttsChain}] ` +
+        `LANG=${voice.status.language} ` +
+        // VOICE is ICOS_VOICE_TTS_VOICE. VOICE=language means none is set: the gateway slot
+        // then sends the language code, which only a backend with no voice concept (gTTS) takes.
         `VOICE=${voice.status.voice} ` +
         // COGNITIVE is the runtime; COGNITION is the engine. Printing only the former
         // is what hid an unconfigured ICOS_COGNITIVE_MODEL behind a healthy-looking host.
         `COGNITIVE=${voice.status.cognitive} COGNITION=${voice.status.cognition})`,
     );
+    for (const error of voice.status.ttsConfigErrors) console.warn(`TTS config: ${error}`);
+    // One bounded probe per provider (no synthesis, no billed characters): evidence, not a key.
+    void voice.tts
+      ?.probe()
+      .then((health) =>
+        console.log(`TTS health: ${health.map((h) => `${h.provider}=${h.state}`).join(" ")}`),
+      );
   });
 }
 

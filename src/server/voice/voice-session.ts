@@ -92,10 +92,14 @@ type Turn = {
     firstCognitive?: number;
     firstTtsAudio?: number;
   };
+  /** Who spoke the first audio chunk, and whether any chunk came from a fallback. */
+  tts?: { provider?: string; fallbackUsed: boolean };
 };
 
 type Response = {
   turn: Turn;
+  /** Speech generation (monotonic per session): stale audio of another one is dropped. */
+  generation: number;
   abort: AbortController;
   tts: TtsStream | null;
   audioSeq: number;
@@ -127,6 +131,7 @@ export class VoiceSession {
   /** Submissions are serialized so turns reach the runtime in order, on one conversation. */
   private acceptance: Promise<unknown> = Promise.resolve();
   private closed = false;
+  private generation = 0;
   readonly metrics: TurnLatency[] = [];
 
   constructor(
@@ -413,6 +418,7 @@ export class VoiceSession {
     this.lastInterruptedTurnId = undefined;
     const response: Response = {
       turn,
+      generation: ++this.generation,
       abort: new AbortController(),
       tts: null,
       audioSeq: 0,
@@ -571,8 +577,9 @@ export class VoiceSession {
     }
     if (!response.tts) {
       try {
+        const language = response.turn.language ?? this.hello.language;
         const tts = this.deps.tts.start(
-          { language: response.turn.language ?? this.hello.language },
+          { ...(language ? { language } : {}), turnId: response.turn.id },
           (e) => this.onTts(response, e),
         );
         if (response.stopped) return quietly(() => tts.cancel()); // failed while starting
@@ -603,10 +610,16 @@ export class VoiceSession {
     if (response.stopped || this.response !== response) return;
     if (event.type === "audio") {
       response.turn.t.firstTtsAudio ??= this.deps.now();
+      const tts = (response.turn.tts ??= {
+        ...(event.provider ? { provider: event.provider } : {}),
+        fallbackUsed: false,
+      });
+      tts.fallbackUsed ||= !!event.fallback;
       if (response.textDone) this.armTtsTail(response);
       this.emit({
         type: "audio",
         turnId: response.turn.id,
+        generation: response.generation,
         seq: response.audioSeq++,
         mime: event.mime,
         data: Buffer.from(event.data).toString("base64"),
@@ -643,8 +656,14 @@ export class VoiceSession {
     response.cancelTimer?.();
     const tts = response.tts;
     response.tts = null;
-    if (tts) quietly(() => tts.cancel());
-    this.emit({ type: "playback_stop", turnId: response.turn.id, reason });
+    // An interrupted stream is cancelled, never failed over: the user stopped it on purpose.
+    if (tts) quietly(() => tts.cancel(reason));
+    this.emit({
+      type: "playback_stop",
+      turnId: response.turn.id,
+      generation: response.generation,
+      reason,
+    });
   }
 
   private interrupt(reason: CognitiveInterruptReason): void {
@@ -747,6 +766,8 @@ export class VoiceSession {
       speechEndToFirstAudioMs: retried ? null : d(t.speechEnd, t.firstTtsAudio),
       tts: this.deps.tts ? "CONFIGURED" : "NOT_CONFIGURED",
       ttsSentencesLost: response.ttsSentencesLost,
+      ...(response.turn.tts?.provider ? { ttsProvider: response.turn.tts.provider } : {}),
+      ...(response.turn.tts ? { ttsFallbackUsed: response.turn.tts.fallbackUsed } : {}),
     };
     this.metrics.push(metrics);
     if (this.metrics.length > MAX_METRICS) this.metrics.shift();

@@ -51,6 +51,7 @@ import {
   type VoicePhase,
 } from "@/features/voice/voice-presentation";
 
+import { PlaybackGate } from "@/features/voice/playback-gate";
 import { createVad } from "@/features/voice/vad";
 import {
   initialSessionState,
@@ -323,8 +324,11 @@ export function VoiceClient() {
   } | null>(null);
   /** Le découpage en tours, local : aucun octet ne part avant qu'une parole commence. */
   const vad = useRef(createVad());
-  /** Turns silenced locally, updated at the moment of the tap (not after a render). */
-  const silenced = useRef(new Set<string>());
+  /**
+   * Which chunk may play: silenced turns, stale generations, duplicates and late audio of
+   * an older turn are dropped here, at the moment of the tap (not after a render).
+   */
+  const gate = useRef(new PlaybackGate());
   const lastAudioTurn = useRef<string | null>(null);
   const playback = useRef({
     sources: new Set<AudioBufferSourceNode>(),
@@ -466,7 +470,7 @@ export function VoiceClient() {
   const play = useCallback(
     (turnId: string, data: string) => {
       const ctx = audio.current?.ctx;
-      if (!ctx || silenced.current.has(turnId)) return;
+      if (!ctx || gate.current.isSilenced(turnId)) return;
       lastAudioTurn.current = turnId;
       const p = playback.current;
       const generation = p.generation;
@@ -477,7 +481,7 @@ export function VoiceClient() {
         .then((buffer) => {
           if (
             generation !== p.generation ||
-            silenced.current.has(turnId) ||
+            gate.current.isSilenced(turnId) ||
             !mayPlay(stateRef.current, turnId)
           ) {
             return;
@@ -557,10 +561,12 @@ export function VoiceClient() {
         // A proposal was created or advanced: the authority is the record, so re-read it.
         if (message.type === "response_event") void refreshProposals();
         if (message.type === "playback_stop") {
-          silenced.current.add(message.turnId);
+          gate.current.silence(message.turnId);
           stopPlayback();
         }
-        if (message.type === "audio") play(message.turnId, message.data);
+        if (message.type === "audio" && gate.current.admit(message) === "play") {
+          play(message.turnId, message.data);
+        }
         dispatch({ type: "server", message });
       };
       socket.onclose = (event) => {
@@ -753,7 +759,7 @@ export function VoiceClient() {
   /** Silence whatever ICOS is saying, locally and at once. */
   const silenceCurrent = () => {
     const active = activeTurn(stateRef.current)?.id ?? lastAudioTurn.current;
-    if (active) silenced.current.add(active);
+    if (active) gate.current.silence(active);
     stopPlayback();
   };
 

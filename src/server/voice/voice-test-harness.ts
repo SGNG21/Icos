@@ -1,4 +1,4 @@
-import type { ServerMessage } from "@/core/voice/contracts";
+import type { ServerMessage, TtsProvider } from "@/core/voice/contracts";
 
 import { SimulatedCognitiveRuntime, SimulatedStt, SimulatedTts } from "./simulated-providers";
 import { VoiceSessionRegistry, type VoiceConnection, type VoiceTimeouts } from "./voice-session";
@@ -20,6 +20,8 @@ export const signal = (turnId: string, s: string) => ({ type: "turn", turnId, si
 export function setup(
   options: {
     tts?: boolean;
+    /** A real TTS implementation (e.g. the router) instead of the simulated one. */
+    ttsProvider?: TtsProvider;
     turnMode?: "push_to_talk" | "auto_vad";
     timeouts?: Partial<VoiceTimeouts>;
   } = {},
@@ -45,7 +47,7 @@ export function setup(
   const cognitive = new SimulatedCognitiveRuntime();
   const registry = new VoiceSessionRegistry({
     stt,
-    ...(options.tts === false ? {} : { tts }),
+    ...(options.tts === false ? {} : { tts: options.ttsProvider ?? tts }),
     cognitive,
     now: () => clock,
     newId: () => `session-${++ids}`,
