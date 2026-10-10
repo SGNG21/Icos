@@ -69,6 +69,8 @@ describe("cognition boundary", () => {
     expect(calls[0].url).toBe("http://omni.test/v1/chat/completions");
     expect((calls[0].init.headers as Record<string, string>).authorization).toBe("Bearer k-test");
     expect(JSON.parse(String(calls[0].init.body)).model).toBe("model-x");
+    /* The request declares the shape this function parses; see the SSE test below. */
+    expect(JSON.parse(String(calls[0].init.body)).stream).toBe(false);
     expect(engine.label).toBe("omniroute:model-x");
   });
 
@@ -511,5 +513,85 @@ describe("phone mission-request envelope (conv-a1a93dc6 regression)", () => {
       intent: "fine",
     });
     expect(normalizeCognitionEnvelope(JSON.parse(correct))).toEqual(JSON.parse(correct));
+  });
+});
+
+describe("the response shape is declared, never inherited from the gateway", () => {
+  const input = {
+    userText: "Réponds uniquement ICOS_OK",
+    context: "(aucun)",
+    conversationTitle: "probe",
+    workload: "CONVERSATION_FAST" as const,
+  };
+  const ANSWER = '{"result":{"kind":"ANSWER_ONLY","text":"ICOS_OK"}}';
+
+  /**
+   * A GATEWAY THAT DEFAULTS TO STREAMING — which is what the published OmniRoute server
+   * does. Measured on the VPS with the same version and database as the owner's laptop:
+   * no `stream` field gave `text/event-stream`, `"stream": false` gave `application/json`.
+   * The laptop's dev build defaults the other way, so the whole class of failure was
+   * invisible locally and every cognitive turn on the VPS died in `response.json()`.
+   */
+  const gatewayThatPrefersSse = (seen: { body: unknown }[]) =>
+    (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { stream?: unknown };
+      seen.push({ body });
+      if (body.stream === false) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: ANSWER } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      /* Exactly what bit us: a chunked SSE body that `response.json()` cannot read. */
+      return new Response(
+        `data: {"choices":[{"delta":{"content":"ICOS_OK"}}]}\n\ndata: [DONE]\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+
+  it("ASKS FOR A SINGLE JSON BODY, so a stream-by-default gateway still answers it", async () => {
+    const seen: { body: unknown }[] = [];
+    const engine = new OmniRouteCognitionEngine(
+      "http://omni.test",
+      "k",
+      "model-x",
+      gatewayThatPrefersSse(seen),
+    );
+
+    const out = await engine.think(input, new AbortController().signal);
+
+    expect(out.result).toEqual({ kind: "ANSWER_ONLY", text: "ICOS_OK" });
+    expect((seen[0]!.body as { stream?: unknown }).stream).toBe(false);
+  });
+
+  it("REGRESSION: a plain application/json gateway is unaffected", async () => {
+    const engine = new OmniRouteCognitionEngine(
+      "http://omni.test",
+      "k",
+      "model-x",
+      (async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: ANSWER } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    );
+
+    const out = await engine.think(input, new AbortController().signal);
+    expect(out.result).toEqual({ kind: "ANSWER_ONLY", text: "ICOS_OK" });
+  });
+
+  it("WITHOUT the explicit field the same gateway breaks — the defect this pins", async () => {
+    /*
+     * The counter-proof: a caller that omits `stream` gets SSE and cannot parse it. This is
+     * the old behaviour, asserted directly against the same fake gateway so the test fails
+     * if someone removes `stream: false` and nothing else notices.
+     */
+    const sse = gatewayThatPrefersSse([]);
+    const response = await sse("http://omni.test/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "model-x", messages: [] }),
+    });
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    await expect(response.json()).rejects.toThrow();
   });
 });
