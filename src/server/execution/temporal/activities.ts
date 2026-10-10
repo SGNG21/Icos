@@ -704,6 +704,22 @@ export async function runGovernedWorker(
         reason && !run.stdout.trim() ? `${classified.message} (stderr: ${reason})` : classified.message,
       );
     }
+
+    /*
+     * THE ACTIVITY DOES NOT MATERIALIZE (ADR 0073).
+     *
+     * It held a `commitWorkerChanges` call, and that was the wrong place twice over. A
+     * Temporal activity holds no container: no workspace registry, so it cannot revalidate
+     * the lease and the fencing token against DURABLE state, and cannot persist the commit
+     * identity the review and the gate then judge — it could only consult its own grant
+     * watcher. And it is one of TWO production execution paths, so the in-process external
+     * worker path had no materialization at all and every governed write there was refused by
+     * the gate as uncommitted.
+     *
+     * The worker's tree is therefore left exactly as it is, and
+     * `finalizeSuccessfulWorkerExecution` captures it ICOS-side at the completion point —
+     * one implementation, called by both paths.
+     */
     return {
       result: classified.result,
       actualExecutor: declared.command,

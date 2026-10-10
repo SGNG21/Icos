@@ -387,7 +387,15 @@ describe("the governed Temporal writer", () => {
     it("a refused grant starts no process", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => ({ ok: false, status: 403 }) as unknown as Response),
+        vi.fn(
+          async () =>
+            /* A real Response has `text`; the refusal body is what names the cause. */
+            ({
+              ok: false,
+              status: 403,
+              text: async () => '{"error":{"message":"scope non autorisé"}}',
+            }) as unknown as Response,
+        ),
       );
 
       await expect(run()).rejects.toThrow("WORKER_GRANT_REFUSED");
