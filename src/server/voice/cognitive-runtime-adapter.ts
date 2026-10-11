@@ -1,11 +1,13 @@
 import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
 import {
   CognitiveUnavailableError,
+  TurnInFlightError,
   type CognitiveEvent,
   type CognitiveRuntimePort,
   type CommittedTurn,
 } from "@/core/voice/contracts";
 import type { CognitiveActor, CognitiveRuntime } from "@/server/cognitive/cognitive-runtime";
+import { TurnInProgressError } from "@/server/cognitive/conversation-store";
 import { CognitiveTurnStream } from "@/server/cognitive/voice-adapter";
 
 /**
@@ -62,6 +64,24 @@ export class CognitiveRuntimeVoiceAdapter implements CognitiveRuntimePort {
         signal,
       );
     } catch (error) {
+      /*
+       * ONE WRITER PER CONVERSATION IS NOT AN OUTAGE. `beginUserTurn` refuses a second
+       * in-flight user turn through a unique index; reporting that as "unavailable" tells
+       * the caller to resend, which hits the same index again. The refusal keeps its own
+       * identity, and everything else stays an outage.
+       */
+      if (error instanceof TurnInProgressError) {
+        /* Attributable afterwards, from the journal alone, with no transcript in it. */
+        console.error(
+          JSON.stringify({
+            event: "VOICE_TURN_REFUSED_ONE_WRITER",
+            conversationId,
+            clientTurnId: turn.turnId,
+            voiceSessionId: turn.voiceSessionId,
+          }),
+        );
+        throw new TurnInFlightError(error.message);
+      }
       throw new CognitiveUnavailableError(error instanceof Error ? error.message : String(error));
     }
 

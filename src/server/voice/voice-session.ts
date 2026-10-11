@@ -2,6 +2,7 @@ import {
   ClientMessageSchema,
   CognitiveUnavailableError,
   DEFAULT_RETENTION,
+  TurnInFlightError,
   type ClientMessage,
   type CognitiveEvent,
   type CognitiveInterruptReason,
@@ -458,20 +459,30 @@ export class VoiceSession {
     } catch (error) {
       turn.phase = "failed";
       if (this.response === response) this.response = null;
+      /*
+       * WHICH REFUSAL THIS IS decides what the caller should do, so the three are not
+       * collapsed: a conversation already answering (wait), a runtime that is down
+       * (resend), and an unconfirmed submission (resend, idempotent).
+       */
+      const inFlight = error instanceof TurnInFlightError;
       const unavailable = error instanceof CognitiveUnavailableError;
       return this.emit({
         type: "error",
-        code: unavailable
-          ? "COGNITIVE_UNAVAILABLE"
-          : error instanceof AcceptTimeout
-            ? "COGNITIVE_TIMEOUT"
-            : "COGNITIVE_ERROR",
+        code: inFlight
+          ? "TURN_IN_PROGRESS"
+          : unavailable
+            ? "COGNITIVE_UNAVAILABLE"
+            : error instanceof AcceptTimeout
+              ? "COGNITIVE_TIMEOUT"
+              : "COGNITIVE_ERROR",
         retryable: true,
         turnId: turn.id,
         text: turn.text ?? "",
-        message: unavailable
-          ? "ICOS could not accept this turn; it was not recorded — resend it"
-          : "ICOS did not confirm this turn; resending it is safe (idempotent)",
+        message: inFlight
+          ? "this conversation is already answering a turn; wait for it to finish, then resend"
+          : unavailable
+            ? "ICOS could not accept this turn; it was not recorded — resend it"
+            : "ICOS did not confirm this turn; resending it is safe (idempotent)",
       });
     }
     turn.phase = "accepted";

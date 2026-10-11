@@ -20,6 +20,15 @@
  */
 import { describe, expect, it } from "vitest";
 
+import {
+  CognitiveUnavailableError,
+  TurnInFlightError,
+  type CommittedTurn,
+  type ServerMessage,
+} from "@/core/voice/contracts";
+
+import { SimulatedStt, SimulatedTts } from "./simulated-providers";
+import { VoiceSessionRegistry } from "./voice-session";
 import { flush, say, setup } from "./voice-test-harness";
 
 const T4 = "turn-hangup";
@@ -115,5 +124,55 @@ describe("hang-up during inference", () => {
     say(back.conn, T5, ["et", "demain"]);
     await flush();
     expect(s.cognitive.conversations.get(conversationId)?.map((t) => t.turnId)).toEqual([T4, T5]);
+  });
+});
+
+/**
+ * THE WIRE TELLS THE CALLER WHAT TO DO. A conversation that is already answering and a
+ * runtime that is down demand opposite remedies -- wait, versus resend -- and were reported
+ * with the same code and the same "resend it" until this was pinned.
+ */
+describe("a refused submission names its own kind", () => {
+  const benchWith = (thrown: Error) => {
+    const out: ServerMessage[] = [];
+    const registry = new VoiceSessionRegistry({
+      stt: new SimulatedStt(),
+      tts: new SimulatedTts(),
+      cognitive: {
+        simulated: true,
+        submitTurn: (_turn: CommittedTurn) => Promise.reject(thrown),
+      },
+      setTimer: () => () => {},
+    });
+    const conn = registry.connect("user-1", (m) => out.push(m));
+    conn.receive({ type: "hello", device: "browser", turnMode: "push_to_talk" });
+    return { conn, out };
+  };
+
+  it("a conversation already answering is TURN_IN_PROGRESS, and must not be resent now", async () => {
+    const b = benchWith(new TurnInFlightError("Un tour est déjà en cours pour cette conversation"));
+    say(b.conn, "turn-0001", ["deux", "a", "la", "fois"]);
+    await flush();
+    await flush();
+
+    const error = b.out.find((m) => m.type === "error");
+    expect(error).toMatchObject({ type: "error", code: "TURN_IN_PROGRESS", turnId: "turn-0001" });
+    expect(b.out.some((m) => m.type === "turn_accepted")).toBe(false);
+    if (error?.type === "error") {
+      expect(error.message).toContain("wait for it to finish");
+      /* The committed text still travels, so the client can resend AFTER the answer. */
+      expect(error.text).toBe("deux a la fois");
+    }
+  });
+
+  it("CONTRAST: a runtime that is actually down is still COGNITIVE_UNAVAILABLE, and resendable", async () => {
+    const b = benchWith(new CognitiveUnavailableError("connection refused"));
+    say(b.conn, "turn-0002", ["bonjour"]);
+    await flush();
+    await flush();
+
+    const error = b.out.find((m) => m.type === "error");
+    expect(error).toMatchObject({ code: "COGNITIVE_UNAVAILABLE" });
+    if (error?.type === "error") expect(error.message).toContain("resend it");
   });
 });

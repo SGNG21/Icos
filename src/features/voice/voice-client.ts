@@ -175,7 +175,10 @@ function onServer(state: VoiceUiState, m: ServerMessage): VoiceUiState {
     case "error": {
       let next: VoiceUiState = { ...state, error: { code: m.code, message: m.message } };
       if (m.turnId) {
-        if (m.code === "TURN_DROPPED" || m.code.startsWith("STT_")) {
+        if (m.code === "TURN_IN_PROGRESS") {
+          /* Not accepted, and not an outage: the turn failed, the conversation is fine. */
+          next = upsert(next, m.turnId, { state: "failed" });
+        } else if (m.code === "TURN_DROPPED" || m.code.startsWith("STT_")) {
           next = upsert(next, m.turnId, { state: "dropped" });
         } else if (m.code.startsWith("COGNITIVE_") && m.text !== undefined) {
           // Only the submission path carries the text: the turn was not accepted.
