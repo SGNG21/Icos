@@ -119,6 +119,18 @@ const envSchema = z.object({
   ICOS_WORKER_WORKSPACE_ROOT: z.preprocess(emptyAsUndefined, z.string().optional()),
   /** The canonical repository. A writer worker is guaranteed NOT to run here. */
   ICOS_REPO_PATH: z.preprocess(emptyAsUndefined, z.string().optional()),
+  /**
+   * The branch governed work integrates into (default `integration/phase-7`). Must match
+   * `integration/<name>`: the workspace manager's guard refuses anything else, so this can
+   * name another integration branch but never `main` or a release branch.
+   */
+  ICOS_INTEGRATION_TARGET: z.preprocess(
+    emptyAsUndefined,
+    z
+      .string()
+      .regex(/^integration\/[a-z0-9][a-z0-9._-]*$/i)
+      .optional(),
+  ),
   /*
    * The Integration Gate's verification commands, as JSON (M9).
    *

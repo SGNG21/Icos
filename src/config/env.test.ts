@@ -9,6 +9,16 @@ import {
 import { loadEnv, resolveAutonomyBounds, resolveSystemModelAllowlist } from "./env";
 
 describe("loadEnv", () => {
+  it("n'accepte comme cible d'intégration qu'une branche integration/<nom>", () => {
+    expect(loadEnv({ ICOS_INTEGRATION_TARGET: "integration/n1-lab" }).ICOS_INTEGRATION_TARGET).toBe(
+      "integration/n1-lab",
+    );
+    expect(loadEnv({ ICOS_INTEGRATION_TARGET: "" }).ICOS_INTEGRATION_TARGET).toBeUndefined();
+    for (const forbidden of ["main", "integration/", "release/x", "integration/../main"]) {
+      expect(() => loadEnv({ ICOS_INTEGRATION_TARGET: forbidden })).toThrow();
+    }
+  });
+
   it("traite les chaînes vides des variables optionnelles comme absentes", () => {
     const env = loadEnv({
       NODE_ENV: "development",

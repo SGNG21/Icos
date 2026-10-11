@@ -1007,6 +1007,7 @@ export async function buildPostgresContainer(
     missions: mission,
     tasks: tasks,
     durableMemory: new PostgresDurableMemory(handle.db),
+    ...(env.ICOS_INTEGRATION_TARGET ? { defaultIntegrationTarget: env.ICOS_INTEGRATION_TARGET } : {}),
   });
 
   return {
