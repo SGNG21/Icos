@@ -273,8 +273,17 @@ describe("DECISION 0054 on PostgreSQL", () => {
     const { ledger, supervisor, router } = restart();
     await supervisor.run(MISSION_ID);
     const a1 = (await ledger.getByWorkflowId(workflowIdForAttempt(TASK, 1)))!;
-    await ledger.markDispatched(a1.id, { owner: "test-owner", leaseMs: 60_000 });
-    expect(await ledger.acquireExecutionLease(a1.id, "runner-1", 60_000)).toBe(true);
+    /*
+     * Since 042bc5e "dispatched implies a lease": the supervisor's `markDispatched` grants
+     * the execution lease, in the same statement as the state, to the workflow it
+     * dispatched (`executionLeaseFor` → owner = workflowId). That workflow IS the runner;
+     * nobody else can take its live lease.
+     */
+    const runner = a1.workflowId;
+    expect(a1.state).toBe("dispatched");
+    expect(await ledger.holdsExecutionLease(a1.id, runner)).toBe(true);
+    expect(await ledger.acquireExecutionLease(a1.id, "intruder", 60_000)).toBe(false);
+    expect(await ledger.acquireExecutionLease(a1.id, runner, 60_000)).toBe(true);
     await ledger.recordExecutionFailure(a1.id, {
       failureClass: "EXECUTION_TIMEOUT",
       message: "killed",
@@ -317,8 +326,8 @@ describe("DECISION 0054 on PostgreSQL", () => {
     });
     expect(old.routingDecision).toEqual(a1.routingDecision);
     /* FENCING: the timed-out runner's attempt is terminal — no lease, so no late report. */
-    expect(await after.ledger.acquireExecutionLease(a1.id, "runner-1", 60_000)).toBe(false);
-    expect(await after.ledger.holdsExecutionLease(a1.id, "runner-1")).toBe(false);
+    expect(await after.ledger.acquireExecutionLease(a1.id, runner, 60_000)).toBe(false);
+    expect(await after.ledger.holdsExecutionLease(a1.id, runner)).toBe(false);
     const fresh = (await after.ledger.getByWorkflowId(workflowIdForAttempt(TASK, 2)))!;
     expect(fresh.routingDecision).toMatchObject({
       previousFailure: { failureClass: "EXECUTION_TIMEOUT" },
