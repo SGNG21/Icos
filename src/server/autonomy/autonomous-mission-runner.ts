@@ -186,7 +186,13 @@ export class AutonomousMissionRunner {
   async run(missionId: string): Promise<AutonomousMissionRunnerResult> {
     const attributed = await this.missions.findById(missionId);
     return attributed?.goalId
-      ? runWithAttribution({ goalId: attributed.goalId }, () => this.runInScope(missionId))
+      ? /*
+         * `missionId` is REPORTING only: the goal outranks it in `attributionKey`, so the
+         * budget window stays the goal's, and the ledger row names the mission it spent for.
+         */
+        runWithAttribution({ goalId: attributed.goalId, missionId }, () =>
+          this.runInScope(missionId),
+        )
       : this.runInScope(missionId);
   }
 

@@ -255,6 +255,12 @@ export interface DispatchAttemptRepository {
   listPrepared(missionId?: string): Promise<DispatchAttempt[]>;
 
   /**
+   * READ-ONLY: every attempt of a mission, whatever its state, oldest first (mission trace).
+   * Optional so hand-built test doubles compile; the trace fails closed without it.
+   */
+  listByMission?(missionId: string): Promise<DispatchAttempt[]>;
+
+  /**
    * List all dispatch attempts for a given missionTaskId that are in a non-terminal state.
    * Non-terminal states are "prepared" and "dispatched".
    * Results are sorted by attempt number descending, then by createdAt descending.

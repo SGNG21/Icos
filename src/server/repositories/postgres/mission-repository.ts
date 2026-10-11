@@ -9,7 +9,12 @@ import type { Mission, MissionTask } from "@/core/mission/contracts";
 import { goals, missions, missionTasks, tasks } from "@/server/database/schema";
 import { scopeOfMetadata } from "@/core/execution/execution-scope";
 import type { Database } from "@/server/database/client";
-import type { MissionRepository } from "@/server/mission/ports";
+import type { MissionRepository, MissionTransitionAudit } from "@/server/mission/ports";
+import {
+  appendTerminalAudit,
+  terminalMissionAuditEntry,
+  TERMINAL_MISSION_AUDIT_STATUSES,
+} from "./terminal-transition-audit";
 import type {
   MissionPlan,
 } from "@/server/mission/mission-plan";
@@ -1036,25 +1041,79 @@ export class PostgresMissionRepository implements MissionRepository {
       );
   }
 
-  async updateMissionStatus(missionId: string, status: Mission["status"]): Promise<void> {
-    await this.db
-      .update(missions)
-      .set({ status, updatedAt: new Date() })
-      // `cancelled` is terminal and sticky (decision 0055): a late writer cannot undo a cancel.
-      .where(and(eq(missions.id, missionId), ne(missions.status, "cancelled")));
+  async updateMissionStatus(
+    missionId: string,
+    status: Mission["status"],
+    audit?: MissionTransitionAudit,
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ status: missions.status, goalId: missions.goalId })
+        .from(missions)
+        .where(eq(missions.id, missionId))
+        .limit(1)
+        .for("update");
+      const updated = await tx
+        .update(missions)
+        .set({ status, updatedAt: new Date() })
+        // `cancelled` is terminal and sticky (decision 0055): a late writer cannot undo a cancel.
+        .where(and(eq(missions.id, missionId), ne(missions.status, "cancelled")))
+        .returning({ id: missions.id });
+      if (updated.length === 1 && current) {
+        await this.auditTerminal(tx, missionId, current, status, audit ?? { cause: "MISSION_STATUS_SET" });
+      }
+    });
   }
 
   async transitionMissionStatusIf(
     missionId: string,
     from: Mission["status"],
     to: Mission["status"],
+    audit?: MissionTransitionAudit,
   ): Promise<boolean> {
-    const rows = await this.db
-      .update(missions)
-      .set({ status: to, updatedAt: new Date() })
-      .where(and(eq(missions.id, missionId), eq(missions.status, from)))
-      .returning({ id: missions.id });
-    return rows.length === 1;
+    return this.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(missions)
+        .set({ status: to, updatedAt: new Date() })
+        .where(and(eq(missions.id, missionId), eq(missions.status, from)))
+        .returning({ id: missions.id, goalId: missions.goalId });
+      if (rows.length !== 1) return false;
+      await this.auditTerminal(
+        tx,
+        missionId,
+        { status: from, goalId: rows[0]!.goalId },
+        to,
+        audit ?? { cause: "MISSION_STATUS_CAS" },
+      );
+      return true;
+    });
+  }
+
+  /**
+   * A mission's TERMINAL transition is audited in the transaction that writes it, once (see
+   * terminal-transition-audit.ts). Before this, a mission settled succeeded/failed/blocked or
+   * cancelled left no audit row at all.
+   */
+  private async auditTerminal(
+    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+    missionId: string,
+    current: { status: string; goalId: string | null },
+    to: string,
+    audit: MissionTransitionAudit,
+  ): Promise<void> {
+    if (current.status === to || !TERMINAL_MISSION_AUDIT_STATUSES.has(to)) return;
+    await appendTerminalAudit(
+      tx,
+      terminalMissionAuditEntry({
+        missionId,
+        from: current.status,
+        to,
+        cause: audit.cause,
+        goalId: current.goalId,
+        ...(audit.actor ? { actor: audit.actor } : {}),
+      }),
+      missionId,
+    );
   }
 
   async deleteMission(missionId: string): Promise<void> {

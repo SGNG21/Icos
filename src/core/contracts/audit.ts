@@ -43,6 +43,8 @@ export const auditEventTypeSchema = z.enum([
   "goal.status_updated",
   "goal.converted",
   "goal.idempotency_key_set",
+  // Mission lifecycle: a mission's TERMINAL transition (already allowed by the DB CHECK since 0047).
+  "mission.transitioned",
   // Control plane (decision 0058): every authenticated control attempt.
   "control.command.rejected",
   "control.command.admitted",

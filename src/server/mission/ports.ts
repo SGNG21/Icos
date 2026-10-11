@@ -1,7 +1,18 @@
+import type { AuditActor } from "@/core/contracts/audit";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import type { Task } from "@/core/contracts";
 import type { AutonomousPlan } from "@/core/contracts/autonomous-plan";
 import type { MissionPlan } from "@/server/mission/mission-plan";
+
+/**
+ * Why a mission reached a terminal status, for its `mission.transitioned` audit entry. The
+ * durable implementation audits EVERY terminal change (with or without this) exactly once;
+ * this only names the cause and the actor.
+ */
+export interface MissionTransitionAudit {
+  readonly cause: string;
+  readonly actor?: AuditActor;
+}
 
 export interface MissionRepository {
   create(input: {
@@ -92,7 +103,11 @@ export interface MissionRepository {
    * Unconditional status write. `cancelled` is terminal (machine) and sticky:
    * implementations never move a mission OUT of `cancelled` (decision 0055).
    */
-  updateMissionStatus(missionId: string, status: Mission["status"]): Promise<void>;
+  updateMissionStatus(
+    missionId: string,
+    status: Mission["status"],
+    audit?: MissionTransitionAudit,
+  ): Promise<void>;
   /**
    * Compare-and-set (decision 0055): writes `to` only if the status is still
    * `from`; false if it changed underneath. Optional like replacePlan: callers
@@ -102,6 +117,7 @@ export interface MissionRepository {
     missionId: string,
     from: Mission["status"],
     to: Mission["status"],
+    audit?: MissionTransitionAudit,
   ): Promise<boolean>;
   deleteMission(missionId: string): Promise<void>;
   updateMission(missionId: string, mission: Mission): Promise<void>;

@@ -708,6 +708,15 @@ export class PostgresDispatchAttemptRepository implements DispatchAttemptReposit
     return rows.map(mapRow);
   }
 
+  async listByMission(missionId: string): Promise<DispatchAttempt[]> {
+    const rows = await this.db
+      .select()
+      .from(dispatchAttempts)
+      .where(eq(dispatchAttempts.missionId, missionId))
+      .orderBy(asc(dispatchAttempts.createdAt), asc(dispatchAttempts.id));
+    return rows.map(mapRow);
+  }
+
   async listNonTerminalByMissionTaskId(missionTaskId: string): Promise<DispatchAttempt[]> {
     const rows = await this.db
       .select()

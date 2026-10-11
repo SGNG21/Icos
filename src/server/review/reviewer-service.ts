@@ -77,8 +77,13 @@ export class ReviewerServiceImpl implements ReviewerService {
      */
     const assignment = (await this.reviewAssignment?.(input.mission.id).catch(() => null)) ?? null;
     const scope = {
+      /*
+       * With a goal, the mission rides along for REPORTING only (`spend_ledger.mission_id`):
+       * the goal outranks it in `attributionKey`. Without one it must NOT be added — `mission`
+       * outranks `system-review`, which would move the review off its strict budget.
+       */
       ...(input.mission.goalId
-        ? { goalId: input.mission.goalId }
+        ? { goalId: input.mission.goalId, missionId: input.mission.id }
         : { systemReviewMissionId: input.mission.id }),
       ...(assignment ? { brainId: assignment.agentId } : {}),
     };

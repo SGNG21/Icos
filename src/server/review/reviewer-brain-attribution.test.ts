@@ -57,7 +57,7 @@ describe("reviewer brain attribution", () => {
       missionId === "m-1" ? { assignmentId: "wfa-r", agentId: "brain-reviewer" } : null,
     );
     await s.impl.review(input("g-1"));
-    expect(s.seen[0]).toEqual({ goalId: "g-1", brainId: "brain-reviewer" });
+    expect(s.seen[0]).toEqual({ goalId: "g-1", missionId: "m-1", brainId: "brain-reviewer" });
     expect(s.saved[0]).toMatchObject({
       providerMetadata: {
         provider: "p",
@@ -70,7 +70,7 @@ describe("reviewer brain attribution", () => {
   it("an undelegated mission, or a failing lookup, reviews exactly as before", async () => {
     const none = service(async () => null);
     await none.impl.review(input("g-1"));
-    expect(none.seen[0]).toEqual({ goalId: "g-1" });
+    expect(none.seen[0]).toEqual({ goalId: "g-1", missionId: "m-1" });
     const failing = service(async () => {
       throw new Error("workforce down");
     });

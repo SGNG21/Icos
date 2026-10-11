@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Attribution } from "@/core/budget/contracts";
+import { attributionKey, type Attribution } from "@/core/budget/contracts";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import { AUTONOMY_BOUNDS_CEILING } from "@/core/autonomy/bounds";
 import { modelAllowlist } from "@/core/autonomy/model-allowlist";
@@ -307,7 +307,13 @@ describe("startAutonomousMission — portée d'imputation de la dépense", () =>
     await startAutonomousMission(observer.deps, { missionId: "mission-bounds" });
 
     expect(observer.seen.length).toBeGreaterThan(0);
-    expect(observer.seen).toEqual(observer.seen.map(() => ({ goalId: "goal-7" })));
+    /* The mission rides along for REPORTING (spend_ledger.mission_id); the budget key stays the goal's. */
+    expect(observer.seen).toEqual(
+      observer.seen.map(() => ({ goalId: "goal-7", missionId: "mission-bounds" })),
+    );
+    expect(observer.seen.map((a) => attributionKey(a))).toEqual(
+      observer.seen.map(() => "goal=goal-7"),
+    );
     /* La portée ne fuit pas hors de l'allumage. */
     expect(currentAttribution()).toBeNull();
   });

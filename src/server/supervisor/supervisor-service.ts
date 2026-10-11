@@ -946,7 +946,9 @@ export class SupervisorService {
 
     if (!settlement.settled) return settlement;
 
-    await this.missionRepository.updateMissionStatus(mission.id, settlement.status);
+    await this.missionRepository.updateMissionStatus(mission.id, settlement.status, {
+      cause: settlement.reason,
+    });
     /* Every terminal outcome gives the brains back — a blocked mission is not still working. */
     await this.releaseDelegation?.(mission.id, `MISSION_${settlement.status.toUpperCase()}`);
 

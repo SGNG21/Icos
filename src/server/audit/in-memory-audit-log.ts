@@ -6,6 +6,12 @@ export interface AuditQuery {
   actorId?: string;
   taskId?: string;
   actionId?: string;
+  /**
+   * Entries recorded FOR a mission: its own entries (`mission.transitioned`) and any entry
+   * whose details name it. Matched on `details.missionId` (and, in PostgreSQL, on the
+   * `audit_entries.mission_id` column as well).
+   */
+  missionId?: string;
 }
 
 /**
@@ -66,7 +72,9 @@ export class InMemoryAuditLog implements AuditLog {
           (filter.eventType === undefined || entry.eventType === filter.eventType) &&
           (filter.actorId === undefined || entry.actor.id === filter.actorId) &&
           (filter.taskId === undefined || entry.taskId === filter.taskId) &&
-          (filter.actionId === undefined || entry.actionId === filter.actionId),
+          (filter.actionId === undefined || entry.actionId === filter.actionId) &&
+          (filter.missionId === undefined ||
+            (entry.details as Record<string, unknown>).missionId === filter.missionId),
       )
       .map((entry) => structuredClone(entry))
       .sort(compareAuditEntries);

@@ -22,6 +22,55 @@ import {
   tasks,
 } from "@/server/database/schema";
 import { reviewDecisionToRow } from "@/server/database/mappers";
+import {
+  appendTerminalAudit,
+  terminalTaskAuditEntry,
+  TERMINAL_TASK_AUDIT_STATUSES,
+  type TerminalOutcome,
+} from "./terminal-transition-audit";
+
+type QcTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/**
+ * Writes the canonical task's status and, when that is a TERMINAL change, its audit entry —
+ * in the caller's transaction. The status was a bare UPDATE on every QC path, so a task
+ * that succeeded or was escalated here left no audit row at all (W6 certification).
+ * Idempotent: the entry is written only when the status actually changes, under an id
+ * derived from (task, status, workflow).
+ */
+async function setTaskStatusAudited(
+  tx: QcTx,
+  job: { taskId: string; missionId: string; workflowId: string },
+  status: string,
+  audit: { cause: string; outcome?: TerminalOutcome; details?: Record<string, string> },
+): Promise<void> {
+  const [current] = await tx
+    .select({ status: tasks.status })
+    .from(tasks)
+    .where(eq(tasks.id, job.taskId))
+    .limit(1)
+    .for("update");
+  await tx
+    .update(tasks)
+    .set({ status, updatedAt: sql`now()` })
+    .where(eq(tasks.id, job.taskId));
+  if (current && current.status !== status && TERMINAL_TASK_AUDIT_STATUSES.has(status)) {
+    await appendTerminalAudit(
+      tx,
+      terminalTaskAuditEntry({
+        taskId: job.taskId,
+        from: current.status,
+        to: status,
+        cause: audit.cause,
+        ...(audit.outcome ? { outcome: audit.outcome } : {}),
+        workflowId: job.workflowId,
+        missionId: job.missionId,
+        ...(audit.details ? { details: audit.details } : {}),
+      }),
+      job.missionId,
+    );
+  }
+}
 
 function mapJob(row: typeof qualityControlJobs.$inferSelect): QualityControlJob {
   return {
@@ -262,10 +311,11 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
      * it answers can be invalidated by this transaction (the job's action is already decided).
      */
     const pending = await this.getByWorkflowId(workflowId);
-    const acceptCompletion =
+    const integration =
       this.settlement && pending?.action === "ACCEPT" && !input.forceEscalate
-        ? completionForSettlement(await this.settlement.settlementOf(workflowId))
-        : "succeeded";
+        ? await this.settlement.settlementOf(workflowId)
+        : null;
+    const acceptCompletion = integration ? completionForSettlement(integration) : "succeeded";
 
     return this.db.transaction(async (tx) => {
       const job = await this.lockOwned(tx, workflowId, ownerToken);
@@ -287,10 +337,15 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           .where(
             and(eq(missionTasks.id, job.missionTaskId), eq(missionTasks.missionId, job.missionId)),
           );
-        await tx
-          .update(tasks)
-          .set({ status, updatedAt: sql`now()` })
-          .where(eq(tasks.id, job.taskId));
+        await setTaskStatusAudited(tx, job, status, {
+          cause: action === "ACCEPT" ? "QC_ACCEPT" : "QC_ESCALATED",
+          ...(action === "ESCALATE" ? { outcome: "escalated" as const } : {}),
+          details: {
+            qcAction: action,
+            ...(job.reviewDecisionId ? { reviewDecisionId: job.reviewDecisionId } : {}),
+            ...(integration ? { integration } : {}),
+          },
+        });
       } else if (action === "CORRECT" || action === "RETRY") {
         if (!input.nextAttempt || !input.nextWorkflowId || !input.prompt) {
           throw new Error("QUALITY_CONTROL_ATTEMPT_INPUT_MISSING");
@@ -397,10 +452,11 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
             .update(missionTasks)
             .set({ status: "failed", updatedAt: sql`now()` })
             .where(eq(missionTasks.id, job.missionTaskId));
-          await tx
-            .update(tasks)
-            .set({ status: "failed", updatedAt: sql`now()` })
-            .where(eq(tasks.id, job.taskId));
+          await setTaskStatusAudited(tx, job, "failed", {
+            cause: "QC_REPLAN_BUDGET_EXHAUSTED",
+            outcome: "escalated",
+            details: { qcAction: "REPLAN" },
+          });
           input.forceEscalate = true;
         } else {
           // Phase 6: supersede the reviewed task (obsolete graph) durably
@@ -472,10 +528,11 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         .update(missionTasks)
         .set({ status: "failed", updatedAt: sql`now()` })
         .where(eq(missionTasks.id, job.missionTaskId));
-      await tx
-        .update(tasks)
-        .set({ status: "failed", updatedAt: sql`now()` })
-        .where(eq(tasks.id, job.taskId));
+      await setTaskStatusAudited(tx, job, "failed", {
+        cause: "QC_ESCALATED",
+        outcome: "escalated",
+        details: { reason },
+      });
       await tx
         .update(qualityControlJobs)
         .set({
@@ -608,6 +665,7 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
         workflowId: qualityControlJobs.workflowId,
         missionTaskId: qualityControlJobs.missionTaskId,
         taskId: qualityControlJobs.taskId,
+        missionId: qualityControlJobs.missionId,
       })
       .from(qualityControlJobs)
       .innerJoin(missionTasks, eq(missionTasks.id, qualityControlJobs.missionTaskId))
@@ -622,9 +680,8 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
 
     let settled = 0;
     for (const candidate of candidates) {
-      const status = completionForSettlement(
-        await this.settlement.settlementOf(candidate.workflowId),
-      );
+      const integration = await this.settlement.settlementOf(candidate.workflowId);
+      const status = completionForSettlement(integration);
       if (!status) continue;
       /*
        * One transaction: the terminal status and the durable wake-up (the QC outbox) commit
@@ -643,10 +700,10 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
           )
           .returning({ id: missionTasks.id });
         if (updated.length === 0) return false;
-        await tx
-          .update(tasks)
-          .set({ status, updatedAt: sql`now()` })
-          .where(eq(tasks.id, candidate.taskId));
+        await setTaskStatusAudited(tx, candidate, status, {
+          cause: "INTEGRATION_SETTLED",
+          details: { qcAction: "ACCEPT", integration },
+        });
         await tx
           .update(qualityControlJobs)
           .set({ wakeupPending: true, updatedAt: sql`now()` })

@@ -1,4 +1,4 @@
-import { and, asc, eq, type SQL } from "drizzle-orm";
+import { and, asc, eq, or, sql, type SQL } from "drizzle-orm";
 
 import { auditEntrySchema, type AuditEntry } from "@/core/contracts";
 import type { AuditQuery } from "@/server/audit/in-memory-audit-log";
@@ -51,6 +51,14 @@ export class PostgresAuditRepository implements AuditRepository {
     }
     if (filter.actionId !== undefined) {
       conditions.push(eq(auditEntries.actionId, filter.actionId));
+    }
+    if (filter.missionId !== undefined) {
+      conditions.push(
+        or(
+          eq(auditEntries.missionId, filter.missionId),
+          sql`${auditEntries.details}->>'missionId' = ${filter.missionId}`,
+        )!,
+      );
     }
 
     const rows = await this.db
