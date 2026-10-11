@@ -150,3 +150,29 @@ Accepted gaps, recorded:
 - Connector failure text is returned as a message without an untrusted label.
 - Concurrent retries can leave an orphan PENDING approval request.
 - The audit CHECK swap validates under an ACCESS EXCLUSIVE lock.
+
+## Update 2026-10-11 — composed at boot, runtime identity, realtime caller (P0 autonomy unblock)
+
+- **Boot.** `startProductionServices` calls `bootToolGateway` (production + PostgreSQL): it
+  builds THE process runtime through `getToolGatewayRuntime` (the memo the admin routes use,
+  reusing `container.db`), whose build runs `reconciliation.runOnce`. Fail-soft: a bad
+  `ICOS_TOOL_GATEWAY_CONFIG` is logged as `TOOL_GATEWAY_BOOT_FAILED <cause>` and does not stop
+  the autonomy runtime.
+- **Periodic reconciliation** rides the existing recovery tick (`sweepAll` entry
+  `tool-gateway-reconciliation`, throttled to 5 min) instead of a new `ScheduledJobKind`:
+  `scheduled_jobs.kind` is closed by a DB CHECK, and the work is idempotent and per-process
+  (health and quota windows are per process anyway). `jobHandler` stays available.
+- **Runtime identity.** `agent-icos-runtime` (authorization level 0) is registered at boot
+  through the insert-only `AgentRegistration` port. It holds **no grant**: the owner grants
+  `web-search:SEARCH` / `web-fetch:READ` explicitly (`pnpm tools:grant-realtime --reason …` or
+  `POST /api/tool-gateway/grants`), both through `setGrant`.
+- **Attribution.** `ToolIntent.context` (`clientId`, `projectId`, `conversationId`, `turnId`;
+  closed identifiers) is recorded on every audit entry of the call; it is not part of any
+  decision or fingerprint. No migration: the execution row is unchanged.
+- **Realtime caller.** `buildRealtimeContextSource` (cognitive) is the first production caller
+  of `ToolGatewayPort.execute`; results are `external_data` context items, always untrusted,
+  with provenance.
+- **Web hardening.** Each web hop's hostname is resolved and refused if any address is private
+  or reserved; web-search 30/min and web-fetch 60/min local quotas. Residual: the platform
+  `fetch` resolves again at connect time (TTL-0 rebinding window), closable only with a pinned
+  dispatcher.
