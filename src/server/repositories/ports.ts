@@ -65,6 +65,17 @@ export interface AgentRepository extends AgentLookup {
   getByIdForScope(id: string, scope: AgentScope): Promise<Agent | null>;
 }
 
+/** Implemented by both agent repositories; a separate port so read-only doubles stay valid. */
+export interface AgentRegistration {
+  /**
+   * Registers a canonical SYSTEM identity if it does not exist yet. Idempotent and
+   * insert-only: an existing row is never rewritten (its level, status and description stay
+   * what an administrator made them), so this can create an identity but never elevate one.
+   * An identity carries no permission: tool use still needs explicit grants.
+   */
+  ensureRegistered(agent: Agent): Promise<"created" | "present">;
+}
+
 export interface CreateTaskInput {
   title: string;
   description?: string;

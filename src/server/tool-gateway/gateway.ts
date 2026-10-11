@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
@@ -9,6 +10,7 @@ import {
   TOOL_FAILURE_RETRYABLE,
   findAction,
   toolIntentSchema,
+  toolScopeContextSchema,
   type ActionClass,
   type ConnectorDefinition,
   type ConnectorHealthRecord,
@@ -24,6 +26,7 @@ import {
   type ToolFailureClass,
   type ToolGrant,
   type ToolIntent,
+  type ToolScopeContext,
 } from "@/core/tool-gateway/model";
 import {
   approvalState,
@@ -242,6 +245,25 @@ const MAX_THROTTLE_SECONDS = 3600;
 const jsonBytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v ?? null), "utf8");
 const DEFAULT_HEALTH_TTL_MS = 15 * 60_000;
 
+/**
+ * The attribution (`ToolIntent.context`) of the call in progress. Carried by async context,
+ * not by the execution row (no column, no migration): every audit entry written while
+ * serving THIS call records it, and concurrent calls cannot see each other's. Background
+ * reconciliation runs outside any call and records none, which is the truth.
+ */
+const callContext = new AsyncLocalStorage<ToolScopeContext | undefined>();
+
+function contextOf(rawIntent: unknown): ToolScopeContext | undefined {
+  if (typeof rawIntent !== "object" || rawIntent === null) return undefined;
+  const parsed = toolScopeContextSchema.safeParse((rawIntent as { context?: unknown }).context);
+  return parsed.success && Object.keys(parsed.data).length > 0 ? parsed.data : undefined;
+}
+
+const contextDetails = (): Record<string, JsonValue> => {
+  const c = callContext.getStore();
+  return c ? { context: { ...c } } : {};
+};
+
 export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
   private readonly connectors: ReadonlyMap<string, Connector>;
   private readonly inputValidators = new Map<string, z.ZodType>();
@@ -269,6 +291,16 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
     caller: ToolCaller,
     rawIntent: unknown,
     opts: { onProgress?: (e: ToolProgressEvent) => void } = {},
+  ): Promise<ToolOutcome> {
+    return callContext.run(contextOf(rawIntent), () =>
+      this.executeInContext(caller, rawIntent, opts),
+    );
+  }
+
+  private async executeInContext(
+    caller: ToolCaller,
+    rawIntent: unknown,
+    opts: { onProgress?: (e: ToolProgressEvent) => void },
   ): Promise<ToolOutcome> {
     const progress = opts.onProgress ?? (() => {});
     const parsed = toolIntentSchema.safeParse(rawIntent);
@@ -1423,6 +1455,7 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
         riskClass: exec.riskClass,
         missionId: exec.missionId ?? null,
         taskId: exec.taskId ?? null,
+        ...contextDetails(),
         ...extra,
       },
     };
@@ -1445,7 +1478,7 @@ export class ToolGateway implements ToolGatewayPort, ToolCapabilityPort {
         { kind: "agent", id: caller.agentId },
         "tool.request.denied",
       ),
-      details: { tenantId: caller.tenantId, reason, failureClass, ...ref },
+      details: { tenantId: caller.tenantId, reason, failureClass, ...ref, ...contextDetails() },
     };
     await this.d.audit.append(entry);
     return { ...fail(failureClass, message), auditReferences: [entry.id] };

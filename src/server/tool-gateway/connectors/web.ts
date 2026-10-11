@@ -1,3 +1,6 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
 import type { JsonValue } from "@/core/contracts";
 import { connectorDefinitionSchema } from "@/core/tool-gateway/model";
 
@@ -18,9 +21,16 @@ import { classifyHttpStatus } from "./http";
  * private / `.local` / `.internal` targets, and any redirect to one of those. Redirects are
  * followed manually and re-validated hop by hop; the body is capped.
  *
- * ponytail: hostnames are checked by name and literal address only; DNS is not resolved,
- * so a public name that resolves to a private address is not blocked. Pin resolution with
- * `dns.lookup` if the gateway host ever shares a network with internal services.
+ * DNS REBINDING: a public NAME can resolve to a private ADDRESS. Every hop's hostname is
+ * therefore resolved (injectable `HostResolver`, `dns.lookup` with `all: true` by default)
+ * and the hop is refused when ANY resolved address is forbidden, or when resolution fails or
+ * returns nothing — before the request is made.
+ *
+ * ponytail: the platform `fetch` resolves the name again when it connects, so a resolver with
+ * a near-zero TTL that answers public-then-private between the two lookups is not stopped.
+ * Closing that window needs a connect-time pinned dispatcher (undici `connect.lookup`), which
+ * this repository does not depend on. The check still removes the static case (a public name
+ * whose records point inside) and every redirect into one.
  */
 const MAX_BYTES_DEFAULT = 256_000;
 const MAX_REDIRECTS = 3;
@@ -60,6 +70,8 @@ export const WEB_DEFINITION = connectorDefinitionSchema.parse({
         }),
       ],
       credential: { kind: "api_key", required: false },
+      // Local, per-process quota (`ConnectorRegistry.take`): a runaway loop cannot crawl.
+      rateLimit: { maxRequests: 60, perSeconds: 60 },
       timeoutMs: 20_000,
       auditPolicy: { persistResult: "summary" },
     },
@@ -83,6 +95,57 @@ export function isForbiddenHost(hostname: string): boolean {
     if (mapped && PRIVATE_V4.test(mapped[1]!)) return true;
   }
   return false;
+}
+
+/**
+ * A resolved ADDRESS ICOS must never connect to: everything `isForbiddenHost` refuses as a
+ * literal, plus the non-unicast and reserved v4 ranges (multicast, broadcast, 240/4,
+ * benchmarking 198.18/15, IETF 192.0.0/24) and IPv6 multicast / NAT64 of a private v4.
+ * Anything that is not a parseable IP address is refused.
+ */
+const RESERVED_V4 = /^(22[4-9]\.|2[3-5]\d\.|198\.1[89]\.|192\.0\.0\.)/;
+
+export function isForbiddenAddress(address: string): boolean {
+  const a = address
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/%.*$/, "");
+  const family = isIP(a);
+  if (family === 0) return true;
+  if (family === 4) return PRIVATE_V4.test(a) || RESERVED_V4.test(a);
+  if (isForbiddenHost(a) || /^ff/.test(a)) return true;
+  const embedded = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+  return embedded ? isForbiddenAddress(embedded[1]!) : false;
+}
+
+/** Resolves a hostname to every address it currently maps to. Injectable for tests. */
+export type HostResolver = (hostname: string) => Promise<readonly string[]>;
+
+export const systemHostResolver: HostResolver = async (hostname) =>
+  (await lookup(hostname, { all: true, verbatim: true })).map((r) => r.address);
+
+/**
+ * Refuses a hop whose hostname resolves (now) to any forbidden address. A literal IP was
+ * already judged by `validateWebTarget`; it is re-checked here with the stricter address rule.
+ */
+export async function checkResolvedTarget(
+  url: URL,
+  resolve: HostResolver,
+): Promise<{ ok: true } | { ok: false; reason: "forbidden_host" | "unresolvable" }> {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(host) !== 0) {
+    return isForbiddenAddress(host) ? { ok: false, reason: "forbidden_host" } : { ok: true };
+  }
+  let addresses: readonly string[];
+  try {
+    addresses = await resolve(host);
+  } catch {
+    return { ok: false, reason: "unresolvable" };
+  }
+  if (addresses.length === 0) return { ok: false, reason: "unresolvable" };
+  return addresses.some(isForbiddenAddress)
+    ? { ok: false, reason: "forbidden_host" }
+    : { ok: true };
 }
 
 export type WebTargetRefusal = "scheme" | "credentials" | "forbidden_host" | "invalid";
@@ -141,6 +204,7 @@ function allowHostsOf(ctx: ConnectorContext): string[] | undefined {
 export function webConnector(
   fetchImpl: typeof fetch = fetch,
   now: () => Date = () => new Date(),
+  resolveHost: HostResolver = systemHostResolver,
 ): Connector {
   return {
     definition: WEB_DEFINITION,
@@ -170,6 +234,17 @@ export function webConnector(
       let url = first.url;
       let response: Response;
       for (let hop = 0; ; hop++) {
+        // DNS rebinding: judge what the name resolves to, on EVERY hop, before connecting.
+        const resolved = await checkResolvedTarget(url, resolveHost);
+        if (!resolved.ok) {
+          if (resolved.reason === "forbidden_host") return refused("forbidden_host", url.href);
+          return {
+            ok: false,
+            failureClass: "NETWORK_ERROR",
+            settlement: "NOT_APPLIED",
+            message: `host could not be resolved (${url.hostname.slice(0, 200)})`,
+          };
+        }
         try {
           response = await fetchImpl(url, {
             method: "GET",

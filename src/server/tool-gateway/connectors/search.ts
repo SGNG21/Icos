@@ -51,6 +51,8 @@ export const SEARCH_DEFINITION = connectorDefinitionSchema.parse({
         }),
       ],
       credential: { kind: "api_key", required: false },
+      // Local, per-process quota (`ConnectorRegistry.take`): protects the provider and its bill.
+      rateLimit: { maxRequests: 30, perSeconds: 60 },
       timeoutMs: 15_000,
       auditPolicy: { persistResult: "summary" },
     },

@@ -21,6 +21,7 @@ import {
 import type { Clock } from "./conversation-store";
 import type { CurrentStateSource } from "./current-state-source";
 import type { PostgresCognitiveMemoryStore } from "./memory-store";
+import type { RealtimeContextSource } from "./realtime-context-source";
 
 /**
  * Operational memory already owned by Phase 7B (validated procedures, human-approved
@@ -79,6 +80,11 @@ export class ContextAssembler {
      * prompt holds only durable memory, and no stale claim can be outranked.
      */
     private readonly current?: CurrentStateSource,
+    /**
+     * Live web data through the Tool Gateway, only when the turn asks for it
+     * (`buildRealtimeContextSource`). Optional: absent ⇒ no realtime stage at all.
+     */
+    private readonly realtime?: RealtimeContextSource,
   ) {}
 
   async assemble(input: AssembleInput): Promise<ContextSnapshot> {
@@ -191,6 +197,18 @@ export class ContextAssembler {
     // 6b. CURRENT state of the client's work, last so it is never shadowed by a
     // remembered version of itself (decision 0063).
     if (this.current) candidates.push(...(await this.current.candidates(scope)));
+    // 6c. Live external data, untrusted and with provenance, when the turn needs it.
+    if (this.realtime) {
+      candidates.push(
+        ...(await this.realtime.candidates({
+          scope,
+          turnText: text,
+          conversationId: input.conversationId,
+          turnId: input.turn.id,
+          now,
+        })),
+      );
+    }
     /*
      * 7. Who ICOS is right now (decision 0062). Always included and never keyword-gated:
      * a question like "de quoi es-tu capable ?" shares no vocabulary with the capability

@@ -12,12 +12,14 @@ import { composeToolGateway, type ToolGatewayRuntime } from "./composition";
  * wires itself WITHOUT editing the shared `container.ts`. It reuses the
  * container's agent lookup and audit repository.
  *
- * INTEGRATION: when the central integrator adds the runtime to the container,
- * it should call `composeToolGateway` with the container's own database handle
- * and replace this accessor; this module then only keeps `toolTenantOf`.
+ * ONE runtime per process: production boot (`bootToolGateway`, called by
+ * `startProductionServices`) and the admin routes both go through this memo, so the
+ * boot reconciliation, the periodic sweep and the routes share one gateway, one
+ * registry (rate-limit windows) and one set of stores.
  *
- * ponytail: under PERSISTENCE=postgres this opens a small dedicated pool (max 3)
- * because the container does not expose its handle yet.
+ * Under PERSISTENCE=postgres it reuses the container's own database handle
+ * (`container.db`); a small dedicated pool (max 3) is opened only when a container
+ * exposes none.
  */
 /** Same memo convention as the container (`__icosContainerPromise__`): one per process, test-injectable. */
 export const TOOL_GATEWAY_RUNTIME_KEY = "__icosToolGatewayRuntime__";
@@ -46,14 +48,14 @@ async function build(container: Container): Promise<ToolGatewayRuntime> {
       throw new Error("ICOS_TOOL_GATEWAY_CONFIG is not valid JSON");
     }
   }
-  let db;
-  if (backend === "postgres") {
+  let db = container.db;
+  if (backend === "postgres" && !db) {
     if (!env.DATABASE_URL) throw new PersistenceUnavailableError("DATABASE_URL absent");
     db = createDatabase(env.DATABASE_URL, { max: 3 }).db;
   }
   const rt = composeToolGateway({
     backend,
-    db,
+    db: backend === "postgres" ? db : undefined,
     agents: container.agents,
     audit: container.audit,
     config,
