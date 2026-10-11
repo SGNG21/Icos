@@ -141,9 +141,9 @@ describe("E2E failure scenario", () => {
     let missionTasks = await missionRepository.listTasks(missionId);
     expect(missionTasks).toHaveLength(3);
 
-    const missionTaskA = missionTasks.find(t => t.title === "Task A")!;
-    const missionTaskB = missionTasks.find(t => t.title === "Task B")!;
-    const missionTaskC = missionTasks.find(t => t.title === "Task C")!;
+    const missionTaskA = missionTasks.find((t) => t.title === "Task A")!;
+    const missionTaskB = missionTasks.find((t) => t.title === "Task B")!;
+    const missionTaskC = missionTasks.find((t) => t.title === "Task C")!;
 
     expect(missionTaskA).not.toBeNull();
     expect(missionTaskB).not.toBeNull();
@@ -165,8 +165,8 @@ describe("E2E failure scenario", () => {
     // Verify the dependencies are set correctly (on the mission tasks)
     missionTasks = await missionRepo.listTasks(missionId);
     expect(missionTasks).toHaveLength(3);
-    const updatedMissionTaskB = missionTasks.find(t => t.title === "Task B")!;
-    const updatedMissionTaskC = missionTasks.find(t => t.title === "Task C")!;
+    const updatedMissionTaskB = missionTasks.find((t) => t.title === "Task B")!;
+    const updatedMissionTaskC = missionTasks.find((t) => t.title === "Task C")!;
     expect(updatedMissionTaskB?.dependsOn).toEqual([missionTaskIdA]);
     expect(updatedMissionTaskC?.dependsOn).toEqual([missionTaskIdB]);
 
@@ -184,7 +184,9 @@ describe("E2E failure scenario", () => {
         missionId,
         taskId: internalTaskIdA, // internal task ID
         taskTitle: missionTaskA.title,
-        prompt: executionPrompt(missionTaskA.description || missionTaskA.title),
+        prompt: executionPrompt(missionTaskA.description || missionTaskA.title, {
+          missionObjective: mission.objective,
+        }),
         workerKind: missionTaskA.workerKind || undefined,
         capability: missionTaskA.capability || undefined,
       }),
@@ -192,9 +194,9 @@ describe("E2E failure scenario", () => {
 
     // After running supervisor, task A should be queued
     const updatedTasksAfterRun1 = await missionRepository.listTasks(missionId);
-    const queuedTaskA = updatedTasksAfterRun1.find(t => t.id === missionTaskIdA)!;
-    const queuedTaskB = updatedTasksAfterRun1.find(t => t.id === missionTaskIdB)!;
-    const queuedTaskC = updatedTasksAfterRun1.find(t => t.id === missionTaskIdC)!;
+    const queuedTaskA = updatedTasksAfterRun1.find((t) => t.id === missionTaskIdA)!;
+    const queuedTaskB = updatedTasksAfterRun1.find((t) => t.id === missionTaskIdB)!;
+    const queuedTaskC = updatedTasksAfterRun1.find((t) => t.id === missionTaskIdC)!;
 
     expect(queuedTaskA?.status).toBe("queued");
     expect(queuedTaskB?.status).toBe("draft"); // B should not be queued yet
@@ -237,7 +239,7 @@ describe("E2E failure scenario", () => {
 
     // After callback, task A should be succeeded
     const tasksAfterACallback = await missionRepository.listTasks(missionId);
-    const succeededTaskA = tasksAfterACallback.find(t => t.id === missionTaskIdA)!;
+    const succeededTaskA = tasksAfterACallback.find((t) => t.id === missionTaskIdA)!;
     expect(succeededTaskA?.status).toBe("succeeded");
 
     // Run supervisor again: now B should be queued (since A succeeded)
@@ -250,7 +252,9 @@ describe("E2E failure scenario", () => {
         missionId,
         taskId: internalTaskIdB, // internal task ID
         taskTitle: missionTaskB.title,
-        prompt: executionPrompt(missionTaskB.description || missionTaskB.title),
+        prompt: executionPrompt(missionTaskB.description || missionTaskB.title, {
+          missionObjective: mission.objective,
+        }),
         workerKind: missionTaskB.workerKind || undefined,
         capability: missionTaskB.capability || undefined,
       }),
@@ -258,8 +262,8 @@ describe("E2E failure scenario", () => {
 
     // After running supervisor, task B should be queued
     const tasksAfterBDispatch = await missionRepository.listTasks(missionId);
-    const queuedTaskBAfter = tasksAfterBDispatch.find(t => t.id === missionTaskIdB)!;
-    const queuedTaskCAfter = tasksAfterBDispatch.find(t => t.id === missionTaskIdC)!;
+    const queuedTaskBAfter = tasksAfterBDispatch.find((t) => t.id === missionTaskIdB)!;
+    const queuedTaskCAfter = tasksAfterBDispatch.find((t) => t.id === missionTaskIdC)!;
     expect(queuedTaskBAfter?.status).toBe("queued");
     expect(queuedTaskCAfter?.status).toBe("draft"); // C should not be queued yet
 
@@ -309,7 +313,7 @@ describe("E2E failure scenario", () => {
 
     // WORKER_FAILED is non-retryable: deterministic BLOCK applies the failed state.
     const tasksAfterBCallback = await missionRepository.listTasks(missionId);
-    const failedTaskB = tasksAfterBCallback.find(t => t.id === missionTaskIdB)!;
+    const failedTaskB = tasksAfterBCallback.find((t) => t.id === missionTaskIdB)!;
     expect(failedTaskB?.status).toBe("failed");
 
     // Run supervisor again: C should NOT be queued because B failed
@@ -320,7 +324,7 @@ describe("E2E failure scenario", () => {
 
     // Verify task C is still draft (never queued)
     const tasksAfterSupervisorRun = await missionRepository.listTasks(missionId);
-    const taskCStatus = tasksAfterSupervisorRun.find(t => t.id === missionTaskIdC)?.status;
+    const taskCStatus = tasksAfterSupervisorRun.find((t) => t.id === missionTaskIdC)?.status;
     expect(taskCStatus).toBe("draft"); // C should remain draft, never dispatched
 
     // Check mission status: based on V1 rule, mission should be failed when any required task fails

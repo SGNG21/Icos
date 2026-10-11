@@ -48,7 +48,7 @@ describe("Supervisor N2.3 durable dispatch ledger", () => {
       expect.objectContaining({
         missionId: mission.id,
         taskTitle: "A",
-        prompt: executionPrompt("A"),
+        prompt: executionPrompt("A", { missionObjective: mission.objective }),
         workerKind: "agent",
       }),
     );

@@ -31,6 +31,29 @@ export const EXECUTION_OUTPUT_CONTRACT = [
  * The task's own instruction, followed by the contract. Kept as a function so the ordering
  * is fixed in one place: the objective leads, the contract qualifies it.
  */
-export function executionPrompt(objective: string): string {
-  return `${objective}\n\n${EXECUTION_OUTPUT_CONTRACT}`;
+export function executionPrompt(
+  objective: string,
+  context: {
+    /** The mission this task serves — the reviewer sees it, so the worker must too. */
+    missionObjective?: string;
+    /** The task's declared file scope: what it reads (read_only) or may change. */
+    fileScope?: readonly string[];
+    readOnly?: boolean;
+  } = {},
+): string {
+  /*
+   * N1 lab: a planned task said "the target file"; the reviewer was given the mission and
+   * named the file, the worker was not — so it asked which file and was (rightly) sent back.
+   * The worker now receives the same facts the reviewer judges it against.
+   */
+  const facts = [
+    ...(context.missionObjective ? [`Mission objective: ${context.missionObjective}`] : []),
+    ...(context.fileScope && context.fileScope.length > 0
+      ? [
+          `${context.readOnly ? "Files in scope (read only — change nothing)" : "Files you may change (nothing else)"}: ${context.fileScope.join(", ")}`,
+        ]
+      : []),
+  ];
+  const lead = facts.length > 0 ? `${objective}\n\n${facts.join("\n")}` : objective;
+  return `${lead}\n\n${EXECUTION_OUTPUT_CONTRACT}`;
 }
