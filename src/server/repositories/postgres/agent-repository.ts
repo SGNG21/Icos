@@ -1,12 +1,12 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 
-import type { Agent } from "@/core/contracts";
+import { agentSchema, type Agent } from "@/core/contracts";
 import type { Database } from "@/server/database/client";
-import { rowToAgent } from "@/server/database/mappers";
+import { agentToRow, rowToAgent } from "@/server/database/mappers";
 import { agents } from "@/server/database/schema";
-import type { AgentRepository, AgentScope } from "@/server/repositories/ports";
+import type { AgentRegistration, AgentRepository, AgentScope } from "@/server/repositories/ports";
 
-export class PostgresAgentRepository implements AgentRepository {
+export class PostgresAgentRepository implements AgentRepository, AgentRegistration {
   constructor(private readonly db: Database) {}
 
   async list(): Promise<Agent[]> {
@@ -48,5 +48,14 @@ export class PostgresAgentRepository implements AgentRepository {
 
     const rows = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
     return rows[0] ? rowToAgent(rows[0]) : null;
+  }
+
+  async ensureRegistered(agent: Agent): Promise<"created" | "present"> {
+    const inserted = await this.db
+      .insert(agents)
+      .values(agentToRow(agentSchema.parse(agent)))
+      .onConflictDoNothing({ target: agents.id })
+      .returning({ id: agents.id });
+    return inserted.length === 1 ? "created" : "present";
   }
 }

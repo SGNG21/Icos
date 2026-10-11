@@ -1,14 +1,14 @@
 import { agentSchema, type Agent } from "@/core/contracts";
 import { compareAgents } from "@/core/ordering";
 
-import type { AgentRepository, AgentScope } from "@/server/repositories/ports";
+import type { AgentRegistration, AgentRepository, AgentScope } from "@/server/repositories/ports";
 
 /**
  * Repository en mémoire des agents (voir avertissement dans
- * `src/server/audit/in-memory-audit-log.ts`). Lecture seule ; travail interne
+ * `src/server/audit/in-memory-audit-log.ts`). Lecture seule (hors `ensureRegistered`, insertion seule d'une identité système) ; travail interne
  * synchrone, exposé derrière un port asynchrone.
  */
-export class InMemoryAgentRepository implements AgentRepository {
+export class InMemoryAgentRepository implements AgentRepository, AgentRegistration {
   private readonly agents: Agent[];
 
   /** Copie défensive du seed : les constantes importées ne sont jamais partagées. */
@@ -38,5 +38,11 @@ export class InMemoryAgentRepository implements AgentRepository {
     }
 
     return this.getById(id);
+  }
+
+  async ensureRegistered(agent: Agent): Promise<"created" | "present"> {
+    if (this.agents.some((candidate) => candidate.id === agent.id)) return "present";
+    this.agents.push(agentSchema.parse(structuredClone(agent)));
+    return "created";
   }
 }

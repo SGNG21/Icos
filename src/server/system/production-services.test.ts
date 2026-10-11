@@ -131,6 +131,28 @@ describe("production services bootstrap", () => {
     await developmentServices.stop();
   });
 
+  it("BOOTS the Tool Gateway once in PostgreSQL production, and never elsewhere", async () => {
+    const toolGatewayBoot = vi.fn().mockResolvedValue(undefined);
+    const container = {
+      autonomousRuntime: {},
+      scheduledJobs: jobs(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Container;
+    const base = {
+      createContainer: vi.fn().mockResolvedValue(container),
+      schedulerFactory: vi.fn().mockReturnValue({ start: vi.fn(), stop: vi.fn() }),
+      signals,
+      registerSignals: false,
+      toolGatewayBoot,
+    };
+    await startProductionServices({ ...base, env: env() });
+    expect(toolGatewayBoot).toHaveBeenCalledTimes(1);
+    expect(toolGatewayBoot).toHaveBeenCalledWith(container);
+
+    await startProductionServices({ ...base, env: env({ NODE_ENV: "development" }) });
+    expect(toolGatewayBoot).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed if production PostgreSQL composition lacks a durable runtime", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
 

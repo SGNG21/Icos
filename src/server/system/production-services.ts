@@ -29,6 +29,7 @@ import { sweepAll } from "@/server/recovery/sweep-all";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 import { CHIEF_BRAIN_ID } from "@/core/workforce/brains";
+import { bootToolGateway, toolReconciliationSweeper } from "@/server/tool-gateway/boot";
 import { TERMINAL_ASSIGNMENT_STATUSES } from "@/core/workforce/contracts";
 
 export interface ProductionServiceScheduler {
@@ -58,6 +59,8 @@ export interface StartProductionServicesOptions {
   ) => ProductionServiceScheduler;
   signals?: ProductionServiceSignals;
   registerSignals?: boolean;
+  /** Tool Gateway boot (composition + boot reconciliation). Default: `bootToolGateway`. */
+  toolGatewayBoot?: (container: Container) => Promise<unknown>;
 }
 
 const DEFAULT_AUTONOMY_RECOVERY_INTERVAL_MS = 30_000;
@@ -538,6 +541,13 @@ function createRecoveryScheduler(
       ...(container.db
         ? [["cognitive-launch-recovery", cognitiveLaunchRecoverySweeper(container)] as const]
         : []),
+      /*
+       * Tool Gateway reconciliation (decision 0059 §6): health re-probe + settlement of
+       * orphaned/unknown effects, throttled to every 5 min on this tick. Same process runtime
+       * as boot and the admin routes. On this tick rather than a durable job: see
+       * `toolReconciliationSweeper`.
+       */
+      ["tool-gateway-reconciliation", toolReconciliationSweeper(container)],
     ]),
     options,
   );
@@ -616,6 +626,15 @@ export async function startProductionServices(
        * whereas refusing to boot the whole runtime over it is not.
        */
       await bootstrapComputeFleetAtStartup(container, options.env);
+
+      /*
+       * THE TOOL GATEWAY, composed at boot (decision 0059 §6). Previously only the first
+       * `/api/tool-gateway/*` request built it, so a deployment nobody administered had no
+       * health evidence and no reconciliation. Registers the runtime's tool identity (no
+       * grant) and runs the boot reconciliation through the process-wide runtime the routes
+       * share. Fail-soft: the tool plane is not on the missions' critical path.
+       */
+      await (options.toolGatewayBoot ?? bootToolGateway)(container);
     }
   } catch (error) {
     await container.close();
