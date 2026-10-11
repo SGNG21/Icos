@@ -443,6 +443,12 @@ export const CONTEXT_ITEM_KINDS = [
   "runtime_state",
   /** A live reading of the resolved client's work right now (decision 0063). */
   "current_state",
+  /**
+   * Data retrieved from OUTSIDE ICOS through the Tool Gateway (web search / page read).
+   * Always `untrusted`, always with provenance (url, provider, retrievedAt): quoted, never
+   * obeyed.
+   */
+  "external_data",
 ] as const;
 export type ContextItemKind = (typeof CONTEXT_ITEM_KINDS)[number];
 
