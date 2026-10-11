@@ -453,3 +453,49 @@ describe("meteredFetch — bout en bout avec le journal en mémoire", () => {
     expect(typeof substitute).toBe("function");
   });
 });
+
+describe("meteredFetch — API Anthropic /v1/messages (sortie mesurée des workers)", () => {
+  const MESSAGES_URL = "http://gateway.invalid/v1/messages?beta=true";
+  const messagesInit: RequestInit = {
+    method: "POST",
+    body: JSON.stringify({ model: "m/x", max_tokens: 100, messages: [], stream: true }),
+  };
+
+  it("un flux SSE est lu en entier et ENREGISTRÉ mesuré, et l'appelant reçoit tout le flux", async () => {
+    const stream =
+      `data: ${JSON.stringify({ type: "message_start", message: { model: "m/x", usage: { input_tokens: 30, output_tokens: 1 } } })}\n\n` +
+      `data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 12 } })}\n\n`;
+    const inner = vi.fn<typeof fetch>(async () =>
+      new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+    );
+    const ledger = new FakeLedger();
+    const response = await meteredFetch(inner, { ledger })(MESSAGES_URL, messagesInit);
+    expect(await response.text()).toBe(stream);
+    expect(ledger.recorded).toHaveLength(1);
+    expect(ledger.recorded[0]).toMatchObject({
+      modelId: "m/x",
+      usage: { kind: "METERED", usage: { promptTokens: 30, completionTokens: 12, totalTokens: 42 } },
+    });
+  });
+
+  it("une réponse JSON non streamée au format Anthropic est mesurée", async () => {
+    const inner = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ model: "m/x", usage: { input_tokens: 5, output_tokens: 6 } }),
+    );
+    const ledger = new FakeLedger();
+    await meteredFetch(inner, { ledger })(MESSAGES_URL, messagesInit);
+    expect(ledger.recorded[0]?.usage).toEqual({
+      kind: "METERED",
+      usage: { promptTokens: 5, completionTokens: 6, totalTokens: 11 },
+    });
+  });
+
+  it("un flux SSE OpenAI-compatible garde son comportement : non lu, UNMETERED", async () => {
+    const inner = vi.fn<typeof fetch>(async () =>
+      new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } }),
+    );
+    const ledger = new FakeLedger();
+    await meteredFetch(inner, { ledger })(URL_UNDER_TEST, chatInit());
+    expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "NON_JSON_BODY" });
+  });
+});
