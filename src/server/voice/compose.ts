@@ -5,7 +5,9 @@ import { protectRoute } from "@/server/http/protect-route";
 import { OmniRouteCognitionEngine } from "@/server/cognitive/cognition";
 
 import { CognitiveRuntimeVoiceAdapter } from "./cognitive-runtime-adapter";
-import { omniRouteVoiceFromEnv } from "./omniroute-voice";
+import { omniRouteGatewayFromEnv, omniRouteVoiceFromEnv } from "./omniroute-voice";
+import { describeTtsStatus, ttsRouterFromEnv } from "./tts/config";
+import { logTtsEvent } from "./tts/telemetry";
 import { VoiceSessionRegistry } from "./voice-session";
 import { createVoiceUpgradeHandler } from "./ws-transport";
 
@@ -25,6 +27,16 @@ export async function composeVoiceHost() {
     throw new Error("VOICE_COGNITIVE_RUNTIME_UNAVAILABLE: PostgreSQL persistence required");
   const providers = omniRouteVoiceFromEnv();
   /*
+   * TTS goes through the ICOS TTS router (decision 0074): Fish Audio → ElevenLabs → Edge →
+   * gTTS, each opt-in. With no premium key configured it is the OmniRoute path voice
+   * already had; with nothing configured at all, answers stay text-only.
+   */
+  const speech = ttsRouterFromEnv(process.env, {
+    gateway: omniRouteGatewayFromEnv(),
+    defaultLanguage: providers.status.language,
+    observer: logTtsEvent,
+  });
+  /*
    * The cognitive RUNTIME existing is not the same as cognition being CONFIGURED.
    * Without ICOS_COGNITIVE_MODEL the runtime falls back to NotConnectedCognitionEngine,
    * which answers "NOT_CONNECTED" as an ordinary turn — so the phone reached "Prêt",
@@ -43,7 +55,7 @@ export async function composeVoiceHost() {
         throw new Error("STT not configured");
       },
     },
-    ...(providers.tts ? { tts: providers.tts } : {}),
+    ...(speech.tts ? { tts: speech.tts } : {}),
     cognitive: new CognitiveRuntimeVoiceAdapter(
       cognitive,
       (userId) => rolesByUser.get(userId) ?? [],
@@ -87,10 +99,16 @@ export async function composeVoiceHost() {
   return {
     registry,
     handleUpgrade,
+    /** Provider health from evidence; `tts.probe()` refreshes it without synthesizing. */
+    tts: speech.tts,
     status: {
       stt: providers.status.stt,
-      tts: providers.status.tts,
+      tts: speech.tts ? ("CONFIGURED" as const) : ("NOT_CONFIGURED" as const),
+      ttsChain: describeTtsStatus(speech.status),
+      ttsConfigErrors: speech.status.errors,
       language: providers.status.language,
+      /* Which voice is actually live: "language" means the no-voice-concept fallback. */
+      voice: providers.status.voice,
       cognitive: "COGNITIVE_RUNTIME" as const,
       cognition: cognitionConfigured ? ("CONFIGURED" as const) : ("NOT_CONFIGURED" as const),
     },

@@ -67,7 +67,7 @@ describe("voice session (SIMULATED providers)", () => {
     s.conn.receive(signal(T2, "VOICE_ACTIVITY_START")); // human speaks over ICOS
 
     expect(s.of("playback_stop")).toEqual([
-      { type: "playback_stop", turnId: T1, reason: "BARGE_IN" },
+      { type: "playback_stop", turnId: T1, generation: 1, reason: "BARGE_IN" },
     ]);
     expect(s.tts.streams[0].cancelled).toBe(true);
     expect(s.cognitive.aborts).toEqual([{ turnId: T1, reason: "BARGE_IN" }]);
@@ -179,12 +179,88 @@ describe("voice session (SIMULATED providers)", () => {
       expect.objectContaining({ code: "TTS_UNAVAILABLE", turnId: T1 }),
     ]);
     expect(s.of("playback_stop")).toEqual([
-      { type: "playback_stop", turnId: T1, reason: "TTS_FAILED" },
+      { type: "playback_stop", turnId: T1, generation: 1, reason: "TTS_FAILED" },
     ]);
     expect(s.of("response_delta").map((d) => d.text)).toEqual(["début", " fin"]);
     expect(s.of("response_final")).toHaveLength(1);
     expect(s.of("turn_metrics")).toHaveLength(1);
     expect(s.of("audio")).toEqual([]);
+  });
+
+  it("9b. a mute ICOS says why: no TTS provider is reported, once, not in silence", async () => {
+    const s = setup({ tts: false });
+    say(s.conn, T1, ["question"]);
+    await flush();
+    const q = s.cognitive.responses.get(T1)!;
+    q.push({ type: "TEXT_DELTA", text: "Bonsoir Geoffrey." });
+    q.push({ type: "TEXT_DELTA", text: " Je t'entends." });
+    q.push({ type: "FINAL_RESPONSE", text: "Bonsoir Geoffrey. Je t'entends." });
+    await flush();
+    // Reported ONCE, however many deltas tried to speak, and never as retryable:
+    // an unset ICOS_VOICE_TTS_MODEL is a deployment fact, not a provider blip.
+    expect(s.of("error")).toEqual([
+      expect.objectContaining({ code: "TTS_NOT_CONFIGURED", retryable: false, turnId: T1 }),
+    ]);
+    // The answer still reaches the user as text, and the metric says why it was silent.
+    expect(s.of("response_final")).toHaveLength(1);
+    expect(s.of("audio")).toEqual([]);
+    expect(s.of("playback_stop")).toEqual([]);
+    expect(s.of("turn_metrics")[0].metrics).toMatchObject({
+      tts: "NOT_CONFIGURED",
+      ttsSentencesLost: 0,
+      speechEndToFirstAudioMs: null,
+    });
+  });
+
+  it("9c. one lost sentence degrades the answer instead of truncating it", async () => {
+    const s = setup();
+    s.tts.loseSentences = 1; // the FIRST sentence is lost; the rest must still play
+    say(s.conn, T1, ["question"]);
+    await flush();
+    const q = s.cognitive.responses.get(T1)!;
+    q.push({ type: "TEXT_DELTA", text: "perdue" });
+    q.push({ type: "TEXT_DELTA", text: "gardée" });
+    q.push({ type: "FINAL_RESPONSE", text: "perdue gardée" });
+    await flush();
+    s.tts.flush();
+    // No playback_stop: flushing the client queue here would discard every sentence
+    // still coming, turning one lost sentence into a truncated answer.
+    expect(s.of("playback_stop")).toEqual([]);
+    expect(s.of("error")).toEqual([
+      expect.objectContaining({ code: "TTS_DEGRADED", retryable: true, turnId: T1 }),
+    ]);
+    expect(s.of("audio").map((a) => Buffer.from(a.data, "base64").toString())).toEqual([
+      "say:gardée",
+    ]);
+    expect(s.of("turn_metrics")[0].metrics).toMatchObject({
+      tts: "CONFIGURED",
+      ttsSentencesLost: 1,
+    });
+  });
+
+  it("9d. losing EVERY sentence reads as an outage, not as a degraded answer", async () => {
+    const s = setup();
+    s.tts.loseSentences = 3;
+    say(s.conn, T1, ["question"]);
+    await flush();
+    const q = s.cognitive.responses.get(T1)!;
+    q.push({ type: "TEXT_DELTA", text: "une" });
+    q.push({ type: "TEXT_DELTA", text: "deux" });
+    q.push({ type: "TEXT_DELTA", text: "trois" });
+    q.push({ type: "FINAL_RESPONSE", text: "une deux trois" });
+    await flush();
+    s.tts.flush();
+    // Nothing was spoken at all, so "part of the answer was lost" would be a lie.
+    expect(s.of("error")).toEqual([
+      expect.objectContaining({ code: "TTS_UNAVAILABLE", turnId: T1 }),
+    ]);
+    expect(s.of("audio")).toEqual([]);
+    expect(s.of("playback_stop")).toEqual([]);
+    expect(s.of("response_final")).toHaveLength(1);
+    expect(s.of("turn_metrics")[0].metrics).toMatchObject({
+      tts: "CONFIGURED",
+      ttsSentencesLost: 3,
+    });
   });
 
   it("10. an unavailable Cognitive Runtime is explicit and the committed turn can be resent", async () => {
@@ -252,6 +328,10 @@ describe("voice session (SIMULATED providers)", () => {
         finalToFirstCognitiveEventMs: 150,
         firstCognitiveEventToFirstTtsAudioMs: 40,
         speechEndToFirstAudioMs: 190,
+        tts: "CONFIGURED",
+        ttsSentencesLost: 0,
+        // The simulated TTS does not name itself: no provider is claimed, no fallback seen.
+        ttsFallbackUsed: false,
       },
     ]);
 
@@ -263,6 +343,8 @@ describe("voice session (SIMULATED providers)", () => {
     expect(text.of("turn_metrics")[0].metrics).toMatchObject({
       firstCognitiveEventToFirstTtsAudioMs: null,
       speechEndToFirstAudioMs: null,
+      // The null now says WHY it is null, instead of meaning three things at once.
+      tts: "NOT_CONFIGURED",
     });
   });
 
@@ -433,7 +515,7 @@ describe("voice session (SIMULATED providers)", () => {
       s.advance(25);
       expect(s.of("error").map((e) => e.code)).toEqual(["TTS_TIMEOUT"]);
       expect(s.of("playback_stop")).toEqual([
-        { type: "playback_stop", turnId: T1, reason: "TIMEOUT" },
+        { type: "playback_stop", turnId: T1, generation: 1, reason: "TIMEOUT" },
       ]);
       expect(s.of("turn_metrics")).toHaveLength(1);
       expect(s.pendingTimers()).toBe(0);

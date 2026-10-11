@@ -68,6 +68,15 @@ export const VoiceErrorCodeSchema = z.enum([
   "STT_TIMEOUT",
   "TTS_UNAVAILABLE",
   "TTS_TIMEOUT",
+  /**
+   * No TTS provider is configured at all (ICOS_VOICE_TTS_MODEL unset) — a
+   * deployment fact, not an outage, so it is never retryable. Distinct from
+   * TTS_UNAVAILABLE because conflating them hid a mute ICOS behind a session
+   * that looked healthy: the text arrived and nothing ever spoke.
+   */
+  "TTS_NOT_CONFIGURED",
+  /** One sentence of the answer was lost; the rest still plays. */
+  "TTS_DEGRADED",
   "COGNITIVE_UNAVAILABLE",
   "COGNITIVE_ERROR",
   "COGNITIVE_TIMEOUT",
@@ -106,8 +115,20 @@ export type ServerMessage =
       payload: unknown;
     }
   | { type: "response_final"; turnId: string; text: string }
-  | { type: "audio"; turnId: string; seq: number; mime: string; data: string }
-  | { type: "playback_stop"; turnId: string; reason: PlaybackStopReason }
+  | {
+      type: "audio";
+      turnId: string;
+      /**
+       * Speech generation of this turn (monotonic per session). A turn re-answered after
+       * an interruption gets a new one: the client drops any chunk of an older generation.
+       */
+      generation?: number;
+      /** Monotonic per generation from 0: the client plays each seq once, in order. */
+      seq: number;
+      mime: string;
+      data: string;
+    }
+  | { type: "playback_stop"; turnId: string; generation?: number; reason: PlaybackStopReason }
   | {
       type: "error";
       code: VoiceErrorCode;
@@ -164,21 +185,34 @@ export interface SttProvider {
 }
 
 export type TtsEvent =
-  /** `data` is one independently decodable chunk (e.g. one sentence of audio/mpeg). */
-  | { type: "audio"; data: Uint8Array; mime: string }
+  /**
+   * `data` is one independently decodable chunk (e.g. one sentence of audio/mpeg).
+   * `provider` names who actually spoke it (a router may have fallen back).
+   */
+  | { type: "audio"; data: Uint8Array; mime: string; provider?: string; fallback?: boolean }
   | { type: "done" }
-  | { type: "error"; message: string; timeout?: boolean };
+  /**
+   * `fatal: false` means this sentence was lost but the stream continues — the
+   * answer degrades instead of ending. Absent/true keeps the original meaning:
+   * the whole stream is over.
+   */
+  | { type: "error"; message: string; timeout?: boolean; fatal?: boolean };
 
 export interface TtsStream {
   text(chunk: string): void;
   finish(): void;
-  cancel(): void;
+  /** Abort synthesis now. A cancelled stream emits nothing more and never falls back. */
+  cancel(reason?: PlaybackStopReason): void;
 }
 
 export interface TtsProvider {
   readonly id: string;
   readonly simulated: boolean;
-  start(options: { language?: string }, onEvent: (event: TtsEvent) => void): TtsStream;
+  /** `turnId` only correlates telemetry; it never changes what is synthesized. */
+  start(
+    options: { language?: string; turnId?: string },
+    onEvent: (event: TtsEvent) => void,
+  ): TtsStream;
 }
 
 /** A user turn committed by the voice layer, submitted to the Cognitive Runtime. */
@@ -280,4 +314,16 @@ export type TurnLatency = {
   finalToFirstCognitiveEventMs: number | null;
   firstCognitiveEventToFirstTtsAudioMs: number | null;
   speechEndToFirstAudioMs: number | null;
+  /**
+   * Why the two numbers above may be null. They used to be null for three
+   * different reasons at once — no TTS configured, TTS failed, retried turn —
+   * so "ICOS never spoke" and "ICOS spoke late" read identically.
+   */
+  tts: "CONFIGURED" | "NOT_CONFIGURED";
+  /** Sentences whose synthesis was lost while the rest of the answer still played. */
+  ttsSentencesLost: number;
+  /** Provider that spoke the first audio chunk, when one did and it said who it was. */
+  ttsProvider?: string;
+  /** True when any chunk of the answer was spoken by a fallback provider. */
+  ttsFallbackUsed?: boolean;
 };

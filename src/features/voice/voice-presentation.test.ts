@@ -179,6 +179,8 @@ describe("user-facing errors", () => {
       "TURN_DROPPED",
       "STT_TIMEOUT",
       "TTS_UNAVAILABLE",
+      "TTS_NOT_CONFIGURED",
+      "TTS_DEGRADED",
       "COGNITIVE_UNAVAILABLE",
       "COGNITIVE_TIMEOUT",
       "COGNITIVE_ERROR",
@@ -198,6 +200,17 @@ describe("user-facing errors", () => {
     // An unconfigured cognition engine blocks the screen: retrying cannot fix config.
     expect(isBlocking("COGNITION_NOT_CONFIGURED")).toBe(true);
     expect(userMessage("COGNITION_NOT_CONFIGURED")).toContain("moteur cognitif");
+    /*
+     * A mute voice must be legible, and the two reasons must read differently: an
+     * unconfigured server is not the same thing as a sentence lost in transit. But
+     * neither blocks the screen — the answer is still there as text, so the session
+     * stays usable, unlike an unconfigured cognition engine.
+     */
+    expect(userMessage("TTS_NOT_CONFIGURED")).toContain("pas configurée");
+    expect(userMessage("TTS_DEGRADED")).toContain("perdue");
+    expect(userMessage("TTS_NOT_CONFIGURED")).not.toBe(userMessage("TTS_DEGRADED"));
+    expect(isBlocking("TTS_NOT_CONFIGURED")).toBe(false);
+    expect(isBlocking("TTS_DEGRADED")).toBe(false);
     expect(isBlocking("TURN_DROPPED")).toBe(false);
   });
 });

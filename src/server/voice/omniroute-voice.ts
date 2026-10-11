@@ -1,5 +1,18 @@
 import type { SttEvent, SttProvider, TtsEvent, TtsProvider } from "@/core/voice/contracts";
 
+import { renderSpeech, SENTENCE_CHUNKING } from "./tts/speech-text";
+import {
+  audioMime,
+  bytesOf,
+  classifyError,
+  classifyStatus,
+  TtsProviderError,
+  type SpeechSynthesizer,
+  type SynthesisRequest,
+  type SynthesisResponse,
+} from "./tts/synthesizer";
+import { TtsRouter } from "./tts/tts-router";
+
 /**
  * Real STT/TTS through OmniRoute, the AI gateway ICOS already uses
  * (OpenAI-compatible `/v1/audio/transcriptions` and `/v1/audio/speech`).
@@ -32,32 +45,65 @@ export type VoiceProviderStatus = "CONFIGURED" | "NOT_CONFIGURED";
 export const DEFAULT_VOICE_LANGUAGE = "fr";
 
 /**
- * A gateway voice id from a session language. The gateway's `/v1/audio/speech` takes
- * the OpenAI `voice` field as a language code and accepts "fr" but answers 502 to
- * "fr-FR", so this narrows to the 2-letter code — the same normalization STT does.
- * Returns null for anything that is not a language tag, so the caller can fall back.
+ * A gateway voice id from a session language. This is the FALLBACK only, for backends
+ * that have no voice concept: gTTS reads the OpenAI `voice` field as a language code
+ * and accepts "fr" but answers 502 to "fr-FR", so this narrows to the 2-letter code —
+ * the same normalization STT does. Returns null for anything that is not a language
+ * tag, so the caller can fall back.
+ *
+ * A real voice is NOT a language. Set ICOS_VOICE_TTS_VOICE and it is sent verbatim
+ * instead (see `ttsVoiceId`): narrowing it here is what made every premium backend
+ * unreachable — a Fish Audio `reference_id` or an ElevenLabs voice id arrived at the
+ * gateway sliced to its first two characters.
  */
 export function ttsVoice(language: string | undefined): string | null {
   const code = language?.trim().slice(0, 2).toLowerCase();
   return code && /^[a-z]{2}$/.test(code) ? code : null;
 }
 
+/**
+ * The provider-specific voice id from configuration, or null. Passed through
+ * UNTOUCHED: the gateway maps it per backend (Fish Audio `reference_id`, ElevenLabs
+ * voice id in the URL path, EdgeTTS `fr-FR-…Neural`, OpenAI `onyx`, gTTS language),
+ * so one opaque string covers every backend and ICOS needs no per-vendor branch.
+ * Bounded and charset-checked because it reaches an upstream URL path on some
+ * backends; a value that is not a plausible voice id is dropped, not sent.
+ */
+export function ttsVoiceId(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  return value && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value) ? value : null;
+}
+
+/** The gateway, when both its URL and key are configured. */
+export function omniRouteGatewayFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): OmniRouteVoiceConfig | null {
+  const baseUrl = env.OMNIROUTE_BASE_URL;
+  const apiKey = env.OMNIROUTE_API_KEY;
+  return baseUrl && apiKey ? { baseUrl, apiKey } : null;
+}
+
 export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = process.env): {
   stt: SttProvider | null;
   tts: TtsProvider | null;
-  status: { stt: VoiceProviderStatus; tts: VoiceProviderStatus; language: string };
+  status: {
+    stt: VoiceProviderStatus;
+    tts: VoiceProviderStatus;
+    language: string;
+    /** The configured voice, or "language" when the language-code fallback is in use. */
+    voice: string;
+  };
 } {
-  const baseUrl = env.OMNIROUTE_BASE_URL;
-  const apiKey = env.OMNIROUTE_API_KEY;
-  const gateway = baseUrl && apiKey ? { baseUrl, apiKey } : null;
+  const gateway = omniRouteGatewayFromEnv(env);
   const language = ttsVoice(env.ICOS_VOICE_LANGUAGE) ?? DEFAULT_VOICE_LANGUAGE;
   const stt =
     gateway && env.ICOS_VOICE_STT_MODEL
       ? new OmniRouteStt(gateway, env.ICOS_VOICE_STT_MODEL, 1.5, language)
       : null;
+  const voiceId = ttsVoiceId(env.ICOS_VOICE_TTS_VOICE);
   const tts =
     gateway && env.ICOS_VOICE_TTS_MODEL
-      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL, language)
+      ? new OmniRouteTts(gateway, env.ICOS_VOICE_TTS_MODEL, language, voiceId)
       : null;
   return {
     stt,
@@ -66,11 +112,19 @@ export function omniRouteVoiceFromEnv(env: Record<string, string | undefined> = 
       stt: stt ? "CONFIGURED" : "NOT_CONFIGURED",
       tts: tts ? "CONFIGURED" : "NOT_CONFIGURED",
       language,
+      voice: voiceId ?? "language",
     },
   };
 }
 
-class ProviderHttpError extends Error {}
+class ProviderHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
 
 /** Beyond this, the utterance only gets its final transcript (partial cost is quadratic). */
 const MAX_PARTIAL_SECONDS = 15;
@@ -96,7 +150,10 @@ async function post(
     },
   );
   // Status only: gateway error bodies can echo request details.
-  if (!response.ok) throw new ProviderHttpError(`${path} HTTP ${response.status}`);
+  if (!response.ok) {
+    void response.body?.cancel().catch(() => {});
+    throw new ProviderHttpError(`${path} HTTP ${response.status}`, response.status);
+  }
   return response;
 }
 
@@ -214,123 +271,89 @@ export class OmniRouteStt implements SttProvider {
   }
 }
 
-/** Markdown and links read aloud badly. */
-export function speakable(text: string): string {
-  return text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/[*_#>`|~]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+/** Markdown and links read aloud badly. Kept for callers; the rules live in speech-text. */
+export const speakable = renderSpeech;
 
-/** Complete sentences at the head of `buffer`, and the rest. */
-export function takeSentences(buffer: string): { sentences: string[]; rest: string } {
-  const sentences: string[] = [];
-  // A terminator ends a sentence only before whitespace: "3.14" and URLs stay whole.
-  const pattern = /[\s\S]*?(?:[.!?…]+(?=\s)|\n)/y;
-  let rest = buffer;
-  for (let match = pattern.exec(rest); match; match = pattern.exec(rest)) {
-    if (match[0].trim()) sentences.push(match[0].trim());
-    rest = rest.slice(match[0].length);
-    pattern.lastIndex = 0;
-  }
-  return { sentences, rest };
-}
-
-/** Sentence-chunked streaming: each sentence is synthesized as it completes, in order. */
-export class OmniRouteTts implements TtsProvider {
-  readonly id: string;
-  readonly simulated = false;
+/**
+ * OmniRoute's `/v1/audio/speech` as one synthesizer below the TTS router (decision 0074):
+ * the `gtts` last resort and the free `edge` voice both go through the gateway ICOS already
+ * uses. The gateway serves exactly one provider per request — routing stays in the router.
+ */
+export class OmniRouteSpeech implements SpeechSynthesizer {
+  readonly streaming = false;
 
   constructor(
     private readonly config: OmniRouteVoiceConfig,
-    private readonly model: string,
-    /** Used when the session states no language. */
-    private readonly defaultLanguage = DEFAULT_VOICE_LANGUAGE,
-  ) {
-    this.id = `omniroute:${model}`;
-  }
-
-  start(options: { language?: string }, onEvent: (event: TtsEvent) => void) {
-    /*
-     * The language MUST be sent. The gateway ignores the model id for
-     * /v1/audio/speech ("gtts/fr" and "gtts/en" return byte-identical audio) and
-     * otherwise GUESSES the language from the text — so one English token in a
-     * French reply ("(NOT_CONNECTED)") flipped the whole answer to an English
-     * voice reading French. Observed on a real phone; see omniroute-voice.test.ts.
+    readonly model: string,
+    readonly name: "gtts" | "edge" = "gtts",
+    /**
+     * Gateway `voice` field. Null = the session language, which MUST be sent: the gateway
+     * ignores the model id for gTTS ("gtts/fr" and "gtts/en" return byte-identical audio)
+     * and otherwise GUESSES the language from the text — one English token in a French
+     * reply ("(NOT_CONNECTED)") flipped the whole answer to an English voice reading
+     * French. Observed on a real phone; see omniroute-voice.test.ts.
+     *
+     * A configured voice id (ICOS_VOICE_TTS_VOICE, see `ttsVoiceId`) is a VOICE and
+     * wins, untouched: narrowed to a language code, every premium backend behind the
+     * gateway was unreachable by construction, not by configuration.
      */
-    const voice = ttsVoice(options.language) ?? this.defaultLanguage;
-    const queue: string[] = [];
-    const cancelled = new AbortController();
-    let buffer = "";
-    let running = false;
-    let finished = false;
-    let done = false;
+    readonly voice: string | null = null,
+  ) {}
 
-    const synthesize = async (input: string) => {
-      const response = await post(
+  async synthesize(request: SynthesisRequest): Promise<SynthesisResponse> {
+    let response: Response;
+    try {
+      response = await post(
         this.config,
         "/audio/speech",
-        JSON.stringify({ model: this.model, input, response_format: "mp3", voice }),
-        cancelled.signal,
+        JSON.stringify({
+          model: this.model,
+          input: request.text,
+          response_format: "mp3",
+          voice: this.voice ?? request.language,
+        }),
+        request.signal,
         true,
       );
-      const mime = response.headers.get("content-type") ?? "audio/mpeg";
-      if (!mime.startsWith("audio/")) throw new ProviderHttpError(`/audio/speech returned ${mime}`);
-      return { data: new Uint8Array(await response.arrayBuffer()), mime };
-    };
-
-    const pump = () => {
-      if (running || cancelled.signal.aborted) return;
-      const next = queue.shift();
-      if (next === undefined) {
-        if (finished && !done) {
-          done = true;
-          onEvent({ type: "done" });
-        }
-        return;
+    } catch (error) {
+      if (error instanceof ProviderHttpError && error.status) {
+        throw new TtsProviderError(this.name, classifyStatus(error.status), error.status);
       }
-      running = true;
-      synthesize(next)
-        .then((audio) => {
-          if (!cancelled.signal.aborted) onEvent({ type: "audio", ...audio });
-        })
-        .catch((error: unknown) => {
-          if (cancelled.signal.aborted) return;
-          cancelled.abort(); // one failed sentence ends this stream; the text still reaches the user
-          onEvent({ type: "error", message: String(error), timeout: isTimeout(error) });
-        })
-        .finally(() => {
-          running = false;
-          pump();
-        });
-    };
+      throw classifyError(this.name, error);
+    }
+    return { mime: audioMime(this.name, response, "audio/mpeg"), body: bytesOf(response) };
+  }
+}
 
-    const enqueue = (sentence: string) => {
-      const clean = speakable(sentence);
-      if (clean) queue.push(clean);
-    };
+/**
+ * Sentence-chunked streaming through the gateway alone: each sentence is synthesized as
+ * it completes, in order — the pre-router behaviour, now a one-provider TtsRouter.
+ */
+export class OmniRouteTts implements TtsProvider {
+  readonly id: string;
+  readonly simulated = false;
+  private readonly router: TtsRouter;
 
-    return {
-      text: (chunk: string) => {
-        if (finished || cancelled.signal.aborted) return;
-        const { sentences, rest } = takeSentences(buffer + chunk);
-        buffer = rest;
-        sentences.forEach(enqueue);
-        pump();
-      },
-      finish: () => {
-        if (finished) return;
-        finished = true;
-        enqueue(buffer);
-        buffer = "";
-        pump();
-      },
-      cancel: () => {
-        cancelled.abort();
-        queue.length = 0;
-      },
-    };
+  constructor(
+    config: OmniRouteVoiceConfig,
+    model: string,
+    /** Used when the session states no language. */
+    defaultLanguage = DEFAULT_VOICE_LANGUAGE,
+    /** Provider-specific voice id; when set it wins over any language code. */
+    voiceId: string | null = null,
+  ) {
+    this.id = `omniroute:${model}${voiceId ? `:${voiceId}` : ""}`;
+    this.router = new TtsRouter({
+      providers: [new OmniRouteSpeech(config, model, "gtts", voiceId)],
+      chunking: SENTENCE_CHUNKING,
+      retries: 0,
+      defaultLanguage,
+      timeoutMs: config.requestTimeoutMs ?? 20_000,
+      firstAudioTimeoutMs: config.requestTimeoutMs ?? 20_000,
+    });
+  }
+
+  start(options: { language?: string; turnId?: string }, onEvent: (event: TtsEvent) => void) {
+    return this.router.start(options, onEvent);
   }
 }
