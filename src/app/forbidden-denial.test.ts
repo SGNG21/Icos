@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
@@ -64,11 +65,16 @@ describe("FORBIDDEN_RETURNS_CONTROLLED_DENIAL", () => {
 
   /** NO_AUTH_WEAKENING: the flag changes the DENIAL's shape, never who is denied. */
   it("every forbidden() call still sits behind a permission or role guard", () => {
-    const callers = execFileSync("git", ["grep", "-l", "forbidden()", "--", "src/app"], {
-      encoding: "utf8",
-    })
-      .split("\n")
-      .filter((line) => line.endsWith(".tsx"));
+    /*
+     * Read from disk, not `git grep`: the integration gate runs this suite under the worker
+     * sandbox, which holds no Git authority (ADR 0073) — the gitdir is not mounted. Walking
+     * the tree is also stricter: an untracked caller is checked too.
+     */
+    const callers = (readdirSync("src/app", { recursive: true }) as string[])
+      .map((entry) => path.join("src/app", entry))
+      .filter(
+        (file) => file.endsWith(".tsx") && readFileSync(file, "utf8").includes("forbidden()"),
+      );
 
     expect(callers.length).toBeGreaterThan(0);
     for (const file of callers) {
