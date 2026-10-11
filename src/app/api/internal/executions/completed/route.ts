@@ -89,7 +89,19 @@ export async function POST(request: Request): Promise<Response> {
      */
     /* Set when the trusted capture refused; it becomes the recorded outcome below. */
     let refusal: string | null = null;
-    if (parsed.data.outcome === "success" && container.workspaceManager) {
+    /*
+     * A REDELIVERY IS NOT A SECOND COMPLETION. Once a result is durable for this workflow, the
+     * capture decision was already taken at first delivery (committed, or refused and recorded
+     * as a failure). Re-running it on a replay found the workspace already integrated and
+     * reaped, refused (WORKSPACE_REQUIRED_BUT_ABSENT), turned an identical success into a
+     * FAILURE and answered 400 "résultat conflictuel" — so a byte-identical redelivery read as
+     * a conflict. Skipping the capture lets `recordTaskExecution` answer the replay for what it
+     * is: `duplicate: true` when identical, a conflict only when it genuinely differs.
+     */
+    const alreadyRecorded = await container.executionResults.getByWorkflowId(
+      parsed.data.workflowId,
+    );
+    if (parsed.data.outcome === "success" && container.workspaceManager && !alreadyRecorded) {
       const finalized = await finalizeSuccessfulWorkerExecution(
         {
           workspaces: container.workspaceManager,

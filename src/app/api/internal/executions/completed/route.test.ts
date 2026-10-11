@@ -362,4 +362,69 @@ describe("POST /api/internal/executions/completed", () => {
     });
     expect(recordTaskExecution).not.toHaveBeenCalled();
   });
+  describe("redelivery after the governed workspace was integrated and reaped (P0 W6 regression)", () => {
+    async function deliver(alreadyRecorded: boolean) {
+      const missionRepository = makeMissionRepositoryMock({
+        getMissionTaskByCanonicalTaskId: vi.fn().mockResolvedValue({ id: "mission-task1", missionId: "mission1" }),
+      });
+      const workspaceManager = { list: vi.fn().mockResolvedValue([]) };
+      const mockContainer = makeContainer({
+        executionCallbackSecret: "test-secret",
+        mission: missionRepository,
+        workspaceManager,
+        /* A governed WRITER: without a live workspace, the trusted capture must refuse. */
+        tasks: {
+          getById: vi.fn().mockResolvedValue({
+            id: "task1",
+            title: "Fix the defect",
+            riskClass: "reversible",
+            allowedFileScope: ["src/x/**"],
+          }),
+        },
+      });
+      mockContainer.executionResults.getByWorkflowId = vi
+        .fn()
+        .mockResolvedValue(alreadyRecorded ? { id: "execution-result-id" } : null);
+      vi.mocked(getContainer).mockResolvedValue(mockContainer);
+      vi.mocked(verifyExecutionCallback).mockReturnValue({ ok: true });
+      vi.mocked(readJson).mockResolvedValue({ ok: true as const, value: {} });
+      const data = {
+        taskId: "task1",
+        workflowId: "wf1",
+        outcome: "success" as const,
+        result: "fixed",
+        completedAt: "2026-10-11T10:00:00.000Z",
+      };
+      vi.spyOn(executionCompletedBodySchema, "safeParse").mockReturnValue({
+        success: true as const,
+        data,
+      } as ReturnType<typeof executionCompletedBodySchema.safeParse>);
+      vi.mocked(recordTaskExecution).mockResolvedValue({
+        ok: true as const,
+        record: {} as never,
+        duplicate: alreadyRecorded,
+      });
+      await POST(new Request("http://localhost/api/internal/executions/completed", { method: "POST" }));
+      return { data, workspaceManager };
+    }
+
+    it("an identical redelivery is recorded as the SAME success (duplicate), never re-captured into a failure", async () => {
+      const { data, workspaceManager } = await deliver(true);
+      expect(workspaceManager.list).not.toHaveBeenCalled();
+      expect(recordTaskExecution).toHaveBeenCalledWith(expect.anything(), data);
+    });
+
+    it("a FIRST delivery still runs the trusted capture and fails closed without a workspace", async () => {
+      await deliver(false);
+      expect(recordTaskExecution).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          outcome: "failure",
+          error: expect.objectContaining({
+            message: expect.stringContaining("GOVERNED_WORK_NOT_MATERIALIZED: WORKSPACE_REQUIRED_BUT_ABSENT"),
+          }),
+        }),
+      );
+    });
+  });
 });
