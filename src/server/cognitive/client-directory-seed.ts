@@ -281,7 +281,9 @@ export async function seedClientDirectory(
 export async function seedClientDirectoryAtStartup(
   memory: Pick<PostgresCognitiveMemoryStore, "upsertEntity" | "write" | "subjectRecorded">,
   tenantId: string,
-  log: (line: string) => void = (line) => console.info(line),
+  /* `warn`, like COMPUTE_BOOTSTRAP: debug levels are banned from shipped source, and this
+     boot summary holds counts and subject keys only — never a fact's content. */
+  log: (line: string) => void = (line) => console.warn(line),
 ): Promise<SeedReport | null> {
   try {
     const report = await seedClientDirectory(memory, tenantId, "system:boot-seed");
