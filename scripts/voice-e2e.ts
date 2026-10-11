@@ -229,7 +229,7 @@ async function main() {
   await speak(c, t1, q1);
   const endAt = Date.now();
   const final1 = await c.until((m) => m.type === "transcript" && m.turnId === t1 && m.final);
-  await c.until((m) => m.type === "turn_accepted" && m.turnId === t1);
+  const accepted1 = await c.until((m) => m.type === "turn_accepted" && m.turnId === t1);
   const answer1 = await c.until((m) => m.type === "response_final" && m.turnId === t1);
   const metrics1 = await c.until((m) => m.type === "turn_metrics" && m.metrics.turnId === t1);
   const audio1 = of(c, "audio", t1);
@@ -247,6 +247,39 @@ async function main() {
     serverMetrics: metrics1.type === "turn_metrics" ? metrics1.metrics : null,
     errors: of(c, "error").map((e) => (e.m.type === "error" ? e.m.code : "")),
   };
+
+  /*
+   * WHERE THE 6 337 ms ACTUALLY GO. Read from the durable event log, not inferred: the
+   * runtime timestamps every stage of a turn, so the one number the session can see
+   * (final transcript -> FINAL_RESPONSE) is decomposed into rows that outlive the process.
+   */
+  const conv1 = accepted1.type === "turn_accepted" ? accepted1.conversationId : "";
+  const log = await fetch(`${base}/api/cognitive/conversations/${conv1}/events`, {
+    headers: { cookie, origin },
+  });
+  const logged = ((await log.json()) as { events?: { type: string; createdAt: string }[] }).events;
+  if (logged?.length) {
+    const at = (type: string) => {
+      const hit = logged.find((e) => e.type === type);
+      return hit ? Date.parse(hit.createdAt) : null;
+    };
+    const span = (from: string, to: string) => {
+      const a = at(from);
+      const b = at(to);
+      return a !== null && b !== null ? b - a : null;
+    };
+    report.cognitiveBreakdown = {
+      stages: logged.map((e) => e.type),
+      receivedToProcessingMs: span("turn.received", "turn.processing"),
+      processingToContextMs: span("turn.processing", "context.assembled"),
+      /* Context assembled -> completed is the model call plus persistence: the real suspect. */
+      contextToCompletedMs: span("context.assembled", "turn.completed"),
+      memoryWriteMs: span("turn.completed", "memory.written"),
+      receivedToCompletedMs: span("turn.received", "turn.completed"),
+    };
+  } else {
+    report.cognitiveBreakdown = { unavailable: `HTTP ${log.status}` };
+  }
 
   // 3. barge-in during ICOS audio
   const t2 = `e2e-${Date.now()}-2`;
@@ -271,33 +304,106 @@ async function main() {
     t3Audio: of(c, "audio", t3).length,
   };
 
-  // 4. phone hang-up after acceptance
+  // 4. phone hang-up after acceptance, then the owner comes back
   const t4 = `e2e-${Date.now()}-4`;
   await speak(c, t4, q1);
-  await c.until((m) => m.type === "turn_accepted" && m.turnId === t4);
-  const heard4 = of(c, "transcript", t4).find((e) => e.m.type === "transcript" && e.m.final);
+  const accepted4 = await c.until((m) => m.type === "turn_accepted" && m.turnId === t4);
+  const conversationId = accepted4.type === "turn_accepted" ? accepted4.conversationId : "";
   c.ws.terminate(); // no close handshake: the phone just vanished
   const hungUpAt = Date.now();
-  let landed: { role: string; content: string }[] = [];
-  while (Date.now() - hungUpAt < 150_000) {
-    const res = await fetch(`${base}/api/conversation`, { headers: { cookie } });
-    const body = (await res.json()) as { messages: { role: string; content: string }[] };
-    const heardText = heard4?.m.type === "transcript" ? heard4.m.text.trim() : "";
-    const idx = body.messages.map((m) => m.content).lastIndexOf(heardText);
-    landed = idx >= 0 ? body.messages.slice(idx) : [];
-    if (landed.some((m) => m.role === "assistant")) break;
-    await sleep(2_000);
-  }
+
+  /*
+   * RESUME FIRST, because the session TTL is a deadline and the old order spent it on a
+   * poll: `VoiceSessionRegistry` sweeps a detached session after `idleTtlMs` (120 s), so
+   * measuring resume AFTER a 150 s poll measured the expiry path and called it a defect.
+   * A returning user reconnects in seconds, which is what this reproduces.
+   */
   const back = await connect(cookie);
   back.send({ type: "hello", sessionId, device: "browser" });
   const resumed = await back.until((m) => m.type === "ready");
+  const resumeMs = Date.now() - hungUpAt;
+
+  /*
+   * THE CANONICAL STORE, NOT THE LEGACY ONE. Voice persists through the Cognitive Runtime;
+   * `/api/conversation` is the retired CEO-conversation bridge and can never show a voice
+   * turn. The user turn carries the voice turnId as its `idempotencyKey` (integration test
+   * V1), and the assistant turn points at it through `replyToTurnId` -- so the reply is
+   * identified by identity, not by string-matching a transcript.
+   */
+  type DurableTurn = {
+    id: string;
+    role: "user" | "assistant";
+    replyToTurnId: string | null;
+    idempotencyKey: string | null;
+    content: { parts: { text: string }[] };
+  };
+  let turns: DurableTurn[] = [];
+  let mine: DurableTurn | undefined;
+  let replies: DurableTurn[] = [];
+  while (Date.now() - hungUpAt < 120_000) {
+    const res = await fetch(`${base}/api/cognitive/conversations/${conversationId}`, {
+      headers: { cookie, origin },
+    });
+    const body = (await res.json()) as { turns?: DurableTurn[] };
+    turns = body.turns ?? [];
+    mine = turns.find((t) => t.role === "user" && t.idempotencyKey === t4);
+    replies = turns.filter((t) => t.role === "assistant" && mine && t.replyToTurnId === mine.id);
+    if (replies.length > 0) break;
+    await sleep(2_000);
+  }
+  const storedAfterMs = Date.now() - hungUpAt;
+
+  // A new turn must be accepted immediately on the resumed connection.
+  const t5 = `e2e-${Date.now()}-5`;
+  await speak(back, t5, q2);
+  const accepted5 = await back
+    .until((m) => m.type === "turn_accepted" && m.turnId === t5, 60_000)
+    .then(() => true)
+    .catch(() => false);
+
   report.phoneHangUp = {
-    answerStoredAfterHangUp: landed.some((m) => m.role === "assistant"),
-    storedAfterMs: Date.now() - hungUpAt,
+    conversationId,
     resumed: resumed.type === "ready" && resumed.resumed,
+    resumeMs,
     t4InAccepted: resumed.type === "ready" && resumed.acceptedTurnIds.includes(t4),
+    assistantReplyStored: replies.length > 0,
+    replyText: replies[0]?.content.parts.map((part) => part.text).join(" ").slice(0, 120) ?? null,
+    storedAfterMs,
+    /* Exactly one of each, or acceptance was not idempotent across the reconnect. */
+    userTurnsForT4: turns.filter((t) => t.idempotencyKey === t4).length,
+    assistantRepliesForT4: replies.length,
+    nextTurnAcceptedAfterResume: accepted5,
+  };
+
+  /*
+   * CONTINUITY WITHOUT PROCESS MEMORY, proven on purpose and without waiting out the TTL:
+   * an unknown sessionId plus the conversationId is the documented path back. If this
+   * works, no conversation depends on a live session object.
+   */
+  const afterExpiry = await connect(cookie);
+  afterExpiry.send({
+    type: "hello",
+    sessionId: `expired-${Date.now()}`,
+    conversationId,
+    device: "browser",
+  });
+  const fresh = await afterExpiry.until((m) => m.type === "ready");
+  const t6 = `e2e-${Date.now()}-6`;
+  await speak(afterExpiry, t6, q3);
+  const accepted6 = await afterExpiry
+    .until((m) => m.type === "turn_accepted" && m.turnId === t6, 60_000)
+    .then(() => true)
+    .catch(() => false);
+  report.continuityWithoutSession = {
+    sessionExpiredReported: of(afterExpiry, "error").some(
+      (e) => e.m.type === "error" && e.m.code === "SESSION_EXPIRED",
+    ),
+    sameConversation: fresh.type === "ready" && fresh.conversationId === conversationId,
+    newSession: fresh.type === "ready" && !fresh.resumed,
+    turnAccepted: accepted6,
   };
   back.ws.close();
+  afterExpiry.ws.close();
 
   console.log(JSON.stringify(report, null, 2));
 }
