@@ -154,6 +154,25 @@ export const CAPABILITY_RISK_TABLE: Readonly<Record<string, CapabilityRiskEntry>
     declarable: true,
     rationale: "modification de la production",
   },
+  /*
+   * The FLEET's routing vocabulary (worker registry capabilities). A canonical Task may carry
+   * these as `requiredCapabilities`; they describe compute, so they are classified by the
+   * effect that compute has. Not declarable by a goal: at launch they stay POLICY_GATED.
+   */
+  review: { riskClass: "READ_ONLY", declarable: false, rationale: "revue, aucun effet" },
+  audit: { riskClass: "READ_ONLY", declarable: false, rationale: "audit en lecture" },
+  analysis: { riskClass: "READ_ONLY", declarable: false, rationale: "analyse, aucun effet" },
+  "deep-research": { riskClass: "READ_ONLY", declarable: false, rationale: "recherche" },
+  "code-generation": {
+    riskClass: "REVERSIBLE_ISOLATED",
+    declarable: false,
+    rationale: "écriture de code, confinée comme code_write",
+  },
+  code_editing: {
+    riskClass: "REVERSIBLE_ISOLATED",
+    declarable: false,
+    rationale: "édition de code, confinée comme code_write",
+  },
   credential_access: {
     riskClass: "SECRET_SENSITIVE",
     declarable: false,
