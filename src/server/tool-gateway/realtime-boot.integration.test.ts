@@ -91,7 +91,14 @@ describe.skipIf(!dockerAvailable)("Tool Gateway boot + realtime on PostgreSQL", 
     expect(await countDispatchableConnectors(ctx.handle.db)).toBe(2);
     expect(
       await measureRealtime(ctx.handle.db, { ICOS_TOOL_GATEWAY_CONFIG: JSON.stringify(CONFIG) }),
-    ).toEqual({ declared: 2, healthy: 2, runtimeAgentGranted: false, callerWired: false });
+    ).toEqual({
+      declared: 2,
+      healthy: 2,
+      runtimeAgentGranted: false,
+      callerWired: false,
+      /* Healthy is not usable: no instance has the grant for its own tool. */
+      usable: 0,
+    });
   });
 
   it("ONE runtime per process: a second boot and the admin routes get the same instance", async () => {

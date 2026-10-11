@@ -309,6 +309,12 @@ function envOverrides(extra: Record<string, string> = {}) {
     ICOS_WORKSPACE_ROOT: repo,
     /* A queue of this file's own, so no other worker can consume its workflows. */
     TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    /*
+     * The SAME server the harness worker polls: without it the dispatcher asked the default
+     * localhost:7233 while the worker polled TEMPORAL_ADDRESS, and no work was ever consumed.
+     */
+    ...(process.env.TEMPORAL_ADDRESS ? { TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS } : {}),
+    ...(process.env.TEMPORAL_NAMESPACE ? { TEMPORAL_NAMESPACE: process.env.TEMPORAL_NAMESPACE } : {}),
     ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
     ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
     /* Every gate RULE is real; only the four pnpm suites are replaced by trivial passing commands. */
