@@ -259,6 +259,12 @@ const envSchema = z.object({
     .string()
     .min(1, "ICOS_AUTONOMY_ALLOWED_PROVIDERS vide : ambigu, l'omettre pour « non restreint »")
     .optional(),
+  /*
+   * RUNTIME TIER (BR-06). Declares WHERE this runtime's autonomy proofs are produced, so the
+   * cockpit can say LAB_CERTIFIED or LIVE_CERTIFIED. Undeclared: proofs are credited as
+   * CODE_READY only. Never inferred from hostnames or paths.
+   */
+  ICOS_RUNTIME_TIER: z.preprocess(emptyAsUndefined, z.enum(["lab", "live"]).optional()),
   ICOS_SELF_DEVELOPMENT: z.preprocess(emptyAsUndefined, z.enum(["enabled", "disabled"]).optional()),
   /*
    * DÉTECTION D'AUTO-DÉVELOPPEMENT (décision 0076), lue seulement si ICOS_SELF_DEVELOPMENT=enabled.

@@ -9,6 +9,7 @@ import type {
   Task,
 } from "@/core/contracts";
 import { decideExecution, type ExecutionDecision } from "@/core/authorization/decide";
+import { interventionDetails } from "@/core/autonomy/intervention";
 import type { ActionRepository, AgentLookup } from "@/server/repositories/ports";
 import type { ActionDecisionUnitOfWork } from "@/server/uow/ports";
 
@@ -119,7 +120,12 @@ export async function recordActionDecision(
       actor: decider,
       actionId: action.id,
       taskId: action.taskId,
-      details: { decision: command.decision, reason: command.reason ?? null },
+      details: {
+        decision: command.decision,
+        reason: command.reason ?? null,
+        // BR-07: a human decision a task waited on is autonomy debt, tagged at the source.
+        ...(decider.kind === "human" ? interventionDetails("APPROVAL_DECISION") : {}),
+      },
     },
     {
       id: newId("audit"),
