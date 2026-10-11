@@ -1,0 +1,19 @@
+# ICOS durable-state backup (one shot). PREPARED, NOT INSTALLED — see deploy/vps/README.md.
+# Read-only on the sources: pg_dump and SQLite's online .backup API never modify them.
+[Unit]
+Description=ICOS backup (app PostgreSQL, Temporal PostgreSQL, OmniRoute SQLite snapshot)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=icos
+Group=icos
+ExecStart=/srv/icos/bin/icos-backup.sh
+Nice=10
+IOSchedulingClass=idle
+SyslogIdentifier=icos-backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/srv/icos/backups

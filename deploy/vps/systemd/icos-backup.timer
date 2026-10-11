@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily ICOS backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+# A missed run (VPS down at 03:30) runs at next boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
