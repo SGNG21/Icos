@@ -30,6 +30,8 @@ import { executionPrompt } from "@/core/review/output-contract";
 import type { ExecutionClass } from "@/core/execution/execution-class";
 import type { ExecutionLeaseGrant } from "@/core/contracts/dispatch-attempt";
 import { DEFAULT_EXECUTION_LEASE_MS } from "@/server/execution/external-worker-task-execution-dispatcher";
+import { POLICY_VERSION } from "@/core/autonomy/execution-risk-policy";
+import type { RiskGateStatus, TaskRiskGate } from "./task-risk-gate";
 import {
   decideWorkspaceAllocation,
   requiresGovernedWorkspace,
@@ -121,7 +123,20 @@ export class SupervisorService {
      * Optional, like every other seam here: absent means the previous behaviour.
      */
     private readonly releaseDelegation?: (missionId: string, reason: string) => Promise<void>,
+    /**
+     * THE DISPATCH RISK GATE (execution-risk-policy). When composed, every task is classified
+     * from its canonical Task and goal BEFORE an attempt is prepared or a workspace allocated;
+     * APPROVAL_REQUIRED parks it in `awaiting_approval` with no dispatch attempt. Composed at
+     * the production site; a construction without it is reported as NOT enforced, never as
+     * enforced.
+     */
+    private readonly taskRiskGate?: TaskRiskGate,
   ) {}
+
+  /** Whether this supervisor enforces the dispatch risk gate, and under which policy. */
+  get riskGate(): RiskGateStatus {
+    return { enforced: this.taskRiskGate !== undefined, policyVersion: POLICY_VERSION };
+  }
 
   private async admissionHeld(missionId: string): Promise<boolean> {
     if (!this.controlGuard) return false;
@@ -463,6 +478,51 @@ export class SupervisorService {
        * a reason that names nothing actually wrong.
        */
       const pendingAttempt = preparedByTask.get(task.id);
+
+      /*
+       * THE RISK GATE, before routing, before any attempt is prepared and before any workspace
+       * is allocated: nothing below may run for a task a human has to approve first.
+       */
+      const gateTask = this.taskRiskGate ? await this.taskRepository.getById(task.taskId) : null;
+      const gateAllocation =
+        this.workspaceExecutionCoordinator && gateTask
+          ? decideWorkspaceAllocation({
+              taskId: task.taskId,
+              title: task.title,
+              riskClass: gateTask.riskClass,
+              allowedFileScope: gateTask.allowedFileScope,
+            }).kind
+          : undefined;
+      /*
+       * A writer the allocation policy REFUSES can never be governed, so no approval could let
+       * it run: it is left to the existing fail-closed path below, which blocks it before
+       * anything is prepared.
+       */
+      if (this.taskRiskGate && gateAllocation !== "REFUSED") {
+        const isolatedWorkspace = gateAllocation === "GOVERNED";
+        const gate = await this.taskRiskGate.evaluate({
+          mission,
+          missionTask: task,
+          canonicalTask: gateTask,
+          isolatedWorkspace,
+        });
+        if (gate.outcome === "APPROVAL_REQUIRED") {
+          if (pendingAttempt) {
+            /*
+             * An intent already exists (a correction): it is neither claimed nor dispatched,
+             * and stays PREPARED. The task waits on a human like any other parked task.
+             */
+            await this.missionRepository.updateMissionTaskStatus(
+              mission.id,
+              task.id,
+              "awaiting_approval",
+            );
+          } else {
+            await this.taskRiskGate.park({ missionId: mission.id, missionTask: task, evaluation: gate });
+          }
+          continue;
+        }
+      }
       const routing: Awaited<ReturnType<SupervisorService["routeReadyTask"]>> = pendingAttempt
         ? {
             blocked: false,

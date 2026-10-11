@@ -4,6 +4,7 @@ import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-swe
 import { AutonomyWakeupService } from "@/server/autonomy/autonomy-wakeup-service";
 import { createContainer as createApplicationContainer, type Container } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
+import { TaskRiskGate } from "@/server/supervisor/task-risk-gate";
 import { CanonicalImprovementProposer } from "@/server/autonomy/canonical-improvement-proposer";
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
 import { SelfDevelopmentChain } from "@/server/autonomy/self-development-chain";
@@ -297,6 +298,17 @@ export function composeAutonomyRuntime(container: Container): {
     workforceBridge,
     /* Chief closes what Chief opened: a terminal mission gives its brains back. */
     chiefRelease(container),
+    /*
+     * THE DISPATCH RISK GATE (execution-risk-policy). Every task is re-classified from its
+     * canonical Task and goal before an attempt exists; APPROVAL_REQUIRED parks it for a human
+     * with no dispatch. `supervisor.riskGate.enforced` reports this argument, nothing else.
+     */
+    new TaskRiskGate({
+      tasks: container.tasks,
+      missions: container.mission,
+      goals: container.goalRepository,
+      audit: container.audit,
+    }),
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,
