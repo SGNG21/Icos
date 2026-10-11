@@ -18,6 +18,8 @@ import { WebSocket } from "ws";
 
 import type { ServerMessage } from "@/core/voice/contracts";
 
+import { readSecretFromTty } from "./lib/tty-password";
+
 const argv = process.argv.slice(2);
 const authOnlyMode = argv.includes("--auth-only");
 const [base, ...wavs] = argv.filter((a) => a !== "--auth-only");
@@ -70,83 +72,17 @@ function pcm(path: string): Buffer {
   return wav.subarray(data + 8);
 }
 
-/**
- * Reads the password from the TERMINAL, with no echo and no shell in the path.
- *
- * `ICOS_OWNER_PASSWORD` still wins when set, for CI. But a password typed into a shell
- * variable first is a password that may already have been altered: `read -rs` strips
- * leading and trailing IFS whitespace, which is invisible and produces exactly the 401
- * this harness reported. Raw mode here means the bytes go from the TTY into the request.
- */
-async function readPasswordFromTty(): Promise<string> {
-  if (process.env.ICOS_OWNER_PASSWORD) return process.env.ICOS_OWNER_PASSWORD;
-  const stdin = process.stdin;
-  if (!stdin.isTTY) {
-    throw new Error(
-      "no ICOS_OWNER_PASSWORD and stdin is not a terminal: run this from an interactive shell",
-    );
-  }
-
-  /*
-   * RAW MODE AND NOTHING ELSE.
-   *
-   * My own defect, one cause with two symptoms: a readline interface created with
-   * `terminal: true` ECHOES what it reads and CONSUMES stdin. Pairing it with raw mode
-   * therefore printed the password in the clear and swallowed the Enter key, so the prompt
-   * hung for ever. There is no need for readline here at all.
-   *
-   * This is the same reader as `scripts/auth-rotate-owner-password.ts`, which is proven on
-   * this host — with the restoration moved into `finally` so the terminal is handed back on
-   * every exit, Ctrl+C included, plus an `exit` listener in case anything escapes.
-   */
-  const wasRaw = stdin.isRaw;
-  const restore = () => {
-    try {
-      stdin.setRawMode(wasRaw);
-    } catch {
-      /* the stream can already be gone while exiting */
-    }
-    stdin.pause();
-  };
-  process.once("exit", restore);
-
-  process.stdout.write("Mot de passe owner (aucun echo) : ");
-  stdin.setRawMode(true);
-  stdin.resume();
-  stdin.setEncoding("utf8");
-
-  let value = "";
-  try {
-    return await new Promise<string>((resolve, reject) => {
-      const onData = (chunk: string) => {
-        for (const ch of chunk) {
-          if (ch === "\r" || ch === "\n") {
-            stdin.off("data", onData);
-            return resolve(value);
-          }
-          if (ch === "\u0003") {
-            stdin.off("data", onData);
-            return reject(new Error("saisie annulee (Ctrl+C)"));
-          }
-          /* Backspace edits; other control characters are ignored, never stored. */
-          if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
-          else if (ch >= " ") value += ch;
-        }
-      };
-      stdin.on("data", onData);
-    });
-  } finally {
-    restore();
-    process.removeListener("exit", restore);
-    /* The newline the echo would have written, so the next line starts clean. */
-    process.stdout.write("\n");
-  }
-}
-
-/** Why a sign-in failed, because "HTTP 401" alone sent us looking in the wrong places. */
 function signInDiagnosis(status: number): string {
   if (status === 400) return "the password field never reached the request";
-  if (status === 401) return "the credential was rejected (email exists, value does not match)";
+  if (status === 401) {
+    /*
+     * HONEST ABOUT WHAT A 401 PROVES, which the first version was not: Better Auth answers
+     * 401 for an unknown email AND for a wrong password. Only its own log line separates
+     * them ("User not found" vs "Invalid password"):
+     *   sudo journalctl -u icos-web.service --since -30min | grep "Better Auth"
+     */
+    return "the credential was refused — the server log says which: `User not found` (identity) or `Invalid password` (value)";
+  }
   if (status === 403) return `the same-origin check refused Origin ${origin}`;
   return "unexpected status";
 }
@@ -154,7 +90,8 @@ function signInDiagnosis(status: number): string {
 async function signIn(): Promise<string> {
   const email = process.env.ICOS_OWNER_EMAIL;
   if (!email) throw new Error("ICOS_OWNER_EMAIL is not set");
-  const password = await readPasswordFromTty();
+  const typed = await readSecretFromTty("Mot de passe owner (aucun echo) : ");
+  const password = typed.value;
   if (!password) throw new Error("empty password: nothing was typed");
 
   const response = await fetch(`${base}/api/auth/sign-in/email`, {
@@ -164,8 +101,17 @@ async function signIn(): Promise<string> {
   });
   const cookies = response.headers.getSetCookie().map((c) => c.split(";")[0]);
   if (!response.ok || cookies.length === 0) {
+    /*
+     * THE SHAPE OF WHAT WAS SUBMITTED, never its content. A count and a source are what
+     * separate a mangled terminal entry from a credential that genuinely no longer matches;
+     * without them, both look like the same 401 and the only remedy left is guessing.
+     */
     throw new Error(
-      `sign-in failed: HTTP ${response.status} — ${signInDiagnosis(response.status)}`,
+      `sign-in failed: HTTP ${response.status} — ${signInDiagnosis(response.status)}\n` +
+        `  submitted: ${password.length} chars, source=${typed.source}` +
+        (typed.strippedSequences
+          ? `, ${typed.strippedSequences} terminal escape sequence(s) stripped`
+          : ""),
     );
   }
   return cookies.join("; ");
