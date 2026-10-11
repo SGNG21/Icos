@@ -140,11 +140,13 @@ beforeEach(() => {
  */
 const WORKER_SCRIPT = `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   fs.mkdirSync('src/core3', { recursive: true });
   fs.writeFileSync('src/core3/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + '\\n');
-  execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-  execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','core3 feature'], { stdio: 'ignore' });
+  /*
+   * NO GIT HERE (ADR 0073). The worker writes files and holds no Git authority: its sandbox
+   * mounts no writable gitdir. ICOS revalidates lease, fencing and scope, then materializes
+   * the commit itself. A worker that commits is the contract this decision retired.
+   */
   /*
    * The canonical result contract: a structured status FILE at the path ICOS gave us, plus
    * a non-empty stdout which becomes the recorded result. Stdout never decides success.
@@ -215,6 +217,14 @@ function envOverrides() {
     ICOS_WORKSPACE_ROOT: repo,
     /* A queue of this file's own, so no other worker can consume its workflows. */
     TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    /*
+     * The SAME server the harness worker polls. `loadEnv(envOverrides())` reads only this
+     * object, so without it the dispatcher asked the default `localhost:7233` while the
+     * worker polled `TEMPORAL_ADDRESS` — on any other server every dispatch was refused
+     * TEMPORAL_NO_CONSUMER, a harness split rather than an orchestration defect.
+     */
+    ...(process.env.TEMPORAL_ADDRESS ? { TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS } : {}),
+    ...(process.env.TEMPORAL_NAMESPACE ? { TEMPORAL_NAMESPACE: process.env.TEMPORAL_NAMESPACE } : {}),
     ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
     ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
     /*
