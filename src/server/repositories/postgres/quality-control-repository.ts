@@ -281,16 +281,31 @@ export class PostgresQualityControlRepository implements QualityControlRepositor
       /* `null`: ACCEPT recorded, completion deferred to `settleAccepted` (DEFECT 36). */
       const status = action === "ACCEPT" ? acceptCompletion : "failed";
       if ((action === "ACCEPT" || action === "ESCALATE") && status) {
-        await tx
+        /*
+         * IN FLIGHT ONLY, like every other completion write here (DEFECT 36): a verdict on an
+         * execution that was already running never revives a task an authority settled in the
+         * meantime. A policy denial cancels a mission's unsettled tasks; the reader it
+         * dispatched at ignition still reports and is still reviewed, and an unguarded ACCEPT
+         * turned that `cancelled` back into `succeeded`. The canonical task follows its
+         * mission task, so it is only written when the mission task was.
+         */
+        const settled = await tx
           .update(missionTasks)
           .set({ status, updatedAt: sql`now()` })
           .where(
-            and(eq(missionTasks.id, job.missionTaskId), eq(missionTasks.missionId, job.missionId)),
-          );
-        await tx
-          .update(tasks)
-          .set({ status, updatedAt: sql`now()` })
-          .where(eq(tasks.id, job.taskId));
+            and(
+              eq(missionTasks.id, job.missionTaskId),
+              eq(missionTasks.missionId, job.missionId),
+              inArray(missionTasks.status, [...IN_FLIGHT]),
+            ),
+          )
+          .returning({ id: missionTasks.id });
+        if (settled.length > 0) {
+          await tx
+            .update(tasks)
+            .set({ status, updatedAt: sql`now()` })
+            .where(eq(tasks.id, job.taskId));
+        }
       } else if (action === "CORRECT" || action === "RETRY") {
         if (!input.nextAttempt || !input.nextWorkflowId || !input.prompt) {
           throw new Error("QUALITY_CONTROL_ATTEMPT_INPUT_MISSING");

@@ -230,8 +230,7 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
     if (!review) throw new Error("QUALITY_CONTROL_REVIEW_NOT_FOUND");
 
     if (input.forceEscalate) {
-      await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, "failed");
-      await this.tasks.transition(job.taskId, "failed");
+      await this.settleInFlight(job, "failed");
       const escalated: QualityControlJob = {
         ...job,
         state: "escalated",
@@ -253,13 +252,11 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
           ? completionForSettlement(await this.settlement.settlementOf(workflowId))
           : "succeeded";
         if (!status) break;
-        await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, status);
-        await this.tasks.transition(job.taskId, status);
+        await this.settleInFlight(job, status);
         break;
       }
       case "ESCALATE":
-        await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, "failed");
-        await this.tasks.transition(job.taskId, "failed");
+        await this.settleInFlight(job, "failed");
         break;
       case "CORRECT":
       case "RETRY": {
@@ -459,6 +456,20 @@ export class InMemoryQualityControlRepository implements QualityControlRepositor
       }
       return settled;
     });
+  }
+
+  /**
+   * A verdict's terminal write, IN FLIGHT ONLY — same rule as the PostgreSQL repository: it
+   * never revives a task an authority settled meanwhile (a policy denial's `cancelled`).
+   */
+  private async settleInFlight(
+    job: QualityControlJob,
+    status: "succeeded" | "failed",
+  ): Promise<void> {
+    const current = await this.missions.getMissionTaskById(job.missionTaskId);
+    if (!current || !IN_FLIGHT.has(current.status)) return;
+    await this.missions.updateMissionTaskStatus(job.missionId, job.missionTaskId, status);
+    await this.tasks.transition(job.taskId, status);
   }
 
   private async unsettledAccepted(missionId?: string): Promise<QualityControlJob[]> {
