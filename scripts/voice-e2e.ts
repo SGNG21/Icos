@@ -22,6 +22,41 @@ const argv = process.argv.slice(2);
 const authOnlyMode = argv.includes("--auth-only");
 const [base, ...wavs] = argv.filter((a) => a !== "--auth-only");
 const outDir = process.env.VOICE_E2E_OUT;
+
+/*
+ * ARGV IS A TRUST BOUNDARY, AND THIS ONE FAILED OPEN.
+ *
+ * `wavs` is a rest element: a full run launched without its three fixtures still
+ * destructured to three `undefined` buffers, and the first use of one -- `audio.length`
+ * inside `speak` -- threw
+ *
+ *     Cannot read properties of undefined (reading 'length')
+ *
+ * AFTER the unauthenticated-upgrade probe, AFTER the owner had typed their password and
+ * AFTER the socket was open. A mistake fully visible in argv before any work started cost a
+ * whole run and named neither a file nor a frame. So the command line is validated HERE,
+ * once, where it enters: the full run needs exactly three fixtures, `--auth-only` needs
+ * none, and the base URL must be a bare http(s) URL -- a markdown-wrapped link is a real
+ * paste accident and `new URL` only ever said "Invalid URL".
+ */
+const USAGE =
+  "usage: tsx scripts/voice-e2e.ts <base-url> <q1.wav> <q2.wav> <q3.wav>\n" +
+  "       tsx scripts/voice-e2e.ts <base-url> --auth-only";
+function refuse(reason: string): never {
+  console.error(`E2E FAILED: ${reason}\n${USAGE}`);
+  process.exit(1);
+}
+if (!base) refuse("no base URL given");
+if (!/^https?:\/\/[^\s/]+/.test(base)) {
+  refuse(`base URL must be a bare http(s)://host — got ${JSON.stringify(base)}`);
+}
+if (!authOnlyMode && wavs.length !== 3) {
+  refuse(
+    `the full run needs exactly 3 WAV fixtures, got ${wavs.length}` +
+      (wavs.length ? `: ${wavs.join(" ")}` : " (add --auth-only to test the credential alone)"),
+  );
+}
+
 const origin = new URL(base).origin;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -322,6 +357,9 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  console.error("E2E FAILED:", error instanceof Error ? error.message : error);
+  /* THE STACK, not just the message: a bare `reading 'length'` names no frame, and that
+   * is precisely what turned a one-line argv mistake into a blind hunt. Stacks carry file
+   * paths and line numbers, never values, so this leaks nothing. */
+  console.error("E2E FAILED:", error instanceof Error ? (error.stack ?? error.message) : error);
   process.exit(1);
 });
