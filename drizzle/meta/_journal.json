@@ -414,6 +414,13 @@
       "when": 1791232014287,
       "tag": "0062_fleet_readiness_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1791232015287,
+      "tag": "0063_gate_report_audit",
+      "breakpoints": true
     }
   ]
 }

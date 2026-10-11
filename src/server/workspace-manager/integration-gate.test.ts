@@ -6,7 +6,11 @@ import { Git } from "./git";
 import { IntegrationGate, type GateOptions } from "./integration-gate";
 import { WorkspaceManager, type RequestWorkspaceInput } from "./manager";
 import { InMemoryWorkspaceRegistry } from "./registry";
-import { formatReport } from "./report";
+import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
+import { InMemoryAuditRepository } from "@/server/services/in-memory/audit-repository";
+
+import type { CommandRunner, GateDatabaseSession } from "./integration-gate";
+import { AuditGateReportRecorder, formatReport, GATE_REPORT_EVENT } from "./report";
 import { FakeProvisioner, FakeRunner, makeRepoFixture, type RepoFixture } from "./test-fixtures";
 
 let fx: RepoFixture;
@@ -90,10 +94,15 @@ describe("ACCEPT", () => {
       "pnpm run test:integration",
       "pnpm build",
     ]);
-    expect(db.resets).toEqual(["icos_test_7a"]);
+    /* H1: one disposable database for the PostgreSQL step, opened once and always closed. */
+    expect(db.gate.opened).toEqual(["icos_test_gate_memory_0"]);
+    expect(db.gate.closed).toEqual(["icos_test_gate_memory_0"]);
     const pg = runner.calls.find((c) => c.command.includes("test:integration"))!;
-    expect(pg.env.ICOS_TEST_DATABASE_URL).toMatch(/\/icos_test_7a$/);
+    expect(pg.env.ICOS_TEST_DATABASE_URL).toMatch(/\/icos_test_gate_memory_0$/);
     expect(pg.env.DATABASE_URL).toBeUndefined();
+    /* No other step receives a database URL at all. */
+    const typecheck = runner.calls.find((c) => c.command.includes("typecheck"))!;
+    expect(typecheck.env.ICOS_TEST_DATABASE_URL).toBeUndefined();
     expect(pg.cwd).toBe(path.join(fx.root, "7a"));
 
     const ws = await manager.get(id);
@@ -487,5 +496,135 @@ describe("rapport", () => {
     ]);
     expect(text).toContain("INTEGRATION_DECISION=ACCEPT");
     expect(text).toContain("SHARED_FILES_CHANGED=NONE");
+  });
+});
+
+describe("H1 — l'étape PostgreSQL : base jetable, aucun réseau, aucun identifiant partagé", () => {
+  const PASSWORD = "per-run-password-0123456789abcdef";
+  function session(log: string[]): GateDatabaseSession {
+    return {
+      database: "icos_test_gate_abc_1",
+      env: { ICOS_TEST_DATABASE_URL: `postgres://r:${PASSWORD}@127.0.0.1:5432/icos_test_gate_abc_1` },
+      readWritePaths: ["/tmp/icos-gate-db-x"],
+      secrets: [PASSWORD],
+      wrap: (command) => ["node", "/tmp/icos-gate-db-x/relay.mjs", "--", ...command],
+      refusals: () => ["only database icos_test_gate_abc_1 as role icos_test_gate_abc_1"],
+      close: async () => void log.push("close"),
+    };
+  }
+  function gateWith(database: { open: () => Promise<GateDatabaseSession> }, run: CommandRunner) {
+    const git = new Git(fx.master);
+    return new IntegrationGate({ git, manager, runner: run, database });
+  }
+
+  it("aucune étape n'a le réseau ; seule l'étape PostgreSQL voit le socket et l'URL jetable", async () => {
+    const log: string[] = [];
+    const seen: { command: string[]; network: boolean; rw?: readonly string[]; env: object }[] = [];
+    const g = gateWith(
+      { open: async () => (log.push("open"), session(log)) },
+      {
+        run: async (command, ctx) => {
+          seen.push({ command, network: ctx.network, rw: ctx.readWritePaths, env: ctx.env });
+          return { code: 0, output: "" };
+        },
+      },
+    );
+    const id = await prepare("h1", { "src/h1/x.ts": "export const x = 1;\n" });
+    const report = await g.integrate(id, APPROVED);
+    expect(report.decision).toBe("ACCEPT");
+    expect(log).toEqual(["open", "close"]);
+    expect(seen.every((s) => s.network === false)).toBe(true);
+    const pg = seen.filter((s) => s.command.includes("test:integration") || s.command.includes("test:db:setup"));
+    expect(pg).toHaveLength(2);
+    for (const step of pg) {
+      expect(step.command.slice(0, 3)).toEqual(["node", "/tmp/icos-gate-db-x/relay.mjs", "--"]);
+      expect(step.rw).toEqual(["/tmp/icos-gate-db-x"]);
+    }
+    for (const step of seen.filter((s) => !pg.includes(s))) {
+      expect(step.rw).toBeUndefined();
+      expect(Object.keys(step.env)).not.toContain("ICOS_TEST_DATABASE_URL");
+    }
+    /* Gatekeeper refusals are said in the report, without deciding it. */
+    expect(report.reasons.join(" ")).toContain("connexion(s) refusée(s)");
+  });
+
+  it("échec de l'étape : la base est fermée, et le mot de passe jetable n'atteint pas le rapport", async () => {
+    const log: string[] = [];
+    const g = gateWith(
+      { open: async () => session(log) },
+      {
+        run: async (command) =>
+          command.includes("test:integration")
+            ? { code: 1, output: `connect failed ${PASSWORD}` }
+            : { code: 0, output: "" },
+      },
+    );
+    const id = await prepare("h1b", { "src/h1b/x.ts": "export const x = 1;\n" });
+    const report = await g.integrate(id, APPROVED);
+    expect(report.decision).toBe("REJECT");
+    expect(report.postgresTests).toBe("FAIL");
+    expect(log).toEqual(["close"]);
+    expect(JSON.stringify(report)).not.toContain(PASSWORD);
+    expect(report.reasons.join(" ")).toContain("***");
+  });
+
+  it("le runner lève : la base est quand même fermée", async () => {
+    const log: string[] = [];
+    const g = gateWith(
+      { open: async () => session(log) },
+      {
+        run: async (command) => {
+          if (command.includes("test:db:setup")) throw new Error("runner crashed");
+          return { code: 0, output: "" };
+        },
+      },
+    );
+    const id = await prepare("h1c", { "src/h1c/x.ts": "export const x = 1;\n" });
+    await expect(g.integrate(id, APPROVED)).rejects.toThrow("runner crashed");
+    expect(log).toEqual(["close"]);
+  });
+});
+
+describe("rapport durable (audit append-only)", () => {
+  it("chaque rapport est enregistré AVANT la transition, avec mission/tâche", async () => {
+    const audit = new InMemoryAuditRepository(new InMemoryAuditLog());
+    const order: string[] = [];
+    let id = "";
+    const recorder = new AuditGateReportRecorder({
+      append: async (entry) => {
+        order.push(`audit:${(await manager.get(id)).status}`);
+        return audit.append(entry);
+      },
+    });
+    const git = new Git(fx.master);
+    const g = new IntegrationGate({ git, manager, runner, database: db, reports: recorder });
+    id = await prepare(
+      "rep",
+      { "src/rep/x.ts": "export const x = 1;\n" },
+      { missionId: "m-1", taskId: "t-1" },
+    );
+    const report = await g.integrate(id, APPROVED);
+
+    expect(order).toEqual(["audit:integrating"]);
+    const rows = await audit.query({ eventType: GATE_REPORT_EVENT });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: { kind: "system", id: "integration-gate" },
+      details: { formatVersion: 1, missionId: "m-1", taskId: "t-1", report: { ...report } },
+    });
+  });
+
+  it("un enregistrement qui échoue arrête la gate : pas de verdict sans trace", async () => {
+    const git = new Git(fx.master);
+    const g = new IntegrationGate({
+      git,
+      manager,
+      runner,
+      database: db,
+      reports: { record: async () => Promise.reject(new Error("audit down")) },
+    });
+    const id = await prepare("rep2", { "src/rep2/x.ts": "export const x = 1;\n" });
+    await expect(g.integrate(id, APPROVED)).rejects.toThrow("audit down");
+    expect((await manager.get(id)).status).toBe("integrating");
   });
 });

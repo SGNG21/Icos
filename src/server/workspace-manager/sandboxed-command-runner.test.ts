@@ -83,6 +83,22 @@ describe("SandboxedCommandRunner — le contrat, sans lancer de processus", () =
     });
   });
 
+  it("les répertoires accordés par l'étape (socket de la base) sont montés en écriture", async () => {
+    const { runner, specs } = recordingRunner();
+    await runner.run(["x"], {
+      cwd: "/w",
+      env: {},
+      network: false,
+      readWritePaths: ["/tmp/icos-gate-db-1"],
+    });
+    expect(specs[0]!.sandbox!.readWritePaths).toEqual([
+      "/w",
+      "/tmp/icos-gate-home-x",
+      "/tmp/icos-gate-db-1",
+    ]);
+    expect(specs[0]!.sandbox!.allowNetwork).toBe(false);
+  });
+
   it("le réseau n'est accordé que si l'étape le demande", async () => {
     const { runner, specs } = recordingRunner();
     await runner.run(["x"], { cwd: "/w", env: {}, network: true });
@@ -188,13 +204,15 @@ describe("IntegrationGate — l'environnement est construit, jamais hérité", (
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
       expect(Object.values(call.env)).not.toContain(CANARY);
+      const pg = /test:db:setup|test:integration/.test(call.command);
       expect(Object.keys(call.env).sort()).toEqual([
         "CI",
-        "ICOS_TEST_DATABASE_URL",
+        ...(pg ? ["ICOS_TEST_DATABASE_URL"] : []),
         "npm_config_verify_deps_before_run",
         "pnpm_config_verify_deps_before_run",
       ]);
-      expect(call.network).toBe(/test:db:setup|test:integration/.test(call.command));
+      /* H1 (ADR 0075): no step has the network, not even PostgreSQL's. */
+      expect(call.network).toBe(false);
     }
   });
 });
@@ -287,7 +305,7 @@ describe.skipIf(!backend)(
       fx.cleanup();
     });
 
-    it("aucune étape ne voit un secret, le disque hors worktree, ni le réseau (sauf PostgreSQL)", async () => {
+    it("aucune étape ne voit un secret, le disque hors worktree, ni le réseau (PostgreSQL compris)", async () => {
       const hostSecretDir = path.join(fx.tmp, "host-secrets");
       mkdirSync(hostSecretDir);
       const hostSecret = path.join(hostSecretDir, "token.txt");
@@ -346,8 +364,8 @@ describe.skipIf(!backend)(
           readCanonical: false,
           realHomeVisible: false,
           sshVisible: false,
-          /* The ONLY step granted a socket is the one that must reach its test database. */
-          network: step === "postgres",
+          /* H1 (ADR 0075): no step reaches a host socket, PostgreSQL's included. */
+          network: false,
         });
         expect(
           seen.envKeys.filter(
