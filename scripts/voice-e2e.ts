@@ -18,8 +18,47 @@ import { WebSocket } from "ws";
 
 import type { ServerMessage } from "@/core/voice/contracts";
 
-const [base, ...wavs] = process.argv.slice(2);
+import { readSecretFromTty } from "./lib/tty-password";
+
+const argv = process.argv.slice(2);
+const authOnlyMode = argv.includes("--auth-only");
+const [base, ...wavs] = argv.filter((a) => a !== "--auth-only");
 const outDir = process.env.VOICE_E2E_OUT;
+
+/*
+ * ARGV IS A TRUST BOUNDARY, AND THIS ONE FAILED OPEN.
+ *
+ * `wavs` is a rest element: a full run launched without its three fixtures still
+ * destructured to three `undefined` buffers, and the first use of one -- `audio.length`
+ * inside `speak` -- threw
+ *
+ *     Cannot read properties of undefined (reading 'length')
+ *
+ * AFTER the unauthenticated-upgrade probe, AFTER the owner had typed their password and
+ * AFTER the socket was open. A mistake fully visible in argv before any work started cost a
+ * whole run and named neither a file nor a frame. So the command line is validated HERE,
+ * once, where it enters: the full run needs exactly three fixtures, `--auth-only` needs
+ * none, and the base URL must be a bare http(s) URL -- a markdown-wrapped link is a real
+ * paste accident and `new URL` only ever said "Invalid URL".
+ */
+const USAGE =
+  "usage: tsx scripts/voice-e2e.ts <base-url> <q1.wav> <q2.wav> <q3.wav>\n" +
+  "       tsx scripts/voice-e2e.ts <base-url> --auth-only";
+function refuse(reason: string): never {
+  console.error(`E2E FAILED: ${reason}\n${USAGE}`);
+  process.exit(1);
+}
+if (!base) refuse("no base URL given");
+if (!/^https?:\/\/[^\s/]+/.test(base)) {
+  refuse(`base URL must be a bare http(s)://host — got ${JSON.stringify(base)}`);
+}
+if (!authOnlyMode && wavs.length !== 3) {
+  refuse(
+    `the full run needs exactly 3 WAV fixtures, got ${wavs.length}` +
+      (wavs.length ? `: ${wavs.join(" ")}` : " (add --auth-only to test the credential alone)"),
+  );
+}
+
 const origin = new URL(base).origin;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -33,19 +72,73 @@ function pcm(path: string): Buffer {
   return wav.subarray(data + 8);
 }
 
+function signInDiagnosis(status: number): string {
+  if (status === 400) return "the password field never reached the request";
+  if (status === 401) {
+    /*
+     * HONEST ABOUT WHAT A 401 PROVES, which the first version was not: Better Auth answers
+     * 401 for an unknown email AND for a wrong password. Only its own log line separates
+     * them ("User not found" vs "Invalid password"):
+     *   sudo journalctl -u icos-web.service --since -30min | grep "Better Auth"
+     */
+    return "the credential was refused — the server log says which: `User not found` (identity) or `Invalid password` (value)";
+  }
+  if (status === 403) return `the same-origin check refused Origin ${origin}`;
+  return "unexpected status";
+}
+
 async function signIn(): Promise<string> {
+  const email = process.env.ICOS_OWNER_EMAIL;
+  if (!email) throw new Error("ICOS_OWNER_EMAIL is not set");
+  const typed = await readSecretFromTty("Mot de passe owner (aucun echo) : ");
+  const password = typed.value;
+  if (!password) throw new Error("empty password: nothing was typed");
+
   const response = await fetch(`${base}/api/auth/sign-in/email`, {
     method: "POST",
     headers: { "content-type": "application/json", origin },
-    body: JSON.stringify({
-      email: process.env.ICOS_OWNER_EMAIL,
-      password: process.env.ICOS_OWNER_PASSWORD,
-    }),
+    body: JSON.stringify({ email, password }),
   });
   const cookies = response.headers.getSetCookie().map((c) => c.split(";")[0]);
-  if (!response.ok || cookies.length === 0)
-    throw new Error(`sign-in failed: HTTP ${response.status}`);
+  if (!response.ok || cookies.length === 0) {
+    /*
+     * THE SHAPE OF WHAT WAS SUBMITTED, never its content. A count and a source are what
+     * separate a mangled terminal entry from a credential that genuinely no longer matches;
+     * without them, both look like the same 401 and the only remedy left is guessing.
+     */
+    throw new Error(
+      `sign-in failed: HTTP ${response.status} — ${signInDiagnosis(response.status)}\n` +
+        `  submitted: ${password.length} chars, source=${typed.source}` +
+        (typed.strippedSequences
+          ? `, ${typed.strippedSequences} terminal escape sequence(s) stripped`
+          : ""),
+    );
+  }
   return cookies.join("; ");
+}
+
+/**
+ * AUTH ONLY: prove the credential and the session, and stop. No WebSocket, no audio, no
+ * model call — so a wrong password costs one prompt instead of a full voice run.
+ */
+async function authOnly(): Promise<void> {
+  const cookie = await signIn();
+  /* Names only: a cookie value is a bearer credential. */
+  const names = cookie.split("; ").map((c) => c.split("=")[0]);
+  console.log(`SET_COOKIE_RECEIVED=YES names=${names.join(",")}`);
+
+  /* A route that refuses anonymously (401 measured), so a 200 here IS the session. */
+  const api = await fetch(`${base}/api/cognitive/conversations`, {
+    headers: { cookie, origin },
+  });
+  console.log(`AUTHENTICATED_ROUTE=/api/cognitive/conversations HTTP=${api.status}`);
+
+  const page = await fetch(`${base}/cockpit`, { headers: { cookie, origin }, redirect: "manual" });
+  console.log(`COCKPIT=HTTP=${page.status}${page.status === 307 ? " (redirected — NOT authenticated)" : ""}`);
+
+  const ok = api.status === 200 && page.status === 200;
+  console.log(`AUTH_ONLY_E2E=${ok ? "PASS" : "FAIL"}`);
+  if (!ok) process.exitCode = 1;
 }
 
 type Client = {
@@ -110,6 +203,12 @@ const of = (c: Client, type: string, turnId?: string) =>
   );
 
 async function main() {
+  /*
+   * AUTH FIRST, and on its own when asked. The fixtures are parsed AFTER this branch so
+   * `--auth-only` needs no WAV at all, and a credential can be confirmed in one prompt.
+   */
+  if (authOnlyMode) return authOnly();
+
   const report: Record<string, unknown> = {};
   const [q1, q2, q3] = wavs.map(pcm);
 
@@ -130,7 +229,7 @@ async function main() {
   await speak(c, t1, q1);
   const endAt = Date.now();
   const final1 = await c.until((m) => m.type === "transcript" && m.turnId === t1 && m.final);
-  await c.until((m) => m.type === "turn_accepted" && m.turnId === t1);
+  const accepted1 = await c.until((m) => m.type === "turn_accepted" && m.turnId === t1);
   const answer1 = await c.until((m) => m.type === "response_final" && m.turnId === t1);
   const metrics1 = await c.until((m) => m.type === "turn_metrics" && m.metrics.turnId === t1);
   const audio1 = of(c, "audio", t1);
@@ -148,6 +247,39 @@ async function main() {
     serverMetrics: metrics1.type === "turn_metrics" ? metrics1.metrics : null,
     errors: of(c, "error").map((e) => (e.m.type === "error" ? e.m.code : "")),
   };
+
+  /*
+   * WHERE THE 6 337 ms ACTUALLY GO. Read from the durable event log, not inferred: the
+   * runtime timestamps every stage of a turn, so the one number the session can see
+   * (final transcript -> FINAL_RESPONSE) is decomposed into rows that outlive the process.
+   */
+  const conv1 = accepted1.type === "turn_accepted" ? accepted1.conversationId : "";
+  const log = await fetch(`${base}/api/cognitive/conversations/${conv1}/events`, {
+    headers: { cookie, origin },
+  });
+  const logged = ((await log.json()) as { events?: { type: string; createdAt: string }[] }).events;
+  if (logged?.length) {
+    const at = (type: string) => {
+      const hit = logged.find((e) => e.type === type);
+      return hit ? Date.parse(hit.createdAt) : null;
+    };
+    const span = (from: string, to: string) => {
+      const a = at(from);
+      const b = at(to);
+      return a !== null && b !== null ? b - a : null;
+    };
+    report.cognitiveBreakdown = {
+      stages: logged.map((e) => e.type),
+      receivedToProcessingMs: span("turn.received", "turn.processing"),
+      processingToContextMs: span("turn.processing", "context.assembled"),
+      /* Context assembled -> completed is the model call plus persistence: the real suspect. */
+      contextToCompletedMs: span("context.assembled", "turn.completed"),
+      memoryWriteMs: span("turn.completed", "memory.written"),
+      receivedToCompletedMs: span("turn.received", "turn.completed"),
+    };
+  } else {
+    report.cognitiveBreakdown = { unavailable: `HTTP ${log.status}` };
+  }
 
   // 3. barge-in during ICOS audio
   const t2 = `e2e-${Date.now()}-2`;
@@ -172,38 +304,114 @@ async function main() {
     t3Audio: of(c, "audio", t3).length,
   };
 
-  // 4. phone hang-up after acceptance
+  // 4. phone hang-up after acceptance, then the owner comes back
   const t4 = `e2e-${Date.now()}-4`;
   await speak(c, t4, q1);
-  await c.until((m) => m.type === "turn_accepted" && m.turnId === t4);
-  const heard4 = of(c, "transcript", t4).find((e) => e.m.type === "transcript" && e.m.final);
+  const accepted4 = await c.until((m) => m.type === "turn_accepted" && m.turnId === t4);
+  const conversationId = accepted4.type === "turn_accepted" ? accepted4.conversationId : "";
   c.ws.terminate(); // no close handshake: the phone just vanished
   const hungUpAt = Date.now();
-  let landed: { role: string; content: string }[] = [];
-  while (Date.now() - hungUpAt < 150_000) {
-    const res = await fetch(`${base}/api/conversation`, { headers: { cookie } });
-    const body = (await res.json()) as { messages: { role: string; content: string }[] };
-    const heardText = heard4?.m.type === "transcript" ? heard4.m.text.trim() : "";
-    const idx = body.messages.map((m) => m.content).lastIndexOf(heardText);
-    landed = idx >= 0 ? body.messages.slice(idx) : [];
-    if (landed.some((m) => m.role === "assistant")) break;
-    await sleep(2_000);
-  }
+
+  /*
+   * RESUME FIRST, because the session TTL is a deadline and the old order spent it on a
+   * poll: `VoiceSessionRegistry` sweeps a detached session after `idleTtlMs` (120 s), so
+   * measuring resume AFTER a 150 s poll measured the expiry path and called it a defect.
+   * A returning user reconnects in seconds, which is what this reproduces.
+   */
   const back = await connect(cookie);
   back.send({ type: "hello", sessionId, device: "browser" });
   const resumed = await back.until((m) => m.type === "ready");
+  const resumeMs = Date.now() - hungUpAt;
+
+  /*
+   * THE CANONICAL STORE, NOT THE LEGACY ONE. Voice persists through the Cognitive Runtime;
+   * `/api/conversation` is the retired CEO-conversation bridge and can never show a voice
+   * turn. The user turn carries the voice turnId as its `idempotencyKey` (integration test
+   * V1), and the assistant turn points at it through `replyToTurnId` -- so the reply is
+   * identified by identity, not by string-matching a transcript.
+   */
+  type DurableTurn = {
+    id: string;
+    role: "user" | "assistant";
+    replyToTurnId: string | null;
+    idempotencyKey: string | null;
+    content: { parts: { text: string }[] };
+  };
+  let turns: DurableTurn[] = [];
+  let mine: DurableTurn | undefined;
+  let replies: DurableTurn[] = [];
+  while (Date.now() - hungUpAt < 120_000) {
+    const res = await fetch(`${base}/api/cognitive/conversations/${conversationId}`, {
+      headers: { cookie, origin },
+    });
+    const body = (await res.json()) as { turns?: DurableTurn[] };
+    turns = body.turns ?? [];
+    mine = turns.find((t) => t.role === "user" && t.idempotencyKey === t4);
+    replies = turns.filter((t) => t.role === "assistant" && mine && t.replyToTurnId === mine.id);
+    if (replies.length > 0) break;
+    await sleep(2_000);
+  }
+  const storedAfterMs = Date.now() - hungUpAt;
+
+  // A new turn must be accepted immediately on the resumed connection.
+  const t5 = `e2e-${Date.now()}-5`;
+  await speak(back, t5, q2);
+  const accepted5 = await back
+    .until((m) => m.type === "turn_accepted" && m.turnId === t5, 60_000)
+    .then(() => true)
+    .catch(() => false);
+
   report.phoneHangUp = {
-    answerStoredAfterHangUp: landed.some((m) => m.role === "assistant"),
-    storedAfterMs: Date.now() - hungUpAt,
+    conversationId,
     resumed: resumed.type === "ready" && resumed.resumed,
+    resumeMs,
     t4InAccepted: resumed.type === "ready" && resumed.acceptedTurnIds.includes(t4),
+    assistantReplyStored: replies.length > 0,
+    replyText: replies[0]?.content.parts.map((part) => part.text).join(" ").slice(0, 120) ?? null,
+    storedAfterMs,
+    /* Exactly one of each, or acceptance was not idempotent across the reconnect. */
+    userTurnsForT4: turns.filter((t) => t.idempotencyKey === t4).length,
+    assistantRepliesForT4: replies.length,
+    nextTurnAcceptedAfterResume: accepted5,
+  };
+
+  /*
+   * CONTINUITY WITHOUT PROCESS MEMORY, proven on purpose and without waiting out the TTL:
+   * an unknown sessionId plus the conversationId is the documented path back. If this
+   * works, no conversation depends on a live session object.
+   */
+  const afterExpiry = await connect(cookie);
+  afterExpiry.send({
+    type: "hello",
+    sessionId: `expired-${Date.now()}`,
+    conversationId,
+    device: "browser",
+  });
+  const fresh = await afterExpiry.until((m) => m.type === "ready");
+  const t6 = `e2e-${Date.now()}-6`;
+  await speak(afterExpiry, t6, q3);
+  const accepted6 = await afterExpiry
+    .until((m) => m.type === "turn_accepted" && m.turnId === t6, 60_000)
+    .then(() => true)
+    .catch(() => false);
+  report.continuityWithoutSession = {
+    sessionExpiredReported: of(afterExpiry, "error").some(
+      (e) => e.m.type === "error" && e.m.code === "SESSION_EXPIRED",
+    ),
+    sameConversation: fresh.type === "ready" && fresh.conversationId === conversationId,
+    newSession: fresh.type === "ready" && !fresh.resumed,
+    turnAccepted: accepted6,
   };
   back.ws.close();
+  afterExpiry.ws.close();
 
   console.log(JSON.stringify(report, null, 2));
 }
 
 main().catch((error: unknown) => {
-  console.error("E2E FAILED:", error instanceof Error ? error.message : error);
+  /* THE STACK, not just the message: a bare `reading 'length'` names no frame, and that
+   * is precisely what turned a one-line argv mistake into a blind hunt. Stacks carry file
+   * paths and line numbers, never values, so this leaks nothing. */
+  console.error("E2E FAILED:", error instanceof Error ? (error.stack ?? error.message) : error);
   process.exit(1);
 });

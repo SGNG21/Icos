@@ -11,7 +11,7 @@ export default defineConfig({
     coverage: {
       reporter: ["text", "json", "html"],
     },
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     // Les tests PostgreSQL partagent une base de test jetable (`icos_test`,
     // voir src/server/database/test-database-guard.ts) : séquence obligatoire.
     // Jamais la base live (icos_n23_probe) : `createDatabase` refuse toute base

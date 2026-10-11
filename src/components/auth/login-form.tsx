@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useRef, useState, useSyncExternalStore } from "react";
 
 import { createLoginSubmission, type AuthActionResult } from "./auth-actions";
 
@@ -9,8 +9,24 @@ type LoginFormProps = {
   nextPath: string;
 };
 
+const subscribeNothing = () => () => {};
+
+/**
+ * `false` au rendu serveur et pendant l'hydratation, `true` une fois React aux commandes.
+ * Tant que le handler n'est pas attaché, le bouton reste désactivé : sans bouton actif,
+ * le navigateur ne fait aucune soumission native (ni clic, ni Entrée implicite).
+ */
+function useHydrated(): boolean {
+  return useSyncExternalStore(
+    subscribeNothing,
+    () => true,
+    () => false,
+  );
+}
+
 export function LoginForm({ nextPath }: LoginFormProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [emailError, setEmailError] = useState("");
@@ -86,7 +102,9 @@ export function LoginForm({ nextPath }: LoginFormProps) {
   };
 
   return (
-    <form className="login-form" onSubmit={handleSubmit} noValidate={false}>
+    // method="post" : même une soumission native imprévue ne met jamais les identifiants
+    // dans l'URL (historique, logs, Referer). Le chemin nominal reste le POST JSON de handleSubmit.
+    <form className="login-form" method="post" onSubmit={handleSubmit} noValidate={false}>
       <div className="form-field">
         <label htmlFor="email">Adresse e-mail</label>
         <input
@@ -146,7 +164,12 @@ export function LoginForm({ nextPath }: LoginFormProps) {
         </p>
       )}
 
-      <button type="submit" disabled={pending} aria-busy={pending} className="login-submit">
+      <button
+        type="submit"
+        disabled={pending || !hydrated}
+        aria-busy={pending}
+        className="login-submit"
+      >
         {pending ? "Connexion en cours…" : "Se connecter"}
       </button>
     </form>
