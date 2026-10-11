@@ -334,6 +334,26 @@ export const connectorInstanceSchema = z
 export type ConnectorInstance = z.infer<typeof connectorInstanceSchema>;
 
 // ── Model-facing intent (Phase 11) ───────────────────────────────────────────
+const scopeRefSchema = z.string().regex(/^[A-Za-z0-9._:@-]{1,128}$/);
+
+/**
+ * WHO the call is for, not who may make it. Attribution only: the client/project the work
+ * serves and the conversation turn that asked. It is recorded on every audit entry of the
+ * execution and NEVER participates in a decision (tenant, grant and approval stay
+ * server-side) nor in the request/operation fingerprints — the same operation for two
+ * clients is still the same operation. Identifiers only: a closed character set, no free
+ * text, so it cannot carry a secret or an instruction.
+ */
+export const toolScopeContextSchema = z
+  .object({
+    clientId: scopeRefSchema.optional(),
+    projectId: scopeRefSchema.optional(),
+    conversationId: scopeRefSchema.optional(),
+    turnId: scopeRefSchema.optional(),
+  })
+  .strict();
+export type ToolScopeContext = z.infer<typeof toolScopeContextSchema>;
+
 /**
  * What a model/agent may send. Strict: no tenant, no principal, no approval,
  * no credential field can be injected. The gateway adds all trusted context.
@@ -351,6 +371,8 @@ export const toolIntentSchema = z
       .optional(),
     missionId: z.string().min(1).optional(),
     taskId: z.string().min(1).optional(),
+    /** Attribution (client / project / conversation turn), audited with the execution. */
+    context: toolScopeContextSchema.optional(),
     /** Knowingly repeat the operation of a prior execution (duplicate policy `require_override`). */
     duplicateOverride: z
       .object({
