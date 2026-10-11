@@ -74,4 +74,47 @@ describe("self-development runs on its own timer", () => {
     expect(advance).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
+
+  it("DETECTS BEFORE IT ADVANCES, inside the same in-flight guard (decision 0076)", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    let release!: () => void;
+    const maybePropose = vi.fn(
+      () =>
+        new Promise<never>((resolve) => {
+          order.push("detect");
+          release = () => resolve(undefined as never);
+        }),
+    );
+    const advance = vi.fn(async () => {
+      order.push("advance");
+    });
+    const scheduler = createSelfDevelopmentScheduler(coordinator(advance), 1_000, { maybePropose });
+    scheduler.start();
+
+    /* A slow detection blocks the tick: no second detection, no advance overlapping it. */
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(maybePropose).toHaveBeenCalledTimes(1);
+    expect(advance).not.toHaveBeenCalled();
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(["detect", "advance"]);
+
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
+
+  it("a failing detection still advances what the backlog already holds", async () => {
+    vi.useFakeTimers();
+    const advance = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSelfDevelopmentScheduler(coordinator(advance), 1_000, {
+      maybePropose: vi.fn().mockRejectedValue(new Error("QUALITY_PROBE_TIMEOUT")),
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(advance).toHaveBeenCalledTimes(1);
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
 });

@@ -1,3 +1,5 @@
+import { attributionKey } from "@/core/budget/contracts";
+
 import { currentAttribution } from "./attribution-context";
 import { createGoalBudgetCapResolver } from "./goal-budget-cap-resolver";
 import { InMemorySpendLedger } from "./in-memory-spend-ledger";
@@ -113,6 +115,30 @@ export function systemReviewCaps(maxTotalTokens: number): BudgetCapResolver {
     attribution?.systemReviewMissionId ? { kind: "CAPPED", maxTotalTokens } : { kind: "CAPPED" };
 }
 
+/**
+ * PLAFOND PAR DÉFAUT DE LA DÉTECTION D'AUTO-DÉVELOPPEMENT, en tokens, PAR JOUR (décision 0076).
+ *
+ * Une proposition est UN appel borné (au plus trois si la sortie est malformée) sur un
+ * constat déjà mesuré. 50 000 tokens par jour couvrent largement une proposition et ses
+ * reprises de forme ; une boucle qui en consommerait davantage est exactement ce que le
+ * refus doit arrêter.
+ */
+export const DEFAULT_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS = 50_000;
+
+/**
+ * LE PLAFOND DE LA DÉTECTION D'AUTO-DÉVELOPPEMENT. Ne répond QU'À une imputation dont la clé
+ * EST `self-development=…` — donc à aucune imputation qui porte aussi un goal, une mission,
+ * un brain, une conversation ou une relecture (la précédence de `attributionKey` les fait
+ * gagner). Pour tout le reste : `CAPPED` sans limite, donc refus.
+ */
+export function selfDevelopmentProposalCaps(maxTotalTokens: number): BudgetCapResolver {
+  return async (attribution) =>
+    attribution?.selfDevelopmentProposalId &&
+    attributionKey(attribution).startsWith("self-development=")
+      ? { kind: "CAPPED", maxTotalTokens }
+      : { kind: "CAPPED" };
+}
+
 export function conversationCaps(maxTotalTokens: number): BudgetCapResolver {
   return async (attribution) =>
     attribution?.conversationId
@@ -202,6 +228,9 @@ export interface ComposeSpendOptions extends Omit<SpendLedgerSelection, "caps"> 
   /** Plafond de tokens d'UNE relecture système. Défaut :
    * {@link DEFAULT_SYSTEM_REVIEW_MAX_TOTAL_TOKENS}. */
   readonly maxTotalTokensPerSystemReview?: number;
+  /** Plafond JOURNALIER de tokens de la détection d'auto-développement. Défaut :
+   * {@link DEFAULT_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS}. */
+  readonly maxTotalTokensPerSelfDevelopmentDay?: number;
   /** Le `fetch` réellement émetteur. Injectable pour les tests, jamais muet en production. */
   readonly inner?: typeof fetch;
   /** Durée du bail des réservations de mission. Défaut : celui du magasin. */
@@ -222,6 +251,13 @@ export interface SpendMeters {
    * d'imputation (`conversation=…` au lieu de `goal=…`).
    */
   readonly conversation: typeof fetch;
+  /**
+   * DÉTECTION D'AUTO-DÉVELOPPEMENT (décision 0076) : la proposition d'UNE amélioration à
+   * partir d'un constat mesuré du dépôt. Sa propre clé (`self-development=sd-proposal-<jour>`),
+   * son propre plafond journalier, une réservation avant l'appel : elle ne peut ni entamer un
+   * budget de goal ni s'en servir.
+   */
+  readonly selfDevelopment: typeof fetch;
 }
 
 /**
@@ -346,6 +382,19 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
       })
     : undefined;
 
+  const selfDevelopmentCaps = selfDevelopmentProposalCaps(
+    options.maxTotalTokensPerSelfDevelopmentDay ??
+      DEFAULT_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS,
+  );
+  const selfDevelopmentReservations = options.db
+    ? new PostgresSpendReservations({
+        db: options.db,
+        tenantId: options.tenantId ?? SPEND_LEDGER_TENANT_ID,
+        caps: selfDevelopmentCaps,
+        ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
+      })
+    : undefined;
+
   return {
     mission: meteredFetch(inner, {
       ledger: ambientlyAttributed(createSpendLedger({ ...selection, caps: goalCaps })),
@@ -374,6 +423,16 @@ export function composeSpendMeters(options: ComposeSpendOptions = {}): SpendMete
       ),
       ...(conversationReservations
         ? { reservations: ambientlyReserved(conversationReservations) }
+        : {}),
+      ...(options.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: options.maxOutputTokens }),
+    }),
+    /* Même mécanique que la conversation : imputation ambiante, réservation, sortie bornée. */
+    selfDevelopment: meteredFetch(inner, {
+      ledger: ambientlyAttributed(createSpendLedger({ ...selection, caps: selfDevelopmentCaps })),
+      ...(selfDevelopmentReservations
+        ? { reservations: ambientlyReserved(selfDevelopmentReservations) }
         : {}),
       ...(options.maxOutputTokens === undefined
         ? {}

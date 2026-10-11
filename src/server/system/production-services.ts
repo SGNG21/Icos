@@ -8,6 +8,11 @@ import { registerComposedRiskGate } from "@/server/supervisor/risk-gate-registry
 import { TaskRiskGate } from "@/server/supervisor/task-risk-gate";
 import { CanonicalImprovementProposer } from "@/server/autonomy/canonical-improvement-proposer";
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
+import { EslintQualityProbe } from "@/server/autonomy/eslint-quality-probe";
+import {
+  DEFAULT_MAX_PROPOSALS_PER_DAY,
+  SelfDevelopmentDetection,
+} from "@/server/autonomy/self-development-detection";
 import { SelfDevelopmentChain } from "@/server/autonomy/self-development-chain";
 import { GovernedSelfDevelopmentCoordinator } from "@/server/autonomy/governed-self-development-coordinator";
 import { QualityControlService } from "@/server/usecases/quality-control-service";
@@ -260,6 +265,12 @@ export function composeAutonomyRuntime(container: Container): {
    * absent means ICOS cannot start from an instruction: it never means "invent something".
    */
   improvementProposer?: CanonicalImprovementProposer;
+  /**
+   * Decision 0076 — DETECT -> PRIORITIZE -> PROPOSE, run by the self-development timer before
+   * `advance()`. Absent without a proposer or a declared repository: ICOS then never invents
+   * work, it only advances what is already in the backlog.
+   */
+  selfDevelopmentDetection?: SelfDevelopmentDetection;
 } {
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
@@ -447,6 +458,23 @@ export function composeAutonomyRuntime(container: Container): {
       })
     : undefined;
 
+  const detectionEnv = loadEnv();
+  const selfDevelopmentDetection =
+    improvementProposer && detectionEnv.ICOS_REPO_PATH
+      ? new SelfDevelopmentDetection({
+          backlog,
+          memory: container.durableMemory,
+          probe: new EslintQualityProbe({
+            repoPath: detectionEnv.ICOS_REPO_PATH,
+            paths: (detectionEnv.ICOS_SELF_DEVELOPMENT_DETECTOR_PATHS ?? "src").split(","),
+            timeoutMs: detectionEnv.ICOS_SELF_DEVELOPMENT_DETECTOR_TIMEOUT_MS ?? 300_000,
+          }),
+          proposer: improvementProposer,
+          maxProposalsPerDay:
+            detectionEnv.ICOS_SELF_DEVELOPMENT_MAX_PROPOSALS_PER_DAY ?? DEFAULT_MAX_PROPOSALS_PER_DAY,
+        })
+      : undefined;
+
   return {
     supervisor,
     qualityControl,
@@ -457,6 +485,7 @@ export function composeAutonomyRuntime(container: Container): {
     selfDevelopmentChain,
     selfDevelopment,
     improvementProposer,
+    selfDevelopmentDetection,
   };
 }
 
@@ -481,8 +510,14 @@ export function composeAutonomyRuntime(container: Container): {
  * result once self-development has a non-blocking, resumable advance.
  */
 export function createSelfDevelopmentScheduler(
-  selfDevelopment: GovernedSelfDevelopmentCoordinator,
+  selfDevelopment: Pick<GovernedSelfDevelopmentCoordinator, "advance">,
   intervalMs: number,
+  /**
+   * Decision 0076: the detection step of the SAME tick, run before `advance()` and under the
+   * same in-flight guard — so detection, proposal and advance never overlap. It proposes only
+   * when nothing is in flight or selectable, so `advance()` then picks up what it proposed.
+   */
+  detection?: Pick<SelfDevelopmentDetection, "maybePropose">,
 ): ProductionServiceScheduler {
   let timer: ReturnType<typeof setInterval> | null = null;
   let inFlight = false;
@@ -493,8 +528,11 @@ export function createSelfDevelopmentScheduler(
         /* Jamais deux avancées concurrentes : une seule amélioration à la fois. */
         if (inFlight) return;
         inFlight = true;
-        void selfDevelopment
-          .advance()
+        void (async () => {
+          /* A failed detection never prevents advancing what is already in the backlog. */
+          if (detection) await detection.maybePropose().catch(() => undefined);
+          await selfDevelopment.advance();
+        })()
           .catch(() => undefined)
           .finally(() => {
             inFlight = false;
@@ -520,7 +558,7 @@ function createRecoveryScheduler(
   container: Container,
   options: { intervalMs: number; selfDevelopment: boolean },
 ): ProductionServiceScheduler {
-  const { supervisor, wakeup, recovery, pendingReviewGate, selfDevelopment } =
+  const { supervisor, wakeup, recovery, pendingReviewGate, selfDevelopment, selfDevelopmentDetection } =
     composeAutonomyRuntime(container);
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
@@ -608,7 +646,11 @@ function createRecoveryScheduler(
   if (!options.selfDevelopment) return sweeps;
 
   /* Deux timers, une seule façade de cycle de vie. */
-  const improvement = createSelfDevelopmentScheduler(selfDevelopment, options.intervalMs);
+  const improvement = createSelfDevelopmentScheduler(
+    selfDevelopment,
+    options.intervalMs,
+    selfDevelopmentDetection,
+  );
   return {
     start() {
       sweeps.start();

@@ -200,7 +200,10 @@ import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
-import { createOmniRouteAutonomousMissionPlanner } from "@/server/autonomy/omniroute-autonomous-mission-planner";
+import {
+  createOmniRouteAutonomousMissionPlanner,
+  OmniRouteCompletionProvider,
+} from "@/server/autonomy/omniroute-autonomous-mission-planner";
 import { DEFAULT_GOAL_MAX_TOTAL_TOKENS, composeSpendMeters } from "@/server/budget/compose-spend";
 import {
   CanonicalAutonomousMissionPlanner,
@@ -758,6 +761,9 @@ export async function buildPostgresContainer(
     ...(env.ICOS_MAX_OUTPUT_TOKENS === undefined
       ? {}
       : { maxOutputTokens: env.ICOS_MAX_OUTPUT_TOKENS }),
+    ...(env.ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS === undefined
+      ? {}
+      : { maxTotalTokensPerSelfDevelopmentDay: env.ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS }),
   });
   const llmReviewer = buildLlmReviewer(env, spend.mission);
   if (!llmReviewer) {
@@ -1078,7 +1084,7 @@ export async function buildPostgresContainer(
     autonomousPlanner: buildAutonomousPlanner(env, spend.mission),
     conversationFetch: spend.conversation,
     autonomyPolicy: buildAutonomyCompositionPolicy(env),
-    improvementProposalProvider: buildImprovementProposalProvider(env),
+    improvementProposalProvider: buildImprovementProposalProvider(env, spend.selfDevelopment),
     conversationService,
     /*
      * VERROU C1 — LE DERNIER CHEMIN NON MESURÉ. `OmniRouteCeoClient` acceptait déjà un
@@ -1319,9 +1325,36 @@ function buildLlmReviewer(env: Env, missionFetch?: typeof fetch): ReviewerPort |
  * the reviewer, which is confined to an empty directory (decision 0047), and for the opposite
  * reason: a proposal is a suggestion everything downstream verifies.
  */
-function buildImprovementProposalProvider(env: Env): PlannerCompletionProvider | undefined {
+function buildImprovementProposalProvider(
+  env: Env,
+  selfDevelopmentFetch?: typeof fetch,
+): PlannerCompletionProvider | undefined {
   const command = parsePlannerCommand(env.ICOS_PLANNER_COMMAND);
-  if (!command || !env.ICOS_REPO_PATH) return undefined;
+  if (!env.ICOS_REPO_PATH) return undefined;
+  if (!command) {
+    /*
+     * THE METERED PATH (decision 0076). With OmniRoute selected as the planner backend, the
+     * proposer uses the same gateway and model — but through the `selfDevelopment` spend
+     * seam: its own daily attribution (`self-development=sd-proposal-<day>`), its own token
+     * cap, a reservation before every call. Never the bare `fetch`, and never the mission
+     * seam, whose goal budget a proposal (which has no goal yet) can neither use nor drain.
+     */
+    if (
+      env.ICOS_PLANNER_MODEL === undefined ||
+      !env.OMNIROUTE_BASE_URL ||
+      !env.OMNIROUTE_API_KEY ||
+      !selfDevelopmentFetch
+    ) {
+      return undefined;
+    }
+    return new OmniRouteCompletionProvider({
+      baseUrl: env.OMNIROUTE_BASE_URL,
+      apiKey: env.OMNIROUTE_API_KEY,
+      model: env.ICOS_PLANNER_MODEL,
+      timeoutMs: env.ICOS_PLANNER_TIMEOUT_MS ?? 300_000,
+      fetch: selfDevelopmentFetch,
+    });
+  }
 
   return new CommandPlannerProvider({
     command: command.command,

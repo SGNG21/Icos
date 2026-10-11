@@ -142,6 +142,20 @@ export interface Attribution {
    * une relecture bavarde affamerait les suivantes.
    */
   readonly systemReviewMissionId?: string;
+  /**
+   * BUDGET DE DÉTECTION D'AUTO-DÉVELOPPEMENT (décision 0076) : la complétion qui transforme
+   * un constat mesuré du dépôt en UNE proposition d'amélioration. Aucun goal n'existe encore
+   * à ce stade — c'est précisément ce que la proposition va peut-être faire naître — donc ce
+   * trafic ne peut pas tomber sur un budget de goal, et il ne doit pas non plus emprunter
+   * celui de la relecture système.
+   *
+   * Porte l'identifiant de la FENÊTRE (une par jour, `sd-proposal-AAAA-MM-JJ`) : le plafond
+   * est donc un plafond JOURNALIER de tokens, pas une cagnotte qui se remplit indéfiniment.
+   *
+   * DERNIER de la précédence, après la relecture système : on ne peut pas descendre vers ce
+   * budget en ajoutant un champ, seulement y tomber faute de toute autre imputation.
+   */
+  readonly selfDevelopmentProposalId?: string;
 }
 
 /** Décompte de tokens mesuré. `totalTokens >= promptTokens + completionTokens`. */
@@ -222,6 +236,8 @@ export function attributionKey(attribution: Attribution | null | undefined): str
      * l'ordre : on ne peut pas descendre vers ce budget, seulement y tomber faute de mieux.
      */
     ["system-review", attribution.systemReviewMissionId],
+    /* Après tout le reste : voir `Attribution.selfDevelopmentProposalId`. */
+    ["self-development", attribution.selfDevelopmentProposalId],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
       return `${label}=${encodeURIComponent(value.trim())}`;
@@ -265,6 +281,8 @@ export function attributionFromKey(key: string): Attribution | null {
       return { conversationId: value };
     case "system-review":
       return { systemReviewMissionId: value };
+    case "self-development":
+      return { selfDevelopmentProposalId: value };
     default:
       return null;
   }
