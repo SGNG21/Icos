@@ -187,7 +187,13 @@ export function runtimeProbesFor(
      * (`ICOS_WORKER_EXEC_COMMANDS`) rather than inferred, because an executor ICOS cannot
      * name is one it must not claim.
      */
-    countGovernedExecutors: async () => countLaunchableExecutors(env, sandboxBackend()),
+    /* The policy is loaded LAZILY: importing it freezes its allowlist (see honest-probes). */
+    countGovernedExecutors: async () =>
+      countLaunchableExecutors(
+        env,
+        sandboxBackend(),
+        (await import("@/core/execution/executable-policy")).decideExecutable,
+      ),
     /*
      * Web/search connectors ONLY. Model-provider reachability is deliberately excluded:
      * a model answers from its weights, which is not realtime access to anything.

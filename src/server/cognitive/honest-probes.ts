@@ -1,6 +1,13 @@
 import { and, count as sqlCount, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
 
-import { decideExecutable, type ExecutableDecision } from "@/core/execution/executable-policy";
+/*
+ * TYPE-ONLY. `executable-policy` freezes its allowlist when first IMPORTED (deliberately: nothing
+ * that later mutates the environment can widen it). A reporting probe must never be what
+ * triggers that freeze — importing it here froze an empty allowlist in any process that loaded
+ * the cognitive module before publishing its deployment, and every governed run was then
+ * refused. The caller passes the decision; `index.ts` loads the policy lazily, at probe time.
+ */
+import type { ExecutableDecision } from "@/core/execution/executable-policy";
 import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
 import { DISPATCHABLE_STATUSES } from "@/core/tool-gateway/model";
 import type { Database } from "@/server/database/client";
@@ -217,7 +224,7 @@ export async function measureRealtime(
 export function countLaunchableExecutors(
   env: Readonly<Record<string, string | undefined>>,
   sandboxDetection: SandboxBackendDetection,
-  decide: (command: string, args: readonly string[]) => ExecutableDecision = decideExecutable,
+  decide: (command: string, args: readonly string[]) => ExecutableDecision,
 ): number | undefined {
   let commands: ReturnType<typeof parseWorkerExecCommands>;
   try {

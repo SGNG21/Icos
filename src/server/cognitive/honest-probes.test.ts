@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { ExecutableDecision } from "@/core/execution/executable-policy";
+import { decideExecutable, type ExecutableDecision } from "@/core/execution/executable-policy";
 import type { Database } from "@/server/database/client";
 import type { SandboxBackendDetection } from "@/server/workers/process/sandbox-backend";
 
@@ -41,7 +41,9 @@ describe("countLaunchableExecutors: declared is not launchable", () => {
   });
 
   it("default policy is the frozen allowlist, empty in tests → nothing launchable", () => {
-    expect(countLaunchableExecutors({ ICOS_WORKER_EXEC_COMMANDS: commands }, SANDBOX)).toBe(0);
+    expect(
+      countLaunchableExecutors({ ICOS_WORKER_EXEC_COMMANDS: commands }, SANDBOX, decideExecutable),
+    ).toBe(0);
   });
 
   it("nothing declared is 0; malformed declaration is unmeasurable (undefined)", () => {
