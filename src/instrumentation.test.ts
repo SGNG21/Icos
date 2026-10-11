@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Env } from "@/config/env";
 import type { Container } from "@/server/container";
@@ -43,6 +43,17 @@ function retainedProductionServices(): Promise<ProductionServices> | undefined {
 
 describe("Next.js server instrumentation", () => {
   const originalRuntime = process.env.NEXT_RUNTIME;
+
+  /*
+   * WARM THE COMPOSITION-ROOT GRAPH ONCE, AS SETUP. The first import of @/server/system/production-services (which `register` imports) transforms and
+   * evaluates the whole container graph (hundreds of modules); measured 8-14 s cold on this
+   * host, far above the 5 s per-test budget once the full suite loads the CPU. That cost is
+   * a property of the import, not of the behaviour asserted, so it is paid here under an
+   * explicit setup budget and the tests below keep the default timeout.
+   */
+  beforeAll(async () => {
+    await import("@/server/system/production-services");
+  }, 120_000);
 
   afterEach(() => {
     vi.resetModules();

@@ -1,6 +1,6 @@
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildDag } from "@/features/cockpit/dag";
 import { buildCockpitSnapshot, type WorkerView } from "@/features/cockpit/snapshot";
@@ -175,6 +175,17 @@ describe("system map", () => {
 });
 
 describe("worker identity", () => {
+  /*
+   * WARM THE COMPOSITION-ROOT GRAPH ONCE, AS SETUP. The first import of the workers page (via features/cockpit/load) transforms and
+   * evaluates the whole container graph (hundreds of modules); measured 8-14 s cold on this
+   * host, far above the 5 s per-test budget once the full suite loads the CPU. That cost is
+   * a property of the import, not of the behaviour asserted, so it is paid here under an
+   * explicit setup budget and the tests below keep the default timeout.
+   */
+  beforeAll(async () => {
+    await import("@/app/cockpit/workers/page");
+  }, 120_000);
+
   it("renders model/provider/account as missing rather than borrowing the worker kind", async () => {
     const { default: WorkersPage } = await import("@/app/cockpit/workers/page");
     expect(WorkersPage).toBeTypeOf("function"); // server page compiles and exports
