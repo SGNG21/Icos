@@ -81,7 +81,8 @@ function workerToRow(worker: WorkerRegistryEntry): typeof workers.$inferInsert {
   };
 }
 
-function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
+/** THE `workers` row mapper, shared by every reader so a row is validated one way only. */
+export function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
   const result = workerRegistryEntrySchema.safeParse({
     id: row.id,
     workerKind: row.workerKind,
