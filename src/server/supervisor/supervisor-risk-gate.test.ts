@@ -241,6 +241,20 @@ describe("supervisor dispatch risk gate", () => {
     expect(await f.statusOf("undeclared")).toBe("awaiting_approval");
   });
 
+  it("a read_only task's file scope is what it READS: it dispatches, as for workspace allocation", async () => {
+    /*
+     * N1 lab regression: a planned "inspect this file" task was parked as an ungoverned
+     * writer because its scope was counted as a write. A reader gets no worktree and a
+     * read-only repository mount, so the runtime — not the scope — decides it cannot write.
+     */
+    const f = await setup({
+      goal: {},
+      tasks: [{ title: "inspect", riskClass: "read_only", allowedFileScope: ["src/x.ts"] }],
+    });
+    await f.supervisor.run(f.mission.id);
+    expect(f.dispatchedTitles()).toEqual(["inspect"]);
+  });
+
   it("a writer with no isolated workspace is escalated", async () => {
     const f = await setup({ goal: {}, tasks: [{ title: "write", allowedFileScope: ["docs/"] }] });
     await f.supervisor.run(f.mission.id);

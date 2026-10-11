@@ -143,13 +143,14 @@ export class TaskRiskGate {
           ...(input.missionTask.capability ? [input.missionTask.capability] : []),
         ],
         /*
-         * The SAME notion of "writer" as the workspace allocation policy: only `read_only`
-         * mutates nothing, and an absent class is the canonical default `reversible`. A file
-         * scope always means writing, whatever the class says.
+         * The SAME notion of "writer" as the workspace allocation policy
+         * (`decideWorkspaceAllocation`): only `read_only` mutates nothing, and an absent class
+         * is the canonical default `reversible`. A `read_only` task's file scope names what it
+         * READS: it gets no worktree and the sandbox mounts the repository read-only, so the
+         * runtime enforces that it cannot write. Counting that scope as a write made the gate
+         * park every planned inspection task as an ungoverned writer (measured in the N1 lab).
          */
-        repositoryWrite:
-          (canonical.riskClass ?? "reversible") !== "read_only" ||
-          (canonical.allowedFileScope?.length ?? 0) > 0,
+        repositoryWrite: (canonical.riskClass ?? "reversible") !== "read_only",
         riskLevel: canonical.riskClass,
         assertedRisk: goal?.riskLevel,
         allowedCapabilities: goal?.allowedCapabilities,
