@@ -15,7 +15,9 @@ import { executionPrompt } from "@/core/review/output-contract";
 
 // Stable but unique UUID-shaped values keep the PostgreSQL proof deterministic.
 let uuidIndex = 0;
-vi.mock("node:crypto", () => ({
+/* Partial: only randomUUID is made deterministic; hashing (audit ids) stays real. */
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
   randomUUID: () => {
     uuidIndex += 1;
     return `00000000-0000-4000-8000-${uuidIndex.toString().padStart(12, "0")}`;
@@ -179,7 +181,9 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskAWithDeps.taskId,
         taskTitle: taskAWithDeps.title,
-        prompt: executionPrompt(taskAWithDeps.description || taskAWithDeps.title),
+        prompt: executionPrompt(taskAWithDeps.description || taskAWithDeps.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 
@@ -246,7 +250,9 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskBWithDeps.taskId,
         taskTitle: taskBWithDeps.title,
-        prompt: executionPrompt(taskBWithDeps.description || taskBWithDeps.title),
+        prompt: executionPrompt(taskBWithDeps.description || taskBWithDeps.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 
@@ -309,7 +315,9 @@ describe("Real E2E with PostgreSQL + Temporal + Hermes (simulated)", () => {
         missionId,
         taskId: taskCWithDeps.taskId,
         taskTitle: taskCWithDeps.title,
-        prompt: executionPrompt(taskCWithDeps.description || taskCWithDeps.title),
+        prompt: executionPrompt(taskCWithDeps.description || taskCWithDeps.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 
