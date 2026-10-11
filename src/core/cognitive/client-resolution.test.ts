@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   fold,
+  hostsIn,
   intentOf,
+  normalizeHost,
   isScopeChange,
   resolveReference,
   type DirectoryEntry,
@@ -345,5 +347,243 @@ describe("intentOf", () => {
     expect(intentOf(fold("continue"))).toBe("continue");
     expect(intentOf(fold("le client de Cannes"))).toBe("descriptive");
     expect(intentOf(fold("bonjour"))).toBe("none");
+  });
+});
+
+/**
+ * P0 live defect (2026-10-11): « Qu'est-ce que tu peux me dire sur ce dossier LDS Rénov et ce
+ * site internet ? » was answered « De quel client ou projet parlez-vous ? ». Every form the
+ * owner listed must resolve, with the owner-declared aliases of the seeded LDS entry.
+ */
+describe("OWNER FORMS (P0 LDS defect, owner statement 2026-10-11)", () => {
+  const LDS_OWNER: DirectoryEntry = {
+    ...LDS,
+    aliases: [...LDS.aliases, "lds-renov.fr", "www.lds-renov.fr", "desc:renovation", "desc:cannes"],
+  };
+  const dir = [LDS_OWNER, MECENE];
+  const onLds = { clientId: "lds-renov", projectId: null };
+  const resolvedLds = { kind: "resolved", clientId: "lds-renov", projectId: null };
+
+  it("« LDS Rénov » (no apostrophe) resolves by canonical name", () => {
+    expect(
+      resolveReference(ask({ text: "Que sais-tu de LDS Rénov ?", directory: dir })),
+    ).toMatchObject({ ...resolvedLds, source: "canonical_name" });
+  });
+
+  it("« LDS » resolves by alias", () => {
+    expect(resolveReference(ask({ text: "Et LDS ?", directory: dir }))).toMatchObject({
+      ...resolvedLds,
+      source: "alias",
+    });
+  });
+
+  it("the live sentence « fichier / ce dossier LDS Rénov » resolves the NAMED entity, no question", () => {
+    const text =
+      "Est-ce que tu as accès au fichier LDS Rénov ? Qu'est-ce que tu peux me dire sur ce dossier LDS Rénov et ce site internet ?";
+    expect(resolveReference(ask({ text, directory: dir }))).toMatchObject(resolvedLds);
+    expect(
+      resolveReference(
+        ask({ text: "Est-ce que tu as accès au fichier LDS Rénov ?", directory: dir }),
+      ),
+    ).toMatchObject(resolvedLds);
+    // Even when another client is active: the name in the sentence wins over the pointer.
+    expect(
+      resolveReference(
+        ask({
+          text: "parle-moi de ce dossier LDS Rénov",
+          directory: dir,
+          current: { clientId: "editions-du-mecene", projectId: null },
+        }),
+      ),
+    ).toMatchObject(resolvedLds);
+  });
+
+  it("a bare domain, a www. domain and a full URL resolve through the domain tier", () => {
+    for (const text of [
+      "que vaut lds-renov.fr ?",
+      "audite www.lds-renov.fr",
+      "regarde https://www.LDS-Renov.fr/contact?x=1 stp",
+      "le site lds-renov.fr.",
+    ]) {
+      expect(resolveReference(ask({ text, directory: dir })), text).toMatchObject({
+        ...resolvedLds,
+        source: "domain",
+        matched: "lds-renov.fr",
+      });
+    }
+  });
+
+  it("an unknown domain is not a reference to anyone", () => {
+    expect(resolveReference(ask({ text: "regarde google.fr", directory: dir })).kind).toBe(
+      "unchanged",
+    );
+  });
+
+  it("« le client rénovation Cannes » / « le client de Cannes » resolve by declared descriptors", () => {
+    for (const text of [
+      "Où en est le client rénovation Cannes ?",
+      "et le client de Cannes ?",
+      "le client de cannes, on en est où",
+    ]) {
+      expect(resolveReference(ask({ text, directory: dir })), text).toMatchObject({
+        ...resolvedLds,
+        source: "descriptor",
+      });
+    }
+  });
+
+  it("descriptors never resolve without a reference noun", () => {
+    expect(
+      resolveReference(ask({ text: "il pleut à Cannes, la rénovation attendra", directory: dir }))
+        .kind,
+    ).toBe("unchanged");
+    // Plural: a statement about the portfolio, not a designation.
+    expect(resolveReference(ask({ text: "nos clients à Cannes", directory: dir })).kind).toBe(
+      "unchanged",
+    );
+  });
+
+  it("two clients fitting the descriptors equally asks, and names both", () => {
+    const other: DirectoryEntry = {
+      kind: "client",
+      key: "cannes-batiment",
+      name: "Cannes Bâtiment",
+      aliases: ["desc:cannes", "desc:renovation"],
+      clientId: "cannes-batiment",
+      sensitivity: "normal",
+    };
+    const r = resolveReference(
+      ask({ text: "le client rénovation Cannes", directory: [LDS_OWNER, MECENE, other] }),
+    );
+    expect(r).toMatchObject({ kind: "ambiguous", reason: "multiple_matches" });
+    if (r.kind !== "ambiguous") throw new Error("unreachable");
+    expect(r.candidates).toEqual(["Cannes Bâtiment", "LDS Rénov'"]);
+  });
+
+  it("the client fitting MORE descriptors wins over one fitting fewer", () => {
+    const other: DirectoryEntry = {
+      kind: "client",
+      key: "cannes-immo",
+      name: "Cannes Immo",
+      aliases: ["desc:cannes"],
+      clientId: "cannes-immo",
+      sensitivity: "normal",
+    };
+    expect(
+      resolveReference(
+        ask({ text: "le client rénovation Cannes", directory: [LDS_OWNER, MECENE, other] }),
+      ),
+    ).toMatchObject(resolvedLds);
+  });
+
+  it("a descriptor qualifier that fits nobody asks and lists the known clients", () => {
+    const r = resolveReference(ask({ text: "et le client de Lyon ?", directory: dir }));
+    expect(r).toMatchObject({ kind: "ambiguous", reason: "unknown_reference" });
+    if (r.kind !== "ambiguous") throw new Error("unreachable");
+    expect(r.question).toContain("LDS Rénov'");
+    expect(r.question).toContain("Éditions du Mécène");
+  });
+
+  it("« ce client » with LDS active stays on LDS", () => {
+    expect(
+      resolveReference(ask({ text: "relance ce client", directory: dir, current: onLds })),
+    ).toMatchObject({ ...resolvedLds, source: "current_context" });
+  });
+
+  it("possessives « son site », « améliore son SEO » keep the active scope", () => {
+    for (const text of ["Améliore son SEO.", "Et son site ?", "améliore la vitesse de son site"]) {
+      expect(resolveReference(ask({ text, directory: dir, current: onLds })), text).toEqual({
+        kind: "unchanged",
+        clientId: "lds-renov",
+        projectId: null,
+      });
+    }
+  });
+
+  it("an explicit switch « passons à / parlons de <X> » moves the scope", () => {
+    for (const text of ["Passons à l'éditeur.", "parlons des Éditions du Mécène"]) {
+      const r = resolveReference(ask({ text, directory: dir, current: onLds }));
+      expect(r, text).toMatchObject({ kind: "resolved", clientId: "editions-du-mecene" });
+      expect(isScopeChange(r, onLds)).toBe(true);
+    }
+  });
+
+  it("an explicit switch to an UNKNOWN client asks instead of staying on the old one", () => {
+    const r = resolveReference(
+      ask({ text: "passons au client Dupont", directory: dir, current: onLds }),
+    );
+    expect(r).toMatchObject({ kind: "ambiguous", reason: "unknown_reference" });
+  });
+
+  it("no scope + no match: the question names the known clients instead of the bare string", () => {
+    const r = resolveReference(
+      ask({ text: "qu'est-ce que tu sais sur ce dossier ?", directory: dir }),
+    );
+    expect(r).toMatchObject({ kind: "ambiguous", reason: "no_current_context" });
+    if (r.kind !== "ambiguous") throw new Error("unreachable");
+    expect(r.question).toContain("Clients connus : LDS Rénov', Éditions du Mécène.");
+  });
+
+  it("the list is bounded and never names a restricted or above-ceiling client", () => {
+    const many: DirectoryEntry[] = Array.from({ length: 12 }, (_, i) => ({
+      kind: "client" as const,
+      key: `c-${String(i).padStart(2, "0")}`,
+      name: `Client ${String(i).padStart(2, "0")}`,
+      aliases: [],
+      clientId: `c-${String(i).padStart(2, "0")}`,
+      sensitivity: "normal" as const,
+    }));
+    const secret: DirectoryEntry = {
+      ...MECENE,
+      key: "secret",
+      name: "Secret SA",
+      sensitivity: "restricted",
+    };
+    const hidden: DirectoryEntry = {
+      ...MECENE,
+      key: "hidden",
+      name: "Hidden SAS",
+      sensitivity: "sensitive",
+    };
+    const r = resolveReference(
+      ask({
+        text: "relance ce client",
+        directory: [...many, secret, hidden],
+        maxSensitivity: "normal",
+      }),
+    );
+    if (r.kind !== "ambiguous") throw new Error("expected a question");
+    expect(r.question).toContain("Client 07");
+    expect(r.question).not.toContain("Client 08");
+    expect(r.question).toContain("(et 4 autres)");
+    expect(r.question).not.toContain("Secret SA");
+    expect(r.question).not.toContain("Hidden SAS");
+  });
+
+  it("an empty directory says so instead of the bare question", () => {
+    const r = resolveReference(ask({ text: "ce dossier LDS Rénov", directory: [] }));
+    if (r.kind !== "ambiguous") throw new Error("expected a question");
+    expect(r.question).toContain("Aucun client n'est encore enregistré");
+  });
+
+  it("domain and descriptor aliases never act as NAME aliases", () => {
+    // « desc:cannes » folds to « desc cannes »: it must not resolve a sentence by name.
+    expect(resolveReference(ask({ text: "desc cannes", directory: dir })).kind).toBe("unchanged");
+  });
+});
+
+describe("normalizeHost / hostsIn", () => {
+  it("strips scheme, www., path, port and trailing dot", () => {
+    expect(normalizeHost("https://www.LDS-Renov.fr:443/contact")).toBe("lds-renov.fr");
+    expect(normalizeHost("lds-renov.fr.")).toBe("lds-renov.fr");
+    expect(normalizeHost("lds renov")).toBeNull();
+    expect(normalizeHost("desc:cannes")).toBeNull();
+  });
+
+  it("extracts every hostname of an utterance once", () => {
+    expect(hostsIn("compare lds-renov.fr et https://www.lds-renov.fr/ avec exemple.com")).toEqual([
+      "lds-renov.fr",
+      "exemple.com",
+    ]);
   });
 });
