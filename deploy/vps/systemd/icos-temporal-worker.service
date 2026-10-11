@@ -1,0 +1,52 @@
+# ICOS execution worker — polls TEMPORAL_TASK_QUEUE (icos-tasks) on the VPS Temporal.
+#
+# PREPARED, NOT INSTALLED. Install procedure and rollback: deploy/vps/README.md.
+#
+# Same tree and same EnvironmentFile as icos-web, so the worker and the dispatcher always
+# agree on queue, namespace, callback URL and secret. The worker is a thin adapter around
+# src/server/execution/temporal (scripts/temporal-worker.ts); it is NOT a new orchestrator.
+# Temporal owns retries/redelivery: if this unit dies mid-activity, the activity times out
+# and is redelivered to the restarted worker — the fencing/lease checks in the activity
+# decide whether it may still act.
+[Unit]
+Description=ICOS execution worker (Temporal queue icos-tasks)
+After=network-online.target docker.service icos-web.service
+Wants=network-online.target
+Requires=docker.service
+# A worker that cannot reach Temporal exits 1; do not hammer it forever.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=icos
+Group=icos
+WorkingDirectory=/srv/icos/worktrees/vps-deploy
+EnvironmentFile=/srv/icos/etc/icos.env
+ExecStart=/usr/bin/pnpm worker:temporal
+Restart=always
+RestartSec=10
+# Temporal's Worker.shutdown() drains in-flight tasks on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=icos-temporal-worker
+
+# Resource ceilings for everything the worker launches (agents run as children, inside
+# bwrap). A runaway mission hits these before it can starve icos-web or PostgreSQL.
+MemoryHigh=6G
+MemoryMax=8G
+CPUQuota=400%
+TasksMax=1024
+OOMPolicy=continue
+Nice=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# Agents need their own (ephemeral) HOME under /home/icos and worktrees under /srv/icos.
+ReadWritePaths=/srv/icos /home/icos
+
+[Install]
+WantedBy=multi-user.target
