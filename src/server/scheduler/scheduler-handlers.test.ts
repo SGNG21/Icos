@@ -28,7 +28,10 @@ const jobOf = (kind: ScheduledJob["kind"], payload: Record<string, unknown>): Sc
   updatedAt: new Date(),
 });
 
-function setup(policy: AutonomyCompositionPolicy = {}) {
+function setup(
+  policy: AutonomyCompositionPolicy = {},
+  goalMetadata: Record<string, Record<string, string>> | null = null,
+) {
   const tasks = new InMemoryTaskRepository(new InMemoryAuditLog(), []);
   const missions = new InMemoryMissionRepository(tasks);
   const runtimeRepository = new InMemoryAutonomousMissionRuntimeRepository();
@@ -42,7 +45,25 @@ function setup(policy: AutonomyCompositionPolicy = {}) {
   const wakeup = { wake: vi.fn().mockResolvedValue(null) };
   const supervisor = new SupervisorService(missions, tasks, { dispatch }, {} as never);
   const handlers = createSchedulerHandlers({
-    ignite: { missions, runtimeRepository, supervisor, planner: planner as never, ...policy },
+    ignite: {
+      missions,
+      runtimeRepository,
+      supervisor,
+      planner: planner as never,
+      ...(goalMetadata
+        ? {
+            goals: {
+              setConverted: vi.fn().mockResolvedValue(undefined),
+              getById: vi.fn(async (id: string) =>
+                goalMetadata[id]
+                  ? { goal: { metadata: goalMetadata[id] } as never, preview: {} as never }
+                  : null,
+              ),
+            },
+          }
+        : {}),
+      ...policy,
+    },
     missions,
     wakeup,
   });
@@ -88,6 +109,74 @@ describe("scheduler handlers", () => {
         signal,
       }),
     ).rejects.toThrow("SCHEDULER_SUPERVISOR_UNAVAILABLE");
+  });
+
+  describe("carried client scope (decision 0063 amendment A)", () => {
+    const goals = { "g-lds": { clientId: "lds-renov" }, "g-none": {} };
+
+    it("starts the mission when the carried scope is the goal's", async () => {
+      const f = setup({}, goals);
+      await f.handlers.start_mission(
+        jobOf("start_mission", {
+          title: "T",
+          objective: "O",
+          missionId: "m-lds",
+          goalId: "g-lds",
+          clientId: "lds-renov",
+        }),
+        { signal },
+      );
+      expect(await f.missions.findById("m-lds")).not.toBeNull();
+    });
+
+    it("FAIL_CLOSED: a carried client that is not the goal's is refused permanently, no mission", async () => {
+      const f = setup({}, goals);
+      for (const [goalId, clientId] of [
+        ["g-lds", "editions-du-mecene"],
+        ["g-none", "lds-renov"],
+      ]) {
+        await expect(
+          f.handlers.start_mission(
+            jobOf("start_mission", { title: "T", objective: "O", missionId: `m-${goalId}`, goalId, clientId }),
+            { signal },
+          ),
+        ).rejects.toThrow("SCHEDULER_SCOPE_MISMATCH");
+        expect(await f.missions.findById(`m-${goalId}`)).toBeNull();
+      }
+    });
+
+    it("FAIL_CLOSED: a carried scope with no goal, or no way to verify it, is refused", async () => {
+      const f = setup({}, goals);
+      await expect(
+        f.handlers.start_mission(
+          jobOf("start_mission", { title: "T", objective: "O", missionId: "m-x", clientId: "lds-renov" }),
+          { signal },
+        ),
+      ).rejects.toThrow("SCHEDULER_SCOPE_MISMATCH");
+      const blind = setup();
+      await expect(
+        blind.handlers.start_mission(
+          jobOf("start_mission", {
+            title: "T",
+            objective: "O",
+            missionId: "m-y",
+            goalId: "g-lds",
+            clientId: "lds-renov",
+          }),
+          { signal },
+        ),
+      ).rejects.toThrow("SCHEDULER_SCOPE_MISMATCH");
+    });
+
+    it("a malformed carried scope is an invalid payload", async () => {
+      const f = setup({}, goals);
+      await expect(
+        f.handlers.start_mission(
+          jobOf("start_mission", { title: "T", objective: "O", missionId: "m-z", goalId: "g-lds", clientId: 42 }),
+          { signal },
+        ),
+      ).rejects.toThrow("SCHEDULER_INVALID_PAYLOAD");
+    });
   });
 
   it("rejects a malformed payload permanently", async () => {

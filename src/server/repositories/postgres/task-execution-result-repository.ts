@@ -7,6 +7,7 @@ import {
   type TaskExecutionResult,
   type TaskStatus,
 } from "@/core/contracts";
+import { scopeAuditDetails, scopeOfMetadata } from "@/core/execution/execution-scope";
 import { transitionTask as transitionLifecycle } from "@/core/tasks/lifecycle";
 import type { Database } from "@/server/database/client";
 import {
@@ -15,7 +16,7 @@ import {
   rowToTaskExecutionResult,
   taskExecutionResultToRow,
 } from "@/server/database/mappers";
-import { auditEntries, taskExecutionResults, tasks } from "@/server/database/schema";
+import { auditEntries, goals, taskExecutionResults, tasks } from "@/server/database/schema";
 import type {
   RecordTaskExecutionResultInput,
   RecordTaskExecutionResultOutcome,
@@ -151,6 +152,21 @@ export class PostgresTaskExecutionResultRepository implements TaskExecutionResul
             .where(eq(tasks.id, input.taskId));
         }
 
+        /*
+         * Whose work completed (decision 0063 amendment A): the client/project the task's goal
+         * declares, read in this transaction from the goal — never from the worker's report.
+         */
+        const goalRows = current.goalId
+          ? await tx
+              .select({ metadata: goals.metadata })
+              .from(goals)
+              .where(eq(goals.goalId, current.goalId))
+              .limit(1)
+          : [];
+        const scope = goalRows[0]
+          ? scopeOfMetadata(goalRows[0].metadata as Record<string, unknown>)
+          : null;
+
         const auditEntry: AuditEntry = {
           id: `audit-${randomUUID()}`,
           occurredAt: parsed.data.recordedAt,
@@ -164,6 +180,7 @@ export class PostgresTaskExecutionResultRepository implements TaskExecutionResul
             statusApplied: transition.ok ? transition.task.status : current.status,
             transitionApplied: transition.ok,
             ...(parsed.data.error ? { errorCode: parsed.data.error.code } : {}),
+            ...scopeAuditDetails(scope),
           },
         };
         await tx.insert(auditEntries).values(auditToRow(auditEntry));

@@ -6,7 +6,8 @@ import { and, asc, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { MissionStatus } from "@/core/mission/contracts";
 
 import type { Mission, MissionTask } from "@/core/mission/contracts";
-import { missions, missionTasks, tasks } from "@/server/database/schema";
+import { goals, missions, missionTasks, tasks } from "@/server/database/schema";
+import { scopeOfMetadata } from "@/core/execution/execution-scope";
 import type { Database } from "@/server/database/client";
 import type { MissionRepository } from "@/server/mission/ports";
 import type {
@@ -30,6 +31,22 @@ export class PostgresMissionRepository implements MissionRepository {
     private readonly db: Database,
     private readonly taskRepository: TaskRepository,
   ) {}
+
+  /**
+   * The client/project the goal declares, for the `task.created` audit details (decision 0063
+   * amendment A). Read from the goal — the one source — never stored on the mission.
+   */
+  private async goalScope(
+    goalId: string | undefined | null,
+  ): Promise<{ clientId: string | null; projectId: string | null } | null> {
+    if (!goalId) return null;
+    const [row] = await this.db
+      .select({ metadata: goals.metadata })
+      .from(goals)
+      .where(eq(goals.goalId, goalId))
+      .limit(1);
+    return row ? scopeOfMetadata(row.metadata as Record<string, unknown>) : null;
+  }
 
   private async hydrateMissionTaskRows(
     rows: (typeof missionTasks.$inferSelect)[],
@@ -83,6 +100,7 @@ export class PostgresMissionRepository implements MissionRepository {
 
     // Build and validate every canonical Task + audit before opening
     // the database transaction. No persistence occurs here.
+    const auditScope = await this.goalScope(input.goalId);
     const preparedTasks = input.tasks.map((taskInput) => {
       const prepared = prepareTaskCreation({
         missionId: missionId,
@@ -108,7 +126,7 @@ export class PostgresMissionRepository implements MissionRepository {
         reviewPolicy: taskInput.reviewPolicy,
         integrationPolicy: taskInput.integrationPolicy,
         assignedAgentId: undefined,
-      });
+      }, auditScope);
 
       if (!prepared.ok) {
         throw new Error(
@@ -314,6 +332,7 @@ export class PostgresMissionRepository implements MissionRepository {
         .where(eq(missions.id, missionId));
     }
 
+    const auditScope = await this.goalScope(goalId);
     const preparedTasks =
       plan.tasks.map((task) => {
         const prepared =
@@ -330,7 +349,7 @@ export class PostgresMissionRepository implements MissionRepository {
             ...resolvePlanTaskMetadata(task),
             dependencies: [],
             assignedAgentId: undefined,
-          });
+          }, auditScope);
 
         if (!prepared.ok) {
           throw new Error(
@@ -567,6 +586,7 @@ export class PostgresMissionRepository implements MissionRepository {
         .where(eq(missions.id, missionId));
     }
 
+    const auditScope = await this.goalScope(goalId);
     const preparedTasks =
       plan.tasks.map((task) => {
         const prepared =
@@ -583,7 +603,7 @@ export class PostgresMissionRepository implements MissionRepository {
             ...resolvePlanTaskMetadata(task),
             dependencies: [],
             assignedAgentId: undefined,
-          });
+          }, auditScope);
 
         if (!prepared.ok) {
           throw new Error(

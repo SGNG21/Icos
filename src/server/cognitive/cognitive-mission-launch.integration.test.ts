@@ -69,6 +69,8 @@ function core3Scheduler(): DurableScheduler {
       runtimeRepository: container.autonomousRuntime!,
       supervisor,
       planner: planner as never,
+      /* As `autonomyIgniteDeps` composes it: ignition verifies the job's carried scope. */
+      goals: container.goalRepository,
     },
     missions: container.mission,
     wakeup: { wake: vi.fn().mockResolvedValue(null) },

@@ -1,5 +1,10 @@
 import { getContainer } from "@/server/container";
+import {
+  ExecutionScopeMismatchError,
+  type ExecutionScope,
+} from "@/core/execution/execution-scope";
 import { verifyExecutionCallback } from "@/server/execution/callback-auth";
+import { ExecutionScopeReader } from "@/server/execution/execution-scope-reader";
 import { zodDetails } from "@/server/http/errors";
 import { executionGrantBodySchema } from "@/server/http/execution-schemas";
 import { toErrorResponse } from "@/server/http/map-error";
@@ -115,6 +120,28 @@ export async function POST(request: Request): Promise<Response> {
 
     const mission = await container.mission.findById(attempt.missionId);
 
+    /*
+     * WHOSE WORK THIS IS (decision 0063 amendment A), read from the task's goal — the one
+     * source — and refused when the task's lineage disagrees with it: a task whose goal
+     * declares a client is never presented to a worker under another client, or under none.
+     */
+    let scope: ExecutionScope | null;
+    try {
+      scope = await new ExecutionScopeReader({
+        goals: container.goalRepository,
+        missions: container.mission,
+        tasks: container.tasks,
+      }).forTask(attempt.missionId, attempt.taskId);
+    } catch (error) {
+      if (error instanceof ExecutionScopeMismatchError) {
+        return apiError("invalid_input", "périmètre d'exécution incohérent", {
+          reason: "EXECUTION_SCOPE_MISMATCH",
+          field: error.field,
+        });
+      }
+      throw error;
+    }
+
     return json({
       grant: {
         taskId: attempt.taskId,
@@ -136,6 +163,8 @@ export async function POST(request: Request): Promise<Response> {
          */
         credentialScope: attempt.workerKind ? [attempt.workerKind] : [],
         writeAllowed,
+        /* Exported to the worker as ICOS_CLIENT_ID / ICOS_PROJECT_ID; ids only, no knowledge. */
+        scope: scope ?? null,
         /* Absent for a reader: nothing to write means nothing to write INTO. */
         workspace: workspace
           ? {

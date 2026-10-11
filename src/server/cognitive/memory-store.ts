@@ -139,7 +139,17 @@ export class PostgresCognitiveMemoryStore {
   ) {}
 
   // ── Entity graph ───────────────────────────────────────────────────────────
-  async upsertEntity(tenantId: string, input: EntityInput): Promise<Entity> {
+  /**
+   * Insert-if-absent. With `mergeAliases`, an existing row additionally GAINS the input's
+   * aliases it does not already hold — appended, never reordered, never removed — and keeps
+   * its name, sensitivity and every alias an owner added by hand. That is what lets a seed run
+   * at every boot without ever undoing an owner's edit.
+   */
+  async upsertEntity(
+    tenantId: string,
+    input: EntityInput,
+    options: { readonly mergeAliases?: boolean } = {},
+  ): Promise<Entity> {
     const now = this.clock.now();
     await this.db
       .insert(memoryEntities)
@@ -171,7 +181,58 @@ export class PostgresCognitiveMemoryStore {
     if ((row.clientId ?? null) !== (input.clientId ?? null)) {
       throw new MemoryPolicyError("entité existante dans un autre périmètre client");
     }
+    if (options.mergeAliases) {
+      const missing = [...new Set(input.aliases ?? [])].filter((a) => !row.aliases.includes(a));
+      if (missing.length) {
+        // Appended in SQL against the row's CURRENT value, deduplicated there too, so a
+        // concurrent owner edit between the read above and this write is never lost.
+        const [merged] = await this.db
+          .update(memoryEntities)
+          .set({
+            aliases: sql`${memoryEntities.aliases} || array(
+              select a from unnest(array[${sql.join(
+                missing.map((a) => sql`${a}`),
+                sql`, `,
+              )}]::text[]) as a
+              where not a = any(${memoryEntities.aliases}))`,
+            updatedAt: now,
+          })
+          .where(eq(memoryEntities.id, row.id))
+          .returning();
+        return toEntity(merged);
+      }
+    }
     return toEntity(row);
+  }
+
+  /**
+   * Whether this subject has EVER been recorded in this exact scope, whatever became of it
+   * (active, candidate, superseded, retracted, deleted). A seed that runs at every boot asks
+   * this first, so a fact the owner retracted, forgot or replaced is never written back.
+   */
+  async subjectRecorded(
+    tenantId: string,
+    clientId: string | null,
+    type: CognitiveMemoryType,
+    subjectKey: string,
+  ): Promise<{ readonly id: string; readonly content: string; readonly status: string }[]> {
+    return this.db
+      .select({
+        id: memoryRecords.id,
+        content: memoryRecords.content,
+        status: memoryRecords.status,
+      })
+      .from(memoryRecords)
+      .where(
+        and(
+          eq(memoryRecords.tenantId, tenantId),
+          eq(memoryRecords.type, type),
+          eq(memoryRecords.subjectKey, subjectKey),
+          sql`coalesce(${memoryRecords.clientId}, '') = ${clientId ?? ""}`,
+          isNull(memoryRecords.projectId),
+          isNull(memoryRecords.ownerUserId),
+        ),
+      );
   }
 
   async relate(

@@ -3,6 +3,11 @@ import type {
   AutonomousMissionPlanner,
   AutonomousSupervisor,
 } from "@/server/autonomy/autonomous-mission-runner";
+import {
+  checkScopeAgreement,
+  ExecutionScopeMismatchError,
+  scopeOfMetadata,
+} from "@/core/execution/execution-scope";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { MissionRepository } from "@/server/mission/ports";
 import {
@@ -30,7 +35,7 @@ export interface IgniteAutonomousMissionDeps extends AutonomyCompositionPolicy {
    * stays `pending` forever while its own mission succeeds — the live state this closed.
    * Optional so a caller with no goal, and the tests, need not supply it.
    */
-  goals?: Pick<GoalRepository, "setConverted">;
+  goals?: Pick<GoalRepository, "setConverted"> & Partial<Pick<GoalRepository, "getById">>;
 }
 
 export type IgniteAutonomousMissionResult =
@@ -38,6 +43,27 @@ export type IgniteAutonomousMissionResult =
   | { missionId: string; outcome: "deferred" };
 
 const TERMINAL_RUNTIME_STATES = ["succeeded", "failed", "cancelled", "escalated"];
+
+/**
+ * FAIL CLOSED, BEFORE THE MISSION ROW. A job that carries a client/project must name a goal,
+ * that goal must be readable, and its metadata must declare the same scope. A carried scope
+ * that cannot be verified is refused rather than trusted: a mission must never run for a
+ * client its goal was not launched for. A job carrying no scope is the pre-carriage shape and
+ * is unaffected — the goal's own metadata remains the scope.
+ */
+async function assertCarriedScope(
+  deps: IgniteAutonomousMissionDeps,
+  input: { goalId?: string; scope?: { clientId?: string; projectId?: string } },
+): Promise<void> {
+  const carried = input.scope;
+  if (!carried || (carried.clientId === undefined && carried.projectId === undefined)) return;
+  if (input.goalId === undefined) throw new ExecutionScopeMismatchError("goalId");
+  if (!deps.goals?.getById) throw new ExecutionScopeMismatchError("goal_unverifiable");
+  const stored = await deps.goals.getById(input.goalId);
+  if (!stored) throw new ExecutionScopeMismatchError("goal_not_found");
+  const agreement = checkScopeAgreement(scopeOfMetadata(stored.goal.metadata), carried);
+  if (!agreement.ok) throw new ExecutionScopeMismatchError(agreement.field);
+}
 
 /**
  * Creates a Mission with an empty graph (idempotent when `id` is imposed) and starts
@@ -54,11 +80,19 @@ const TERMINAL_RUNTIME_STATES = ["succeeded", "failed", "cancelled", "escalated"
  */
 export async function igniteAutonomousMission(
   deps: IgniteAutonomousMissionDeps,
-  input: { id?: string; title: string; objective: string; goalId?: string } & Pick<
-    StartAutonomousMissionInput,
-    "bounds" | "computePolicy"
-  >,
+  input: {
+    id?: string;
+    title: string;
+    objective: string;
+    goalId?: string;
+    /**
+     * The client/project scope the job CARRIED (decision 0063 amendment A). It is a claim,
+     * checked here against the goal — the one source — before any mission exists.
+     */
+    scope?: { clientId?: string; projectId?: string };
+  } & Pick<StartAutonomousMissionInput, "bounds" | "computePolicy">,
 ): Promise<IgniteAutonomousMissionResult> {
+  await assertCarriedScope(deps, input);
   const mission = await deps.missions.create({
     ...(input.id !== undefined ? { id: input.id } : {}),
     title: input.title,

@@ -27,6 +27,11 @@ import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recove
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
+import { seedClientDirectoryAtStartup } from "@/server/cognitive/client-directory-seed";
+import { missionSettlementRecorder } from "@/server/cognitive/mission-memory";
+import { PostgresCognitiveMemoryStore } from "@/server/cognitive/memory-store";
+import { ExecutionScopeReader } from "@/server/execution/execution-scope-reader";
+import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 import { CHIEF_BRAIN_ID } from "@/core/workforce/brains";
 import { TERMINAL_ASSIGNMENT_STATUSES } from "@/core/workforce/contracts";
@@ -109,6 +114,28 @@ const PROCESS_SIGNALS: ProductionServiceSignals = {
  * `synthesize` is the workforce's own terminal transition, so this is a release through
  * the existing authority rather than a second lifecycle: Chief closes what Chief opened.
  */
+function onMissionTerminal(
+  container: Container,
+): ((missionId: string, reason: string) => Promise<void>) | undefined {
+  const release = chiefRelease(container);
+  const remember = container.db
+    ? missionSettlementRecorder({
+        missions: container.mission,
+        scope: new ExecutionScopeReader({
+          goals: container.goalRepository,
+          missions: container.mission,
+        }),
+        reviews: container.reviewDecisions,
+        memory: new PostgresCognitiveMemoryStore(container.db),
+      })
+    : undefined;
+  if (!release && !remember) return undefined;
+  return async (missionId, reason) => {
+    await release?.(missionId, reason);
+    await remember?.(missionId);
+  };
+}
+
 function chiefRelease(
   container: Container,
 ): ((missionId: string, reason: string) => Promise<void>) | undefined {
@@ -252,6 +279,12 @@ export function composeAutonomyRuntime(container: Container): {
     capabilityRouter: container.capabilityRouter,
     /* A retry keeps the brain that governed the task (decision 0070, owner property 6). */
     workforceCompute: workforceBridge,
+    /* The reviewer is told whose work it judges, from the task's goal (0063 amendment A). */
+    executionScope: new ExecutionScopeReader({
+      goals: container.goalRepository,
+      missions: container.mission,
+      tasks: container.tasks,
+    }),
     /*
      * NO `dispatchPrepared` (0050 × 0049). A CORRECT/RETRY prepares its attempt and sets the
      * durable wake-up in the SAME transaction; the woken supervisor claims that intent and
@@ -295,8 +328,13 @@ export function composeAutonomyRuntime(container: Container): {
      * Optional, so a composition without a workforce routes byte-identically.
      */
     workforceBridge,
-    /* Chief closes what Chief opened: a terminal mission gives its brains back. */
-    chiefRelease(container),
+    /*
+     * THE TERMINAL-SETTLEMENT SEAM. Chief closes what Chief opened (a terminal mission gives
+     * its brains back), and the settlement leaves ONE durable memory in the goal's client
+     * scope (decision 0067 item 8, wired by 0063 amendment A). Each step is independent and
+     * non-fatal: neither can un-settle the mission or block the other.
+     */
+    onMissionTerminal(container),
   );
   const wakeup = new AutonomyWakeupService(
     container.mission,
@@ -602,6 +640,19 @@ export async function startProductionServices(
        * is NOTIFY and compute routing owns remediation, so this observes; it never acts.
        */
       if (container.db) await seedObservation(container.scheduledJobs, COMPUTE_HEALTH_OBSERVATION);
+
+      /*
+       * THE CLIENT DIRECTORY (P0 2026-10-11, decision 0063 amendment A). Written only by a
+       * manual script before this, so the live directory was empty and every client reference
+       * became « De quel client parlez-vous ? ». Idempotent, merge-only, owner edits are never
+       * undone; a failure is logged, never fatal (see `seedClientDirectoryAtStartup`).
+       */
+      if (container.db) {
+        await seedClientDirectoryAtStartup(
+          new PostgresCognitiveMemoryStore(container.db),
+          CURRENT_SINGLE_TENANT_ID,
+        );
+      }
 
       /*
        * THE CANONICAL FLEET BOOTSTRAP (live-worker bootstrap lane). Probing was already

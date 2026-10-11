@@ -9,14 +9,20 @@ import type { Sensitivity } from "./contracts";
  * guesses — two plausible matches is an `ambiguous` result that asks a question.
  *
  * Precedence (strict: a tier that matched is never diluted by a weaker one):
+ *   0 declared domain                 (« lds-renov.fr », « https://www.lds-renov.fr/contact »)
  *   1 explicit canonical identifier   (`lds-renov`)
  *   2 exact canonical name            (« LDS Rénov' »)
  *   3 exact alias                     (« lds », « le mécène »)
+ *   3b declared descriptors           (« le client rénovation Cannes ») — only with a reference
+ *                                     noun, and only when exactly one entity fits best
  *   4 current conversation context    (« ça », « ce client », « ce projet »)
  *   5 recent durable context          (« continue ce qu'on faisait »)
- *   6 safe ambiguity                  (ask, never pick)
+ *   6 safe ambiguity                  (ask, never pick — and name the known clients)
+ *
+ * A strong deictic that names an entity in the same sentence (« ce dossier LDS Rénov ») is
+ * resolved by the NAME: tiers 0-3b run before any pointer is read.
  */
-export const RESOLUTION_POLICY_VERSION = "client-resolution-v1";
+export const RESOLUTION_POLICY_VERSION = "client-resolution-v2";
 
 /** One directory row: that a client/project exists, its name and its aliases. No facts. */
 export interface DirectoryEntry {
@@ -31,9 +37,11 @@ export interface DirectoryEntry {
 }
 
 export const RESOLUTION_SOURCES = [
+  "domain",
   "canonical_id",
   "canonical_name",
   "alias",
+  "descriptor",
   "current_context",
   "previous_context",
   "recent_context",
@@ -125,6 +133,56 @@ function containsIdentifier(haystack: string, key: string): boolean {
   }
 }
 
+// ── declared alias kinds ─────────────────────────────────────────────────────
+/**
+ * Aliases live in ONE column (`memory_entities.aliases`), so the three kinds of reference form
+ * are told apart by shape, never by a second table:
+ *  - a DOMAIN alias is a bare hostname (« lds-renov.fr »), matched against the hostnames the
+ *    utterance contains, `www.` and scheme stripped;
+ *  - a DESCRIPTOR alias carries the `desc:` prefix (« desc:cannes »): a declared trait that
+ *    may pick a client out of a descriptive reference (« le client de Cannes »), never a name;
+ *  - everything else is a NAME alias, matched as a whole folded phrase.
+ */
+export const DESCRIPTOR_PREFIX = "desc:";
+
+const HOSTNAME_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+
+/** `https://www.LDS-Renov.fr/contact` → `lds-renov.fr`; anything not a hostname → null. */
+export function normalizeHost(value: string): string | null {
+  const host = value
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .replace(/[/?#:].*$/, "")
+    .replace(/\.$/, "")
+    .replace(/^www\./, "");
+  return HOSTNAME_RE.test(host) ? host : null;
+}
+
+export const isDescriptorAlias = (alias: string) =>
+  alias.trim().toLowerCase().startsWith(DESCRIPTOR_PREFIX);
+export const isDomainAlias = (alias: string) =>
+  !isDescriptorAlias(alias) && !/\s/.test(alias.trim()) && normalizeHost(alias) !== null;
+const isNameAlias = (alias: string) => !isDescriptorAlias(alias) && !isDomainAlias(alias);
+
+/** Every hostname the utterance mentions, normalised. Order of appearance, no duplicates. */
+export function hostsIn(text: string): string[] {
+  const found = new Set<string>();
+  const re =
+    /(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?![a-z0-9-])/g;
+  for (const m of text.toLowerCase().matchAll(re)) {
+    const host = normalizeHost(m[0]);
+    if (host) found.add(host);
+  }
+  return [...found];
+}
+
+/**
+ * A descriptive reference needs a noun that designates a business object. Singular only:
+ * « nos clients à Cannes » is a statement about the portfolio, not a designation.
+ */
+const REFERENCE_NOUN_RE = /\b(client|cliente|dossier|projet|compte)\b/;
+
 const SENSITIVITY_RANK: Record<Sensitivity, number> = { normal: 0, sensitive: 1, restricted: 2 };
 
 // ── referential intent ───────────────────────────────────────────────────────
@@ -150,7 +208,7 @@ const WEAK_DEICTIC_RE = /\b(ca|cela|dessus)\b/;
  * (« nos clients », « côté projet ») is not a reference and must not trigger a question.
  */
 const DESCRIPTIVE_RE =
-  /\b(?:le|la|du|de la|notre|chez|pour) (?:client|cliente|projet|dossier|compte) (?:de |du |d |des |a |chez )?([a-z0-9]{3,})/;
+  /\b(?:le|la|au|du|de la|notre|chez|pour) (?:client|cliente|projet|dossier|compte) (?:de |du |d |des |a |chez )?([a-z0-9]{3,})/;
 
 export type ReferentialIntent =
   "named" | "return" | "continue" | "deictic" | "weak_deictic" | "descriptive" | "none";
@@ -167,19 +225,26 @@ export function intentOf(foldedText: string): ReferentialIntent {
 // ── matching ─────────────────────────────────────────────────────────────────
 interface Match {
   readonly entry: DirectoryEntry;
-  /** Folded text that matched; its length is the specificity of the match. */
+  /** Folded text that matched. */
   readonly matched: string;
+  /**
+   * Specificity inside a tier. Defaults to the length of `matched` (a longer phrase is more
+   * specific); the descriptor tier counts traits instead.
+   */
+  readonly weight?: number;
 }
+
+const weightOf = (m: Match) => m.weight ?? m.matched.length;
 
 /** Best (longest) match per entity, strongest first, ties broken by key. */
 function bestPerEntity(matches: readonly Match[]): Match[] {
   const best = new Map<string, Match>();
   for (const m of matches) {
     const kept = best.get(m.entry.key);
-    if (!kept || m.matched.length > kept.matched.length) best.set(m.entry.key, m);
+    if (!kept || weightOf(m) > weightOf(kept)) best.set(m.entry.key, m);
   }
   return [...best.values()].sort(
-    (a, b) => b.matched.length - a.matched.length || (a.entry.key < b.entry.key ? -1 : 1),
+    (a, b) => weightOf(b) - weightOf(a) || (a.entry.key < b.entry.key ? -1 : 1),
   );
 }
 
@@ -202,18 +267,49 @@ const ask = (
   reason,
 });
 
+/** At most this many client names are ever listed in a question. Names only, never facts. */
+export const MAX_LISTED_CLIENTS = 8;
+
+/**
+ * « Clients connus : A, B, C. » — bounded, sorted, names only. The list is built from the
+ * entries this actor may resolve (`visible`): a restricted or above-ceiling client is never
+ * named, so a question cannot disclose its existence.
+ */
+export function knownClientsSentence(visible: readonly DirectoryEntry[]): string {
+  const names = [...new Set(visible.filter((e) => e.kind === "client").map((e) => e.name))].sort();
+  if (!names.length) return "Aucun client n'est encore enregistré dans le répertoire.";
+  const shown = names.slice(0, MAX_LISTED_CLIENTS);
+  const more = names.length - shown.length;
+  return `Clients connus : ${shown.join(", ")}${more > 0 ? ` (et ${more} autre${more > 1 ? "s" : ""})` : ""}.`;
+}
+
 function unknownReference(visible: readonly DirectoryEntry[]): ContextResolution {
   const clients = visible.filter((e) => e.kind === "client");
   return ask(
     clients,
     "unknown_reference",
     clients.length
-      ? `Je ne reconnais pas ce périmètre. Clients connus : ${clients
-          .map((c) => c.name)
-          .sort()
-          .join(", ")}. Lequel ?`
+      ? `Je ne reconnais pas ce périmètre. ${knownClientsSentence(clients)} Lequel ?`
       : "Je ne reconnais pas ce périmètre et aucun client n'est enregistré.",
   );
+}
+
+/**
+ * Tier 3b. Each entity's declared descriptors (« desc:renovation », « desc:cannes ») that occur in
+ * the utterance, joined into ONE match weighted by its trait count: the entity fitting the
+ * most traits wins, and two entities fitting equally many are a question, never a pick.
+ */
+function descriptorMatches(visible: readonly DirectoryEntry[], text: string): Match[] {
+  return visible.flatMap((e) => {
+    const hits = e.aliases
+      .filter(isDescriptorAlias)
+      .map((a) => fold(a.trim().slice(DESCRIPTOR_PREFIX.length)))
+      .filter((d) => containsPhrase(text, d))
+      .sort();
+    // Specificity is the NUMBER of traits matched, so a longer word cannot outweigh an extra
+    // trait; `matched` keeps the traits readable on the event log.
+    return hits.length ? [{ entry: e, matched: hits.join(" + "), weight: hits.length }] : [];
+  });
 }
 
 /** Resolve the scope for one turn. Pure: no clock, no I/O, deterministic. */
@@ -229,7 +325,19 @@ export function resolveReference(input: ResolutionInput): ContextResolution {
       SENSITIVITY_RANK[e.sensitivity] <= SENSITIVITY_RANK[input.maxSensitivity],
   );
 
+  const hosts = hostsIn(input.text);
   const tiers: readonly (readonly [ResolutionSource, Match[]])[] = [
+    [
+      // A hostname is the most explicit thing a human can write: it names one site.
+      "domain",
+      visible.flatMap((e) =>
+        e.aliases
+          .filter(isDomainAlias)
+          .map((a) => normalizeHost(a)!)
+          .filter((h) => hosts.includes(h))
+          .map((h) => ({ entry: e, matched: h })),
+      ),
+    ],
     [
       "canonical_id",
       visible
@@ -246,18 +354,20 @@ export function resolveReference(input: ResolutionInput): ContextResolution {
       "alias",
       visible.flatMap((e) =>
         e.aliases
+          .filter(isNameAlias)
           .map(fold)
           .filter((a) => containsPhrase(text, a))
           .map((a) => ({ entry: e, matched: a })),
       ),
     ],
+    ["descriptor", REFERENCE_NOUN_RE.test(text) ? descriptorMatches(visible, text) : []],
   ];
 
   for (const [source, raw] of tiers) {
     if (!raw.length) continue;
     const matches = bestPerEntity(raw);
     // Two entities whose best match is equally specific are equally plausible: ask.
-    if (matches.length > 1 && matches[1].matched.length >= matches[0].matched.length) {
+    if (matches.length > 1 && weightOf(matches[1]) >= weightOf(matches[0])) {
       return ask(
         matches.map((m) => m.entry),
         "multiple_matches",
@@ -319,7 +429,7 @@ export function resolveReference(input: ResolutionInput): ContextResolution {
     return ask(
       clients,
       "no_previous_context",
-      "Revenir à quel client ? Aucun périmètre précédent n'est enregistré.",
+      `Revenir à quel client ? Aucun périmètre précédent n'est enregistré. ${knownClientsSentence(clients)}`,
     );
   }
 
@@ -347,10 +457,12 @@ export function resolveReference(input: ResolutionInput): ContextResolution {
     if (intent === "weak_deictic") {
       return { kind: "unchanged", clientId: null, projectId: null };
     }
+    // Never the bare question: the human must be able to answer it, so it names the clients
+    // this actor may resolve (bounded, names only) — or says plainly that there are none.
     return ask(
       clients,
       "no_current_context",
-      "De quel client ou projet parlez-vous ? Aucun périmètre n'est actif.",
+      `De quel client ou projet parlez-vous ? Aucun périmètre n'est actif. ${knownClientsSentence(clients)}`,
     );
   }
 

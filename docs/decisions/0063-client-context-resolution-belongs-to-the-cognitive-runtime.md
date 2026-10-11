@@ -161,3 +161,59 @@ with zero leakage, return to previous, cross-conversation continuation, ambiguit
 scope and tenant isolation, writeback provenance, temporal precedence, mission handoff under the
 proposal's scope, restart durability (new runtime **and** a real `SIGKILL`-equivalent child
 process).
+
+## Amendment A (2026-10-11) — P0 autonomy unblock: a populated directory, and a scope that travels
+
+### Context
+
+Live defect: « Est-ce que tu as accès au fichier LDS Rénov ? Qu'est-ce que tu peux me dire sur
+ce dossier LDS Rénov et ce site internet ? » was answered « De quel client ou projet parlez-vous ?
+Aucun périmètre n'est actif. ». The resolver already lets a name beat a strong deictic; the root
+cause was that the only writer of the directory, `seedClientDirectory`, ran only from a manual
+script, so the production directory was empty. Downstream, the resolved scope reached the goal
+metadata and was then dropped at every execution hop.
+
+### Decision
+
+1. **The directory is seeded at every production boot** (`startProductionServices` →
+   `seedClientDirectoryAtStartup`), through the governed store, idempotent and **merge-only**:
+   an existing entity keeps its name, sensitivity and aliases and only gains missing aliases;
+   a fact is written only if its subject was never recorded in that scope, so an owner's
+   retraction, deletion or supersession is never undone. A seed failure is logged, never fatal.
+2. **Owner statements are a second, labelled source** (item 9 is otherwise unchanged): the owner
+   stated on 2026-10-11 that LDS Rénov' is a renovation company in Cannes and that its website is
+   lds-renov.fr. They are recorded with `sourceId: owner-statement:2026-10-11`, as
+   SYSTEM_OBSERVED (ICOS transcribed them; USER_ASSERTED stays reserved to an authenticated
+   human through the API, which outranks them). « Le client de Cannes » is therefore no longer
+   in `MISSING_BUSINESS_DATA` and now resolves to LDS.
+3. **Two new resolution tiers, same column.** `memory_entities.aliases` holds three shapes:
+   a bare hostname is a DOMAIN alias (tier 0, matched against hostnames extracted from the
+   utterance, scheme/`www.`/path stripped); a `desc:` alias is a declared DESCRIPTOR (tier 3b:
+   only with a singular reference noun, the entity matching the most traits wins, a tie asks);
+   anything else is a NAME alias. No new column, no second registry.
+4. **A clarification names the candidates.** Every question lists the clients this actor may
+   resolve (sorted, at most 8, names only; restricted/above-ceiling clients are never named), or
+   says the directory is empty. Policy version `client-resolution-v2`.
+5. **ExecutionScope is carried, never re-decided.** One core type
+   (`src/core/execution/execution-scope.ts`), one source: the goal's metadata (`clientId`,
+   `projectId`, `tenantId`). Missions and tasks get **no** scope column — they already hold
+   `goal_id`; `ExecutionScopeReader` derives the scope from it. Carried at: the `start_mission`
+   payload (checked against the goal by ignition before the mission row exists), the Temporal
+   execution grant (and the worker's `ICOS_CLIENT_ID` / `ICOS_PROJECT_ID`, from the grant only),
+   the review request, and the `task.created` / `task.execution.completed` audit details.
+   **Fail closed** at each hop: a presented scope that differs from the goal's, a carried scope
+   with no or an unreadable goal, or a task whose goal declares another client is refused
+   (`SCHEDULER_SCOPE_MISMATCH`, `EXECUTION_SCOPE_MISMATCH`, `WORKER_SCOPE_MISMATCH`).
+6. **Settlement memory is wired.** `missionSettlementRecorder` runs on the supervisor's existing
+   terminal-settlement seam (composed with the Chief release in `production-services.ts`, no
+   change to `supervisor-service.ts`) and writes one episodic record in the goal's client scope.
+
+### Consequences
+
+- No migration. Review decision records do not store the scope (strict schema, own columns): it
+  is derivable from `missionId → goal` and is passed to the reviewer with the request.
+- A `start_mission` job enqueued before this change carries no scope and is unaffected. A launch
+  interrupted between enqueue and `finishLaunch` across the upgrade replays with a different
+  payload hash; the scheduler's idempotency check then refuses it (rare, visible, fail-safe).
+- Rollback: revert the commits; nothing durable changes shape. Seeded aliases and owner-statement
+  records remain as ordinary, editable directory/memory rows.

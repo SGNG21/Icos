@@ -22,6 +22,7 @@ import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute
 import { reviewDecisionRecordSchema } from "@/core/contracts/review";
 import type { CapabilityRouter } from "@/server/routing/capability-router";
 import { complexityFromRisk, type PriorAttemptFact } from "@/core/workers/compute-routing";
+import type { ExecutionScopeReader } from "@/server/execution/execution-scope-reader";
 
 const QUALITY_CONTROL_LEASE_MS = 5 * 60_000;
 /** Cool-down before a review parked as unavailable is retried with a fresh budget. */
@@ -81,6 +82,13 @@ export interface QualityControlServiceDeps {
    * the worker capabilities its skill declares, or hold while a human approval is missing.
    */
   workforceCompute?: WorkforceTaskCompute;
+  /**
+   * WHOSE WORK IS BEING REVIEWED (decision 0063 amendment A): the task's client/project scope,
+   * read from its goal and handed to the reviewer with the request. Optional: absent, the
+   * review request is exactly as before. A lineage mismatch throws here, so a task whose
+   * scope disagrees with its goal is never judged as if it belonged to either.
+   */
+  executionScope?: Pick<ExecutionScopeReader, "forTask">;
 }
 
 export interface RegisterExecutionInput {
@@ -664,8 +672,13 @@ export class QualityControlService {
       ? attributionKey({ goalId: mission.goalId })
       : attributionKey({ systemReviewMissionId: mission.id });
 
+    const scope = this.deps.executionScope
+      ? await this.deps.executionScope.forTask(job.missionId, job.taskId)
+      : null;
+
     this.reviewTrace.stage = "reviewer_invocation";
     const review = await this.deps.reviewer.review({
+      ...(scope ? { scope } : {}),
       reviewerCompute,
       mission,
       missionTask,
@@ -681,6 +694,15 @@ export class QualityControlService {
       policyContext: {
         executionAttempt: job.executionAttempt,
         priorReviews: await this.deps.reviewDecisions.listByTaskId(job.taskId),
+        ...(scope
+          ? {
+              executionScope: {
+                clientId: scope.clientId,
+                projectId: scope.projectId,
+                allowedDataScope: scope.allowedDataScope,
+              },
+            }
+          : {}),
       },
       signal,
     });

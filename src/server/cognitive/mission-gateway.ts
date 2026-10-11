@@ -1,6 +1,7 @@
 import { classifyRawObjective } from "@/core/chief/objective-classification";
 import type { GoalProposal } from "@/core/cognitive/contracts";
 import { HighLevelGoalSchema, type HighLevelGoal } from "@/core/contracts/high-level-goal";
+import { scopePayloadFields } from "@/core/execution/execution-scope";
 import type { GoalRepository } from "@/server/repositories/ports";
 import type { SchedulerService } from "@/server/scheduler/scheduler-service";
 import type { GoalNormalizer } from "@/server/services/goal-normalizer";
@@ -22,6 +23,12 @@ export interface GoalLaunchRequest {
   readonly approval: "human" | "policy";
   readonly clientId: string | null;
   readonly projectId: string | null;
+  /**
+   * The tenant the proposal was made in. Written into the goal's metadata with the client and
+   * project so the execution scope (`ExecutionScope`) read back from the goal is complete.
+   * Optional for callers that predate it; readers then fall back to the single tenant.
+   */
+  readonly tenantId?: string;
 }
 
 export type GoalLaunch =
@@ -110,6 +117,7 @@ export class CanonicalGoalLauncher implements MissionGateway {
       approvedBy: r.approvedBy,
       ...(r.clientId ? { clientId: r.clientId } : {}),
       ...(r.projectId ? { projectId: r.projectId } : {}),
+      ...(r.tenantId ? { tenantId: r.tenantId } : {}),
       /*
        * Reserved namespace (decision 0065): the priority governor classifies on these and
        * on nothing else, because ICOS wrote them. The unprefixed keys above stay for the
@@ -156,7 +164,17 @@ export class CanonicalGoalLauncher implements MissionGateway {
           .enqueue({
             kind: "start_mission",
             idempotencyKey,
-            payload: { title: goal.title, objective: goal.objective, goalId: goal.id },
+            payload: {
+              title: goal.title,
+              objective: goal.objective,
+              goalId: goal.id,
+              /*
+               * THE SCOPE TRAVELS WITH THE JOB (decision 0063 amendment A), copied from the
+               * goal it was just written to — never from the request a second time. The
+               * handler checks it against the goal again before any mission exists.
+               */
+              ...scopePayloadFields(goal.metadata),
+            },
           })
           .then(({ job }) => ({ jobId: job.id, missionId: job.missionId }));
 

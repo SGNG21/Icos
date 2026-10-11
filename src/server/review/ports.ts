@@ -5,6 +5,7 @@ import type {
   Finding,
   WorkerKind,
 } from "@/core/contracts";
+import type { ExecutionScope } from "@/core/execution/execution-scope";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import type {
   ReviewDecisionRecord,
@@ -36,6 +37,11 @@ export interface ReviewInput {
   findings: readonly Finding[];
   /** Contexte politique/risque (futur) */
   policyContext?: Record<string, unknown>;
+  /**
+   * Whose work this is (decision 0063 amendment A), read from the task's goal. Ids only: the
+   * reviewer learns WHICH client, never that client's knowledge.
+   */
+  scope?: ExecutionScope;
   /** Annulation coopérative sur perte de propriété du runner. */
   signal?: AbortSignal;
   /**

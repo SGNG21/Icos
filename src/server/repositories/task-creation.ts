@@ -6,6 +6,8 @@ import {
   type Task,
 } from "@/core/contracts";
 
+import { scopeAuditDetails } from "@/core/execution/execution-scope";
+
 import type {
   CreateTaskInput,
   CreateTaskResult,
@@ -31,6 +33,11 @@ export type PreparedTaskCreation =
  */
 export function prepareTaskCreation(
   input: CreateTaskInput,
+  /**
+   * The client/project the task's goal declares (decision 0063 amendment A), stamped on the
+   * `task.created` audit entry so the trail says whose work was created. Ids only.
+   */
+  scope: { clientId: string | null; projectId: string | null } | null = null,
 ): PreparedTaskCreation {
   const now = new Date().toISOString();
 
@@ -81,6 +88,7 @@ export function prepareTaskCreation(
     details: {
       title: parsed.data.title,
       status: parsed.data.status,
+      ...scopeAuditDetails(scope),
     },
     createdAt: now,
   };
