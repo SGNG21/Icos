@@ -99,7 +99,7 @@ import { WorkspaceExecutionCoordinator } from "@/server/workspace-manager/worksp
 import { PostgresTestDatabaseProvisioner } from "@/server/workspace-manager/test-database";
 import { PostgresWorkspaceRegistry } from "@/server/workspace-manager/postgres-workspace-registry";
 import { PostgresGit } from "@/server/workspace-manager/postgres-git";
-import { PostgresCommandRunner } from "@/server/workspace-manager/postgres-gate-deps";
+import { SandboxedCommandRunner } from "@/server/workspace-manager/sandboxed-command-runner";
 import { PostgresGateDatabase } from "@/server/workspace-manager/postgres-gate-deps";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { PostgresActionRepository } from "@/server/repositories/postgres/action-repository";
@@ -848,7 +848,7 @@ export async function buildPostgresContainer(
   const integrationGate = new IntegrationGate({
     git: pgGit,
     manager: workspaceManager,
-    runner: new PostgresCommandRunner(),
+    runner: new SandboxedCommandRunner(),
     database: new PostgresGateDatabase(),
     control: controlGuard,
     /* A deployment may verify with something other than pnpm; omitted keys keep defaults. */

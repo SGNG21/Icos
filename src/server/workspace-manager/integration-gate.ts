@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { sameEffectiveModel } from "@/core/workers/compute-routing";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -13,32 +12,20 @@ import { checkScope } from "./scope";
 import { workerDatabaseUrl } from "./test-database";
 import { WorkspaceError, type IntegrationDecision, type Workspace } from "./types";
 
-export interface CommandRunner {
-  run(
-    command: string[],
-    ctx: { cwd: string; env: NodeJS.ProcessEnv },
-  ): Promise<{ code: number; output: string }>;
+/**
+ * What a gate step hands its runner. `env` is the COMPLETE set of variables the gate names
+ * — nothing is inherited from this process (P0: the gate runs worker-authored code, see
+ * `sandboxed-command-runner.ts`). `network` is granted only to the step that must reach
+ * its dedicated test database.
+ */
+export interface GateCommandContext {
+  cwd: string;
+  env: Readonly<Record<string, string>>;
+  network: boolean;
 }
 
-/** Exécute une commande sans shell. */
-export class ProcessCommandRunner implements CommandRunner {
-  run(
-    command: string[],
-    ctx: { cwd: string; env: NodeJS.ProcessEnv },
-  ): Promise<{ code: number; output: string }> {
-    const [bin, ...args] = command;
-    return new Promise((resolve) => {
-      execFile(
-        bin!,
-        args,
-        { ...ctx, maxBuffer: 64 * 1024 * 1024, timeout: 20 * 60_000 },
-        (error, stdout, stderr) => {
-          const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-          resolve({ code, output: `${stdout}\n${stderr}`.trim() });
-        },
-      );
-    });
-  }
+export interface CommandRunner {
+  run(command: string[], ctx: GateCommandContext): Promise<{ code: number; output: string }>;
 }
 
 export interface GateDatabase {
@@ -279,7 +266,7 @@ export class IntegrationGate {
             "typecheck",
             (s) => (report.typecheck = s),
             [this.commands.typecheck],
-            true,
+            { withInstall: true },
           ),
       ],
       ["lint", () => this.command(ws, "lint", (s) => (report.lint = s), [this.commands.lint])],
@@ -303,6 +290,8 @@ export class IntegrationGate {
             "tests PostgreSQL",
             (s) => (report.postgresTests = s),
             this.commands.postgres,
+            /* The only step that must reach a socket: its own dedicated test database. */
+            { network: true },
           );
         },
       ],
@@ -440,24 +429,37 @@ export class IntegrationGate {
     return report;
   }
 
-  /** Lance les commandes dans le worktree ; la DB de test dédiée remplace toute URL de base héritée. */
+  /**
+   * Lance les commandes dans le worktree, SOUS LE BAC À SABLE du runner.
+   *
+   * L'environnement est CONSTRUIT, jamais hérité : ces commandes exécutent le code écrit par
+   * le worker (tests, configurations, scripts), qui ne doit voir aucun secret du serveur.
+   * Seule la DB de test dédiée est nommée. `verify-deps-before-run` est coupé : l'installation
+   * est une étape explicite (`install`), pas un effet de bord de `pnpm run`.
+   */
   private async command(
     ws: Workspace,
     label: string,
     set: (s: StepStatus) => void,
     commands: string[][],
-    withInstall = false,
+    { withInstall = false, network = false }: { withInstall?: boolean; network?: boolean } = {},
   ): Promise<Outcome> {
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of Object.keys(env))
-      if (/(^|_)(DATABASE_URL|POSTGRES_URL)$|^PGDATABASE$/.test(key)) delete env[key];
-    env.ICOS_TEST_DATABASE_URL = workerDatabaseUrl(ws.testDatabase);
+    const env: Record<string, string> = {
+      ICOS_TEST_DATABASE_URL: workerDatabaseUrl(ws.testDatabase),
+      CI: "1",
+      npm_config_verify_deps_before_run: "false",
+      pnpm_config_verify_deps_before_run: "false",
+    };
     const list =
       withInstall && !existsSync(path.join(ws.worktreePath, "node_modules"))
         ? [this.commands.install, ...commands]
         : commands;
     for (const command of list) {
-      const { code, output } = await this.runner.run(command, { cwd: ws.worktreePath, env });
+      const { code, output } = await this.runner.run(command, {
+        cwd: ws.worktreePath,
+        env,
+        network,
+      });
       if (code !== 0) {
         set("FAIL");
         return {

@@ -13,13 +13,11 @@ import { parseArgs } from "node:util";
 
 import { Git } from "../src/server/workspace-manager/git";
 import { DEFAULT_WORKTREE_ROOT } from "../src/server/workspace-manager/guards";
-import {
-  IntegrationGate,
-  ProcessCommandRunner,
-} from "../src/server/workspace-manager/integration-gate";
+import { IntegrationGate } from "../src/server/workspace-manager/integration-gate";
 import { WorkspaceManager } from "../src/server/workspace-manager/manager";
 import { FileWorkspaceRegistry } from "../src/server/workspace-manager/registry";
 import { formatReport } from "../src/server/workspace-manager/report";
+import { SandboxedCommandRunner } from "../src/server/workspace-manager/sandboxed-command-runner";
 import { PostgresTestDatabaseProvisioner } from "../src/server/workspace-manager/test-database";
 import { WORKSPACE_STATUSES, type WorkspaceStatus } from "../src/server/workspace-manager/types";
 
@@ -107,7 +105,7 @@ async function main(): Promise<number> {
       const gate = new IntegrationGate({
         git,
         manager,
-        runner: new ProcessCommandRunner(),
+        runner: new SandboxedCommandRunner(),
         database: provisioner,
       });
       const report = await gate.integrate(need(id, "<id>"), {

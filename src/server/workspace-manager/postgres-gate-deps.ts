@@ -1,26 +1,10 @@
-import { execFile } from "node:child_process";
-import type { CommandRunner, GateDatabase } from "./integration-gate";
+import type { GateDatabase } from "./integration-gate";
 
-/** PostgreSQL-backed command runner that executes commands in the workspace. */
-export class PostgresCommandRunner implements CommandRunner {
-  run(
-    command: string[],
-    ctx: { cwd: string; env: NodeJS.ProcessEnv },
-  ): Promise<{ code: number; output: string }> {
-    const [bin, ...args] = command;
-    return new Promise((resolve) => {
-      execFile(
-        bin!,
-        args,
-        { ...ctx, maxBuffer: 64 * 1024 * 1024, timeout: 20 * 60_000 },
-        (error, stdout, stderr) => {
-          const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-          resolve({ code, output: `${stdout}\n${stderr}`.trim() });
-        },
-      );
-    });
-  }
-}
+/*
+ * The gate's command runner is `SandboxedCommandRunner` (sandboxed-command-runner.ts). The
+ * `execFile` runner that lived here inherited the server's whole environment and ran
+ * worker-authored code unconfined (P0); it is gone, not deprecated.
+ */
 
 /** PostgreSQL-backed gate database. */
 export class PostgresGateDatabase implements GateDatabase {

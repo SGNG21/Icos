@@ -1,4 +1,5 @@
 import { assertWorkerDatabaseName } from "./guards";
+import type { GateCommandContext } from "./integration-gate";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,11 +78,16 @@ export class FakeProvisioner {
 
 /** Faux exécuteur de commandes : enregistre les appels, échoue sur demande. */
 export class FakeRunner {
-  readonly calls: { command: string; cwd: string; env: NodeJS.ProcessEnv }[] = [];
+  readonly calls: {
+    command: string;
+    cwd: string;
+    env: Readonly<Record<string, string>>;
+    network: boolean;
+  }[] = [];
   failing: string[] = [];
-  async run(command: string[], ctx: { cwd: string; env: NodeJS.ProcessEnv }) {
+  async run(command: string[], ctx: GateCommandContext) {
     const text = command.join(" ");
-    this.calls.push({ command: text, cwd: ctx.cwd, env: ctx.env });
+    this.calls.push({ command: text, cwd: ctx.cwd, env: ctx.env, network: ctx.network });
     const fail = this.failing.some((f) => text.includes(f));
     return { code: fail ? 1 : 0, output: fail ? "boom" : "ok" };
   }
