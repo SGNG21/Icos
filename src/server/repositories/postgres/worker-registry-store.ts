@@ -73,6 +73,7 @@ function workerToRow(worker: WorkerRegistryEntry): typeof workers.$inferInsert {
     metadata: parsed.metadata,
     lastProbeAt: parsed.lastProbeAt ? new Date(parsed.lastProbeAt) : null,
     lastProbeOutcome: parsed.lastProbeOutcome,
+    lastProbeErrorClass: parsed.lastProbeErrorClass ?? null,
     maxConcurrency: parsed.maxConcurrency,
     capacityPool: parsed.capacityPool,
     capacityPoolLimit: parsed.capacityPoolLimit,
@@ -80,7 +81,8 @@ function workerToRow(worker: WorkerRegistryEntry): typeof workers.$inferInsert {
   };
 }
 
-function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
+/** THE `workers` row mapper, shared by every reader so a row is validated one way only. */
+export function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
   const result = workerRegistryEntrySchema.safeParse({
     id: row.id,
     workerKind: row.workerKind,
@@ -98,6 +100,7 @@ function rowToWorker(row: WorkerRow): WorkerRegistryEntry {
     metadata: row.metadata,
     lastProbeAt: row.lastProbeAt ? row.lastProbeAt.toISOString() : null,
     lastProbeOutcome: row.lastProbeOutcome,
+    lastProbeErrorClass: row.lastProbeErrorClass,
     maxConcurrency: row.maxConcurrency,
     capacityPool: row.capacityPool,
     capacityPoolLimit: row.capacityPoolLimit,

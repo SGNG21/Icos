@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  WorkerProbeErrorClass,
   WorkerRegistryEntry,
   WorkerRuntimeDescriptor,
 } from "@/core/contracts/worker-registry";
@@ -298,4 +299,16 @@ export function classifyProbeFailure(message: string): ProbeClassification {
     return "UNAVAILABLE";
   }
   return "UNKNOWN";
+}
+
+/**
+ * The DURABLE class of a failed probe (migration 0062): the one place a probe error
+ * message becomes the closed `WorkerProbeErrorClass` that the prober persists and the
+ * operator CLI prints. A timeout is UNKNOWN (it says nothing about why), and so is the
+ * unreachable `AVAILABLE` — a failure is never stored as a success class.
+ */
+export function probeFailureClass(message: string): WorkerProbeErrorClass {
+  if (/TIMEOUT/.test(message)) return "UNKNOWN";
+  const classified = classifyProbeFailure(message);
+  return classified === "AVAILABLE" ? "UNKNOWN" : classified;
 }

@@ -209,8 +209,8 @@ export const auditEntries = pgTable(
   (t) => [
     check(
       "audit_event_type_check",
-      // Mirrors the constraint enforced by migrations 0008 -> 0047_audit_goal_events -> 0049_control_plane -> 0052_tool_gateway.
-      sql`${t.eventType} in ('task.created','task.transitioned','task.execution.dispatched','task.execution.started','task.execution.completed','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded','mission.created','mission.transitioned','mission.task.dispatched','goal.created','goal.status_updated','goal.converted','goal.idempotency_key_set','control.command.rejected','control.command.admitted','control.command.executed','control.command.failed','tool.execution.recorded','tool.approval.requested','tool.approval.decided','tool.grant.changed','tool.request.denied','tool.approval.consumed')`,
+      // Mirrors the constraint enforced by migrations 0008 -> 0047_audit_goal_events -> 0049_control_plane -> 0052_tool_gateway -> 0062_fleet_readiness_evidence.
+      sql`${t.eventType} in ('task.created','task.transitioned','task.execution.dispatched','task.execution.started','task.execution.completed','approval.recorded','action.decided','user.created','role.changed','auth.bootstrap.succeeded','auth.bootstrap.failed','auth.login.succeeded','auth.login.rejected','auth.logout.succeeded','auth.access.denied','human_user.created','human_user.role_changed','human_user.enabled','human_user.disabled','human_agent_link.created','human_agent_link.removed','human_user.administration_denied','capability.created','capability.updated','capability.status_changed','agent_capability.granted','agent_capability.revoked','skill.created','skill.imported','skill.content_changed','skill.trust_changed','skill.activation_changed','skill.security_scan_recorded','skill.eval_recorded','mission.created','mission.transitioned','mission.task.dispatched','goal.created','goal.status_updated','goal.converted','goal.idempotency_key_set','control.command.rejected','control.command.admitted','control.command.executed','control.command.failed','tool.execution.recorded','tool.approval.requested','tool.approval.decided','tool.grant.changed','tool.request.denied','tool.approval.consumed','worker.fleet.retired','worker.fleet.reinstated')`,
     ),
     check("audit_actor_type_check", sql`${t.actorType} in ('agent','human','system')`),
     index("audit_event_type_idx").on(t.eventType),
@@ -1158,6 +1158,11 @@ export const workers = pgTable(
     lastProbeAt: timestamp("last_probe_at", { withTimezone: true }),
     lastProbeOutcome: text("last_probe_outcome").default("never").notNull(),
     /*
+     * WHY the last probe failed (migration 0062): a closed class, never the raw error
+     * text. null = the current evidence is not a failure.
+     */
+    lastProbeErrorClass: text("last_probe_error_class"),
+    /*
      * CAPACITY (migration 0044, M5.5). A worker is NOT an unlimited execution
      * slot, hence the default of 1. There is deliberately no `current_load`
      * column: load is DERIVED by counting non-terminal dispatch_attempts, so it
@@ -1197,6 +1202,15 @@ export const workers = pgTable(
     check(
       "workers_probe_evidence_dated_check",
       sql`${t.lastProbeOutcome} = 'never' or ${t.lastProbeAt} is not null`,
+    ),
+    check(
+      "workers_last_probe_error_class_check",
+      sql`${t.lastProbeErrorClass} is null or ${t.lastProbeErrorClass} in ('NOT_CONFIGURED','AUTH_FAILURE','RATE_LIMITED','UNAVAILABLE','UNKNOWN')`,
+    ),
+    /* A failure class explains failed (or since-expired) evidence, never a success. */
+    check(
+      "workers_last_probe_error_class_outcome_check",
+      sql`${t.lastProbeErrorClass} is null or ${t.lastProbeOutcome} in ('failed','stale')`,
     ),
     check("workers_max_concurrency_check", sql`${t.maxConcurrency} >= 1`),
     check(

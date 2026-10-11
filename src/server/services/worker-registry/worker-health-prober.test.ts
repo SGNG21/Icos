@@ -127,6 +127,74 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(eligibleAt(entry, clock.now().toISOString())).toBe(false);
   });
 
+  it("PROBE_FAILURE_CLASS_PERSISTED: a failed probe records WHY as a closed class, never the text", async () => {
+    const { clock, store, registration } = harness();
+    await registerAgent(registration, W1);
+    const secretish = "404 no active credentials for provider nvidia (Authorization: Bearer sk-live-xyz)";
+    let mode: "fail" | "ok" | "unsupported" = "fail";
+    const prober = new WorkerHealthProber(store, registration, {
+      selectProbe: () =>
+        mode === "unsupported"
+          ? null
+          : mode === "ok"
+            ? healthy()
+            : {
+                probe: async () => {
+                  throw new Error(secretish);
+                },
+              },
+      now: clock.now,
+    });
+
+    const [record] = await prober.probeAll();
+    expect(record.errorClass).toBe("NOT_CONFIGURED");
+    const failed = (await store.get(W1))!;
+    expect(failed.lastProbeOutcome).toBe("failed");
+    expect(failed.lastProbeErrorClass).toBe("NOT_CONFIGURED");
+    /* The durable row never carries the message, nor anything that looks like a credential. */
+    expect(JSON.stringify(failed)).not.toMatch(/sk-live|Bearer|credentials for/);
+
+    /* Expiry keeps the last known cause; a success clears it. */
+    clock.set("2026-09-27T13:00:00.000Z");
+    await prober.expireStaleEvidence();
+    expect((await store.get(W1))!.lastProbeOutcome).toBe("stale");
+    expect((await store.get(W1))!.lastProbeErrorClass).toBe("NOT_CONFIGURED");
+
+    mode = "ok";
+    await prober.probeAll();
+    expect((await store.get(W1))!.lastProbeErrorClass).toBeNull();
+
+    /* And `unsupported` is not a failure either. */
+    mode = "fail";
+    await prober.probeAll();
+    mode = "unsupported";
+    await prober.probeAll();
+    const unsupported = (await store.get(W1))!;
+    expect(unsupported.lastProbeOutcome).toBe("unsupported");
+    expect(unsupported.lastProbeErrorClass).toBeNull();
+  });
+
+  it.each([
+    ["HTTP 401 Unauthorized", "AUTH_FAILURE"],
+    ["429 Too Many Requests", "RATE_LIMITED"],
+    ["503 Service Unavailable", "UNAVAILABLE"],
+    ["OMNIROUTE_PROBE_TIMEOUT after 30000ms", "UNKNOWN"],
+    ["socket hang up", "UNKNOWN"],
+  ] as const)("a failure %j is persisted as %s", async (message, expected) => {
+    const { store, registration } = harness();
+    await registerAgent(registration, W1);
+    await new WorkerHealthProber(store, registration, {
+      adapters: {
+        node: {
+          probe: async () => {
+            throw new Error(message);
+          },
+        },
+      },
+    }).probeAll();
+    expect((await store.get(W1))!.lastProbeErrorClass).toBe(expected);
+  });
+
   it("UNPROBEABLE_FAILS_CLOSED: a RUNTIME with no adapter is 'unsupported', never healthy", async () => {
     const { clock, store, registration } = harness();
     await registerRuntime(registration, W1, "hermes", "docker");
@@ -257,7 +325,11 @@ describe("M5.2 WorkerHealthProber", () => {
     expect(report.probed).toEqual([]);
     expect(report.expired).toEqual([]);
     const entry = (await store.get(W1))!;
-    expect(entry.health).toBe("healthy"); // last known verdict kept for audit
+    // Not re-probed, not re-expired: the row deactivate() wrote is left exactly as is —
+    // health cleared (nothing observes a disabled worker), probe date kept for audit.
+    expect(entry.health).toBe("unknown");
+    expect(entry.lastProbeOutcome).toBe("stale");
+    expect(entry.lastProbeAt).not.toBeNull();
     expect(entry.status).toBe("inactive"); // and it still routes nothing
     expect(eligibleAt(entry, clock.now().toISOString())).toBe(false);
   });

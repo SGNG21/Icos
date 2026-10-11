@@ -390,8 +390,13 @@ describe("M4 capability routing on PostgreSQL", () => {
       expect(
         (await afterDeactivate.router.route({ requiredCapabilities: ["deep-research"] })).decision,
       ).toBe("NO_ELIGIBLE_WORKER");
-      // The declaration and last probe survive for audit.
-      expect((await afterDeactivate.store.get(RESEARCHER))?.health).toBe("healthy");
+      // The declaration and the probe DATE survive for audit; the health verdict does not
+      // (nothing observes a disabled worker, so a kept `healthy` would never expire).
+      const deactivated = await afterDeactivate.store.get(RESEARCHER);
+      expect(deactivated?.capabilities).toEqual(["deep-research"]);
+      expect(deactivated?.lastProbeAt).not.toBeNull();
+      expect(deactivated?.lastProbeOutcome).toBe("stale");
+      expect(deactivated?.health).toBe("unknown");
 
       expect(await a.registration.deregister(RESEARCHER)).toBe(true);
       const afterDeregister = await restart();

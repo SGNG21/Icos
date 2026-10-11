@@ -69,7 +69,9 @@ export function warnOnAttention(outcome: StartupComputeBootstrapOutcome): void {
   if (
     outcome.status === "UNCONFIGURED" ||
     outcome.status === "PROVIDER_UNAVAILABLE" ||
-    outcome.status === "WRITE_FAILED"
+    outcome.status === "WRITE_FAILED" ||
+    /* Orphans an operator must look at: the reconciler refused to retire them itself. */
+    (outcome.status === "APPLIED" && outcome.result.retirement === "WITHHELD_MASS_WITHDRAWAL")
   ) {
     console.warn(`COMPUTE_BOOTSTRAP ${JSON.stringify(outcome)}`);
   }
@@ -145,7 +147,9 @@ export async function bootstrapComputeFleetAtStartup(
   }
 
   try {
-    const result = await applyComputeBootstrap(container.workerRegistration, plan);
+    const result = await applyComputeBootstrap(container.workerRegistration, plan, {
+      audit: container.audit,
+    });
     const outcome = { status: "APPLIED", source: plan.source, result } as const;
     log(outcome);
     return outcome;
