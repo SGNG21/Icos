@@ -12,6 +12,10 @@ import {
 } from "@/server/usecases/ignite-autonomous-mission";
 import { createObservationHandler } from "@/server/proactive/observations";
 import {
+  createComputeFleetReconcileHandler,
+  type ComputeFleetReconcileHandlerDeps,
+} from "@/server/workers/compute-fleet-schedule";
+import {
   createWorkerProbeHandler,
   type WorkerProbeHandlerDeps,
 } from "@/server/workers/probes/worker-probe-schedule";
@@ -33,6 +37,11 @@ export interface SchedulerHandlerDeps {
    * PERMANENTLY, never a silent success: an observation nobody runs must show up.
    */
   supervisorObservation?: Parameters<typeof createObservationHandler>[0];
+  /**
+   * Periodic compute fleet reconciliation (migration 0063). Absent ⇒ the job fails
+   * PERMANENTLY: a scheduled reconciliation nobody can run must show up as a dead job.
+   */
+  computeFleetReconcile?: ComputeFleetReconcileHandlerDeps;
 }
 
 /**
@@ -147,6 +156,12 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
       ? createObservationHandler(deps.supervisorObservation)
       : async () => {
           throw new PermanentJobError("SCHEDULER_SUPERVISOR_UNAVAILABLE");
+        },
+
+    reconcile_compute_fleet: deps.computeFleetReconcile
+      ? createComputeFleetReconcileHandler(deps.computeFleetReconcile)
+      : async () => {
+          throw new PermanentJobError("SCHEDULER_COMPUTE_RECONCILE_UNAVAILABLE");
         },
   };
 }

@@ -95,6 +95,12 @@ const envSchema = z.object({
    */
   ICOS_WORKER_PROBE_INTERVAL_MS: optionalPositiveInteger,
   /*
+   * How often the durable `reconcile_compute_fleet` job re-runs the boot fleet reconciliation
+   * (only when ICOS_COMPUTE_BOOTSTRAP is on). Default 5 min; refused outside [1 min, 1 h]
+   * at composition (see compute-fleet-schedule.ts). All replicas must share one value.
+   */
+  ICOS_COMPUTE_RECONCILE_INTERVAL_MS: optionalPositiveInteger,
+  /*
    * EXTERNAL WORKER EXECUTION (M6.3). Per RUNTIME, the non-interactive command that
    * makes a worker do work, as JSON. No executable, product or provider name is
    * committed: adding Hermes, Codex or anything else is configuration. Malformed

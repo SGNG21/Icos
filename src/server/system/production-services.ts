@@ -22,6 +22,7 @@ import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute
 import { boundTaskCompute } from "@/server/workforce/mission-binding";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
 import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
+import { seedComputeFleetReconciliation } from "@/server/workers/compute-fleet-schedule";
 import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
 import { seedObservation } from "@/server/proactive/observations";
 import { sweepWithScheduler } from "@/server/scheduler/scheduler-sweeper";
@@ -543,6 +544,18 @@ function createRecoveryScheduler(
       jobs: container.scheduledJobs,
       intervalMs: loadEnv().ICOS_WORKER_PROBE_INTERVAL_MS,
     },
+    /*
+     * Periodic compute fleet reconciliation (P1 « je ne vois pas Claude »): the boot
+     * reconciliation, re-run by the durable `reconcile_compute_fleet` chain — one process at
+     * a time, every ICOS_COMPUTE_RECONCILE_INTERVAL_MS — so a model OmniRoute starts serving
+     * reaches the registry without a restart. Same guards as boot; off with ICOS_COMPUTE_BOOTSTRAP.
+     */
+    computeFleetReconcile: {
+      reconcile: () => bootstrapComputeFleetAtStartup(container, loadEnv()),
+      enabled: () => Boolean(loadEnv().ICOS_COMPUTE_BOOTSTRAP),
+      jobs: container.scheduledJobs,
+      intervalMs: loadEnv().ICOS_COMPUTE_RECONCILE_INTERVAL_MS,
+    },
     // Proactive Supervisor (decision 0060): observations ride this same durable scheduler.
     supervisorObservation: proactive
       ? {
@@ -692,6 +705,20 @@ export async function startProductionServices(
        * whereas refusing to boot the whole runtime over it is not.
        */
       await bootstrapComputeFleetAtStartup(container, options.env);
+      /*
+       * …and keep it reconciled (P1 « je ne vois pas Claude »): ignite the durable
+       * `reconcile_compute_fleet` chain. Grid-aligned, so a live chain makes this a no-op on
+       * every replica's boot. Fail-soft like the bootstrap itself: the registry still routes.
+       */
+      if (options.env.ICOS_COMPUTE_BOOTSTRAP) {
+        await seedComputeFleetReconciliation(container.scheduledJobs, {
+          intervalMs: options.env.ICOS_COMPUTE_RECONCILE_INTERVAL_MS,
+        }).catch((error: unknown) => {
+          console.warn(
+            `COMPUTE_RECONCILE_SEED_FAILED ${(error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200)}`,
+          );
+        });
+      }
 
       /*
        * THE TOOL GATEWAY, composed at boot (decision 0059 §6). Previously only the first
