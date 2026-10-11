@@ -106,7 +106,10 @@ export function isForbiddenHost(hostname: string): boolean {
 const RESERVED_V4 = /^(22[4-9]\.|2[3-5]\d\.|198\.1[89]\.|192\.0\.0\.)/;
 
 export function isForbiddenAddress(address: string): boolean {
-  const a = address.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  const a = address
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/%.*$/, "");
   const family = isIP(a);
   if (family === 0) return true;
   if (family === 4) return PRIVATE_V4.test(a) || RESERVED_V4.test(a);
