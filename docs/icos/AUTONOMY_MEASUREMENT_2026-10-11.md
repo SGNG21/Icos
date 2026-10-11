@@ -8,7 +8,7 @@ n'utilise que les quatre dépôts lus par l'évaluation, sans composer le runtim
 
 | Runtime | Base | Commande | Niveau | Certification | Dimensions prouvées |
 | --- | --- | --- | --- | --- | --- |
-| Labo N1 (p0-autonomy-unblock, run4) | `icos_lab_run4` @ 127.0.0.1:55445 | `ICOS_RUNTIME_TIER=lab pnpm autonomy:assess` (19:29:43 UTC) | **L2** | **LAB_CERTIFIED** | Planning (1), Routing (1), Review (2) |
+| Labo N1 (p0-autonomy-unblock, run8) | `icos_lab_run8` @ 127.0.0.1:55445 (base désignée par `lab.env` à 19:29 ; vérifié : la ligne d'audit `ffb4fbfe…` n'existe que dans `icos_lab_run8`) | `ICOS_RUNTIME_TIER=lab pnpm autonomy:assess` (19:29:43 UTC) | **L2** | **LAB_CERTIFIED** | Planning (1), Routing (1), Review (2) |
 | Live (`icos-web` @049a7d9) | `icos_app` @ 127.0.0.1:5433 | `ICOS_RUNTIME_TIER=live pnpm autonomy:assess --direct` (19:33:32 UTC) | **L0** | CODE_READY | aucune (toutes les sources lisibles, 0 preuve) |
 
 ### Labo — preuves (lignes durables, identifiants exacts)
@@ -28,9 +28,12 @@ Deployment        UNKNOWN   NONE            proofs=0   (no source)
 L2: L3 needs Recovery proven.
 ```
 
-Lecture : depuis run3 (mission `failed` à 18:28 UTC), le labo a progressé — une exécution Claude
-Code a réussi (19:09) et deux revues indépendantes ont été rendues (19:12 : `REQUEST_CHANGES`
-par le LLM, `BLOCK` par le relecteur déterministe). Ni correction intégrée, ni mission
+Lecture : le labo en est à son 8e run (`icos_lab_run2` → `run8`, même mission idempotente
+`sd-mission-47fcfb9ba6de346e`). Depuis run3/run4 (mission `failed` à 18:28 UTC sur
+`error_max_budget_usd`), run8 a progressé — une exécution Claude Code a réussi (19:09) et deux
+revues indépendantes ont été rendues (19:12 : `REQUEST_CHANGES` par le LLM, `BLOCK` par le
+relecteur déterministe) ; la mission est passée `failed` à 19:12:51 et le journal montre encore
+`COMPUTE_BOOTSTRAP PROVIDER_UNAVAILABLE` (OmniRoute). Ni correction intégrée, ni mission
 `succeeded` : L4 reste hors d'atteinte tant que la boucle correction → porte → intégration ne
 se ferme pas.
 

@@ -42,7 +42,7 @@ showing.
 
 ## Consequences
 
-- First measurement (N1 lab, `icos_lab_run4`, 2026-10-11 19:29 UTC): **L2, LAB_CERTIFIED** —
+- First measurement (N1 lab, `icos_lab_run8`, 2026-10-11 19:29 UTC): **L2, LAB_CERTIFIED** —
   planning (1), routing (1), review (2) proven; recovery, integration, self-development
   UNPROVEN; deployment UNKNOWN (no source).
 - The live runtime (@049a7d9) cannot be measured by this code until the convergence is
