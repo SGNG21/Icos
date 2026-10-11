@@ -1,0 +1,61 @@
+# ICOS Task Contract — première mission autonome canari (schéma .icos/schemas/task-contract.schema.json)
+# Préparé par FABLE 5.1 le 2026-10-11. Labo d'abord, prod ensuite sur autorisation propriétaire.
+task_id: AUTONOMY-NOW-001
+goal: >-
+  ICOS détecte seul une anomalie ESLint bornée dans src/ (détecteur W11, ADR 0076), la convertit en
+  mission, la planifie, la fait corriger par Claude Code via OmniRoute dans un worktree isolé (W10),
+  fait passer la correction par la porte sandbox (W7) et une revue indépendante (W6), puis l'intègre
+  sur la branche integration/autonomy-now-001 et clôture avec trace, coût et enseignements (W9).
+assigned_role: workforce.governed-writer (exécuteur bin/icos-claude-worker.mjs, modèle routé par OmniRoute)
+tenant_scope: default
+allowed_resources:
+  - "repo canonique en lecture : ICOS_REPO_PATH (labo : /srv/icos/worktrees/p0au-n1-target ; prod : répertoire de release)"
+  - "worktree jetable sous ICOS_WORKER_WORKSPACE_ROOT (labo : /srv/icos/worktrees/p0au-n1-trees ; prod : /srv/icos/workers)"
+  - "fichiers cibles : src/**/*.ts désignés par la proposition W11 (un fichier par mission)"
+  - "modèle d'inférence : uniquement via le proxy compté ICOS vers OMNIROUTE_BASE_URL (127.0.0.1:20129)"
+  - "commandes autorisées au worker : pnpm test*, pnpm vitest run *, pnpm exec eslint *"
+  - "porte : install --offline, typecheck, lint, unit, postgres jetable (ICOS_GATE_COMMANDS)"
+  - "cible d'intégration : integration/autonomy-now-001 (ICOS_INTEGRATION_TARGET), jamais main"
+forbidden_resources:
+  - "main, deploy/vps-runtime, toute branche d'un autre worker, tout worktree /srv/icos/worktrees/* hors le sien"
+  - "git push, git remote, GitHub, tout réseau sortant hors proxy compté (réseau unshare, vérifié W10)"
+  - "/srv/icos/etc/*, secrets, ~/.claude du compte icos (HOME éphémère), services systemd, docker"
+  - "bases live : icos-app-postgres (5433), icos-test-postgres (5432), Temporal partagé icos-test-temporal"
+  - "drizzle/ (aucune migration), package.json / pnpm-lock.yaml (aucune dépendance)"
+  - "fichiers hors du périmètre déclaré de la tâche (checkScope / effectiveScope)"
+security_invariants:
+  - "exécution sous bubblewrap avec réseau coupé ; seule sortie : socket UNIX du proxy compté (W10)"
+  - "le worker ne lance jamais git ; la matérialisation du commit est faite par ICOS (ADR 0073)"
+  - "la porte exécute le code écrit par le worker dans le même sandbox, sans secrets ni réseau (ADR 0074/0075, W7)"
+  - "un DENY budget précède tout appel modèle (402, x-should-retry:false) ; aucun appel non compté"
+  - "une tâche annulée par une autorité n'est jamais ravivée par un verdict de revue (W8)"
+  - "transitions terminales auditées (audit_entries) ; toute décision porte qui l'a prise (W9)"
+  - "aucun secret dans le prompt, les artefacts, les rapports de porte ni la trace"
+acceptance_criteria:
+  - "goals=1, missions=1 avec status=completed ; aucune mission ni tâche créée hors de cette idempotency key"
+  - "exactement 1 dispatch_attempts en état completed par tâche exécutée (pas de double dispatch)"
+  - "task_execution_results.outcome=success avec artifacts non vide (diff sur le fichier ciblé)"
+  - "rapport de porte durable : typecheck, lint, unit PASS ; étape postgres sur base jetable uniquement"
+  - "au moins un verdict de revue indépendante enregistré, émis par ICOS_REVIEWER_MODEL ≠ modèle du worker"
+  - "si REQUEST_CHANGES : une correction, dans la limite ICOS_GOAL_MAX_TOTAL_TOKENS et max_retries"
+  - "la branche integration/autonomy-now-001 contient le commit matérialisé par ICOS ; main inchangée ; aucun push"
+  - "spend_ledger : total_tokens ≤ ICOS_GOAL_MAX_TOTAL_TOKENS ; chaque appel attribué (goal_id, mission_id) ; aucun UNMETERED"
+  - "pnpm mission:trace <missionId> affiche décisions, coûts et enseignements sans intervention humaine entre goal.created et mission.transitioned(completed)"
+  - "reproductible : la même proposition rejouée est un duplicate (idempotency), pas une seconde mission"
+evidence_required:
+  - "lignes PostgreSQL : goals, supervisor_goal_proposals, missions, tasks, dispatch_attempts, task_execution_results, audit_entries, spend_ledger, spend_reservations"
+  - "sortie de pnpm mission:trace <missionId>"
+  - "git log --oneline integration/autonomy-now-001 ^<base> et git diff <base>..integration/autonomy-now-001 --stat"
+  - "rapport de porte (gate_report) et journal du worker (journalctl -u icos-temporal-worker ou lab worker.log)"
+  - "status.json du worker Claude : confinement=bubblewrap, networkEnforced=true, exitCode=0, usage"
+  - "icos-sovereignty-check.sh avant/après (prod) : ICOS_WORKERS_VPS=PASS"
+  - "preuve d'absence d'opérateur : processus sans TTY (ps -o tty= → ?) et session SSH fermée pendant le cycle"
+budget_eur: 2
+max_retries: 2
+# Notes d'exécution (hors schéma) :
+# - Plafonds tokens : ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS=50000, ICOS_GOAL_MAX_TOTAL_TOKENS=450000,
+#   ICOS_SELF_DEVELOPMENT_MAX_PROPOSALS_PER_DAY=1 en prod (2 au labo).
+# - budget_eur est indicatif tant que ICOS_PRICE_REGISTRY (src/core/pricing/registry.ts) est vide : tout appel
+#   est UNPRICED et seul le plafond en tokens est opposable. Le plafond --max-budget-usd du CLI Claude est un
+#   second garde-fou, calculé par le CLI lui-même.
+# - Rollback : git branch -D integration/autonomy-now-001 ; suppression du worktree ; aucune autre trace à défaire.
