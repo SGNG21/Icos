@@ -4,6 +4,7 @@ import { protectRoute } from "@/server/http/protect-route";
 import { readJson } from "@/server/http/respond";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Mission } from "@/core/mission/contracts";
+import { approveRiskGatedTasks } from "@/server/usecases/approve-risk-gated-tasks";
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -53,6 +54,16 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
 
     let newStatus: Mission["status"];
     if (action === "approve") {
+      /*
+       * Tasks the dispatch risk gate parked are released AS THIS HUMAN: the audited canonical
+       * transition is the approval record the gate requires before it dispatches them (once).
+       * Done before the mission is set running, so a crash in between leaves the mission still
+       * awaiting approval and a repeated approval completes it.
+       */
+      await approveRiskGatedTasks(
+        { missions: container.mission, tasks: container.tasks, audit: container.audit },
+        { missionId: mission.id, approver: { kind: "human", id: access.session.user.id } },
+      );
       // Approve: set to running (assuming there are tasks to run)
       newStatus = "running";
     } else {

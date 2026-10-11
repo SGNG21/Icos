@@ -8,7 +8,11 @@ import type { Task, TaskStatus } from "@/core/contracts";
 const allowedTransitions: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["queued", "cancelled"],
   queued: ["awaiting_approval", "running", "cancelled"],
-  awaiting_approval: ["running", "cancelled"],
+  /*
+   * `queued`: a human approved work the dispatch risk gate parked BEFORE any attempt existed
+   * (execution-risk-policy). It returns to the dispatch queue rather than claiming to run.
+   */
+  awaiting_approval: ["queued", "running", "cancelled"],
   running: ["review_pending", "succeeded", "failed", "cancelled"],
   review_pending: ["queued", "succeeded", "failed", "cancelled"],
   succeeded: [],

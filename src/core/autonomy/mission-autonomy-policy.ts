@@ -15,6 +15,8 @@
  * volunteer that it is safe.
  */
 
+import { CAPABILITY_RISK_TABLE, decideActionAutonomy } from "./execution-risk-policy";
+
 /** What the runtime may do with a goal before a human has answered. */
 export const MISSION_POLICY_CLASSES = [
   /** Verifiably read-only or confined to an isolated workspace: start it. */
@@ -27,37 +29,47 @@ export const MISSION_POLICY_CLASSES = [
 export type MissionPolicyClass = (typeof MISSION_POLICY_CLASSES)[number];
 
 /**
- * Capabilities whose worst outcome is a wasted run: reading, thinking, and writing inside
- * a worktree that is thrown away. Everything here is checked against the CAPABILITY the
- * goal declares, which the intake normalises — not against prose.
+ * Both sets are DERIVED from the one capability table (`execution-risk-policy.ts`), so the
+ * launch-time answer and the dispatch-time gate cannot drift apart. Their contents and order
+ * are unchanged from when they were written out here by hand; the mapping tests pin that.
  */
-export const AUTO_ALLOWED_CAPABILITIES: ReadonlySet<string> = new Set([
-  "research",
-  "planning",
-  "architecture_design",
-  "synthesis",
-  "independent_review",
-  "seo_audit",
-  "sales_strategy",
-  /*
-   * Writing code is auto-allowed ONLY because a writer is confined to its own worktree and
-   * its branch reaches the repository through review and the integration gate. The
-   * confinement is what makes it safe; if that ever stops being true this belongs below.
-   */
-  "code_write",
-]);
 
-/** Capabilities that always reach a human, whatever else the goal says. */
-export const APPROVAL_REQUIRED_CAPABILITIES: ReadonlySet<string> = new Set([
-  "deploy",
-  "merge",
-  "payment",
-  "purchase",
-  "customer_communication",
-  "account_change",
-  "data_delete",
-  "production_change",
-]);
+/**
+ * Capabilities whose worst outcome is a wasted run: reading, thinking, and writing inside
+ * a worktree that is thrown away — i.e. every table entry whose class is AUTONOMOUS when the
+ * writer is confined (READ_ONLY, REVERSIBLE_ISOLATED). `code_write` is here ONLY because a
+ * writer is confined to its own worktree and its branch reaches the repository through review
+ * and the integration gate; at dispatch the gate re-checks that the workspace really is
+ * isolated, and escalates when it is not.
+ */
+export const AUTO_ALLOWED_CAPABILITIES: ReadonlySet<string> = new Set(
+  Object.entries(CAPABILITY_RISK_TABLE)
+    .filter(
+      ([, entry]) =>
+        entry.declarable &&
+        decideActionAutonomy(entry.riskClass, { isolatedWorkspace: true }).decision ===
+          "AUTONOMOUS",
+    )
+    .map(([capability]) => capability),
+);
+
+/**
+ * Capabilities that always reach a human at launch, whatever else the goal says: every
+ * DECLARABLE table entry that is not autonomous (external, destructive, financial,
+ * irreversible or privileged). Non-declarable classified entries (secret access, protected
+ * domains) are deliberately not part of the goal vocabulary; at launch they stay
+ * POLICY_GATED exactly as before, and at dispatch the gate classifies them strictly.
+ */
+export const APPROVAL_REQUIRED_CAPABILITIES: ReadonlySet<string> = new Set(
+  Object.entries(CAPABILITY_RISK_TABLE)
+    .filter(
+      ([, entry]) =>
+        entry.declarable &&
+        decideActionAutonomy(entry.riskClass, { isolatedWorkspace: true }).decision !==
+          "AUTONOMOUS",
+    )
+    .map(([capability]) => capability),
+);
 
 export type MissionAutonomyInput = {
   /** Capabilities the goal declares it needs. Normalised by intake, not free prose. */
