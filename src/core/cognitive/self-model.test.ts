@@ -113,7 +113,8 @@ describe("self-model: the description is a measurement, not prose", () => {
      * ICOS used to answer "aucun outil utilisable" on exactly that runtime.
      */
     const gatewayOnly = { ...FULL, toolConnectors: 0, toolGrants: 0, governedExecutors: 2 };
-    expect(stateOf(gatewayOnly, "tools.governed")).toBe("GOVERNED");
+    /* The executor count is LIVE (allowlist + working sandbox), so a positive one is READY. */
+    expect(stateOf(gatewayOnly, "tools.governed")).toBe("READY");
     expect(stateOf({ ...gatewayOnly, governedExecutors: 0 }, "tools.governed")).toBe(
       "NOT_CONNECTED",
     );
@@ -177,10 +178,13 @@ describe("self-model: the description is a measurement, not prose", () => {
     };
     const fact = capabilityFacts(mixed).find((f) => f.key === "compute.providers")!;
     expect(fact.state).toBe("DEGRADED");
-    expect(fact.evidence).toBe("workers routables 12/15 — nvidia 11/11, oc 0/3, groq 1/1");
+    /* The evidence says WHY: three configured oc workers are failing, not merely absent. */
+    expect(fact.evidence).toBe(
+      "workers routables 12/15 — nvidia 11/11, oc 0/3 3 en échec, groq 1/1",
+    );
     expect(stateOf(mixed, "workforce.delegate")).toBe("DEGRADED");
-    // All routable: governed. None routable: not connected, however many are registered.
-    expect(stateOf(FULL, "compute.providers")).toBe("GOVERNED");
+    // All routable: READY. None routable: not connected, however many are registered.
+    expect(stateOf(FULL, "compute.providers")).toBe("READY");
     expect(stateOf({ ...mixed, routableWorkers: 0 }, "workforce.delegate")).toBe("NOT_CONNECTED");
     expect(
       stateOf(
@@ -286,5 +290,112 @@ describe("temporal self-state: current measurement beats recalled prose", () => 
     expect(runtimeItem).toBeDefined();
     expect(staleItem).toBeDefined();
     expect(runtimeItem!.score).toBeGreaterThan(staleItem!.score);
+  });
+});
+
+describe("P0 autonomy unblock — operational states are measured, never declared", () => {
+  const withoutCredentials = {
+    ...FULL,
+    registeredWorkers: 14,
+    routableWorkers: 11,
+    computeProviders: [
+      { provider: "nvidia", registered: 11, routable: 11 },
+      { provider: "oc", registered: 3, routable: 0, notConfigured: 3 },
+    ],
+  };
+
+  it("a provider WITHOUT CREDENTIALS is PARTIAL and named — never DEGRADED, never READY", () => {
+    const fact = capabilityFacts(withoutCredentials).find((f) => f.key === "compute.providers")!;
+    expect(fact.state).toBe("PARTIAL");
+    expect(fact.evidence).toContain("oc 0/3 3 non configuré(s)");
+    expect(stateOf(withoutCredentials, "workforce.delegate")).toBe("PARTIAL");
+  });
+
+  it("one configured worker failing makes the fleet DEGRADED even beside unconfigured ones", () => {
+    const failing = {
+      ...withoutCredentials,
+      routableWorkers: 10,
+      computeProviders: [
+        { provider: "nvidia", registered: 11, routable: 10 },
+        { provider: "oc", registered: 3, routable: 0, notConfigured: 3 },
+      ],
+    };
+    expect(stateOf(failing, "compute.providers")).toBe("DEGRADED");
+    expect(stateOf(failing, "workforce.delegate")).toBe("DEGRADED");
+  });
+
+  it("delegation is READY only while the durable scheduler is ALIVE (leases, recovery)", () => {
+    expect(stateOf(FULL, "workforce.delegate")).toBe("READY");
+    expect(stateOf({ ...FULL, durableSchedulerRunning: false }, "workforce.delegate")).toBe(
+      "GOVERNED",
+    );
+  });
+
+  it("mission.execute is AUTONOMOUS_BY_POLICY only with the risk gate composed", () => {
+    const gated = { ...FULL, executionRiskGate: { enforced: true, policyVersion: "v1" } };
+    expect(stateOf(gated, "mission.execute")).toBe("AUTONOMOUS_BY_POLICY");
+    expect(capabilityFacts(gated).find((f) => f.key === "mission.execute")!.evidence).toContain(
+      "approbation",
+    );
+    expect(
+      stateOf(
+        { ...gated, executionRiskGate: { enforced: false, policyVersion: "v1" } },
+        "mission.execute",
+      ),
+    ).toBe("GOVERNED");
+    expect(stateOf({ ...gated, durableSchedulerRunning: false }, "mission.execute")).toBe(
+      "NOT_CONNECTED",
+    );
+  });
+
+  it("realtime: declared is not enough — it needs a LIVE owner grant and a caller", () => {
+    const rt = (r: Partial<NonNullable<RuntimeCapabilityProbe["realtime"]>>) => ({
+      ...FULL,
+      realtime: { declared: 1, healthy: 1, runtimeAgentGranted: true, callerWired: true, ...r },
+    });
+    expect(stateOf(rt({}), "external.realtime")).toBe("READY");
+    expect(stateOf(rt({ runtimeAgentGranted: false }), "external.realtime")).toBe("NOT_CONFIGURED");
+    expect(
+      capabilityFacts(rt({ runtimeAgentGranted: false })).find(
+        (f) => f.key === "external.realtime",
+      )!.evidence,
+    ).toContain("tools:grant-realtime");
+    expect(stateOf(rt({ callerWired: false }), "external.realtime")).toBe("NOT_CONNECTED");
+    expect(stateOf(rt({ healthy: 0 }), "external.realtime")).toBe("NOT_CONNECTED");
+    expect(stateOf(rt({ declared: 0 }), "external.realtime")).toBe("NOT_CONNECTED");
+  });
+
+  it("context.scope: READY with a populated directory, NOT_CONFIGURED when it is empty", () => {
+    expect(
+      stateOf({ ...FULL, contextResolverWired: true, clientDirectorySize: 2 }, "context.scope"),
+    ).toBe("READY");
+    expect(
+      stateOf({ ...FULL, contextResolverWired: true, clientDirectorySize: 0 }, "context.scope"),
+    ).toBe("NOT_CONFIGURED");
+    expect(
+      stateOf({ ...FULL, contextResolverWired: false, clientDirectorySize: 2 }, "context.scope"),
+    ).toBe("NOT_CONNECTED");
+    expect(stateOf(FULL, "context.scope")).toBe("NOT_CONNECTED");
+  });
+
+  it("knowledge.routing names the sources that are not composed, and claims no semantic routing", () => {
+    const all = {
+      durableMemory: true,
+      scopeFiltered: true,
+      operational: true,
+      currentState: true,
+      realtime: true,
+    };
+    expect(stateOf({ ...FULL, knowledgeSources: all }, "knowledge.routing")).toBe("READY");
+    const partial = capabilityFacts({
+      ...FULL,
+      knowledgeSources: { ...all, realtime: false },
+    }).find((f) => f.key === "knowledge.routing")!;
+    expect(partial.state).toBe("PARTIAL");
+    expect(partial.evidence).toContain("recherche web");
+    expect(partial.evidence).not.toMatch(/sémantique|embedding/i);
+    expect(
+      stateOf({ ...FULL, knowledgeSources: { ...all, scopeFiltered: false } }, "knowledge.routing"),
+    ).toBe("NOT_CONNECTED");
   });
 });

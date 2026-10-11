@@ -2,6 +2,8 @@ import type { CognitiveScope } from "@/core/cognitive/contracts";
 import {
   capabilityCandidates,
   type ComputeProviderProbe,
+  type KnowledgeSourcesProbe,
+  type RealtimeProbe,
   type RuntimeCapabilityProbe,
 } from "@/core/cognitive/self-model";
 import type { ContextCandidate } from "@/core/cognitive/context-selection";
@@ -37,7 +39,19 @@ export type RuntimeProbes = {
   readonly providerConfigured: () => boolean;
   readonly cognitionConfigured: () => boolean;
   readonly missionIntakeConnected: () => boolean;
-  readonly durableSchedulerRunning: () => boolean;
+  /**
+   * MEASURED liveness of the durable scheduler — a recent completed job or a live lease —
+   * not the environment it is supposed to run in. A process configured for production
+   * whose sweepers never started must not claim that missions continue without it.
+   */
+  readonly durableSchedulerRunning: () => Promise<boolean | undefined>;
+  /** The Tool Gateway's realtime measurement (live grant, health, caller). */
+  readonly measureRealtime?: () => Promise<RealtimeProbe | undefined>;
+  /** The supervisor's pre-dispatch execution risk gate, as composed. */
+  readonly executionRiskGate?: () => { enforced: boolean; policyVersion: string } | undefined;
+  readonly contextResolverWired?: () => boolean;
+  readonly countClientDirectory?: () => Promise<number | undefined>;
+  readonly knowledgeSources?: () => KnowledgeSourcesProbe;
   readonly speechToText: () => boolean;
   readonly textToSpeech: () => boolean;
 };
@@ -65,6 +79,9 @@ export class RuntimeSelfModel implements SelfModelSource {
       realtimeConnectors,
       durableBrains,
       computeProviders,
+      durableSchedulerRunning,
+      realtime,
+      clientDirectorySize,
     ] = await Promise.all([
       safely(this.probes.countToolConnectors),
       safely(this.probes.countToolGrants),
@@ -75,6 +92,9 @@ export class RuntimeSelfModel implements SelfModelSource {
       safely(this.probes.countRealtimeConnectors),
       safely(this.probes.countDurableBrains),
       safely(this.probes.computeProviders),
+      safely(this.probes.durableSchedulerRunning),
+      safely(this.probes.measureRealtime ?? (async () => undefined)),
+      safely(this.probes.countClientDirectory ?? (async () => undefined)),
     ]);
     return {
       providerConfigured: this.probes.providerConfigured(),
@@ -83,7 +103,7 @@ export class RuntimeSelfModel implements SelfModelSource {
       conversationDurable: true,
       memoryDurable: true,
       missionIntakeConnected: this.probes.missionIntakeConnected(),
-      durableSchedulerRunning: this.probes.durableSchedulerRunning(),
+      durableSchedulerRunning,
       toolConnectors,
       toolGrants,
       registeredWorkers,
@@ -95,6 +115,15 @@ export class RuntimeSelfModel implements SelfModelSource {
       registeredCapabilities,
       speechToText: this.probes.speechToText(),
       textToSpeech: this.probes.textToSpeech(),
+      ...(realtime ? { realtime } : {}),
+      ...(this.probes.executionRiskGate?.()
+        ? { executionRiskGate: this.probes.executionRiskGate()! }
+        : {}),
+      ...(this.probes.contextResolverWired
+        ? { contextResolverWired: this.probes.contextResolverWired() }
+        : {}),
+      ...(clientDirectorySize !== undefined ? { clientDirectorySize } : {}),
+      ...(this.probes.knowledgeSources ? { knowledgeSources: this.probes.knowledgeSources() } : {}),
     };
   }
 

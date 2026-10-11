@@ -15,9 +15,26 @@ import { CognitiveRuntime } from "./cognitive-runtime";
 import { count as sqlCount } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 
-import { capabilities as capabilitiesTable, workers } from "@/server/database/schema";
-import { toolConnectorHealth, toolGrants } from "@/server/database/tool-gateway-schema";
+import { capabilities as capabilitiesTable } from "@/server/database/schema";
 import { countRealtimeConnectors } from "@/server/tool-gateway/realtime";
+import { getToolGatewayRuntime } from "@/server/tool-gateway/app";
+import { scheduledJobs } from "@/server/database/schema";
+import { readFleetReadiness } from "@/server/workers/fleet-readiness";
+import { sandboxBackend } from "@/server/workers/process/sandbox-backend";
+import type { KnowledgeSourcesProbe } from "@/core/cognitive/self-model";
+import {
+  countDispatchableConnectors,
+  countLaunchableExecutors,
+  countLiveToolGrants,
+  measureRealtime,
+} from "./honest-probes";
+import {
+  buildRealtimeContextSource,
+  clientDomainsFromEntities,
+  realtimeInstancesFromConfig,
+  type RealtimeContextSource,
+} from "./realtime-context-source";
+import { memoryEntities } from "./schema";
 
 import {
   ContextAssembler,
@@ -36,12 +53,8 @@ import {
 } from "./current-state-source";
 import { PostgresCognitiveMemoryStore } from "./memory-store";
 import { CanonicalGoalLauncher, type MissionGateway } from "./mission-gateway";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, or } from "drizzle-orm";
 import { workforceAgents } from "@/server/database/workforce-schema";
-import {
-  executableRuntimes,
-  parseWorkerExecCommands,
-} from "@/server/workers/execution/exec-command-config";
 
 export {
   CognitiveRuntime,
@@ -113,7 +126,21 @@ export interface CognitiveRuntimeOptions {
   /** `null` freezes the conversation's scope (no client/project resolution). */
   readonly resolveContext?: boolean;
   readonly staleTurnMs?: number;
+  /** Governed web/search context (decision 0059). `null`/absent ⇒ not composed. */
+  readonly realtime?: RealtimeContextSource | null;
+  /** The supervisor's pre-dispatch risk gate, as composed (P0 autonomy unblock). */
+  readonly executionRiskGate?: { enforced: boolean; policyVersion: string } | null;
 }
+
+/** What THIS composition wired, so the self-model describes the runtime it is part of. */
+export interface CognitiveComposition {
+  readonly resolverWired: boolean;
+  readonly knowledgeSources: KnowledgeSourcesProbe;
+  readonly executionRiskGate?: { enforced: boolean; policyVersion: string };
+}
+
+/** Horizon of scheduler liveness: the worker probe job completes every 30 s in production. */
+export const SCHEDULER_LIVENESS_HORIZON_MS = 3 * 60_000;
 
 /**
  * The real measurements behind ICOS's self-description. Counts are per turn and
@@ -121,35 +148,46 @@ export interface CognitiveRuntimeOptions {
  * registered" is what decides NOT_CONNECTED, and a count that cannot be taken
  * stays undefined so the self-model fails closed.
  */
-function runtimeProbesFor(
+export function runtimeProbesFor(
   db: Database,
   engine: CognitionEngine,
   missionsConnected: boolean,
   env: NodeJS.ProcessEnv = process.env,
+  composition?: CognitiveComposition,
 ): RuntimeProbes {
   const count = async (table: PgTable) => {
     const [row] = await db.select({ n: sqlCount() }).from(table);
     return Number(row?.n ?? 0);
   };
+  /*
+   * THE FLEET, ONCE PER TURN, by the canonical eligibility rules (`measureFleet`): active
+   * workers only, routable = what the router would actually pick (status, runtime support,
+   * evidence younger than its horizon), and a credential-less provider counted apart from
+   * an outage. Workers, routable workers and per-provider health are three readers of this
+   * one measurement, so they can never disagree.
+   */
+  let fleet: ReturnType<typeof readFleetReadiness> | undefined;
+  const fleetOnce = () => {
+    fleet ??= readFleetReadiness(db, new Date());
+    const current = fleet;
+    setTimeout(() => {
+      if (fleet === current) fleet = undefined;
+    }, 1_000).unref?.();
+    return current;
+  };
   return {
-    countToolConnectors: () => count(toolConnectorHealth),
-    countToolGrants: () => count(toolGrants),
-    countWorkers: () => count(workers),
-    /* Registered is not routable: a worker whose probe failed is a row, not a resource. */
-    countRoutableWorkers: async () => {
-      const [row] = await db
-        .select({ n: sqlCount() })
-        .from(workers)
-        .where(and(eq(workers.health, "healthy"), eq(workers.availability, "available")));
-      return Number(row?.n ?? 0);
-    },
+    /* LIVE only: dispatchable, unexpired health — a DISABLED or AUTH_FAILED row is no tool. */
+    countToolConnectors: () => countDispatchableConnectors(db),
+    /* LIVE only: unrevoked, unexpired grants — a revoked grant authorises nothing. */
+    countToolGrants: () => countLiveToolGrants(db),
+    countWorkers: async () => (await fleetOnce()).total.active,
+    countRoutableWorkers: async () => (await fleetOnce()).total.routable,
     /*
      * Executors the Execution Gateway can actually launch. Declared by deployment
      * (`ICOS_WORKER_EXEC_COMMANDS`) rather than inferred, because an executor ICOS cannot
      * name is one it must not claim.
      */
-    countGovernedExecutors: async () =>
-      executableRuntimes(parseWorkerExecCommands(env.ICOS_WORKER_EXEC_COMMANDS)).length,
+    countGovernedExecutors: async () => countLaunchableExecutors(env, sandboxBackend()),
     /*
      * Web/search connectors ONLY. Model-provider reachability is deliberately excluded:
      * a model answers from its weights, which is not realtime access to anything.
@@ -168,29 +206,48 @@ function runtimeProbesFor(
      * The fleet as the routing probes left it, grouped by the provider each worker DECLARED
      * at registration (`metadata.provider`). Undeclared is reported as such, never guessed.
      */
-    computeProviders: async () => {
-      const rows = await db
-        .select({
-          provider: sql<string | null>`${workers.metadata}->>'provider'`,
-          registered: sqlCount(),
-          routable: sql<number>`count(*) filter (where ${workers.health} = 'healthy' and ${workers.availability} = 'available')`,
-        })
-        .from(workers)
-        .groupBy(sql`${workers.metadata}->>'provider'`);
-      return rows
-        .map((r) => ({
-          provider: r.provider ?? "(non déclaré)",
-          registered: Number(r.registered),
-          routable: Number(r.routable),
-        }))
-        .sort((a, b) => a.provider.localeCompare(b.provider));
-    },
+    computeProviders: async () =>
+      (await fleetOnce()).providers.map((p) => ({
+        provider: p.provider,
+        registered: p.active,
+        routable: p.routable,
+        notConfigured: p.notConfigured,
+      })),
     providerConfigured: () => Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY),
     cognitionConfigured: () => engine.label !== "not_connected",
     missionIntakeConnected: () => missionsConnected,
-    // The sweepers that advance an approved mission only run in this mode
-    // (startProductionServices); without them nothing continues after a disconnect.
-    durableSchedulerRunning: () => env.NODE_ENV === "production" && env.PERSISTENCE === "postgres",
+    /*
+     * MEASURED, not inferred from NODE_ENV: a job completed within the horizon (the worker
+     * probe job alone completes every 30 s in production) or one held under a live lease.
+     * A production-configured process whose sweepers never started answers false.
+     */
+    durableSchedulerRunning: async () => {
+      const now = new Date();
+      const since = new Date(now.getTime() - SCHEDULER_LIVENESS_HORIZON_MS);
+      const [row] = await db
+        .select({ n: sqlCount() })
+        .from(scheduledJobs)
+        .where(
+          or(
+            and(eq(scheduledJobs.state, "succeeded"), gt(scheduledJobs.completedAt, since)),
+            and(eq(scheduledJobs.state, "running"), gt(scheduledJobs.leaseUntil, now)),
+          ),
+        );
+      return Number(row?.n ?? 0) > 0;
+    },
+    measureRealtime: () => measureRealtime(db, env),
+    contextResolverWired: () => composition?.resolverWired ?? false,
+    countClientDirectory: async () => {
+      const [row] = await db
+        .select({ n: sqlCount() })
+        .from(memoryEntities)
+        .where(eq(memoryEntities.kind, "client"));
+      return Number(row?.n ?? 0);
+    },
+    ...(composition ? { knowledgeSources: () => composition.knowledgeSources } : {}),
+    ...(composition?.executionRiskGate
+      ? { executionRiskGate: () => composition.executionRiskGate }
+      : {}),
     speechToText: () =>
       Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY && env.ICOS_VOICE_STT_MODEL),
     textToSpeech: () =>
@@ -205,10 +262,21 @@ function runtimeProbesFor(
  */
 export async function measureRuntimeCapabilities(container: Container) {
   if (!container.db) return null;
+  /* Composition is side-effect free; composing here makes the screen read the SAME wiring. */
+  cognitiveRuntimeFor(container);
   const engine = OmniRouteCognitionEngine.fromEnv();
-  const probes = runtimeProbesFor(container.db, engine, true);
+  const probes = runtimeProbesFor(
+    container.db,
+    engine,
+    true,
+    process.env,
+    compositions.get(container),
+  );
   return capabilityFacts(await new RuntimeSelfModel(probes).probe());
 }
+
+/** The composition each container's runtime was built with (read by the cockpit probe). */
+const compositions = new WeakMap<Container, CognitiveComposition>();
 
 export function buildCognitiveRuntime(
   db: Database,
@@ -229,31 +297,77 @@ export function buildCognitiveRuntime(
       : (options.operational ?? undefined);
   const engine = options.engine ?? OmniRouteCognitionEngine.fromEnv();
   const missionsConnected = options.missions !== undefined && options.missions !== null;
-  const selfModel =
-    options.selfModel === undefined
-      ? new CombinedSelfModel([
-          new RuntimeSelfModel(runtimeProbesFor(db, engine, missionsConnected)),
-          new OperationalStateSource(db),
-        ])
-      : (options.selfModel ?? undefined);
   const conversations = new PostgresConversationStore(db, clock);
   const currentState =
     options.currentState === undefined
       ? new LaunchedMissionStateSource(conversations, options.missionStatus ?? null, clock)
       : (options.currentState ?? undefined);
-  return new CognitiveRuntime({
+  const realtime = options.realtime ?? undefined;
+  const composition: CognitiveComposition = {
+    resolverWired: options.resolveContext !== false,
+    knowledgeSources: {
+      durableMemory: true,
+      /* `memory-store` filters by client/project in SQL before any limit (decision 0063). */
+      scopeFiltered: true,
+      operational: operational !== undefined,
+      currentState: currentState !== undefined,
+      realtime: realtime !== undefined,
+    },
+    ...(options.executionRiskGate ? { executionRiskGate: options.executionRiskGate } : {}),
+  };
+  const selfModel =
+    options.selfModel === undefined
+      ? new CombinedSelfModel([
+          new RuntimeSelfModel(
+            runtimeProbesFor(db, engine, missionsConnected, process.env, composition),
+          ),
+          new OperationalStateSource(db),
+        ])
+      : (options.selfModel ?? undefined);
+  const runtime = new CognitiveRuntime({
     conversations,
     memory,
-    assembler: new ContextAssembler(memory, clock, operational, selfModel, currentState),
+    assembler: new ContextAssembler(memory, clock, operational, selfModel, currentState, realtime),
     resolver:
       options.resolveContext === false ? undefined : new ContextResolver(memory, conversations),
     engine,
     missions: options.missions === undefined ? null : options.missions,
     staleTurnMs: options.staleTurnMs,
   });
+  runtimeCompositions.set(runtime, composition);
+  return runtime;
 }
 
+/** What each runtime was composed with: the self-model of THIS runtime, not of a guess. */
+const runtimeCompositions = new WeakMap<CognitiveRuntime, CognitiveComposition>();
+
 const cache = new WeakMap<Container, CognitiveRuntime>();
+
+/**
+ * Governed web/search for conversation turns — THROUGH the process's single Tool Gateway
+ * runtime (the one the admin routes and boot reconciliation share), never a parallel route.
+ * Composed only when a web or search instance is declared; whether it may run is the
+ * gateway's decision per call (live owner grant, health, rate limit), not this function's.
+ */
+function realtimeSourceFor(container: Container): RealtimeContextSource | null {
+  const instances = realtimeInstancesFromConfig(process.env.ICOS_TOOL_GATEWAY_CONFIG);
+  if (!instances.search && !instances.fetch) return null;
+  const memory = container.db ? new PostgresCognitiveMemoryStore(container.db, systemClock) : null;
+  return buildRealtimeContextSource({
+    gateway: {
+      execute: async (...args) => (await getToolGatewayRuntime(container)).gateway.execute(...args),
+    },
+    instances,
+    env: process.env,
+    clientDomains: async (scope) =>
+      memory && scope.clientId
+        ? clientDomainsFromEntities(
+            await memory.clientDirectory(scope.tenantId, "normal"),
+            scope.clientId,
+          )
+        : [],
+  });
+}
 
 /**
  * The runtime for a container. PostgreSQL only: in memory mode it returns null and the
@@ -282,8 +396,11 @@ export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | nu
       // Reading a status is not executing anything, so it is safe to compose here —
       // unlike the launch recovery this function used to start (see the note above).
       missionStatus: container.mission ?? null,
+      realtime: realtimeSourceFor(container),
     });
     cache.set(container, runtime);
+    const composition = runtimeCompositions.get(runtime);
+    if (composition) compositions.set(container, composition);
   }
   return runtime;
 }

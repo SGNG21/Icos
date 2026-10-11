@@ -88,6 +88,10 @@ export function providerHealthMetric(workers: Truth<WorkerRegistryEntry[]>): Tru
 
 export const CAPABILITY_TONE: Record<CapabilityState, Tone> = {
   AUTONOMOUS: "autonomy",
+  AUTONOMOUS_BY_POLICY: "autonomy",
+  READY: "ok",
+  /* Working, with a named part not configured: a setting to fix, not an outage. */
+  PARTIAL: "warn",
   GOVERNED: "ok",
   APPROVAL_REQUIRED: "flow",
   DEGRADED: "warn",
