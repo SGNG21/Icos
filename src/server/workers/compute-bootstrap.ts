@@ -265,7 +265,15 @@ export function planComputeBootstrap(input: ComputeBootstrapPlanInput): ComputeB
       if (worker.status === "inactive") continue;
       plan.orphan.push({ id: worker.id, displayName: worker.displayName });
       const working = worker.health === "healthy" && worker.availability === "available";
-      if (isFleetOwned(worker) && worker.status === "active" && !working) {
+      /*
+       * Review L2: retire on the row's OWN FAILING evidence only — a failed probe, or the
+       * stale expiry of one. A row never probed (just registered, just reinstated) or merely
+       * `unsupported` has proven nothing either way, so a partial listing cannot retire it.
+       */
+      const failing =
+        worker.lastProbeOutcome === "failed" ||
+        (worker.lastProbeOutcome === "stale" && (worker.lastProbeErrorClass ?? null) !== null);
+      if (isFleetOwned(worker) && worker.status === "active" && !working && failing) {
         plan.retire.push({
           id: worker.id,
           displayName: worker.displayName,
@@ -278,7 +286,12 @@ export function planComputeBootstrap(input: ComputeBootstrapPlanInput): ComputeB
     const fleetActive = input.existing.filter(
       (w) => isFleetOwned(w) && w.status === "active",
     ).length;
-    if (plan.retire.length > 1 && plan.retire.length * 2 > fleetActive) {
+    /* Never the whole fleet, and never its LAST active row (review L2), even one at a time. */
+    if (
+      plan.retire.length > 0 &&
+      (plan.retire.length >= fleetActive ||
+        (plan.retire.length > 1 && plan.retire.length * 2 > fleetActive))
+    ) {
       plan.retirement = "WITHHELD_MASS_WITHDRAWAL";
       plan.retire = [];
     }

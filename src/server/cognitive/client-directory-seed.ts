@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   CognitiveMemoryType,
   MemoryCandidate,
@@ -221,7 +223,47 @@ export async function seedClientDirectory(
       aliases: client.aliases,
       sensitivity: "normal",
     };
-    await memory.upsertEntity(tenantId, input, { mergeAliases: true });
+    /*
+     * Review L3: merging the seed's aliases on EVERY boot re-added any alias the owner had
+     * deleted. Each alias SET is merged once: a content-addressed marker, written through the
+     * same governed path, records that this exact set was applied. Once recorded, the entity's
+     * aliases are the owner's — the seed leaves them alone. A later release with a CHANGED set
+     * merges once more (limit: an alias the owner deleted returns only if that new set lists it).
+     */
+    const aliasSet = [...client.aliases].sort();
+    const aliasMarker = `seed.client-directory.${client.key}.aliases.${createHash("sha256")
+      .update(JSON.stringify(aliasSet))
+      .digest("hex")
+      .slice(0, 16)}`;
+    const aliasesApplied =
+      (await memory.subjectRecorded(tenantId, client.key, "project", aliasMarker)).length > 0;
+    await memory.upsertEntity(tenantId, aliasesApplied ? { ...input, aliases: [] } : input, {
+      mergeAliases: true,
+    });
+    if (!aliasesApplied) {
+      await memory.write(
+        { tenantId, userId: recordedBy, clientId: client.key, projectId: null },
+        {
+          type: "project",
+          subjectKey: aliasMarker,
+          content: `Alias de l'annuaire appliqués par l'amorçage : ${aliasSet.join(", ")}.`,
+          epistemic: "SYSTEM_OBSERVED",
+          statementKind: "observation",
+          confidence: 1,
+          originTrust: "trusted",
+          provenance: {
+            sourceType: "system",
+            sourceId: "seed:client-directory-aliases",
+            conversationId: null,
+            turnId: null,
+            engine: null,
+          },
+          entityKey: client.key,
+          retention: "long_term",
+          tags: ["seed", "client-directory", "alias-set"],
+        },
+      );
+    }
     entities++;
     for (const fact of client.facts) {
       const type = fact.type ?? "project";

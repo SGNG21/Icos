@@ -215,3 +215,23 @@ describe("governed retirement of compute fleet orphans", () => {
     expect(await store.get(GONE)).toEqual(before);
   });
 });
+
+describe("review L2 — retirement needs failing evidence and never empties the fleet", () => {
+  it("a NEVER-PROBED orphan is reported, not retired", async () => {
+    const { plan, apply } = harness();
+    await apply();
+    const p = await plan(WITHOUT_GONE);
+    expect(p.orphan.map((o) => o.id)).toContain(GONE);
+    expect(p.retire).toEqual([]);
+  });
+
+  it("the LAST active fleet worker is never retired, even alone and failing", async () => {
+    const { plan, apply, fail } = harness();
+    await apply([GONE_MODEL]);
+    await fail(GONE);
+    const p = await plan(["claude/claude-sonnet-5"]);
+    /* The new model is registered; the only ACTIVE fleet row is still the failing one. */
+    expect(p.retire).toEqual([]);
+    expect(p.retirement).toBe("WITHHELD_MASS_WITHDRAWAL");
+  });
+});
