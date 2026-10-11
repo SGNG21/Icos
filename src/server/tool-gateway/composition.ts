@@ -22,7 +22,7 @@ import { NOT_CONNECTED_DEFINITIONS, notConnected } from "./connectors/catalog";
 import { httpConnector } from "./connectors/http";
 import { localFilesConnector } from "./connectors/local-files";
 import { searchConnector } from "./connectors/search";
-import { webConnector } from "./connectors/web";
+import { webConnector, type HostResolver } from "./connectors/web";
 import { ToolGateway, type InstanceHealthView } from "./gateway";
 import {
   ConnectorRegistry,
@@ -177,17 +177,22 @@ export interface ComposeToolGatewayDeps {
   config?: unknown;
   env?: Readonly<Record<string, string | undefined>>;
   fetchImpl?: typeof fetch;
+  /** DNS seam for the web connector's rebinding check (tests inject one; no real lookup). */
+  resolveHost?: HostResolver;
   now?: () => Date;
   /** Test/extension seam: replaces the default connector set. */
   connectors?: readonly Connector[];
 }
 
-export function defaultConnectors(fetchImpl?: typeof fetch): Connector[] {
+export function defaultConnectors(
+  fetchImpl?: typeof fetch,
+  resolveHost?: HostResolver,
+): Connector[] {
   return [
     localFilesConnector,
     httpConnector(fetchImpl),
     // Governed web read and search (decision 0067 item 5): READ/SEARCH, LOW, no approval.
-    webConnector(fetchImpl),
+    webConnector(fetchImpl, undefined, resolveHost),
     searchConnector(fetchImpl),
     ...NOT_CONNECTED_DEFINITIONS.map(notConnected),
   ];
@@ -245,7 +250,7 @@ export function composeToolGateway(deps: ComposeToolGatewayDeps): ToolGatewayRun
   }
 
   const gateway = new ToolGateway({
-    connectors: deps.connectors ?? defaultConnectors(deps.fetchImpl),
+    connectors: deps.connectors ?? defaultConnectors(deps.fetchImpl, deps.resolveHost),
     registry,
     agents: deps.agents,
     credentials,

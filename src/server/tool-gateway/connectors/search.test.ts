@@ -88,4 +88,8 @@ describe("search connector: governed search through a configured provider", () =
     );
     expect(await h({})).toBe("UNKNOWN");
   });
+
+  it("declares a local per-minute rate limit", () => {
+    expect(SEARCH_DEFINITION.tools[0]!.rateLimit).toEqual({ maxRequests: 30, perSeconds: 60 });
+  });
 });
