@@ -622,6 +622,7 @@ export class CognitiveRuntime {
         // conversation has switched to another client must still launch under LDS.
         clientId: launching.clientId,
         projectId: launching.projectId,
+        tenantId,
       });
       return conversations.finishLaunch(tenantId, launching, result);
     } catch (error) {

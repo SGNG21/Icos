@@ -1,5 +1,6 @@
 import type { Mission } from "@/core/mission/contracts";
 import type { HighLevelGoal } from "@/core/contracts/high-level-goal";
+import { scopePayloadFields } from "@/core/execution/execution-scope";
 import { WORK_CLASSES, type WorkClass } from "@/core/supervisor/contracts";
 import {
   DEFAULT_PRIORITY_POLICY,
@@ -265,6 +266,8 @@ export class ObjectiveCoordinator {
         title: input.title,
         objective: input.objective,
         goalId: input.goal.id,
+        /* The goal's client/project scope rides the job (decision 0063 amendment A). */
+        ...scopePayloadFields(input.goal.metadata),
         /*
          * Omis quand absents : un `undefined` dans le payload jsonb deviendrait une CLÉ
          * présente et nulle, que le schéma strict du gestionnaire refuserait.

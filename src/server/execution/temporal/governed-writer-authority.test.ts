@@ -369,6 +369,60 @@ describe("the governed Temporal writer", () => {
       expect(env.ICOS_GOAL_ID).toBe("goal-1");
     });
 
+    it("WHOSE WORK: the client/project scope comes from the grant, never from the environment", async () => {
+      process.env.ICOS_CLIENT_ID = "spoofed-client";
+      answerWith({
+        ...baseGrant(allocate("task-1"), true),
+        scope: {
+          tenantId: "default",
+          clientId: "lds-renov",
+          projectId: "lds-seo",
+          missionId: "mission-1",
+          taskId: "task-1",
+          goalId: "goal-1",
+          allowedDataScope: "project",
+        },
+      });
+
+      await run();
+
+      const env = sandboxArgs[0]!.env ?? {};
+      expect(env.ICOS_CLIENT_ID).toBe("lds-renov");
+      expect(env.ICOS_PROJECT_ID).toBe("lds-seo");
+      expect(env.ICOS_MISSION_ID).toBe("mission-1");
+      delete process.env.ICOS_CLIENT_ID;
+    });
+
+    it("unscoped work exports no client at all, even if the server's env has one", async () => {
+      process.env.ICOS_CLIENT_ID = "spoofed-client";
+      answerWith(baseGrant(allocate("task-1"), true));
+
+      await run();
+
+      expect(sandboxArgs[0]!.env?.ICOS_CLIENT_ID).toBeUndefined();
+      delete process.env.ICOS_CLIENT_ID;
+    });
+
+    it("FAIL_CLOSED: a scope bound to another task or mission starts no process", async () => {
+      const scope = {
+        tenantId: "default",
+        clientId: "lds-renov",
+        projectId: null,
+        goalId: "goal-1",
+        allowedDataScope: "client",
+      };
+      for (const bad of [
+        { ...scope, missionId: "mission-OTHER", taskId: "task-1" },
+        { ...scope, missionId: "mission-1", taskId: "task-OTHER" },
+        { ...scope, clientId: null, projectId: "orphan", missionId: "mission-1", taskId: "task-1" },
+      ]) {
+        sandboxArgs = [];
+        answerWith({ ...baseGrant(allocate("task-1"), true), scope: bad });
+        await expect(run()).rejects.toThrow("WORKER_SCOPE_MISMATCH");
+        expect(sandboxArgs).toHaveLength(0);
+      }
+    });
+
     it("the worker environment is constructed, never inherited", async () => {
       process.env.AWS_SECRET_ACCESS_KEY = "must-not-travel";
       answerWith(baseGrant(allocate("task-1"), true));

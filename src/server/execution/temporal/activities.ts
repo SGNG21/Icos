@@ -31,6 +31,7 @@ import {
 import type { WorkerRuntimeDescriptor } from "@/core/contracts/worker-registry";
 
 import { decideExecutable } from "@/core/execution/executable-policy";
+import type { ExecutionScope } from "@/core/execution/execution-scope";
 
 import { firstLineRedacted } from "@/server/workers/probes/probe-redaction";
 import { classifyWorkerRun } from "./worker-run";
@@ -186,6 +187,27 @@ export interface ExecutionGrant {
     /** The existing workspace lease. Null means no lease is held at all. */
     readonly leaseExpiresAt: string | null;
   } | null;
+  /**
+   * WHOSE WORK THIS IS (decision 0063 amendment A): the client/project scope ICOS read from the
+   * task's goal. Absent only from a server that predates the carriage.
+   */
+  readonly scope?: ExecutionScope | null;
+}
+
+/**
+ * FAIL CLOSED: a scope bound to another task or mission is never run under. The grant route
+ * already refuses a task whose lineage disagrees with its goal's client; this is the worker's
+ * own check that the scope it is about to export belongs to THIS execution.
+ */
+export function assertGrantScope(ctx: ExecutionContext, grant: ExecutionGrant): void {
+  const scope = grant.scope;
+  if (!scope) return;
+  if (scope.missionId !== grant.missionId || (scope.taskId ?? ctx.taskId) !== ctx.taskId) {
+    throw new Error("WORKER_SCOPE_MISMATCH: le périmètre accordé ne correspond pas à cette tâche");
+  }
+  if (scope.projectId && !scope.clientId) {
+    throw new Error("WORKER_SCOPE_MISMATCH: projet sans client");
+  }
 }
 
 async function fetchGrant(ctx: ExecutionContext): Promise<ExecutionGrant> {
@@ -421,6 +443,7 @@ export async function runGovernedWorker(
    * first also means a refusal costs no worktree and no subprocess.
    */
   const grant = await fetchGrant(ctx);
+  assertGrantScope(ctx, grant);
 
   /*
    * MAY THIS PROGRAM RUN? Asked of the executable policy, which is default-deny and
@@ -565,6 +588,14 @@ export async function runGovernedWorker(
         ICOS_WORKFLOW_ID: grant.workflowId,
         ICOS_MISSION_ID: grant.missionId,
         ...(grant.goalId ? { ICOS_GOAL_ID: grant.goalId } : {}),
+        /*
+         * WHOSE WORK, from the grant like every identity above — never from this process's
+         * environment, so an inherited ICOS_CLIENT_ID cannot relabel the task.
+         */
+        ...(grant.scope?.clientId ? { ICOS_CLIENT_ID: grant.scope.clientId } : {}),
+        ...(grant.scope?.clientId && grant.scope.projectId
+          ? { ICOS_PROJECT_ID: grant.scope.projectId }
+          : {}),
         ...(worktree && grant.workspace
           ? {
               ICOS_WORKSPACE_PATH: worktree,

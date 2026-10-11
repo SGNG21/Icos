@@ -32,6 +32,13 @@ export const enqueueScheduledJobSchema = z
              */
             goalId: z.string().trim().min(1).max(5000).optional(),
             /*
+             * The goal's client/project scope, CARRIED (decision 0063 amendment A): copied from
+             * the goal's metadata by the launcher, checked against that same goal by ignition
+             * before any mission exists. Never a source of its own.
+             */
+            clientId: z.string().trim().min(1).max(200).optional(),
+            projectId: z.string().trim().min(1).max(200).optional(),
+            /*
              * PLAFONDS ET POOL DE COMPUTE DEMANDÉS (P0-E/P0-F). L'admission est le point
              * de déclaration: ces deux valeurs voyagent dans le payload durable jusqu'à
              * `igniteAutonomousMission` -> `startAutonomousMission`, où elles ne peuvent

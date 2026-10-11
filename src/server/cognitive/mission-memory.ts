@@ -16,7 +16,7 @@ export interface MissionSettlementFact {
   readonly goalId: string | null;
   readonly title: string;
   /** CORE3's terminal status, verbatim. */
-  readonly outcome: "succeeded" | "failed" | "cancelled";
+  readonly outcome: "succeeded" | "failed" | "cancelled" | "blocked";
   /** The independent reviewer's verdict when one was given. */
   readonly reviewVerdict: string | null;
   /** Where the result lives (workspace branch, artifact id, result row). Never the content. */
@@ -35,7 +35,13 @@ export function renderMissionOutcome(f: MissionSettlementFact): string {
   const verdict = f.reviewVerdict ? `, revue ${f.reviewVerdict}` : ", sans revue";
   const result = f.resultRef ? ` Résultat : ${f.resultRef}.` : "";
   const goal = f.goalId ? ` (objectif ${f.goalId})` : "";
-  return `Mission « ${f.title} »${goal} ${f.outcome === "succeeded" ? "réussie" : f.outcome === "failed" ? "échouée" : "annulée"}${verdict}, le ${f.settledAt}.${result}`;
+  const outcome = {
+    succeeded: "réussie",
+    failed: "échouée",
+    cancelled: "annulée",
+    blocked: "bloquée",
+  }[f.outcome];
+  return `Mission « ${f.title} »${goal} ${outcome}${verdict}, le ${f.settledAt}.${result}`;
 }
 
 export function missionOutcomeCandidate(f: MissionSettlementFact): MemoryCandidate {
@@ -95,4 +101,82 @@ export async function recordMissionSettlement(
       ),
     };
   }
+}
+
+/** Terminal mission statuses a settlement memory is written for (CORE3 `TERMINAL_MISSION_STATUSES`). */
+const SETTLED: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled", "blocked"]);
+
+/**
+ * THE PRODUCTION SETTLEMENT HOOK (decision 0067 item 8, wired by decision 0063 amendment A).
+ *
+ * Called by the supervisor's terminal-settlement seam right after CORE3 moved the mission to a
+ * terminal status. Everything it writes comes from CORE3's own tables: the mission (title,
+ * status), its goal's scope (`ExecutionScopeReader` — so the memory lands in the client's scope
+ * and nowhere else), and the last review verdict. It NEVER throws: a memory failure must not
+ * un-settle a mission or block the workforce release that shares the seam.
+ */
+export function missionSettlementRecorder(deps: {
+  readonly missions: {
+    findById(
+      id: string,
+    ): Promise<{ id: string; title: string; status: string; updatedAt: Date } | null>;
+  };
+  readonly scope: {
+    forMission(missionId: string): Promise<{
+      tenantId: string;
+      clientId: string | null;
+      projectId: string | null;
+      goalId: string | null;
+    } | null>;
+  };
+  readonly reviews?: {
+    listByMissionId(missionId: string): Promise<{ decision: string; createdAt: string }[]>;
+  };
+  readonly memory: MissionMemoryPort;
+  readonly log?: (line: string) => void;
+}): (missionId: string) => Promise<WritebackOutcome | null> {
+  const log = deps.log ?? ((line: string) => console.error(line));
+  return async (missionId) => {
+    try {
+      const mission = await deps.missions.findById(missionId);
+      if (!mission || !SETTLED.has(mission.status)) return null;
+      const scope = await deps.scope.forMission(missionId);
+      if (!scope) return null;
+      const reviews = deps.reviews ? await deps.reviews.listByMissionId(missionId) : [];
+      const last = [...reviews].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+      const outcome = await recordMissionSettlement(
+        deps.memory,
+        scope.tenantId,
+        "system:mission-settlement",
+        {
+          missionId,
+          goalId: scope.goalId,
+          title: mission.title,
+          outcome: mission.status as MissionSettlementFact["outcome"],
+          reviewVerdict: last?.decision ?? null,
+          resultRef: null,
+          clientId: scope.clientId,
+          projectId: scope.projectId,
+          // The moment CORE3 wrote the terminal status: deterministic, so a replayed
+          // settlement renders the same text and is a `duplicate`, never a second row.
+          settledAt: mission.updatedAt.toISOString(),
+        },
+      );
+      if (outcome.kind === "rejected") {
+        log(
+          JSON.stringify({ event: "MISSION_MEMORY_REJECTED", missionId, reason: outcome.reason }),
+        );
+      }
+      return outcome;
+    } catch (error) {
+      log(
+        JSON.stringify({
+          event: "MISSION_MEMORY_FAILED",
+          missionId,
+          error: `${error instanceof Error ? error.name : "Error"}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`,
+        }),
+      );
+      return null;
+    }
+  };
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requestedBoundsSchema } from "@/core/autonomy/bounds";
 import { requestedComputePolicySchema } from "@/core/autonomy/model-allowlist";
 import type { ScheduledJobKind } from "@/core/contracts/scheduler";
+import { ExecutionScopeMismatchError } from "@/core/execution/execution-scope";
 import type { MissionRepository } from "@/server/mission/ports";
 import { PermanentJobError, type JobHandler } from "@/server/scheduler/durable-scheduler";
 import {
@@ -89,16 +90,41 @@ export function createSchedulerHandlers(deps: SchedulerHandlerDeps): Record<Sche
         throw new PermanentJobError("SCHEDULER_INVALID_PAYLOAD");
       }
 
+      /*
+       * THE CARRIED SCOPE (decision 0063 amendment A). Strings or absent — anything else is a
+       * malformed payload, permanently. A scope that disagrees with its goal is refused by
+       * ignition before the mission row exists, and that refusal is permanent too: retrying
+       * cannot make the job belong to the goal's client.
+       */
+      const clientId = job.payload.clientId;
+      const projectId = job.payload.projectId;
+      if (
+        (clientId !== undefined && text(clientId) === null) ||
+        (projectId !== undefined && text(projectId) === null)
+      ) {
+        throw new PermanentJobError("SCHEDULER_INVALID_PAYLOAD");
+      }
+      const scope = {
+        ...(typeof clientId === "string" ? { clientId } : {}),
+        ...(typeof projectId === "string" ? { projectId } : {}),
+      };
+
       // Fixed Mission id + idempotent create: a replay never creates a second Mission.
       await igniteAutonomousMission(deps.ignite, {
         id: missionId,
         title,
         objective,
         goalId,
+        ...(Object.keys(scope).length ? { scope } : {}),
         ...(admitted.data.bounds !== undefined ? { bounds: admitted.data.bounds } : {}),
         ...(admitted.data.computePolicy !== undefined
           ? { computePolicy: admitted.data.computePolicy }
           : {}),
+      }).catch((error: unknown) => {
+        if (error instanceof ExecutionScopeMismatchError) {
+          throw new PermanentJobError("SCHEDULER_SCOPE_MISMATCH");
+        }
+        throw error;
       });
     },
 
