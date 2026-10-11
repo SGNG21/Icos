@@ -7,6 +7,43 @@ const coordinator = (advance: () => Promise<unknown>) =>
   ({ advance }) as unknown as GovernedSelfDevelopmentCoordinator;
 
 describe("self-development runs on its own timer", () => {
+  it("starts nothing — no detection, no advance — while no worker is routable", async () => {
+    vi.useFakeTimers();
+    const advance = vi.fn(async () => undefined);
+    const maybePropose = vi.fn(async () => undefined);
+    let routable = false;
+    const scheduler = createSelfDevelopmentScheduler(
+      coordinator(advance),
+      1_000,
+      { maybePropose } as never,
+      async () => routable,
+    );
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(maybePropose).not.toHaveBeenCalled();
+    expect(advance).not.toHaveBeenCalled();
+
+    routable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(maybePropose).toHaveBeenCalledTimes(1);
+    expect(advance).toHaveBeenCalledTimes(1);
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
+
+  it("an unreadable fleet counts as not ready (fail closed)", async () => {
+    vi.useFakeTimers();
+    const advance = vi.fn(async () => undefined);
+    const scheduler = createSelfDevelopmentScheduler(coordinator(advance), 1_000, undefined, () =>
+      Promise.reject(new Error("db down")),
+    );
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(advance).not.toHaveBeenCalled();
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
+
   it("never starts a second advance while one is in flight", async () => {
     vi.useFakeTimers();
     let release!: () => void;

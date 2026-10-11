@@ -27,6 +27,7 @@ import type { WorkforceTaskCompute } from "@/server/workforce/core3-task-compute
 import { boundTaskCompute } from "@/server/workforce/mission-binding";
 import { seedWorkerProbeSweep } from "@/server/workers/probes/worker-probe-schedule";
 import { bootstrapComputeFleetAtStartup } from "@/server/workers/startup-compute-bootstrap";
+import { readFleetReadiness } from "@/server/workers/fleet-readiness";
 import { seedComputeFleetReconciliation } from "@/server/workers/compute-fleet-schedule";
 import { COMPUTE_HEALTH_OBSERVATION, composeProactiveSupervisor } from "@/server/proactive/compose";
 import { seedObservation } from "@/server/proactive/observations";
@@ -519,6 +520,13 @@ export function createSelfDevelopmentScheduler(
    * when nothing is in flight or selectable, so `advance()` then picks up what it proposed.
    */
   detection?: Pick<SelfDevelopmentDetection, "maybePropose">,
+  /**
+   * N1 lab: at boot the fleet discovery timed out, the tick still proposed and ignited, and
+   * the mission's first task BLOCKED (terminal) for want of any worker. Self-development
+   * starts nothing — no detection, proposal or advance — while no worker is routable; the
+   * next tick retries. An unreadable fleet counts as not ready (fail closed).
+   */
+  fleetReady?: () => Promise<boolean>,
 ): ProductionServiceScheduler {
   let timer: ReturnType<typeof setInterval> | null = null;
   let inFlight = false;
@@ -530,6 +538,7 @@ export function createSelfDevelopmentScheduler(
         if (inFlight) return;
         inFlight = true;
         void (async () => {
+          if (fleetReady && !(await fleetReady().catch(() => false))) return;
           /* A failed detection never prevents advancing what is already in the backlog. */
           if (detection) await detection.maybePropose().catch(() => undefined);
           await selfDevelopment.advance();
@@ -659,10 +668,14 @@ function createRecoveryScheduler(
   if (!options.selfDevelopment) return sweeps;
 
   /* Deux timers, une seule façade de cycle de vie. */
+  const db = container.db;
   const improvement = createSelfDevelopmentScheduler(
     selfDevelopment,
     options.intervalMs,
     selfDevelopmentDetection,
+    db
+      ? async () => (await readFleetReadiness(db, new Date())).total.routable > 0
+      : undefined,
   );
   return {
     start() {
