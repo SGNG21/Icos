@@ -314,9 +314,12 @@ describe("session TTL is not conversation lifetime (real PostgreSQL)", () => {
   });
 
   it("ONE WRITER: a second turn while the first is answering is refused as TURN_IN_PROGRESS, immediately and not as an outage", async () => {
-    /* The first turn stays in flight: that is the whole point of the scenario. */
+    /* The first turn stays in flight: that is the whole point of the scenario. Released at
+     * the end of THIS test, because a stalled call left running deadlocks the next
+     * test's TRUNCATE -- measured, twice. */
+    let release: () => void = () => {};
     const engine = new ScriptedCognitionEngine(async (input) => {
-      if (input.userText.includes("lente")) await new Promise<void>((r) => stalled.push(r));
+      if (input.userText.includes("lente")) await new Promise<void>((r) => (release = r));
       return answer("reponse");
     });
     const b = bench({ engine });
@@ -357,6 +360,9 @@ describe("session TTL is not conversation lifetime (real PostgreSQL)", () => {
     const state = await b.runtime.resume(ME, conversationId);
     expect(state.turns.filter((t) => t.role === "user")).toHaveLength(1);
     expect(state.turns.map((t) => t.idempotencyKey).filter(Boolean)).toEqual(["voice-001"]);
+
+    release();
+    await b.quiesce();
   });
 
   it("ISOLATION: another authenticated user cannot continue, or even read, the conversation", async () => {

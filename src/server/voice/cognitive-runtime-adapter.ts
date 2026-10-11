@@ -70,7 +70,18 @@ export class CognitiveRuntimeVoiceAdapter implements CognitiveRuntimePort {
        * the caller to resend, which hits the same index again. The refusal keeps its own
        * identity, and everything else stays an outage.
        */
-      if (error instanceof TurnInProgressError) throw new TurnInFlightError(error.message);
+      if (error instanceof TurnInProgressError) {
+        /* Attributable afterwards, from the journal alone, with no transcript in it. */
+        console.error(
+          JSON.stringify({
+            event: "VOICE_TURN_REFUSED_ONE_WRITER",
+            conversationId,
+            clientTurnId: turn.turnId,
+            voiceSessionId: turn.voiceSessionId,
+          }),
+        );
+        throw new TurnInFlightError(error.message);
+      }
       throw new CognitiveUnavailableError(error instanceof Error ? error.message : String(error));
     }
 
