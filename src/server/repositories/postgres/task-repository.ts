@@ -8,6 +8,7 @@ import type { Database } from "@/server/database/client";
 import { auditToRow, rowToTask, taskToRow } from "@/server/database/mappers";
 import { actions, auditEntries, tasks } from "@/server/database/schema";
 import { prepareTaskCreation } from "@/server/repositories/task-creation";
+import { TERMINAL_TASK_AUDIT_STATUSES } from "./terminal-transition-audit";
 import type {
   AgentScope,
   CreateTaskInput,
@@ -173,7 +174,13 @@ export class PostgresTaskRepository implements TaskRepository {
           ? { kind: "agent", id: current.assignedAgentId }
           : { kind: "system", id: "icos" }),
       taskId: current.id,
-      details: { ...(audit?.details ?? {}), from: current.status, to },
+      details: {
+        ...(audit?.details ?? {}),
+        from: current.status,
+        to,
+        /* Same shape as every other terminal entry (terminal-transition-audit.ts). */
+        ...(TERMINAL_TASK_AUDIT_STATUSES.has(to) ? { terminal: true, outcome: to } : {}),
+      },
       createdAt: result.task.updatedAt,
     };
 

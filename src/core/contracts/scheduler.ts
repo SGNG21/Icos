@@ -7,6 +7,8 @@ export const SCHEDULED_JOB_KINDS = [
   "wake_mission",
   "probe_workers",
   "supervisor_observe",
+  /* Periodic compute fleet reconciliation (migration 0063). */
+  "reconcile_compute_fleet",
 ] as const;
 export type ScheduledJobKind = (typeof SCHEDULED_JOB_KINDS)[number];
 

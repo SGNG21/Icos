@@ -955,8 +955,9 @@ export const scheduledJobs = pgTable(
     unique("scheduled_jobs_idempotency_key_unique").on(t.idempotencyKey),
     check(
       "scheduled_jobs_kind_check",
-      /* ALLOW-list. `probe_workers` added by 0045 (M6), `supervisor_observe` by 0049 (decision 0060). */
-      sql`${t.kind} in ('start_mission','wake_mission','probe_workers','supervisor_observe')`,
+      /* ALLOW-list. `probe_workers` added by 0045 (M6), `supervisor_observe` by 0049 (decision 0060),
+       * `reconcile_compute_fleet` by 0064 (periodic fleet reconciliation). */
+      sql`${t.kind} in ('start_mission','wake_mission','probe_workers','supervisor_observe','reconcile_compute_fleet')`,
     ),
     check(
       "scheduled_jobs_state_check",

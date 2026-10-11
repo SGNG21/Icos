@@ -212,7 +212,11 @@ export class PostgresSpendReservations implements SpendReservationPort {
    * le rend observable. Un id CONNU présenté avec un mauvais jeton, lui, est bien imputé à son
    * goal (la dépense est réelle) mais n'est PAS clos : voir {@link locate}.
    */
-  async settle(reservation: SpendReservation, entry: SettleEntry): Promise<SettlementOutcome> {
+  async settle(
+    reservation: SpendReservation,
+    entry: SettleEntry,
+    reporting?: Attribution | null,
+  ): Promise<SettlementOutcome> {
     return this.options.db.transaction(async (tx) => {
       /*
        * On ne connaît pas encore la clé : on authentifie d'abord pour l'apprendre, puis on
@@ -223,7 +227,17 @@ export class PostgresSpendReservations implements SpendReservationPort {
       if (probe !== null) await this.lock(tx, probe.key);
       const row = probe === null ? null : await this.locate(tx, reservation.id);
 
-      const attribution = row === null ? null : attributionFromKey(row.key);
+      /*
+       * The KEY is the reservation's, always. The caller's ambient imputation is kept only
+       * when it encodes the SAME key — it then merely adds reporting fields (`missionId`)
+       * that the key does not carry. A different key is a redirection attempt: ignored.
+       */
+      const attribution =
+        row === null
+          ? null
+          : reporting && attributionKey(reporting) === row.key
+            ? reporting
+            : attributionFromKey(row.key);
       await this.ledgerOn(tx).record({ ...entry, attribution });
 
       const closed =

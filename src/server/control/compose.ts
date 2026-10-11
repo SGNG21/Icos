@@ -45,7 +45,9 @@ export function createControlEffects(deps: ControlEffectsDeps): ControlEffects {
       // Without compare-and-set the cancel could overwrite a concurrent terminal
       // status: refuse (FAILED, nothing changed) rather than write blindly.
       deps.missions.transitionMissionStatusIf
-        ? deps.missions.transitionMissionStatusIf(id, from, "cancelled")
+        ? deps.missions.transitionMissionStatusIf(id, from, "cancelled", {
+            cause: "CONTROL_CANCEL",
+          })
         : false,
     readWorker: (id) => deps.workers.get(id),
     disableWorker: async (id) => {

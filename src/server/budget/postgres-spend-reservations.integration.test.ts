@@ -204,6 +204,33 @@ describe("spend_reservations — réservation atomique par goal (migration 0056)
     });
   });
 
+  describe("REPORTING au solde (traçabilité par mission)", () => {
+    const missionOf = async (reservationTotal: number) =>
+      (await ctx.handle.db.execute(sql`
+        select attribution_key, goal_id, mission_id from spend_ledger
+         where tenant_id = ${TENANT} and total_tokens = ${reservationTotal}
+      `)) as unknown as Array<Record<string, unknown>>;
+
+    it("garde la mission rapportée quand la CLÉ est identique, jamais une autre clé", async () => {
+      const store = reservations();
+      const a = await store.reserve(G1, 100);
+      const b = await store.reserve(G1, 100);
+      if (a.kind !== "RESERVED" || b.kind !== "RESERVED") throw new Error("attendu RESERVED");
+
+      /* Même clé (goal=g1) : la mission s'ajoute au reporting, le budget ne bouge pas. */
+      await store.settle(a.reservation, entry(41), { goalId: "g1", missionId: "m1" });
+      /* Autre clé (goal=g2) : une redirection — ignorée, la ligne reste celle de la réservation. */
+      await store.settle(b.reservation, entry(42), { goalId: "g2", missionId: "m2" });
+
+      expect(await missionOf(41)).toEqual([
+        { attribution_key: "goal=g1", goal_id: "g1", mission_id: "m1" },
+      ]);
+      expect(await missionOf(42)).toEqual([
+        { attribution_key: "goal=g1", goal_id: "g1", mission_id: null },
+      ]);
+    });
+  });
+
   describe("solde sur la consommation RÉELLE", () => {
     it("rend le reliquat : le goal peut réserver de nouveau ce qu'il n'a pas consommé", async () => {
       const store = reservations();

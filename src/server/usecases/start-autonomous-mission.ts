@@ -149,10 +149,10 @@ export async function startAutonomousMission(
    * les adaptateurs, eux, sont construits une fois pour le processus. Tout appel mesuré
    * descendant de `run` est donc imputé ici, sans qu'aucune signature intermédiaire change.
    *
-   * LA CLÉ EST LE GOAL SEUL, pas (mission, goal) : `attributionKey` dérive la fenêtre de
-   * TOUTE l'imputation, donc y ajouter la mission donnerait à chaque mission une copie
-   * NEUVE du budget de son goal — N missions, N fois le budget. Or c'est le goal qui porte
-   * `budget`, c'est donc lui qu'on accumule.
+   * LA CLÉ EST LE GOAL SEUL : `attributionKey` retient le goal dès qu'il est présent (verrou
+   * P0-B), donc la mission portée EN PLUS ne crée aucune fenêtre neuve — N missions restent
+   * UN budget. Elle n'est là que pour le REPORTING : `spend_ledger.mission_id`, ce qui rend
+   * la dépense d'une mission traçable (`pnpm mission:trace`).
    *
    * Le `goalId` vient de la MISSION PERSISTÉE, la seule autorité sur ce lien (`input.goalId`
    * reste inutilisé, comme avant). Une mission sans goal n'ouvre AUCUNE portée : l'appel est
@@ -161,7 +161,7 @@ export async function startAutonomousMission(
    */
   const run = () => runner.run(input.missionId);
   const result = await (mission.goalId
-    ? runWithAttribution({ goalId: mission.goalId }, run)
+    ? runWithAttribution({ goalId: mission.goalId, missionId: mission.id }, run)
     : run());
 
   if (resolved && resolved.clamped.length > 0) {

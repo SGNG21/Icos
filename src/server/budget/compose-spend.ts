@@ -185,7 +185,8 @@ export function ambientlyAttributed(ledger: SpendLedgerPort): SpendLedgerPort {
 export function ambientlyReserved(port: SpendReservationPort): SpendReservationPort {
   return {
     reserve: (_attribution, requestedTokens) => port.reserve(currentAttribution(), requestedTokens),
-    settle: (reservation, entry) => port.settle(reservation, entry),
+    /* Reporting fields only: the port keeps the reservation's key (see SpendReservationPort.settle). */
+    settle: (reservation, entry) => port.settle(reservation, entry, currentAttribution()),
     renew: (reservation) => port.renew(reservation),
     release: (reservation) => port.release(reservation),
   };

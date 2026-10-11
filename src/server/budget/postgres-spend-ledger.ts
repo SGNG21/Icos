@@ -224,4 +224,95 @@ export class PostgresSpendLedger implements SpendLedgerPort {
 
     return rows.reduce((window, row) => accumulate(window, toObservation(row)), emptyWindow());
   }
+  /**
+   * READ-ONLY. Every ledger row spent FOR a mission (mission traceability, `pnpm mission:trace`):
+   * rows whose reported `mission_id` is the mission, plus its strict system-review window
+   * (a goal-less mission's mandatory review). With `goalId`, also the goal's rows that name NO
+   * mission (`scope: "goal-shared"`): spent under the same budget but not provably for this
+   * mission — reported apart, never folded into the mission's own cost.
+   *
+   * Totals are folded by `accumulate`, the single accumulation authority, never re-derived in SQL.
+   */
+  async listForMission(
+    missionId: string,
+    options: { goalId?: string | null } = {},
+  ): Promise<MissionSpend> {
+    const systemReviewKey = attributionKey({ systemReviewMissionId: missionId });
+    const goalId = options.goalId ?? null;
+    const rows = (await this.options.db.execute(sql`
+      select id, attribution_key, mission_id, goal_id, brain_id, model_id, usage_kind,
+             prompt_tokens, completion_tokens, total_tokens, unmetered_reason, cost_kind,
+             currency, amount, unpriced_reason, observed_at, recorded_at
+        from spend_ledger
+       where tenant_id = ${this.tenantId}
+         and (mission_id = ${missionId}
+              or attribution_key = ${systemReviewKey}
+              or (${goalId}::text is not null and mission_id is null and goal_id = ${goalId}))
+       order by recorded_at, id
+    `)) as unknown as Row[];
+
+    const entries: MissionSpendEntry[] = rows.map((row) => ({
+      id: String(row.id),
+      scope:
+        row.mission_id === missionId || row.attribution_key === systemReviewKey
+          ? "mission"
+          : "goal-shared",
+      attributionKey: String(row.attribution_key),
+      goalId: (row.goal_id as string | null) ?? null,
+      brainId: (row.brain_id as string | null) ?? null,
+      modelId: String(row.model_id),
+      usageKind: String(row.usage_kind),
+      promptTokens: row.prompt_tokens === null ? null : Number(row.prompt_tokens),
+      completionTokens: row.completion_tokens === null ? null : Number(row.completion_tokens),
+      totalTokens: row.total_tokens === null ? null : Number(row.total_tokens),
+      costKind: (row.cost_kind as string | null) ?? null,
+      currency: (row.currency as string | null) ?? null,
+      amount: row.amount === null ? null : Number(row.amount),
+      reason: ((row.unmetered_reason ?? row.unpriced_reason) as string | null) ?? null,
+      observedAt: new Date(row.observed_at as string).toISOString(),
+      observation: toObservation(row),
+    }));
+
+    const fold = (scope: MissionSpendEntry["scope"]) =>
+      entries
+        .filter((e) => e.scope === scope)
+        .reduce((window, e) => accumulate(window, e.observation), emptyWindow());
+
+    return {
+      entries: entries.map(({ observation: _observation, ...rest }) => rest),
+      total: fold("mission"),
+      goalShared: fold("goal-shared"),
+    };
+  }
+}
+
+/** One spend row as the mission trace reports it. NULL stays NULL: an absence is never a zero. */
+export interface MissionSpendRow {
+  readonly id: string;
+  /** `mission`: spent for this mission. `goal-shared`: the goal's, naming no mission. */
+  readonly scope: "mission" | "goal-shared";
+  readonly attributionKey: string;
+  readonly goalId: string | null;
+  readonly brainId: string | null;
+  readonly modelId: string;
+  readonly usageKind: string;
+  readonly promptTokens: number | null;
+  readonly completionTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly costKind: string | null;
+  readonly currency: string | null;
+  readonly amount: number | null;
+  /** Why the row is UNMETERED or UNPRICED, when it is. */
+  readonly reason: string | null;
+  readonly observedAt: string;
+}
+
+type MissionSpendEntry = MissionSpendRow & { readonly observation: SpendObservation };
+
+export interface MissionSpend {
+  readonly entries: readonly MissionSpendRow[];
+  /** This mission's own spend (scope `mission`). */
+  readonly total: SpendWindow;
+  /** The goal's spend that names no mission — reported apart, never added to `total`. */
+  readonly goalShared: SpendWindow;
 }

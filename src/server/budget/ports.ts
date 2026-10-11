@@ -112,7 +112,17 @@ export interface SpendReservationPort {
    * reliquat non consommé et dit le dépassement éventuel. L'imputation est celle de la
    * réservation, JAMAIS une imputation fournie ici — voir {@link SettleEntry}.
    */
-  settle(reservation: SpendReservation, entry: SettleEntry): Promise<SettlementOutcome>;
+  settle(
+    reservation: SpendReservation,
+    entry: SettleEntry,
+    /**
+     * REPORTING ONLY (mission traceability). The ambient imputation of the settling call. It is
+     * used for the ledger row ONLY when its `attributionKey` is IDENTICAL to the reservation's,
+     * i.e. it can add the reporting fields that key does not encode (`missionId`, `brainId`)
+     * and can NEVER move the spend to another budget. Anything else is ignored.
+     */
+    reporting?: Attribution | null,
+  ): Promise<SettlementOutcome>;
 
   /**
    * PROLONGE le bail d'une réservation VIVANTE (verrou C3). Un appel de complétion qui dure

@@ -594,6 +594,15 @@ export class InMemoryDispatchAttemptRepository implements DispatchAttemptReposit
     );
   }
 
+  async listByMission(missionId: string): Promise<DispatchAttempt[]> {
+    return Array.from(this.attempts.values())
+      .filter((attempt) => attempt.missionId === missionId)
+      .sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+      )
+      .map((attempt) => structuredClone(attempt));
+  }
+
   async listPrepared(missionId?: string): Promise<DispatchAttempt[]> {
     return Array.from(this.attempts.values())
       .filter(
