@@ -69,6 +69,35 @@ Rollback: `sudo systemctl disable --now icos-backup.timer`.
 Restore drill (lab, never over production):
 `docker exec -i <lab-pg> pg_restore -U <user> -d <empty db> < icos_app.dump`.
 
+## Step 2b — Gate database (B2): a TEST cluster the integration gate may create databases on
+
+The gate's PostgreSQL step (W7) creates a per-run disposable database + role on an ADMIN test URL
+(`ICOS_TEST_DATABASE_URL`), reached only through the gatekeeper socket; the live base must never be
+that URL. Recommended: a dedicated loopback container with its own named volume, so the gate shares
+nothing with the live base (5433) nor with the Temporal persistence (5432, risk R3).
+
+```bash
+# owner — one time; the password goes ONLY into /srv/icos/etc/icos.env (ICOS_TEST_DATABASE_URL)
+docker run -d --name icos-gate-postgres --restart unless-stopped \
+  -e POSTGRES_USER=icos -e POSTGRES_PASSWORD="$(openssl rand -hex 24)" -e POSTGRES_DB=icos_gate_test \
+  -p 127.0.0.1:5434:5432 -v icos-gate-postgres-data:/var/lib/postgresql/data postgres:14-alpine
+# ICOS_TEST_DATABASE_URL=postgres://icos:<that password>@127.0.0.1:5434/icos_gate_test
+```
+
+Check: `deploy/vps/bin/icos-autonomy-check.sh` (PASS "ICOS_TEST_DATABASE_URL (gate)" — the name
+must contain `test`, the guard refuses anything else). Rollback: `docker rm -f icos-gate-postgres
+&& docker volume rm icos-gate-postgres-data`; nothing else references it.
+
+## Step 2c — Autonomy env (B1 + B2 + D) and the worker (B3), in this order
+
+1. Namespace: `docker exec icos-test-temporal sh -c 'temporal operator namespace create --address $(hostname -i):7233 --namespace icos-prod --retention 720h'` (additive; inert until something uses it).
+2. Merge `env/icos.env.sovereignty.example` then `env/icos.env.autonomy.example` into `icos.env`
+   (owner; `.bak` first), REMOVE `ICOS_REVIEWER_COMMAND`, fill `ICOS_TEST_DATABASE_URL`.
+3. `deploy/vps/bin/icos-autonomy-check.sh` → every FAIL must be gone except "pollers" (no worker yet).
+4. `sudo systemctl restart icos-web` (reads the new namespace/paths/reviewer) → `release/bin/health-check.sh 3100`.
+5. Step 2 above (worker unit; its `WorkingDirectory` is `/srv/icos/current`) → `icos-autonomy-check.sh` → `AUTONOMY_READY=PASS`.
+   Rollback of the whole block: restore the `.bak`, `systemctl disable --now icos-temporal-worker`, restart `icos-web`.
+
 ## Step 4 — OmniRoute over Tailscale (replaces the Mac's SSH tunnel)
 
 1. Owner, in the OmniRoute dashboard (still via the existing tunnel): enable **Require API key**
