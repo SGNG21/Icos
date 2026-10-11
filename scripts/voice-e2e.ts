@@ -549,17 +549,44 @@ async function main() {
   const stillInFlight = of(back, "response_final", t5).length === 0;
   const t6a = `e2e-${Date.now()}-6a`;
   await speak(afterExpiry, t6a, q2);
-  const simultaneous = await tryUntil(
+  const askedAt = Date.now();
+  /* EITHER outcome ends the wait: a refusal is an answer, and waiting past it is why this
+   * step used to cost twenty seconds of silence. */
+  const verdict = await tryUntil(
     afterExpiry,
-    (m) => m.type === "turn_accepted" && m.turnId === t6a,
+    (m) =>
+      (m.type === "turn_accepted" && m.turnId === t6a) ||
+      (m.type === "error" && m.turnId === t6a),
     20_000,
   );
+  const answer = afterExpiry.inbox
+    .map((e) => e.m)
+    .find(
+      (m) =>
+        (m.type === "turn_accepted" && m.turnId === t6a) ||
+        (m.type === "error" && m.turnId === t6a),
+    );
+  const refusal = answer?.type === "error" ? answer : null;
   report.oneWriterPerConversation = {
     firstTurnStillInFlightWhenSecondSpoke: stillInFlight,
-    simultaneousTurnAccepted: simultaneous.ok,
-    refusalCodes: of(afterExpiry, "error").map((e) => (e.m.type === "error" ? e.m.code : "")),
-    /* The governed outcome: refused while the first turn was in flight. */
-    invariantHeld: stillInFlight ? !simultaneous.ok : null,
+    verdict: refusal ? "REFUSED" : answer ? "ACCEPTED" : "NO ANSWER",
+    answeredInMs: answer ? Date.now() - askedAt : null,
+    noAnswerBecause: verdict.why ?? null,
+    refusalCode: refusal?.code ?? null,
+    refusalMessage: refusal?.message?.slice(0, 120) ?? null,
+    /*
+     * An OUTAGE and a GOVERNED REFUSAL used to arrive as the same code. TURN_IN_PROGRESS
+     * means the server distinguishes them; COGNITIVE_UNAVAILABLE here means it does not yet
+     * (the deployed build), and the refusal is only attributable by its timing and by the
+     * fact that every other turn of this very run succeeded.
+     */
+    /* Compared as text on purpose: this harness runs against builds whose contracts
+     * predate the code, and a narrowed union would refuse to compile against them. */
+    refusalIsExplicit: String(refusal?.code) === "TURN_IN_PROGRESS",
+    allErrorCodesOnThisConnection: of(afterExpiry, "error").map((e) =>
+      e.m.type === "error" ? e.m.code : "",
+    ),
+    invariantHeld: stillInFlight ? Boolean(refusal) : null,
   };
 
   /*
