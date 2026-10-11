@@ -156,7 +156,16 @@ describe("startup compute bootstrap", () => {
       warnOnAttention({
         status: "APPLIED",
         source: "https://gateway.invalid",
-        result: { registered: [], updated: [], unchanged: [], skippedDisabled: [] },
+        result: {
+          registered: [],
+          updated: [],
+          unchanged: [],
+          skippedDisabled: [],
+          retired: [],
+          reinstated: [],
+          skippedUnaudited: [],
+          retirement: "OK",
+        },
       });
       expect(warn).not.toHaveBeenCalled();
 

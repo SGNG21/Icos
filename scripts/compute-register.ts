@@ -74,8 +74,13 @@ async function main(): Promise<void> {
       wouldRegister: plan.register.map((p) => ({ id: p.id, model: p.model, family: p.family })),
       wouldUpdate: plan.update.map((p) => ({ id: p.id, model: p.model, family: p.family })),
       alreadyPresent: plan.unchanged.map((p) => ({ id: p.id, model: p.model })),
-      /* REPORT ONLY — this command never writes a worker's status. */
+      /* Every model the provider no longer lists; only `wouldRetire` is ever written. */
       noLongerServed: plan.orphan,
+      /* Fleet-owned, active, failing orphans: retired (audited) on --apply. */
+      wouldRetire: plan.retire,
+      retirement: plan.retirement,
+      /* Rows this reconciler retired that are listed again: reinstated (audited) on --apply. */
+      wouldReinstate: plan.reinstate.map((p) => ({ id: p.id, model: p.model })),
       disabledLeftAlone: plan.disabled,
       unavailable: plan.unavailable,
       pools: plan.pools,
@@ -96,7 +101,9 @@ async function main(): Promise<void> {
       return;
     }
 
-    const applied = await applyComputeBootstrap(container.workerRegistration, plan);
+    const applied = await applyComputeBootstrap(container.workerRegistration, plan, {
+      audit: container.audit,
+    });
     const probed = await container.workerHealthProber.probeAll();
     console.log(
       JSON.stringify(

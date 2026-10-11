@@ -216,7 +216,7 @@ describe("live worker fleet bootstrap", () => {
     expect(after.filter((w) => w.capacityPool === "provider:nvidia").length).toBe(2);
   });
 
-  it("reports a withdrawn model but never writes its status: that decision is governed", async () => {
+  it("reports a withdrawn model that still ANSWERS its probe, and never retires it", async () => {
     const { store, registration, plan } = harness();
     await applyComputeBootstrap(registration, await plan());
     const gone = candidateWorkerId("codex/gpt-5.6-sol");
@@ -228,10 +228,11 @@ describe("live worker fleet bootstrap", () => {
     expect(next.orphan.map((o) => o.id)).toEqual([gone]);
     await applyComputeBootstrap(registration, next);
     /*
-     * Still active, still carrying its evidence: taking a worker out of rotation is
-     * DISABLE_WORKER's decision, and the prober stops routing to a dead model on
-     * evidence anyway. The reconciler reports; it does not legislate.
+     * Still active, still carrying its evidence: absence from one listing is not enough
+     * to retire a model whose own probe says it works (a PARTIAL listing must not retire
+     * a working fleet). Failing orphans are retired — see compute-fleet-retirement.test.
      */
+    expect(next.retire).toEqual([]);
     expect(await store.list()).toEqual(before);
     expect((await store.get(gone))?.status).toBe("active");
   });
