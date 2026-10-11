@@ -305,7 +305,21 @@ export type ActionAutonomyContext = {
   readonly preAuthorizedSecretScopes?: readonly string[];
   /** The owner's standing instruction; may only tighten. */
   readonly ownerPolicy?: OwnerApprovalPolicy;
+  /**
+   * Under `always`: a human's approval of THIS goal is durably recorded (the conversational
+   * launch writes `approvedBy`). It covers the goal's read-only and isolated reversible work —
+   * what the human approved launching — and nothing more: privileged, secret, destructive,
+   * financial and irreversible tasks still each need their own approval. Without it, `always`
+   * parks every task. Never relaxes any other owner policy.
+   */
+  readonly ownerApprovedGoal?: boolean;
 };
+
+/** Classes a recorded human approval of the goal covers under `always`. */
+const COVERED_BY_GOAL_APPROVAL: ReadonlySet<ActionRiskClass> = new Set([
+  "READ_ONLY",
+  "REVERSIBLE_ISOLATED",
+]);
 
 export type ActionAutonomyVerdict = {
   readonly decision: ActionAutonomyDecision;
@@ -329,13 +343,17 @@ function secretsNarrowlyPreAuthorized(ctx: ActionAutonomyContext): boolean {
  *   PRIVILEGED           → GOVERNED
  *   SECRET_SENSITIVE     → APPROVAL_REQUIRED unless narrowly pre-authorized (then GOVERNED)
  *   DESTRUCTIVE / FINANCIAL / IRREVERSIBLE → APPROVAL_REQUIRED
- * and an owner policy of `always` makes every class APPROVAL_REQUIRED.
+ * and an owner policy of `always` makes every class APPROVAL_REQUIRED — except READ_ONLY and
+ * isolated REVERSIBLE work when a human's approval of the goal is recorded (`ownerApprovedGoal`).
  */
 export function decideActionAutonomy(
   riskClass: ActionRiskClass,
   ctx: ActionAutonomyContext = {},
 ): ActionAutonomyVerdict {
-  if (ctx.ownerPolicy === "always") {
+  if (
+    ctx.ownerPolicy === "always" &&
+    !(ctx.ownerApprovedGoal === true && COVERED_BY_GOAL_APPROVAL.has(riskClass))
+  ) {
     return { decision: "APPROVAL_REQUIRED", reason: "le propriétaire exige une approbation" };
   }
   switch (riskClass) {
@@ -399,7 +417,13 @@ export function decideTaskAutonomy(
     .filter((x) => x.v.decision !== "AUTONOMOUS")
     .map((x) => `${x.c}: ${x.v.reason}`);
 
-  if (ctx.ownerPolicy === "always") {
+  if (
+    ctx.ownerPolicy === "always" &&
+    !(
+      ctx.ownerApprovedGoal === true &&
+      classification.classes.every((c) => COVERED_BY_GOAL_APPROVAL.has(c))
+    )
+  ) {
     decisions.push("APPROVAL_REQUIRED");
   }
   if (classification.unclassified.length > 0) {
@@ -428,7 +452,7 @@ export function decideTaskAutonomy(
       `u=${[...classification.unclassified].sort().join(",")}`,
       `o=${[...classification.outsideAllowlist].sort().join(",")}`,
       `e=${[...classification.escalatedBy].sort().join(",")}`,
-      `p=${ctx.ownerPolicy ?? "if_risky"}`,
+      `p=${ctx.ownerPolicy ?? "if_risky"}${ctx.ownerPolicy === "always" && ctx.ownerApprovedGoal ? "+approved" : ""}`,
     ].join("|"),
   };
 }

@@ -53,7 +53,7 @@ const COMPOSED: CognitiveComposition = {
     currentState: true,
     realtime: false,
   },
-  executionRiskGate: { enforced: true, policyVersion: "test" },
+  executionRiskGate: () => ({ enforced: true, policyVersion: "test" }),
 };
 const handles: DatabaseHandle[] = [];
 

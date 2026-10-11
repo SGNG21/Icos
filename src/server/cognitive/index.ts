@@ -35,6 +35,7 @@ import {
   type RealtimeContextSource,
 } from "./realtime-context-source";
 import { memoryEntities } from "./schema";
+import { composedRiskGate } from "@/server/supervisor/risk-gate-registry";
 
 import {
   ContextAssembler,
@@ -128,15 +129,18 @@ export interface CognitiveRuntimeOptions {
   readonly staleTurnMs?: number;
   /** Governed web/search context (decision 0059). `null`/absent ⇒ not composed. */
   readonly realtime?: RealtimeContextSource | null;
-  /** The supervisor's pre-dispatch risk gate, as composed (P0 autonomy unblock). */
-  readonly executionRiskGate?: { enforced: boolean; policyVersion: string } | null;
+  /**
+   * The supervisor's pre-dispatch risk gate, read LIVE at probe time from what the dispatching
+   * supervisor actually composed (P0 autonomy unblock). Absent ⇒ never claimed.
+   */
+  readonly executionRiskGate?: (() => { enforced: boolean; policyVersion: string } | undefined) | null;
 }
 
 /** What THIS composition wired, so the self-model describes the runtime it is part of. */
 export interface CognitiveComposition {
   readonly resolverWired: boolean;
   readonly knowledgeSources: KnowledgeSourcesProbe;
-  readonly executionRiskGate?: { enforced: boolean; policyVersion: string };
+  readonly executionRiskGate?: () => { enforced: boolean; policyVersion: string } | undefined;
 }
 
 /** Horizon of scheduler liveness: the worker probe job completes every 30 s in production. */
@@ -251,9 +255,7 @@ export function runtimeProbesFor(
       return Number(row?.n ?? 0);
     },
     ...(composition ? { knowledgeSources: () => composition.knowledgeSources } : {}),
-    ...(composition?.executionRiskGate
-      ? { executionRiskGate: () => composition.executionRiskGate }
-      : {}),
+    ...(composition?.executionRiskGate ? { executionRiskGate: composition.executionRiskGate } : {}),
     speechToText: () =>
       Boolean(env.OMNIROUTE_BASE_URL && env.OMNIROUTE_API_KEY && env.ICOS_VOICE_STT_MODEL),
     textToSpeech: () =>
@@ -403,6 +405,7 @@ export function cognitiveRuntimeFor(container: Container): CognitiveRuntime | nu
       // unlike the launch recovery this function used to start (see the note above).
       missionStatus: container.mission ?? null,
       realtime: realtimeSourceFor(container),
+      executionRiskGate: () => composedRiskGate(container),
     });
     cache.set(container, runtime);
     const composition = runtimeCompositions.get(runtime);

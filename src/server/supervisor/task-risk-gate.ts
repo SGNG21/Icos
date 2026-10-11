@@ -7,11 +7,7 @@ import {
 } from "@/core/autonomy/execution-risk-policy";
 import type { Mission, MissionTask } from "@/core/mission/contracts";
 import type { MissionRepository } from "@/server/mission/ports";
-import type {
-  AuditRepository,
-  GoalRepository,
-  TaskRepository,
-} from "@/server/repositories/ports";
+import type { AuditRepository, GoalRepository, TaskRepository } from "@/server/repositories/ports";
 import { transitionTask } from "@/server/usecases/transition-task";
 
 /**
@@ -161,6 +157,13 @@ export class TaskRiskGate {
       verdict = decideTaskAutonomy(classification, {
         isolatedWorkspace: input.isolatedWorkspace,
         ownerPolicy: goal?.humanApprovalPolicy,
+        /*
+         * The conversational launch records WHO approved the goal. Under `always` that
+         * approval covers the goal's read-only and isolated reversible work only (see
+         * `ownerApprovedGoal`); without it, every task is parked.
+         */
+        ownerApprovedGoal:
+          typeof goal?.metadata?.approvedBy === "string" && goal.metadata.approvedBy.length > 0,
         /*
          * No deployment in this codebase grants unattended external changes or pre-authorizes
          * secret scopes yet, so both stay at their strict defaults here.

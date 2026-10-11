@@ -32,8 +32,16 @@ describe("decideActionAutonomy — the exhaustive table", () => {
     ["REVERSIBLE_ISOLATED", { isolatedWorkspace: false }, "APPROVAL_REQUIRED"],
     ["REVERSIBLE_ISOLATED", {}, "APPROVAL_REQUIRED"],
     ["REVERSIBLE_EXTERNAL", { externalPermitted: true, rollbackAvailable: true }, "AUTONOMOUS"],
-    ["REVERSIBLE_EXTERNAL", { externalPermitted: true, rollbackAvailable: false }, "APPROVAL_REQUIRED"],
-    ["REVERSIBLE_EXTERNAL", { externalPermitted: false, rollbackAvailable: true }, "APPROVAL_REQUIRED"],
+    [
+      "REVERSIBLE_EXTERNAL",
+      { externalPermitted: true, rollbackAvailable: false },
+      "APPROVAL_REQUIRED",
+    ],
+    [
+      "REVERSIBLE_EXTERNAL",
+      { externalPermitted: false, rollbackAvailable: true },
+      "APPROVAL_REQUIRED",
+    ],
     ["REVERSIBLE_EXTERNAL", {}, "APPROVAL_REQUIRED"],
     ["PRIVILEGED", {}, "GOVERNED"],
     ["PRIVILEGED", { isolatedWorkspace: true, externalPermitted: true }, "GOVERNED"],
@@ -61,7 +69,11 @@ describe("decideActionAutonomy — the exhaustive table", () => {
       "APPROVAL_REQUIRED",
     ],
     ["DESTRUCTIVE", {}, "APPROVAL_REQUIRED"],
-    ["DESTRUCTIVE", { isolatedWorkspace: true, externalPermitted: true, rollbackAvailable: true }, "APPROVAL_REQUIRED"],
+    [
+      "DESTRUCTIVE",
+      { isolatedWorkspace: true, externalPermitted: true, rollbackAvailable: true },
+      "APPROVAL_REQUIRED",
+    ],
     ["FINANCIAL", {}, "APPROVAL_REQUIRED"],
     ["FINANCIAL", { externalPermitted: true, rollbackAvailable: true }, "APPROVAL_REQUIRED"],
     ["IRREVERSIBLE", {}, "APPROVAL_REQUIRED"],
@@ -174,9 +186,9 @@ describe("classifyTaskRisk", () => {
   });
 
   it("records unclassified capabilities (fail closed)", () => {
-    expect(classifyTaskRisk({ capabilities: ["research", "quantum_teleport"] }).unclassified).toEqual([
-      "quantum_teleport",
-    ]);
+    expect(
+      classifyTaskRisk({ capabilities: ["research", "quantum_teleport"] }).unclassified,
+    ).toEqual(["quantum_teleport"]);
   });
 
   it("records capabilities outside the goal's allowlist, implicit code_write included", () => {
@@ -220,7 +232,15 @@ describe("decideTaskAutonomy", () => {
   });
 
   it("destructive, financial and irreversible capabilities need a human", () => {
-    for (const c of ["data_delete", "payment", "purchase", "deploy", "merge", "production_change", "customer_communication"]) {
+    for (const c of [
+      "data_delete",
+      "payment",
+      "purchase",
+      "deploy",
+      "merge",
+      "production_change",
+      "customer_communication",
+    ]) {
       expect(verdict({ capabilities: ["research", c] }).decision, c).toBe("APPROVAL_REQUIRED");
     }
   });
@@ -232,15 +252,21 @@ describe("decideTaskAutonomy", () => {
 
   it("the strictest decision over ALL classes wins, not the most severe class's", () => {
     /* PRIVILEGED is more severe than REVERSIBLE_EXTERNAL but is only GOVERNED. */
-    const c = { riskClass: "PRIVILEGED", classes: ["REVERSIBLE_EXTERNAL", "PRIVILEGED"], unclassified: [], outsideAllowlist: [], escalatedBy: [] } as const;
+    const c = {
+      riskClass: "PRIVILEGED",
+      classes: ["REVERSIBLE_EXTERNAL", "PRIVILEGED"],
+      unclassified: [],
+      outsideAllowlist: [],
+      escalatedBy: [],
+    } as const;
     expect(decideTaskAutonomy(c, {}).decision).toBe("APPROVAL_REQUIRED");
   });
 
   it("unknown, outside-allowlist, sensitive or owner-always all fail closed", () => {
     expect(verdict({ capabilities: ["quantum_teleport"] }).decision).toBe("APPROVAL_REQUIRED");
-    expect(verdict({ capabilities: ["research"], allowedCapabilities: ["planning"] }).decision).toBe(
-      "APPROVAL_REQUIRED",
-    );
+    expect(
+      verdict({ capabilities: ["research"], allowedCapabilities: ["planning"] }).decision,
+    ).toBe("APPROVAL_REQUIRED");
     expect(verdict({ capabilities: ["research"], riskLevel: "sensitive" }).decision).toBe(
       "APPROVAL_REQUIRED",
     );
@@ -300,6 +326,52 @@ describe("classifyMissionAutonomy is derived from the table, unchanged", () => {
   it("non-declarable classified capabilities stay POLICY_GATED at launch, as before", () => {
     expect(classifyMissionAutonomy({ capabilities: ["secret_access"] }).policyClass).toBe(
       "POLICY_GATED",
+    );
+  });
+});
+
+describe("owner `always` + a RECORDED human approval of the goal (P0 supervisor decision)", () => {
+  const approved = {
+    ownerPolicy: "always" as const,
+    ownerApprovedGoal: true,
+    isolatedWorkspace: true,
+  };
+
+  it("without a recorded approval, `always` parks every class — even read-only", () => {
+    for (const c of ACTION_RISK_CLASSES) {
+      expect(
+        decideActionAutonomy(c, { ownerPolicy: "always", isolatedWorkspace: true }).decision,
+        c,
+      ).toBe("APPROVAL_REQUIRED");
+    }
+  });
+
+  it("a recorded approval covers read-only and isolated reversible work, nothing more", () => {
+    expect(decideActionAutonomy("READ_ONLY", approved).decision).toBe("AUTONOMOUS");
+    expect(decideActionAutonomy("REVERSIBLE_ISOLATED", approved).decision).toBe("AUTONOMOUS");
+    expect(
+      decideActionAutonomy("REVERSIBLE_ISOLATED", { ...approved, isolatedWorkspace: false })
+        .decision,
+    ).toBe("APPROVAL_REQUIRED");
+    for (const c of [
+      "PRIVILEGED",
+      "SECRET_SENSITIVE",
+      "DESTRUCTIVE",
+      "FINANCIAL",
+      "IRREVERSIBLE",
+      "REVERSIBLE_EXTERNAL",
+    ] as const) {
+      expect(decideActionAutonomy(c, approved).decision, c).toBe("APPROVAL_REQUIRED");
+    }
+  });
+
+  it("a recorded approval never relaxes `if_risky` or `never` rules beyond their own table", () => {
+    expect(
+      decideActionAutonomy("PRIVILEGED", { ownerPolicy: "if_risky", ownerApprovedGoal: true })
+        .decision,
+    ).toBe("GOVERNED");
+    expect(decideActionAutonomy("DESTRUCTIVE", { ownerApprovedGoal: true }).decision).toBe(
+      "APPROVAL_REQUIRED",
     );
   });
 });

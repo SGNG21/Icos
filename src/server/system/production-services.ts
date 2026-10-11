@@ -4,6 +4,7 @@ import { AutonomyRecoverySweeper } from "@/server/autonomy/autonomy-recovery-swe
 import { AutonomyWakeupService } from "@/server/autonomy/autonomy-wakeup-service";
 import { createContainer as createApplicationContainer, type Container } from "@/server/container";
 import { SupervisorService } from "@/server/supervisor/supervisor-service";
+import { registerComposedRiskGate } from "@/server/supervisor/risk-gate-registry";
 import { TaskRiskGate } from "@/server/supervisor/task-risk-gate";
 import { CanonicalImprovementProposer } from "@/server/autonomy/canonical-improvement-proposer";
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
@@ -351,6 +352,8 @@ export function composeAutonomyRuntime(container: Container): {
       audit: container.audit,
     }),
   );
+  /* What the self-model reports is what THIS supervisor enforces — read from it, live. */
+  registerComposedRiskGate(container, () => supervisor.riskGate);
   const wakeup = new AutonomyWakeupService(
     container.mission,
     supervisor,
