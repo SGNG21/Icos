@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   createImprovementCandidate,
+  type ImprovementCategory,
   improvementCategorySchema,
   improvementPrioritySchema,
   type ImprovementBacklog,
@@ -76,6 +77,29 @@ export interface CanonicalImprovementProposerDeps {
   actor?: string;
 }
 
+/**
+ * MEASURED GROUNDING for one proposal (decision 0076).
+ *
+ * When a proposal answers a detected finding, the finding is a fact and the model's text is
+ * not. The evidence is therefore appended to the candidate's rationale BY THIS CODE — never
+ * left to the model to restate — so the durable candidate cites what was measured even if
+ * the model paraphrases it badly. A proposal that wanders off the finding (another file,
+ * another category) is a SHAPE failure, retried, and never reaches the backlog.
+ */
+export interface ProposalGrounding {
+  /** Deterministic evidence text, appended verbatim to the rationale. */
+  evidence: string;
+  /** The proposal MUST target exactly this repository-relative path. */
+  targetComponent?: string;
+  /** The proposal MUST use exactly this category. */
+  category?: ImprovementCategory;
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => path.posix.normalize(p.trim().replaceAll("\\", "/")).replace(/^\.\//, "");
+  return norm(a) === norm(b);
+}
+
 export class CanonicalImprovementProposer {
   /** Same measured reason as the planner's and the reviewer's: shape failures only. */
   private static readonly MAX_ATTEMPTS = 3;
@@ -96,13 +120,26 @@ export class CanonicalImprovementProposer {
    * Idempotent by construction — the candidate's id is a content hash, so re-proposing the
    * same improvement re-adds the same candidate rather than creating a second one.
    */
-  async propose(instruction: string, signal?: AbortSignal): Promise<ImprovementCandidate> {
+  async propose(
+    instruction: string,
+    signal?: AbortSignal,
+    grounding?: ProposalGrounding,
+  ): Promise<ImprovementCandidate> {
     if (!instruction.trim()) throw proposerError("EMPTY_INSTRUCTION");
 
     let lastShapeError: Error | undefined;
     for (let attempt = 1; attempt <= CanonicalImprovementProposer.MAX_ATTEMPTS; attempt += 1) {
       try {
         const proposal = await this.proposeOnce(instruction, signal);
+        if (grounding) {
+          if (grounding.targetComponent && !samePath(proposal.targetComponent, grounding.targetComponent)) {
+            throw proposerError("INVALID_OUTPUT");
+          }
+          if (grounding.category && proposal.category !== grounding.category) {
+            throw proposerError("INVALID_OUTPUT");
+          }
+          proposal.rationale = `${proposal.rationale}\n\nMeasured evidence: ${grounding.evidence.trim()}`;
+        }
         /*
          * The CANONICAL factory has its own rules — a repository-relative targetComponent,
          * for one — and a model breaks them occasionally. Its refusal is a SHAPE failure like
@@ -175,6 +212,10 @@ export class CanonicalImprovementProposer {
       if (error instanceof Error && error.message.startsWith(PROPOSER_ERROR_PREFIX)) throw error;
       if (signal?.aborted) throw proposerError("ABORTED");
       if (controller.signal.aborted) throw proposerError("TIMEOUT");
+      /* The spend seam refused BEFORE the call: say so, it is the actionable fact. */
+      if (error instanceof Error && error.name === "BudgetDeniedError") {
+        throw proposerError("BUDGET_DENIED");
+      }
       /* Opaque on purpose: a provider failure must carry no URL, key or stack. */
       throw proposerError("PROVIDER_FAILURE");
     } finally {

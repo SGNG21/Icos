@@ -242,6 +242,18 @@ const envSchema = z.object({
     .min(1, "ICOS_AUTONOMY_ALLOWED_PROVIDERS vide : ambigu, l'omettre pour « non restreint »")
     .optional(),
   ICOS_SELF_DEVELOPMENT: z.preprocess(emptyAsUndefined, z.enum(["enabled", "disabled"]).optional()),
+  /*
+   * DÉTECTION D'AUTO-DÉVELOPPEMENT (décision 0076), lue seulement si ICOS_SELF_DEVELOPMENT=enabled.
+   * Nombre maximal de propositions par jour UTC, compté durablement. Défaut 1 ; 0 coupe la
+   * détection (le minuteur continue d'avancer les candidats déjà au backlog).
+   */
+  ICOS_SELF_DEVELOPMENT_MAX_PROPOSALS_PER_DAY: optionalNonNegativeInteger,
+  /* Plafond JOURNALIER de tokens de la proposition (imputation `self-development=`). Défaut 50 000. */
+  ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS: optionalPositiveInteger,
+  /* Chemins du dépôt sondés par ESLint, relatifs, séparés par des virgules. Défaut `src`. */
+  ICOS_SELF_DEVELOPMENT_DETECTOR_PATHS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  /* Durée maximale de la sonde de qualité. Défaut 300 000 ms. */
+  ICOS_SELF_DEVELOPMENT_DETECTOR_TIMEOUT_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,
   TEMPORAL_ADDRESS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
   /*
