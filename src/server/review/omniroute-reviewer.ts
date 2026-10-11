@@ -141,6 +141,11 @@ export class OmniRouteReviewer implements ReviewerPort {
           /* The routed reviewer model when there is one; OmniRoute serves any model it lists. */
           model: input.reviewerCompute?.model ?? this.options.model,
           temperature: 0,
+          /*
+           * EXPLICIT (same rule as cognition.ts, dec9fcb): this caller reads ONE JSON body, and
+           * OmniRoute 3.8.49 answers text/event-stream when `stream` is absent.
+           */
+          stream: false,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: this.systemPrompt() },

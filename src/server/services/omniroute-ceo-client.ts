@@ -89,6 +89,11 @@ export class OmniRouteCeoClient {
         body: JSON.stringify({
           model,
           temperature: 0.2,
+          /*
+           * EXPLICIT (same rule as cognition.ts, dec9fcb): this caller reads ONE JSON body, and
+           * OmniRoute 3.8.49 answers text/event-stream when `stream` is absent.
+           */
+          stream: false,
           messages: [
             {
               role: "system",

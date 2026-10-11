@@ -442,6 +442,8 @@ describe("OmniRouteReviewer", () => {
       expect(fetchMock).toHaveBeenCalled();
       const callArgs = fetchMock.mock.calls[0];
       const requestBody = JSON.parse(callArgs[1].body);
+      /* It reads ONE JSON body: OmniRoute 3.8.49 streams when `stream` is absent. */
+      expect(requestBody.stream).toBe(false);
       const userPrompt = requestBody.messages[1].content;
       console.log("userPrompt length:", userPrompt.length);
       console.log("userPrompt first 500 chars:", userPrompt.slice(0, 500));

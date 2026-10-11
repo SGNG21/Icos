@@ -84,11 +84,14 @@ describe("OmniRouteAutonomousMissionPlanner", () => {
     const body = JSON.parse(String(request?.body)) as {
       model: string;
       temperature: number;
+      stream: unknown;
       response_format: { type: string };
       messages: Array<{ role: string; content: string }>;
     };
     expect(body.model).toBe("planner-model");
     expect(body.temperature).toBe(0);
+    /* It reads ONE JSON body: OmniRoute 3.8.49 streams when `stream` is absent. */
+    expect(body.stream).toBe(false);
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body.messages[0].role).toBe("system");
     expect(body.messages[1].content).toContain(mission.objective);
