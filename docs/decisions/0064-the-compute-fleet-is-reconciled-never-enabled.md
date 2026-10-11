@@ -143,6 +143,41 @@ distinct workers with distinct capacity pools, so a silent route substitution is
 undetectable here and one upstream account can be counted as two ceilings. Closing it
 needs the gateway to echo its route; a cleverer comparison cannot.
 
+## Amendment — governed retirement of provider-withdrawn workers (P0 autonomy unblock)
+
+Point 4 left an orphan `active` for ever, on the argument that its probe fails and the
+matcher stops routing to it. Routing was right; everything else was not: the row counted as
+fleet in every reader short of the full matcher (the self-model reported compute DEGRADED
+against rows that would never route again) and nothing ever cleaned it up. Point 2's
+objection — "it legislates" — was against a reconciler writing `status` *ungoverned*: no
+proof of ownership, no evidence, no audit. That is what this amendment supplies.
+
+1. **Only rows the bootstrap provably created** (`isFleetOwned`: id == `candidateWorkerId`
+   of its own `metadata.model` AND display name == `compute:<model>`). A manual worker is
+   never retired, whatever it is called.
+2. **Only on two independent signals**: absent from a non-EMPTY listing AND the row's own
+   evidence does not say healthy+available. A partial listing (point 5) therefore cannot
+   retire a working model. Retiring more than half of the active fleet-owned rows at once
+   is WITHHELD and reported (`WITHHELD_MASS_WITHDRAWAL`, logged at boot).
+3. **Through the canonical service, with an audit entry**: `retireFleetOrphan` is the
+   `DISABLE_WORKER` effect plus a `fleetRetirement` metadata marker in the same row write;
+   each one is followed by a `worker.fleet.retired` entry from the system actor
+   `compute-fleet-reconciler`. No audit sink, no status write. The control command bus is
+   not the path: it is the authority for HUMAN commands (session, freshness, password
+   re-auth) and has no system actor; the reconciler applies the same effects and audits them.
+4. **Reversible by the reconciler, and only its own retirements**: a marked row that is
+   listed again is reinstated through `reactivate()` (the `ENABLE_WORKER` effect: evidence
+   reset to never probed) and audited `worker.fleet.reinstated`. An operator-disabled row
+   carries no marker and stays untouched, exactly as point 4 requires.
+5. **A disabled worker keeps no health verdict.** `deactivate()` resets health/availability
+   to `unknown` (evidence `stale`, date kept), so neither a retirement nor a
+   `DISABLE_WORKER` leaves a `healthy` that nothing will ever refresh.
+
+Migration `0062_fleet_readiness_evidence` widens `audit_event_type_check` for the two events
+(and adds `workers.last_probe_error_class`). Known limit: an operator who re-enables a model
+the provider still does not list, and whose probe still fails, sees it retired again at the
+next reconciliation — with an audit entry each time.
+
 ## Consequences
 
 - A deployment can expose its real compute capacity without an operator remembering a command,
