@@ -363,6 +363,10 @@ describe("P0 autonomy unblock — operational states are measured, never declare
     expect(stateOf(rt({ callerWired: false }), "external.realtime")).toBe("NOT_CONNECTED");
     expect(stateOf(rt({ healthy: 0 }), "external.realtime")).toBe("NOT_CONNECTED");
     expect(stateOf(rt({ declared: 0 }), "external.realtime")).toBe("NOT_CONNECTED");
+    /* Review M1: unmeasurable health is not health; a grant on the other tool is no grant. */
+    expect(stateOf(rt({ healthy: undefined }), "external.realtime")).toBe("NOT_CONNECTED");
+    expect(stateOf(rt({ usable: 0 }), "external.realtime")).toBe("NOT_CONNECTED");
+    expect(stateOf(rt({ usable: 1 }), "external.realtime")).toBe("READY");
   });
 
   it("context.scope: READY with a populated directory, NOT_CONFIGURED when it is empty", () => {

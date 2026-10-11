@@ -93,6 +93,8 @@ export type RealtimeProbe = {
   readonly runtimeAgentGranted: boolean;
   /** A conversation turn can actually call it (the context source is composed). */
   readonly callerWired: boolean;
+  /** Healthy instances whose own tool is granted (search↔web-search, web↔web-fetch). */
+  readonly usable?: number | undefined;
 };
 
 /** Which context sources the assembler draws from, as composed in THIS process. */
@@ -329,7 +331,14 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
           ? "NOT_CONNECTED"
           : !realtime.runtimeAgentGranted
             ? "NOT_CONFIGURED"
-            : !realtime.callerWired || realtime.healthy === 0
+            : /*
+               * READY needs POSITIVE evidence: a healthy instance whose own tool is granted.
+               * An unmeasurable health (`undefined`) is not health, and a grant on the other
+               * tool does not make this one callable.
+               */
+              !realtime.callerWired ||
+                !(typeof realtime.healthy === "number" && realtime.healthy > 0) ||
+                (realtime.usable !== undefined && !(realtime.usable > 0))
               ? "NOT_CONNECTED"
               : "READY"
         : some(probe.realtimeConnectors)
@@ -342,9 +351,11 @@ export function capabilityFacts(probe: RuntimeCapabilityProbe): CapabilityFact[]
             ? `connecteur web/recherche déclaré (${realtime.declared}) mais aucune habilitation active du runtime : le propriétaire doit l'accorder (pnpm tools:grant-realtime)`
             : !realtime.callerWired
               ? "habilitation active mais aucune source de contexte ne l'appelle dans ce processus"
-              : realtime.healthy === 0
+              : !(typeof realtime.healthy === "number" && realtime.healthy > 0)
                 ? "connecteur web/recherche déclaré mais aucune preuve de santé valide"
-                : `recherche web gouvernée via la Tool Gateway (${realtime.declared} connecteur(s), habilitation active) ; résultats marqués non fiables, avec source, date de récupération et fraîcheur`
+                : realtime.usable !== undefined && !(realtime.usable > 0)
+                  ? "l'habilitation active ne couvre pas l'outil dont le connecteur est sain (recherche ↔ web-search, page ↔ web-fetch)"
+                  : `recherche web gouvernée via la Tool Gateway (${realtime.declared} connecteur(s), habilitation active) ; résultats marqués non fiables, avec source, date de récupération et fraîcheur`
         : some(probe.realtimeConnectors)
           ? `connecteur web/recherche gouverné disponible (${probe.realtimeConnectors})`
           : "aucun connecteur web ou de recherche installé : joindre un fournisseur de modèle n'est pas un accès au web",

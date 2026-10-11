@@ -5,6 +5,7 @@ import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
 import { DISPATCHABLE_STATUSES } from "@/core/tool-gateway/model";
 import type { Database } from "@/server/database/client";
 import { toolConnectorHealth, toolGrants } from "@/server/database/tool-gateway-schema";
+import { toolGatewayConfigSchema } from "@/server/tool-gateway/composition";
 import { declaredRealtimeInstanceIds } from "@/server/tool-gateway/realtime";
 import { REALTIME_TOOL_PERMISSIONS, RUNTIME_AGENT_ID } from "@/server/tool-gateway/runtime-agent";
 import { parseWorkerExecCommands } from "@/server/workers/execution/exec-command-config";
@@ -93,6 +94,33 @@ export interface RealtimeMeasurement {
   runtimeAgentGranted: boolean;
   /** A realtime context source was built in this process (see `markRealtimeCallerWired`). */
   callerWired: boolean;
+  /**
+   * Healthy instances whose OWN tool is granted: a `search` instance with a live
+   * `web-search:SEARCH` grant, a `web` instance with a live `web-fetch:READ` grant. A grant on
+   * one tool never makes the other usable. Undefined = unmeasurable.
+   */
+  usable: number | undefined;
+}
+
+/** Which grant makes an instance of each realtime connector callable. */
+const GRANT_FOR_CONNECTOR: Readonly<Record<string, { toolId: string; action: string }>> = {
+  search: { toolId: "web-search", action: "SEARCH" },
+  web: { toolId: "web-fetch", action: "READ" },
+};
+
+function realtimeConnectorOf(raw: string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!raw) return out;
+  try {
+    const parsed = toolGatewayConfigSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return out;
+    for (const i of parsed.data.instances) {
+      if (i.enabled && GRANT_FOR_CONNECTOR[i.connectorId]) out.set(i.instanceId, i.connectorId);
+    }
+  } catch {
+    /* unreadable → no pairing, fail closed */
+  }
+  return out;
 }
 
 /**
@@ -109,12 +137,15 @@ export async function measureRealtime(
   const callerWired = realtimeCallerWired;
   const ids = declaredRealtimeInstanceIds(env.ICOS_TOOL_GATEWAY_CONFIG);
   let healthy: number | undefined;
+  let healthyIds: string[] | undefined;
   if (ids === undefined) healthy = undefined;
-  else if (ids.length === 0) healthy = 0;
-  else {
+  else if (ids.length === 0) {
+    healthy = 0;
+    healthyIds = [];
+  } else {
     try {
-      const [row] = await db
-        .select({ n: sqlCount() })
+      const rows = await db
+        .select({ instanceId: toolConnectorHealth.instanceId })
         .from(toolConnectorHealth)
         .where(
           and(
@@ -128,13 +159,15 @@ export async function measureRealtime(
             ),
           ),
         );
-      healthy = Number(row?.n ?? 0);
+      healthyIds = [...new Set(rows.map((r) => r.instanceId))];
+      healthy = healthyIds.length;
     } catch {
       healthy = undefined;
     }
   }
 
   let runtimeAgentGranted = false;
+  let granted: { toolId: string; action: string }[] | undefined;
   try {
     const rows = await db
       .select({ toolId: toolGrants.toolId, action: toolGrants.action })
@@ -150,11 +183,24 @@ export async function measureRealtime(
     runtimeAgentGranted = rows.some((r) =>
       REALTIME_TOOL_PERMISSIONS.some((p) => p.toolId === r.toolId && p.action === r.action),
     );
+    granted = rows;
   } catch {
     runtimeAgentGranted = false;
   }
 
-  return { declared: ids?.length, healthy, runtimeAgentGranted, callerWired };
+  const connectorOf = realtimeConnectorOf(env.ICOS_TOOL_GATEWAY_CONFIG);
+  const usable =
+    healthyIds === undefined || granted === undefined
+      ? undefined
+      : healthyIds.filter((id) => {
+          const need = GRANT_FOR_CONNECTOR[connectorOf.get(id) ?? ""];
+          return (
+            need !== undefined &&
+            granted!.some((g) => g.toolId === need.toolId && g.action === need.action)
+          );
+        }).length;
+
+  return { declared: ids?.length, healthy, runtimeAgentGranted, callerWired, usable };
 }
 
 // ── executors ───────────────────────────────────────────────────────────────
