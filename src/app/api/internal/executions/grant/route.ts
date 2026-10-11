@@ -10,6 +10,7 @@ import { executionGrantBodySchema } from "@/server/http/execution-schemas";
 import { toErrorResponse } from "@/server/http/map-error";
 import { apiError, json, readJson } from "@/server/http/respond";
 import { decideWorkspaceAllocation } from "@/server/supervisor/workspace-allocation-policy";
+import { identityOf } from "@/server/workers/execution/worker-executor";
 
 /**
  * WHAT MAY THIS EXECUTION DO? Answered by ICOS, from durable state, never by the worker.
@@ -142,8 +143,20 @@ export async function POST(request: Request): Promise<Response> {
       throw error;
     }
 
+    /*
+     * THE ROUTED MODEL (decision 0054), from the registration of the worker this attempt was
+     * routed to — the one source. The activity substitutes it for `{{model}}`; without it a
+     * launch command that names the model is refused rather than run on the CLI's default.
+     */
+    const routedWorker = attempt.workerId
+      ? container.workerRegistry.getWorker(attempt.workerId)
+      : undefined;
+    const routedIdentity = routedWorker ? identityOf(routedWorker) : undefined;
+
     return json({
       grant: {
+        model: routedIdentity?.model ?? null,
+        provider: routedIdentity?.provider ?? null,
         taskId: attempt.taskId,
         missionId: attempt.missionId,
         missionTaskId: attempt.missionTaskId,

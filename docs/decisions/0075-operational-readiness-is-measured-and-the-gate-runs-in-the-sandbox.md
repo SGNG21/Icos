@@ -123,3 +123,46 @@ even bypassing the gatekeeper; database and role dropped on success and on failu
   data. The upstream hop is plain TCP to the test cluster (SSL requests are answered `N`).
 - macOS (Seatbelt) denies UNIX-socket connects with the network: the PostgreSQL step fails closed
   there. The production host is Linux/bubblewrap.
+
+## Amendment A — worker egress is metered (Claude Code via OmniRoute)
+
+**Problem.** A worker sandbox with `allowNetwork: true` reaches OmniRoute on loopback, and
+OmniRoute needs no client key there: a worker could spend unmetered, outside every goal cap.
+
+**Decision.** An executor listed in `METERED_EGRESS_EXECUTORS` (`activities.ts`; today
+`icos-claude-worker.mjs`) runs with the network **unshared** — no host network, no host loopback.
+Per execution, the activity starts `metered-egress-proxy.ts` on a UNIX socket in a directory bound
+**read-only** into the sandbox. The proxy serves only `POST /v1/messages` and `GET /v1/models`,
+drops worker headers outside a short allowlist (the worker's dummy credential never travels; the
+gateway key, if any, is added host-side), and forwards through the **existing** `meteredFetch`
+(`composeSpendMeters().mission`, same ledger, same reservations, same goal cap as ICOS's own calls)
+under the grant's `{goalId, missionId}`. A DENY never reaches the gateway; the worker gets HTTP 402
+`x-should-retry: false`, and the run fails `WORKER_BUDGET_DENIED`. `meteredFetch` now measures
+`/v1/messages` and reads Anthropic usage (JSON and SSE `message_start`/`message_delta`, cache
+tokens counted as input). The trusted adapter `bin/icos-claude-worker.mjs` bridges
+127.0.0.1:<ephemeral> → socket inside the sandbox, runs `claude -p` with a closed tool set, the
+routed `{{model}}` (now carried on the grant from the routed worker's registration), a per-run
+`--max-budget-usd`, `--setting-sources user` (worktree settings cannot add hooks or permissions),
+and never runs git.
+
+**Consequences.** Streaming to the worker is buffered (the meter reads the full SSE before the
+proxy answers): correct, not progressive. The token cap is the binding control (no price table);
+`--max-budget-usd` is advisory for non-Anthropic model names. The selection is keyed by basename
+because it only removes authority. hermes/codex keep `allowNetwork: true`.
+
+**Deployment** (Temporal worker env; no secret here — `OMNIROUTE_API_KEY` stays optional and is
+only ever read host-side). `<ICOS>` is the install checkout; the adapter is bound read-only from it.
+
+```sh
+ICOS_WORKER_EXECUTABLE_ALLOWLIST='["<ICOS>/bin/icos-claude-worker.mjs"]'
+ICOS_WORKER_EXEC_COMMANDS='{"binary":{"command":"<ICOS>/bin/icos-claude-worker.mjs","args":["--prompt","{{prompt}}","--model","{{model}}","--max-budget-usd","0.50","--timeout-ms","840000","--allow-bash","pnpm test*","--allow-bash","pnpm vitest run *"],"timeoutMs":900000}}'
+OMNIROUTE_BASE_URL=http://127.0.0.1:20129   # the proxy's upstream; never visible in the sandbox
+DATABASE_URL=…                              # the spend ledger + reservations (required: no DB, no run)
+ICOS_GOAL_MAX_TOTAL_TOKENS=500000           # the binding cap (default 500000)
+ICOS_MAX_OUTPUT_TOKENS=8192                 # per-call output ceiling written into each request
+TMPDIR=/tmp                                 # socket path must stay < 100 bytes
+```
+
+Compute workers (`compute-fleet.ts`, runtime `binary`, one per OmniRoute model) carry
+`metadata.model`; the grant now returns it, so `{{model}}` is the routed model, and a command
+naming `{{model}}` with no routed model is refused (`WORKER_EXEC_UNROUTABLE`).

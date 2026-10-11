@@ -33,6 +33,11 @@ export function readUsage(body: unknown): UsageOutcome {
 
   const raw = body.usage;
   if (!isPlainObject(raw)) return unmetered("USAGE_ABSENT");
+  if (raw.prompt_tokens === undefined && raw.completion_tokens === undefined) {
+    if (raw.input_tokens !== undefined || raw.output_tokens !== undefined) {
+      return anthropicUsage(raw);
+    }
+  }
 
   const prompt = tokenCount(raw.prompt_tokens);
   const completion = tokenCount(raw.completion_tokens);
@@ -62,4 +67,70 @@ export function readUsage(body: unknown): UsageOutcome {
     kind: "METERED",
     usage: { promptTokens: prompt, completionTokens: completion, totalTokens },
   };
+}
+
+/**
+ * LE FORMAT ANTHROPIC (`POST /v1/messages`), que sert aussi OmniRoute et que parle Claude Code.
+ *
+ * `{input_tokens, output_tokens, cache_creation_input_tokens?, cache_read_input_tokens?}` :
+ * les tokens de cache SONT des tokens d'entrée facturés, ils sont donc ajoutés à l'entrée —
+ * les ignorer sous-compterait exactement la partie qui grossit à chaque tour d'un agent.
+ * Mêmes règles qu'au-dessus : absent ≠ 0, invalide = UNMETERED.
+ */
+function anthropicUsage(raw: Record<string, unknown>): UsageOutcome {
+  const input = tokenCount(raw.input_tokens);
+  const output = tokenCount(raw.output_tokens);
+  const cacheCreation = tokenCount(raw.cache_creation_input_tokens);
+  const cacheRead = tokenCount(raw.cache_read_input_tokens);
+  if (input === undefined || output === undefined) return unmetered("USAGE_INCOMPLETE");
+  if (input === null || output === null || cacheCreation === null || cacheRead === null) {
+    return unmetered("USAGE_INVALID");
+  }
+  const prompt = input + (cacheCreation ?? 0) + (cacheRead ?? 0);
+  const totalTokens = prompt + output;
+  if (totalTokens > MAX_PLAUSIBLE_TOKENS_PER_CALL) return unmetered("USAGE_IMPLAUSIBLE");
+  return {
+    kind: "METERED",
+    usage: { promptTokens: prompt, completionTokens: output, totalTokens },
+  };
+}
+
+/**
+ * LA CONSOMMATION D'UN FLUX SSE ANTHROPIC, lu en entier.
+ *
+ * Un flux `/v1/messages` (stream: true) porte la consommation en deux morceaux :
+ *   - `message_start.message.usage` : l'entrée (et le cache), plus un `output_tokens` initial ;
+ *   - `message_delta.usage`         : `output_tokens` CUMULÉ, et parfois l'entrée réécrite.
+ * Le dernier mot sur chaque champ gagne. Un flux sans `message_start` lisible, ou sans aucun
+ * décompte de sortie, est UNMETERED — jamais 0.
+ *
+ * Rend la forme d'un corps non-streamé (`{model, usage}`) pour réutiliser {@link readUsage}.
+ */
+export function readAnthropicStream(text: string): { usage: UsageOutcome; model?: string } {
+  let model: string | undefined;
+  let started = false;
+  const merged: Record<string, unknown> = {};
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(event)) continue;
+    if (event.type === "message_start" && isPlainObject(event.message)) {
+      started = true;
+      if (typeof event.message.model === "string") model = event.message.model;
+      if (isPlainObject(event.message.usage)) Object.assign(merged, event.message.usage);
+    } else if (event.type === "message_delta" && isPlainObject(event.usage)) {
+      for (const [key, value] of Object.entries(event.usage)) {
+        if (value !== null && value !== undefined) merged[key] = value;
+      }
+    }
+  }
+  if (!started) return { usage: unmetered("USAGE_ABSENT") };
+  return { usage: readUsage({ usage: merged }), ...(model ? { model } : {}) };
 }

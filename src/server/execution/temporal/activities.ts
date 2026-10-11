@@ -23,6 +23,11 @@ import { join, resolve } from "node:path";
 
 import { brokerCredentials, seedHome } from "@/server/workers/process/credential-broker";
 import { createEphemeralHome } from "@/server/workers/process/ephemeral-home";
+import {
+  startMeteredEgressProxy,
+  type MeteredEgressProxy,
+} from "@/server/workers/metered-egress-proxy";
+import { workerEgressFetch, workerEgressUpstream } from "@/server/workers/metered-egress";
 import { runNonInteractive } from "@/server/workers/process/run-process";
 import {
   EXEC_PLACEHOLDERS,
@@ -74,6 +79,21 @@ const EXECUTOR_ACCESS: Readonly<
     programPaths: [`${HOME}/.local/bin`],
   },
 };
+
+/**
+ * EXECUTORS WHOSE MODEL TRAFFIC IS METERED BY ICOS (ADR 0075, "worker egress is metered").
+ *
+ * For these, the sandbox gets NO network at all — not the host's, not its loopback, so the
+ * gateway on 127.0.0.1 is unreachable — and the only way out is a UNIX socket served by
+ * `metered-egress-proxy.ts`, which forwards through `meteredFetch` under the task's goal.
+ *
+ * Keyed by the program's BASENAME, unlike {@link EXECUTOR_ACCESS}, and that is safe because
+ * of which direction it moves: membership here only ever REMOVES authority (host network)
+ * and adds none — no secret, no path beyond the adapter file itself and the socket directory.
+ * A different program that happened to share the name would run with less, never more.
+ * Which program may run at all stays the executable allowlist's decision.
+ */
+const METERED_EGRESS_EXECUTORS: ReadonlySet<string> = new Set(["icos-claude-worker.mjs"]);
 
 /**
  * THE WORKSPACE THE TASK ACTUALLY RUNS AGAINST.
@@ -192,6 +212,13 @@ export interface ExecutionGrant {
    * task's goal. Absent only from a server that predates the carriage.
    */
   readonly scope?: ExecutionScope | null;
+  /**
+   * THE ROUTED MODEL (decision 0054), from the registration of the worker ICOS routed this
+   * attempt to. Substituted for `{{model}}` / `{{provider}}`; absent from a server that
+   * predates the carriage, and absent for a worker that declares none.
+   */
+  readonly model?: string | null;
+  readonly provider?: string | null;
 }
 
 /**
@@ -482,6 +509,36 @@ export async function runGovernedWorker(
     );
   }
 
+  /*
+   * A launch command that asks for the routed model must GET one: an empty `--model` would
+   * let the CLI run its own default — a routing decision that routed nothing. Refused before
+   * anything is provisioned, exactly as the in-process executor refuses it.
+   */
+  const routed = { model: grant.model ?? undefined, provider: grant.provider ?? undefined };
+  const unroutable = (["model", "provider"] as const).filter(
+    (key) => declared.args.some((arg) => arg.includes(EXEC_PLACEHOLDERS[key])) && !routed[key],
+  );
+  if (unroutable.length > 0) {
+    throw new Error(
+      `WORKER_EXEC_UNROUTABLE: the launch command needs ${unroutable.join(", ")} and the routed worker declares none`,
+    );
+  }
+
+  /*
+   * METERED EGRESS: the adapter must be an absolute, existing file, because it is bound
+   * read-only into a sandbox that has nothing else of the host's filesystem.
+   */
+  const meteredEgress = METERED_EGRESS_EXECUTORS.has(executorName);
+  const adapterPath = meteredEgress
+    ? await realpath(resolve(declared.command)).then(
+        /* The DECLARED path: the sandbox mounts its real target there (and at the real path). */
+        () => resolve(declared.command),
+        () => {
+          throw new Error("WORKER_EGRESS_ADAPTER_MISSING: the declared adapter does not exist");
+        },
+      )
+    : null;
+
   const scratch = await mkdtemp(join(tmpdir(), "icos-worker-"));
   /*
    * A WRITER RUNS IN THE WORKTREE ICOS ALLOCATED IT, and a reader never writes to the
@@ -503,7 +560,27 @@ export async function runGovernedWorker(
    */
   const authority = worktree ? watchAuthority(ctx, grant, authorityCheckIntervalMs()) : null;
   const home = await createEphemeralHome();
+  let egress: MeteredEgressProxy | null = null;
+  let egressDir: string | null = null;
   try {
+    if (meteredEgress) {
+      /*
+       * One proxy per execution, its socket in a directory of its own that the sandbox sees
+       * READ-ONLY. Attribution is the grant's — ICOS's durable answer — never the env's.
+       */
+      const upstream = workerEgressUpstream();
+      egressDir = await mkdtemp(join(tmpdir(), "icos-egress-"));
+      egress = await startMeteredEgressProxy({
+        socketPath: join(egressDir, "gateway.sock"),
+        upstreamBaseUrl: upstream.baseUrl,
+        ...(upstream.apiKey ? { upstreamApiKey: upstream.apiKey } : {}),
+        fetch: workerEgressFetch(),
+        attribution: {
+          missionId: grant.missionId,
+          ...(grant.goalId ? { goalId: grant.goalId } : {}),
+        },
+      });
+    }
     const capabilities = access.credentials.map((relativePath) => ({
       /* The task owns the capability: task A's grant cannot be replayed for task B. */
       id: `${grant.taskId}:${executorName}:${relativePath}`,
@@ -546,7 +623,11 @@ export async function runGovernedWorker(
         .split(EXEC_PLACEHOLDERS.prompt)
         .join(prompt)
         .split(EXEC_PLACEHOLDERS.workspace)
-        .join(workspace),
+        .join(workspace)
+        .split(EXEC_PLACEHOLDERS.model)
+        .join(routed.model ?? "")
+        .split(EXEC_PLACEHOLDERS.provider)
+        .join(routed.provider ?? ""),
     );
     const run = await runNonInteractive({
       command: declared.command,
@@ -603,6 +684,7 @@ export async function runGovernedWorker(
               ICOS_WORKSPACE_BASE_COMMIT: grant.workspace.baseCommit,
             }
           : {}),
+        ...(egress ? { ICOS_EGRESS_SOCKET: egress.socketPath } : {}),
         ...broker.env,
       },
       timeoutMs: enforcedTimeoutMs,
@@ -645,13 +727,20 @@ export async function runGovernedWorker(
            * narrower grant win (ADR 0072, phase 0). A narrowing, never a widening.
            */
           ...(gitPointer ? [gitPointer] : []),
+          /* The adapter itself and the egress socket's directory: read-only, nothing more. */
+          ...(adapterPath ? [adapterPath] : []),
+          ...(egressDir ? [egressDir] : []),
         ],
         /*
          * A remote provider needs the network, so it is granted. Neither Seatbelt nor
          * Bubblewrap can filter by hostname, so this is all-or-nothing and the audit says
          * so rather than implying a per-endpoint policy that does not exist.
          */
-        allowNetwork: true,
+        /*
+         * EXCEPT for a metered-egress executor: no network namespace of the host's at all.
+         * Its one road out is the socket above, and every call on it is metered.
+         */
+        allowNetwork: !meteredEgress,
       },
     });
 
@@ -688,6 +777,15 @@ export async function runGovernedWorker(
         "WORKER_SANDBOX_UNAVAILABLE: no confinement mechanism on this platform; " +
           "a governed run is refused rather than executed unconfined",
       );
+    }
+
+    /*
+     * A BUDGET REFUSAL ENDS THE RUN AS A FAILURE, whatever the worker printed: the work was
+     * cut off by ICOS's cap, so it is incomplete by construction, and the refusal is the
+     * cause the ledger and the reviewer must see.
+     */
+    if (egress && egress.stats.denied > 0) {
+      throw new Error(`WORKER_BUDGET_DENIED: ${egress.stats.lastDenial ?? "denied"}`);
     }
 
     if (run.timedOut) {
@@ -759,6 +857,8 @@ export async function runGovernedWorker(
     };
   } finally {
     authority?.stop();
+    await egress?.close().catch(() => undefined);
+    if (egressDir) await rm(egressDir, { recursive: true, force: true }).catch(() => undefined);
     await home.dispose();
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
   }

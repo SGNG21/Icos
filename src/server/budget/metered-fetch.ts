@@ -10,7 +10,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   type BoundedRequest,
 } from "@/core/budget/request-bounds";
-import { readUsage } from "@/core/budget/usage";
+import { readAnthropicStream, readUsage } from "@/core/budget/usage";
 
 import type { SpendLedgerPort, SpendReservation, SpendReservationPort } from "./ports";
 
@@ -90,8 +90,14 @@ export interface MeteredFetchDeps {
 
 const JSON_CONTENT_TYPE = /^application\/(\w+\+)?json\b/i;
 
-/** Le seul chemin facturé : les cinq appelants postent tous là. */
-const COMPLETION_PATH = /\/v1\/chat\/completions\/?$/;
+/**
+ * Les chemins facturés : les cinq appelants OpenAI-compatibles postent sur le premier ; le
+ * second est l'API Anthropic (`/v1/messages`) que la sortie mesurée des workers (Claude Code
+ * via OmniRoute, voir `workers/metered-egress-proxy.ts`) fait passer par ce même décorateur.
+ */
+const COMPLETION_PATH = /\/v1\/(chat\/completions|messages)\/?$/;
+const ANTHROPIC_PATH = /\/v1\/messages\/?$/;
+const EVENT_STREAM = /^text\/event-stream\b/i;
 
 /**
  * Seule une COMPLÉTION est une dépense. Le même fetch injecté sert aussi à des requêtes qui
@@ -102,14 +108,18 @@ const COMPLETION_PATH = /\/v1\/chat\/completions\/?$/;
  * On décide d'après la REQUÊTE, et d'après le CHEMIN : `input` peut être une chaîne, une URL
  * ou un `Request`, et deviner d'après le corps serait bien moins fiable.
  */
-function isCompletionRequest(input: RequestInfo | URL): boolean {
+function requestPath(input: RequestInfo | URL): string {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   try {
-    return COMPLETION_PATH.test(new URL(href).pathname);
+    return new URL(href).pathname;
   } catch {
     /* URL relative : on teste le chemin brut, sans requête ni fragment. */
-    return COMPLETION_PATH.test(href.split(/[?#]/, 1)[0] ?? "");
+    return href.split(/[?#]/, 1)[0] ?? "";
   }
+}
+
+function isCompletionRequest(input: RequestInfo | URL): boolean {
+  return COMPLETION_PATH.test(requestPath(input));
 }
 
 /** Le modèle demandé, quand le corps de requête est une chaîne JSON (les cinq appelants). */
@@ -137,7 +147,10 @@ function requestedModel(init: RequestInit | undefined): string | undefined {
  * cloné : lire un flux SSE jusqu'au bout attendrait la fin de la complétion et casserait
  * le streaming de l'appelant.
  */
-async function observe(response: Response): Promise<{ usage: UsageOutcome; model?: string }> {
+async function observe(
+  response: Response,
+  input: RequestInfo | URL,
+): Promise<{ usage: UsageOutcome; model?: string }> {
   /*
    * LA MESURE NE DOIT JAMAIS CASSER L'APPEL. `meteredFetch` est typé `typeof fetch`, donc
    * un `inner` conforme rend un vrai `Response` — mais un adaptateur de test, un proxy ou
@@ -155,6 +168,24 @@ async function observe(response: Response): Promise<{ usage: UsageOutcome; model
     typeof (headers as Headers | undefined)?.get === "function"
       ? (headers as Headers).get("content-type")
       : null;
+  /*
+   * UN FLUX ANTHROPIC EST LU EN ENTIER, et c'est délibéré. Sa consommation n'arrive qu'à la
+   * fin (`message_delta`), et l'enregistrer UNMETERED condamnerait la fenêtre du goal dès le
+   * premier tour d'un agent. Le prix : l'appelant reçoit le flux d'un bloc, une fois la
+   * complétion finie — la complétion reste correcte, seule la progressivité est perdue.
+   * Limité au chemin Anthropic : les appelants OpenAI-compatibles gardent leur comportement.
+   */
+  if (
+    typeof response.clone === "function" &&
+    EVENT_STREAM.test(readHeader ?? "") &&
+    ANTHROPIC_PATH.test(requestPath(input))
+  ) {
+    try {
+      return readAnthropicStream(await response.clone().text());
+    } catch {
+      return { usage: { kind: UNMETERED, reason: "NON_JSON_BODY" } };
+    }
+  }
   if (typeof response.clone !== "function" || !JSON_CONTENT_TYPE.test(readHeader ?? "")) {
     return { usage: { kind: UNMETERED, reason: "NON_JSON_BODY" } };
   }
@@ -241,7 +272,7 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
      */
     if (!isCompletionRequest(input)) return response;
 
-    const observed = await observe(response);
+    const observed = await observe(response, input);
     try {
       await deps.ledger.record({
         modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
@@ -321,7 +352,7 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
       return response;
     }
 
-    const observed = await observe(response);
+    const observed = await observe(response, input);
     try {
       /*
        * Le solde n'accepte AUCUNE imputation (verrou C2) : celle du journal est relue depuis
