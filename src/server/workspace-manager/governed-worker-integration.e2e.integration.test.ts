@@ -9,6 +9,8 @@ import { IntegrationApplier } from "./integration-applier";
 import { WorkspaceExecutionCoordinator } from "./workspace-execution-coordinator";
 import { FakeProvisioner, makeRepoFixture, type RepoFixture } from "./test-fixtures";
 import { ExternalWorkerTaskExecutionDispatcher } from "@/server/execution/external-worker-task-execution-dispatcher";
+import { finalizeSuccessfulWorkerExecution } from "@/server/usecases/finalize-successful-worker-execution";
+import { commitWorkerChanges } from "@/server/workspace-manager/git-authority";
 import { RuntimeDispatchRouter } from "@/server/execution/runtime-dispatch-router";
 import { CommandWorkerExecutor } from "@/server/workers/execution/command-worker-executor";
 import {
@@ -84,14 +86,21 @@ let coordinator: WorkspaceExecutionCoordinator;
 /** The gate's external commands always pass; its decision logic is untouched. */
 const passingRunner: CommandRunner = { run: async () => ({ code: 0, output: "" }) };
 
-/* A REAL worker: it writes a file in its workspace and commits it. */
+/*
+ * A REAL worker: it writes a file in its workspace. It does NOT commit — under ADR 0073 it
+ * holds no Git authority at all, and ICOS materializes the tree it leaves.
+ */
 const WORKER_SCRIPT = `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   fs.mkdirSync('src/e2e', { recursive: true });
   fs.writeFileSync('src/e2e/feature.txt', 'built by ' + process.env.ICOS_TASK_ID + '\\n');
-  execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-  execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','worker feature'], { stdio: 'ignore' });
+  /*
+   * NO git HERE (ADR 0073). A confined worker holds no Git authority: its gitdir lives in
+   * the canonical .git directory, which the sandbox never grants. It leaves its change as
+   * FILES and ICOS — outside the sandbox, after revalidating success, ownership, the lease
+   * and the fencing token — materializes the commit through the hardened Git authority.
+   * (No backticks in here: this comment lives inside a template literal.)
+   */
   process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
     status: 'succeeded', summary: 'wrote src/e2e/feature.txt', testsRun: ['unit'],
   }) + process.env.ICOS_RESULT_SENTINEL_END);
@@ -150,6 +159,23 @@ function buildRuntime() {
   };
 
   const external = new ExternalWorkerTaskExecutionDispatcher({
+    /*
+     * THE TRUSTED MATERIALIZATION (ADR 0073), the same function the container gives the
+     * production dispatcher. The worker holds no Git authority and commits nothing; ICOS
+     * captures the tree it leaves, under the lease and the fencing token, and records the
+     * commit the review and the gate then judge.
+     */
+    finalizeGovernedWork: (work) =>
+      finalizeSuccessfulWorkerExecution(
+        {
+          workspaces: manager,
+          gitFor: (repoDir) => new Git(repoDir),
+          materialize: commitWorkerChanges,
+          /* The repository now travels on the workspace row, bound at allocation. */
+          tasks: { getById: async () => ({ id: TASK_ID, title: `Add ${TASK_ID} feature`, riskClass: "reversible" as const, allowedFileScope: ["src/e2e/**"] }) },
+        },
+        work,
+      ),
     executor: new WorkerExecutor({
       binary: new CommandWorkerExecutor(
         createWorkerExecResolver(

@@ -139,12 +139,10 @@ const plan = (writerScope: string) =>
 /* Writes only inside a governed worktree; a read-only task runs elsewhere and changes nothing. */
 const workerScript = () => `
   const fs = require('fs');
-  const { execFileSync } = require('child_process');
   if (process.cwd().startsWith(${JSON.stringify(worktreeRoot)})) {
     fs.mkdirSync('docs/sd', { recursive: true });
     fs.writeFileSync('docs/sd/note.md', '# Note\\n' + process.env.ICOS_WORKFLOW_ID + '\\n');
-    execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
-    execFileSync('git', ['-c','user.email=w@w','-c','user.name=w','commit','-q','-m','sd note'], { stdio: 'ignore' });
+    /* NO git: ICOS materializes what the worker leaves (ADR 0073). */
   }
   process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
     status: 'succeeded', summary: 'done', testsRun: ['unit'],

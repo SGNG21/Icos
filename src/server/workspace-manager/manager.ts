@@ -85,6 +85,22 @@ export class WorkspaceManager {
     return path.join(this.root, ".archive");
   }
 
+  /**
+   * The canonical repository, and the Git port bound to it.
+   *
+   * Read-only, and exposed for ONE caller: the trusted finalizer, which must capture a
+   * worker's tree through the same hardened authority this manager already uses rather than
+   * constructing a second one. Handing out the PORT is narrower than handing out a repository
+   * path a caller could then drive with its own git.
+   */
+  get masterRepoPath(): string {
+    return this.masterRepo;
+  }
+
+  get gitPort(): Git {
+    return this.git;
+  }
+
   async list(): Promise<Workspace[]> {
     return this.registry.read();
   }
@@ -211,6 +227,12 @@ export class WorkspaceManager {
         updatedAt: stamp,
         releasedAt: null,
         sourceCommit: null,
+        /*
+         * BOUND HERE, by the allocator, from the repository THIS manager owns — never from a
+         * worker, a grant, a worktree pointer or ambient state read later. This is the only
+         * moment at which the binding can be made from trusted knowledge alone.
+         */
+        canonicalRepo: this.masterRepo,
       };
       state.workspaces.push(workspace);
       return workspace;

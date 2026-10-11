@@ -148,6 +148,34 @@ describe("PostgreSQL workspace fencing proofs", () => {
     await registry.close();
   });
 
+  it("CARRIES THE CANONICAL REPOSITORY THROUGH PERSISTENCE: a restart reads the binding", async () => {
+    /*
+     * The binding only works if it OUTLIVES the process that made it. A fresh registry over
+     * the same database is what a restart looks like, and the capture must find the same
+     * repository there — never the ambient one, which a new process may read differently.
+     */
+    const { manager: wm, registry } = await manager();
+    const requested = await wm.request({
+      slug: "repo_binding",
+      workerId: "worker-rb",
+      manual: true,
+      integrationTarget: "integration/phase-7",
+      fileScope: { owns: ["src/repo_binding/**"], shared: [], forbidden: [] },
+    });
+    expect(requested.canonicalRepo).not.toBeNull();
+
+    const reloaded = new PostgresWorkspaceRegistry(DATABASE_URL);
+    await reloaded.initialize();
+    try {
+      const rows = await reloaded.read();
+      const row = rows.find((w) => w.workspaceId === requested.workspaceId);
+      expect(row?.canonicalRepo).toBe(requested.canonicalRepo);
+    } finally {
+      await reloaded.close();
+      await registry.close();
+    }
+  });
+
   it("allows only one concurrent lease contender", async () => {
     const { manager: first, registry: registryA } = await manager();
     const { manager: second, registry: registryB } = await manager();

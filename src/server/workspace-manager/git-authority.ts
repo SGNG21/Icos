@@ -503,6 +503,37 @@ export async function preserveWorktreeChanges(
 }
 
 /**
+ * ENREGISTRE le travail d'un worker confiné sur la branche de SON workspace (ADR 0073).
+ *
+ * Un worker confiné ne peut pas commiter : son gitdir vit dans le `.git` canonique, monté
+ * en lecture seule — c'est une propriété prouvée du bac à sable, pas une panne. C'est donc
+ * ICOS qui fige l'arbre qu'il a laissé, par le même chemin durci que la préservation.
+ *
+ * La branche est vérifiée AVANT d'indexer : le HEAD lu est celui du gitdir DÉRIVÉ, que le
+ * worker ne peut pas écrire, et il doit nommer exactement la branche que le workspace a
+ * reçue. Une autre branche, ou un HEAD détaché, est un refus — jamais un commit ailleurs.
+ * Rien à enregistrer n'est pas une erreur : ce qui est jugé ensuite, c'est l'arbre réel.
+ */
+export async function commitWorkerChanges(
+  repoDir: string,
+  worktree: string,
+  expectedBranch: string,
+  message: string,
+): Promise<void> {
+  const head = await runHardened(["rev-parse", "--symbolic-full-name", "HEAD"], {
+    repoDir,
+    worktree,
+  });
+  if (head.stdout.trim() !== `refs/heads/${expectedBranch}`) {
+    throw new WorkspaceError(
+      "GIT_WORKTREE_BRANCH_MISMATCH",
+      `le worktree n'est pas sur la branche accordée (${expectedBranch})`,
+    );
+  }
+  await preserveWorktreeChanges(repoDir, worktree, message);
+}
+
+/**
  * REFUSE UN DÉPÔT IMBRIQUÉ avant toute écriture d'index (ADR 0072, phase 0).
  *
  * Mesuré : face à un gitlink SUIVI, `git add -A` lance un `git status` DANS le sous-module

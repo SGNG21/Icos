@@ -53,6 +53,40 @@ describe("request", () => {
       baseCommit: fx.git(fx.master, "rev-parse", "integration/phase-7"),
     });
     expect(w.createdAt).toBe("2026-09-19T10:00:00.000Z");
+    /*
+     * ET LE DÉPÔT CANONIQUE EST LIÉ ICI (ADR 0073). L'allocateur le connaît et aucun worker
+     * n'existe encore ; la matérialisation s'en servira au lieu de consulter un état de
+     * processus qui peut avoir changé entre la fin de l'exécution et la capture.
+     */
+    expect(w.canonicalRepo).toBe(fx.master);
+  });
+
+  it("LIE LE DÉPÔT CANONIQUE DE CE MANAGER, jamais celui d'un autre", async () => {
+    /*
+     * Deux managers, deux dépôts, dans un seul processus : c'est la topologie qui a fait
+     * échouer 145 captures quand le dépôt venait de l'environnement. Chaque workspace porte
+     * le sien, donc aucun croisement n'est possible.
+     */
+    const other = makeRepoFixture();
+    try {
+      const elsewhere = new WorkspaceManager({
+        git: new Git(other.master),
+        registry: new InMemoryWorkspaceRegistry(),
+        provisioner: new FakeProvisioner(),
+        worktreeRoot: other.root,
+        masterRepo: other.master,
+        now: () => new Date(clock),
+      });
+
+      const mine = await manager.request(input("mine"));
+      const theirs = await elsewhere.request(input("theirs"));
+
+      expect(mine.canonicalRepo).toBe(fx.master);
+      expect(theirs.canonicalRepo).toBe(other.master);
+      expect(mine.canonicalRepo).not.toBe(theirs.canonicalRepo);
+    } finally {
+      other.cleanup();
+    }
   });
 
   it("refuse une collision de chemin (workspace actif, ou dossier existant)", async () => {
@@ -124,15 +158,15 @@ describe("create", () => {
     expect(w.status).toBe("ready");
     expect(existsSync(path.join(fx.root, "7a", "src/a.ts"))).toBe(true);
     /*
-     * DÉTACHÉ, et la branche existe quand même. Un HEAD attaché ferait verrouiller
-     * `refs/heads/ws/7a` dans le dépôt canonique, que le bac à sable du writer refuse — donc
-     * aucune écriture gouvernée ne pouvait aboutir sous confinement. Le worker commite
-     * détaché et rend un SHA ; c'est le coordinateur qui nomme ensuite la branche, après
-     * vérification (`nameGovernedBranch`).
+     * ATTACHÉ à sa propre branche (ADR 0073). Un design précédent allouait DÉTACHÉ parce que
+     * le worker committait lui-même et qu'un HEAD attaché lui aurait fait verrouiller
+     * `refs/heads/ws/7a` dans le dépôt canonique. ADR 0073 retire la prémisse : le worker ne
+     * reçoit aucun gitdir, donc aucune référence ne lui est atteignable quel que soit HEAD.
+     * C'est l'autorité de confiance qui commite, et la branche avance avec son commit.
      */
-    expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "--abbrev-ref", "HEAD")).toBe("ws/7a");
     expect(fx.git(path.join(fx.root, "7a"), "rev-parse", "HEAD")).toBe(w.baseCommit);
-    /* La branche est réservée dès l'allocation : deux exécutions ne partagent jamais un nom. */
+    /* Le nom est pris dès l'allocation : deux exécutions ne partagent jamais une branche. */
     expect(fx.git(fx.master, "rev-parse", "ws/7a")).toBe(w.baseCommit);
     expect(db.databases.has("icos_test_7a")).toBe(true);
     await expect(manager.create(workspaceId)).rejects.toThrow(/TRANSITION_FORBIDDEN/);
