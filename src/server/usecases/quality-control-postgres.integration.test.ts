@@ -131,6 +131,20 @@ describe("PostgreSQL durable quality control", () => {
     expect((await f.qualityJobs.getByWorkflowId(f.workflowId))?.state).toBe("action_applied");
   });
 
+  it("an APPROVE on an execution whose task was cancelled meanwhile never revives it", async () => {
+    const f = await seed("APPROVE");
+    expect(await f.qualityJobs.recoverUnregistered(f.mission.id)).toBe(1);
+    /* An authority (a self-development policy denial) stops the mission while it is in review. */
+    await container.mission.updateMissionTaskStatus(f.mission.id, f.missionTask.id, "cancelled");
+
+    await f.service.recover(f.mission.id);
+
+    expect((await container.mission.getMissionTaskById(f.missionTask.id))?.status).toBe(
+      "cancelled",
+    );
+    expect((await container.tasks.getById(f.missionTask.taskId))?.status).not.toBe("succeeded");
+  });
+
   it("resumes decision-before-action once after an expired claim", async () => {
     const f = await seed("REQUEST_CHANGES");
     await f.service.registerExecution({

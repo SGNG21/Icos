@@ -23,7 +23,20 @@ const fresh = async () => {
   return new PostgresScheduledJobRepository(handle.db);
 };
 
-describeScheduledJobRepositoryContract("PostgreSQL", fresh);
+/**
+ * Make `ms` of DATABASE time pass for the scheduler: every stored instant the
+ * repository compares with `now()` moves `ms` into the past. Equivalent to the
+ * database clock advancing, without sleeping against a wall-clock lease.
+ */
+const elapse = async (ms: number) => {
+  await handle.db.execute(sql`
+    UPDATE scheduled_jobs
+       SET lease_until = lease_until - (${ms} * interval '1 millisecond'),
+           next_run_at = next_run_at - (${ms} * interval '1 millisecond'),
+           deadline_at = deadline_at - (${ms} * interval '1 millisecond')`);
+};
+
+describeScheduledJobRepositoryContract("PostgreSQL", fresh, elapse);
 
 describe("PostgreSQL scheduled jobs — durability across process restarts", () => {
   const base = {
@@ -38,14 +51,14 @@ describe("PostgreSQL scheduled jobs — durability across process restarts", () 
     await handle.db.execute(sql.raw("TRUNCATE TABLE scheduled_jobs"));
     const first = new PostgresScheduledJobRepository(handle.db);
     const { job } = await first.enqueue(base);
-    await first.claimDue("crashed-process", 50);
+    await first.claimDue("crashed-process", 60_000);
 
     // "Restart": brand new connection pool and repository, same database.
     const other = createDatabase(TEST_DATABASE_URL, { max: 2 });
     try {
       const second = new PostgresScheduledJobRepository(other.db);
       expect(await second.claimDue("restarted", 1_000)).toBeNull(); // lease not expired yet
-      await new Promise((r) => setTimeout(r, 100));
+      await elapse(61_000); // the crashed owner never renews: its lease runs out
       const reclaimed = await second.claimDue("restarted", 60_000);
       expect(reclaimed).toMatchObject({ id: job.id, attemptCount: 2, leaseOwner: "restarted" });
       expect(await second.complete(job.id, "restarted")).toBe(true);

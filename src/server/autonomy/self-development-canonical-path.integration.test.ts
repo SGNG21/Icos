@@ -10,10 +10,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { createImprovementCandidate } from "@/core/autonomy/improvement-backlog";
 import { loadEnv } from "@/config/env";
-import { buildPostgresContainer, type Container } from "@/server/container";
+import { buildPostgresContainer, resetContainer, type Container } from "@/server/container";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 import { workflowIdForAttempt } from "@/server/execution/workflow-id";
 import { composeAutonomyRuntime } from "@/server/system/production-services";
+import {
+  startTemporalRuntime,
+  uniqueTaskQueue,
+  type TemporalRuntime,
+} from "@/test/temporal-runtime-harness";
 
 /**
  * SELF_DEVELOPMENT_GATE_PATH_DIVERGENCE — closed by decision 0052.
@@ -32,6 +37,26 @@ import { composeAutonomyRuntime } from "@/server/system/production-services";
 const DATABASE_URL = TEST_DATABASE_URL;
 const TARGET = "integration/phase-7";
 const WRITE_SCOPE = "docs/sd/**";
+
+/*
+ * THE DURABLE RUNTIME. Every mission task is DURABLE_MISSION_TASK and is orchestrated by
+ * Temporal and by nothing else (ADR 0067). This file used to start no worker and configure
+ * no queue or server, so every dispatch was refused (no consumer on the default queue /
+ * server) and `advance()` waited out the whole case timeout. Wired exactly like the core3
+ * certifications: the production workflow, activities and callbacks on a queue of this
+ * file's own, on the server named by TEMPORAL_ADDRESS.
+ */
+const TASK_QUEUE = uniqueTaskQueue("selfdev");
+const CALLBACK_SECRET = "selfdev-callback-secret-at-least-32-chars-long";
+let temporal: TemporalRuntime | undefined;
+/* Everything this file publishes to process.env, so afterAll can put it back. */
+const publishedEnv = new Map<string, string | undefined>();
+function publishEnv(values: Record<string, string>) {
+  for (const [key, value] of Object.entries(values)) {
+    if (!publishedEnv.has(key)) publishedEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+}
 
 // ------------------------------------------------------------------ OmniRoute network edge
 
@@ -78,10 +103,27 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   reviewerUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  /*
+   * BEFORE THE HARNESS STARTS: the executable policy freezes when the activities are first
+   * imported, which `startTemporalRuntime` does (see core3-autonomous-orchestration).
+   */
+  publishEnv({
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+  });
+  publishedEnv.set("ICOS_BASE_URL", process.env.ICOS_BASE_URL);
+  temporal = await startTemporalRuntime(TASK_QUEUE);
 });
 
 afterAll(async () => {
+  await temporal?.stop();
+  await resetContainer();
   vi.unstubAllEnvs();
+  for (const [key, value] of publishedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
@@ -136,7 +178,14 @@ const plan = (writerScope: string) =>
     ],
   });
 
-/* Writes only inside a governed worktree; a read-only task runs elsewhere and changes nothing. */
+/*
+ * Writes only inside a governed worktree; a read-only task runs elsewhere and changes nothing.
+ *
+ * Reports through the CANONICAL durable-worker contract: a structured status FILE at
+ * ICOS_WORKER_STATUS_FILE plus a non-empty stdout (see core3-autonomous-orchestration). The
+ * result sentinel is the in-process INTERACTIVE_COMMAND protocol, which mission work never
+ * uses.
+ */
 const workerScript = () => `
   const fs = require('fs');
   if (process.cwd().startsWith(${JSON.stringify(worktreeRoot)})) {
@@ -144,13 +193,38 @@ const workerScript = () => `
     fs.writeFileSync('docs/sd/note.md', '# Note\\n' + process.env.ICOS_WORKFLOW_ID + '\\n');
     /* NO git: ICOS materializes what the worker leaves (ADR 0073). */
   }
-  process.stdout.write(process.env.ICOS_RESULT_SENTINEL_START + JSON.stringify({
-    status: 'succeeded', summary: 'done', testsRun: ['unit'],
-  }) + process.env.ICOS_RESULT_SENTINEL_END);
+  process.stdout.write('done');
+  fs.writeFileSync(process.env.ICOS_WORKER_STATUS_FILE, JSON.stringify({
+    completed: true, failed: false,
+  }));
 `;
 
-async function container(writerScope = WRITE_SCOPE): Promise<Container> {
-  const env = loadEnv({
+/**
+ * The deployment as the ACTIVITY sees it: it runs in the harness's Temporal worker and reads
+ * `process.env` at call time.
+ */
+function activityEnv(): Record<string, string> {
+  return {
+    ICOS_WORKER_EXEC_COMMANDS: JSON.stringify({
+      binary: { command: process.execPath, args: ["-e", workerScript()], timeoutMs: 30_000 },
+    }),
+    ICOS_REPO_PATH: repo,
+    ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    /* The canonical checkout the activity binds read-only for a governed write. */
+    ICOS_WORKSPACE_ROOT: repo,
+    /* A queue of this file's own, so no other worker can consume its workflows. */
+    TEMPORAL_TASK_QUEUE: TASK_QUEUE,
+    /* The SAME server the harness worker polls (loadEnv reads only the object it is given). */
+    ...(process.env.TEMPORAL_ADDRESS ? { TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS } : {}),
+    ...(process.env.TEMPORAL_NAMESPACE ? { TEMPORAL_NAMESPACE: process.env.TEMPORAL_NAMESPACE } : {}),
+    ICOS_EXECUTION_CALLBACK_SECRET: CALLBACK_SECRET,
+    ICOS_WORKER_EXECUTABLE_ALLOWLIST: JSON.stringify([process.execPath, "node"]),
+  };
+}
+
+/** The whole deployment for one case: handed to the container AND published (see below). */
+function deploymentEnv(writerScope: string): Record<string, string> {
+  return {
     NODE_ENV: "test",
     PERSISTENCE: "postgres",
     DATABASE_URL,
@@ -169,11 +243,7 @@ async function container(writerScope = WRITE_SCOPE): Promise<Container> {
       command: process.execPath,
       args: ["-e", `process.stdout.write(${JSON.stringify(plan(writerScope))})`, "{{prompt}}"],
     }),
-    ICOS_WORKER_EXEC_COMMANDS: JSON.stringify({
-      binary: { command: process.execPath, args: ["-e", workerScript()], timeoutMs: 30_000 },
-    }),
-    ICOS_REPO_PATH: repo,
-    ICOS_WORKER_WORKSPACE_ROOT: worktreeRoot,
+    ...activityEnv(),
     /* Every gate RULE is real; only the pnpm suites are trivial passing commands. */
     ICOS_GATE_COMMANDS: JSON.stringify({
       install: [process.execPath, "-e", ""],
@@ -183,7 +253,21 @@ async function container(writerScope = WRITE_SCOPE): Promise<Container> {
       build: [process.execPath, "-e", ""],
       postgres: [[process.execPath, "-e", ""]],
     }),
-  });
+  };
+}
+
+async function container(writerScope = WRITE_SCOPE): Promise<Container> {
+  const deployment = deploymentEnv(writerScope);
+  /*
+   * PUBLISH THE WHOLE DEPLOYMENT, not only the activity's part: the execution callbacks the
+   * activity posts to are the production routes, and they resolve the process-wide
+   * `getContainer()` from `process.env` — without PERSISTENCE/DATABASE_URL they answer 503
+   * and the attempt never starts. That singleton is reset per case (afterEach) so it is
+   * always built from THIS case's repository paths.
+   */
+  publishEnv(deployment);
+  await resetContainer();
+  const env = loadEnv(deployment);
   const built = await buildPostgresContainer(DATABASE_URL, undefined, env);
   containers.push(built);
   await built.db!.execute(
@@ -232,6 +316,7 @@ const missionTaskStatuses = async (c: Container, missionId: string) =>
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  await resetContainer();
   await Promise.all(
     containers.splice(0).map(async (c) => {
       await c.workspaceExecutionCoordinator?.shutdown();

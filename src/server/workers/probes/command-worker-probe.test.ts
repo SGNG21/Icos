@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import { evaluateWorkerEligibility } from "@/core/workers/worker-eligibility";
@@ -267,6 +267,17 @@ describe("M6 real probe through the prober, end to end", () => {
  * same `buildWorkerProbeAdapters()` as the PostgreSQL root.
  */
 describe("M6 container wiring", () => {
+  /*
+   * WARM THE COMPOSITION-ROOT GRAPH ONCE, AS SETUP. The first import of @/server/container transforms and
+   * evaluates the whole container graph (hundreds of modules); measured 8-14 s cold on this
+   * host, far above the 5 s per-test budget once the full suite loads the CPU. That cost is
+   * a property of the import, not of the behaviour asserted, so it is paid here under an
+   * explicit setup budget and the tests below keep the default timeout.
+   */
+  beforeAll(async () => {
+    await import("@/server/container");
+  }, 120_000);
+
   it("container.workerHealthProber really probes a node worker to HEALTHY", async () => {
     const { buildMemoryContainer } = await import("@/server/container");
     const container = buildMemoryContainer();

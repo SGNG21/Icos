@@ -147,12 +147,14 @@ describe("Temporal failure callback route sequence", () => {
   it.each([
     {
       branch: "B",
+      reason: "EXECUTION_ATTEMPT_UNKNOWN",
       prepare: (subject: Container) => {
         vi.spyOn(subject.dispatchAttempts, "getByWorkflowId").mockResolvedValue(null);
       },
     },
     {
       branch: "C",
+      reason: "EXECUTION_ATTEMPT_TASK_MISMATCH",
       prepare: (subject: Container) => {
         vi.spyOn(subject.dispatchAttempts, "getByWorkflowId").mockResolvedValue({
           taskId: "different-task",
@@ -161,12 +163,14 @@ describe("Temporal failure callback route sequence", () => {
     },
     {
       branch: "D",
+      reason: "MISSION_TASK_UNKNOWN",
       prepare: (subject: Container) => {
         vi.spyOn(subject.mission, "getMissionTaskByCanonicalTaskId").mockResolvedValue(null);
       },
     },
     {
       branch: "E",
+      reason: "MISSION_TASK_ATTEMPT_MISMATCH",
       prepare: (subject: Container) => {
         vi.spyOn(subject.mission, "getMissionTaskByCanonicalTaskId").mockResolvedValue({
           id: "different-mission-task",
@@ -176,6 +180,7 @@ describe("Temporal failure callback route sequence", () => {
     },
     {
       branch: "F",
+      reason: "MISSION_TASK_MISSION_MISMATCH",
       prepare: (subject: Container) => {
         vi.spyOn(subject.mission, "getMissionTaskByCanonicalTaskId").mockResolvedValue({
           id: "mission-task-route-branch",
@@ -183,7 +188,7 @@ describe("Temporal failure callback route sequence", () => {
         } as Awaited<ReturnType<MissionRepository["getMissionTaskByCanonicalTaskId"]>>);
       },
     },
-  ])("identifies correlation rejection branch $branch with the real route", async ({ prepare }) => {
+  ])("identifies correlation rejection branch $branch with the real route", async ({ prepare, reason }) => {
     const taskId = "task-route-branch";
     const workflowId = "workflow-route-branch";
     container.dispatchAttempts = {
@@ -218,6 +223,9 @@ describe("Temporal failure callback route sequence", () => {
       error: {
         code: "invalid_input",
         message: "workflow d'exécution non corrélé",
+        // The stable message is unchanged; the route now names WHICH correlation
+        // invariant failed with a fixed code (never a field value) in `details`.
+        details: { reason },
       },
     });
   });
