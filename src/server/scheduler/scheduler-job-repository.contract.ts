@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { ScheduledJobRepository } from "@/core/contracts/scheduler";
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const at = (deltaMs: number) => new Date(Date.now() + deltaMs);
 let seq = 0;
 const job = (overrides: Record<string, unknown> = {}) => ({
@@ -17,10 +16,17 @@ const job = (overrides: Record<string, unknown> = {}) => ({
 /**
  * Contrat du Durable Scheduler : exécuté contre l'implémentation in-memory ET
  * contre PostgreSQL réel (base de test). `make` fournit un dépôt neuf et vide.
+ *
+ * `elapse(ms)` makes `ms` of the implementation's OWN clock pass (the database clock
+ * for PostgreSQL, `Date` for in-memory). Lease-expiry cases use it instead of a
+ * wall-clock sleep against a tens-of-milliseconds lease: under a loaded suite a
+ * 40 ms lease could expire before the "still held" assertion ran, so the case
+ * proved nothing reliably. Leases are now long, and expiry is explicit.
  */
 export function describeScheduledJobRepositoryContract(
   name: string,
   make: () => Promise<ScheduledJobRepository>,
+  elapse: (ms: number) => Promise<void>,
 ): void {
   describe(`ScheduledJobRepository contract — ${name}`, () => {
     it("persists a job and does not run a future job too early", async () => {
@@ -79,9 +85,11 @@ export function describeScheduledJobRepositoryContract(
     it("reclaims an expired lease and fences the evicted owner", async () => {
       const repo = await make();
       const { job: created } = await repo.enqueue(job());
-      await repo.claimDue("owner-a", 40);
-      expect(await repo.claimDue("owner-b", 40)).toBeNull(); // lease still active
-      await sleep(90);
+      await repo.claimDue("owner-a", 60_000);
+      expect(await repo.claimDue("owner-b", 60_000)).toBeNull(); // lease still active
+      await elapse(59_000);
+      expect(await repo.claimDue("owner-b", 60_000)).toBeNull(); // still active just before expiry
+      await elapse(2_000);
 
       const reclaimed = await repo.claimDue("owner-b", 60_000);
       expect(reclaimed).toMatchObject({ id: created.id, attemptCount: 2, leaseOwner: "owner-b" });
@@ -99,9 +107,9 @@ export function describeScheduledJobRepositoryContract(
     it("renews a lease for its owner only", async () => {
       const repo = await make();
       const { job: created } = await repo.enqueue(job());
-      await repo.claimDue("owner-a", 60);
+      await repo.claimDue("owner-a", 1_000);
       expect(await repo.renewLease(created.id, "owner-a", 60_000)).toBe(true);
-      await sleep(100);
+      await elapse(5_000); // well past the original 1 s lease
       expect(await repo.claimDue("owner-b", 1_000)).toBeNull(); // renewed
       expect(await repo.renewLease(created.id, "owner-b", 1_000)).toBe(false);
     });
@@ -109,10 +117,10 @@ export function describeScheduledJobRepositoryContract(
     it("kills a job that keeps crashing after max attempts (no infinite retry)", async () => {
       const repo = await make();
       const { job: created } = await repo.enqueue(job({ maxAttempts: 2 }));
-      await repo.claimDue("a", 30);
-      await sleep(70);
-      await repo.claimDue("b", 30);
-      await sleep(70);
+      await repo.claimDue("a", 1_000);
+      await elapse(2_000);
+      await repo.claimDue("b", 1_000);
+      await elapse(2_000);
       expect(await repo.claimDue("c", 1_000)).toBeNull();
       expect(await repo.getById(created.id)).toMatchObject({ state: "dead", attemptCount: 2 });
       expect((await repo.getById(created.id))?.lastError).toContain("SCHEDULER_MAX_ATTEMPTS_EXCEEDED");
