@@ -313,6 +313,52 @@ describe("session TTL is not conversation lifetime (real PostgreSQL)", () => {
     expect(state.turns.filter((t) => t.role === "assistant")).toHaveLength(1);
   });
 
+  it("ONE WRITER: a second turn while the first is answering is refused as TURN_IN_PROGRESS, immediately and not as an outage", async () => {
+    /* The first turn stays in flight: that is the whole point of the scenario. */
+    const engine = new ScriptedCognitionEngine(async (input) => {
+      if (input.userText.includes("lente")) await new Promise<void>((r) => stalled.push(r));
+      return answer("reponse");
+    });
+    const b = bench({ engine });
+
+    const first = b.client();
+    first.conn.receive({ type: "hello", device: "browser", turnMode: "push_to_talk" });
+    say(first.conn, "voice-001", ["question", "lente"]);
+    expect(await waitFor(() => first.of("turn_accepted").length === 1)).toBe(true);
+    const conversationId = first.of("turn_accepted")[0].conversationId;
+
+    /* Same owner, another connection, same conversation — a second device speaking over it. */
+    const second = b.client();
+    second.conn.receive({
+      type: "hello",
+      conversationId,
+      device: "pwa",
+      turnMode: "push_to_talk",
+    });
+    const startedAt = Date.now();
+    say(second.conn, "voice-002", ["je", "parle", "aussi"]);
+    const refused = await waitFor(() =>
+      second.of("error").some((e) => e.code === "TURN_IN_PROGRESS"),
+    );
+    const refusalMs = Date.now() - startedAt;
+
+    expect(refused, "the refusal must arrive, not time out").toBe(true);
+    /* IMMEDIATE: a unique-index violation, not a watchdog. The live run waited 20 s only
+     * because the harness watched for an acceptance that was never coming. */
+    expect(refusalMs).toBeLessThan(5_000);
+    expect(second.of("turn_accepted")).toEqual([]);
+    /* AND NOT AN OUTAGE: the old path reported exactly this as COGNITIVE_UNAVAILABLE. */
+    expect(second.of("error").map((e) => e.code)).not.toContain("COGNITIVE_UNAVAILABLE");
+    const message = second.of("error").find((e) => e.code === "TURN_IN_PROGRESS")!.message;
+    expect(message).toContain("already answering");
+    expect(message).not.toContain("resend it");
+
+    /* The conversation is unharmed: exactly one user turn landed. */
+    const state = await b.runtime.resume(ME, conversationId);
+    expect(state.turns.filter((t) => t.role === "user")).toHaveLength(1);
+    expect(state.turns.map((t) => t.idempotencyKey).filter(Boolean)).toEqual(["voice-001"]);
+  });
+
   it("ISOLATION: another authenticated user cannot continue, or even read, the conversation", async () => {
     const b = bench();
     const c = b.client();

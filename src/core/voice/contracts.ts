@@ -78,6 +78,13 @@ export const VoiceErrorCodeSchema = z.enum([
   /** One sentence of the answer was lost; the rest still plays. */
   "TTS_DEGRADED",
   "COGNITIVE_UNAVAILABLE",
+  /**
+   * The conversation already has a user turn in flight, refused by the
+   * `cognitive_turns_one_inflight` unique index -- one writer per conversation. NOT an
+   * outage: the runtime is healthy and is already answering. Retryable, but only once the
+   * current answer ends, which is why it cannot share COGNITIVE_UNAVAILABLE's "resend it".
+   */
+  "TURN_IN_PROGRESS",
   "COGNITIVE_ERROR",
   "COGNITIVE_TIMEOUT",
 ]);
@@ -280,6 +287,18 @@ export class CognitiveUnavailableError extends Error {
   constructor(message = "cognitive runtime unavailable") {
     super(message);
     this.name = "CognitiveUnavailableError";
+  }
+}
+
+/**
+ * The conversation is already answering a turn. Distinct from
+ * {@link CognitiveUnavailableError} because the remedy is the opposite: wait, do not resend
+ * now. Lives here so the session can classify it without importing the runtime.
+ */
+export class TurnInFlightError extends Error {
+  constructor(message = "a turn is already in flight for this conversation") {
+    super(message);
+    this.name = "TurnInFlightError";
   }
 }
 
