@@ -12,7 +12,13 @@ import { GoalNormalizer } from "@/server/services/goal-normalizer";
 import { GoalPlanner } from "@/server/services/goal-planner";
 import { GoalPreviewStore } from "@/server/services/goal-preview-store";
 
-import { MISSING_BUSINESS_DATA, SEED_CLIENTS, seedClientDirectory } from "./client-directory-seed";
+import {
+  MISSING_BUSINESS_DATA,
+  OWNER_STATEMENT_2026_10_11,
+  SEED_CLIENTS,
+  seedClientDirectory,
+  seedClientDirectoryAtStartup,
+} from "./client-directory-seed";
 import { PostgresConversationStore } from "./conversation-store";
 import type { MissionStatusReader } from "./current-state-source";
 import { buildCognitiveRuntime, type CognitiveActor } from "./index";
@@ -133,12 +139,96 @@ describe("BUSINESS SEEDING", () => {
 
   it("reports missing business data instead of inventing it", () => {
     expect(MISSING_BUSINESS_DATA.length).toBeGreaterThan(0);
-    const all = [...SEED_CLIENTS.flatMap((c) => c.facts.map((f) => f.content))].join(" ");
+    const repositoryFacts = SEED_CLIENTS.flatMap((c) =>
+      c.facts.filter((f) => f.source === "repository").map((f) => f.content),
+    ).join(" ");
     // No placeholder business detail from the example blocks is ever seeded as a fact.
     for (const invented of ["Cannes", "RCS", "75001", "Lyon", "SARL", "SAS", "ldsrenov.fr"]) {
-      expect(all).not.toContain(invented);
+      expect(repositoryFacts).not.toContain(invented);
     }
-    expect(MISSING_BUSINESS_DATA.join(" ")).toContain("Cannes");
+    // What the OWNER stated is recorded as such: dated provenance, and the content says so.
+    const ownerFacts = SEED_CLIENTS.flatMap((c) => c.facts.filter((f) => f.source === "owner"));
+    expect(ownerFacts.length).toBeGreaterThan(0);
+    for (const f of ownerFacts) {
+      expect(f.evidence).toBe(OWNER_STATEMENT_2026_10_11);
+      expect(f.content).toContain("déclaration du propriétaire du 2026-10-11");
+    }
+    const all = SEED_CLIENTS.flatMap((c) => c.facts.map((f) => f.content)).join(" ");
+    for (const placeholder of ["RCS", "75001", "SARL", "ldsrenov.fr", "123 Rue"]) {
+      expect(all).not.toContain(placeholder);
+    }
+  });
+
+  it("BOOT SEED: merges aliases into an owner-edited entity and never undoes the owner's edits", async () => {
+    const memory = new PostgresCognitiveMemoryStore(handle.db);
+    // The owner created LDS by hand earlier, under another display name, with their own alias
+    // and none of the seed's domain/descriptor aliases.
+    await memory.upsertEntity(TENANT, {
+      kind: "client",
+      key: LDS,
+      name: "LDS Rénovation (nom du propriétaire)",
+      clientId: LDS,
+      aliases: ["le client du port"],
+      sensitivity: "normal",
+    });
+    await seedClientDirectory(memory, TENANT);
+    await seedClientDirectory(memory, TENANT);
+    const lds = (await memory.clientDirectory(TENANT, "sensitive")).find((d) => d.key === LDS)!;
+    expect(lds.name).toBe("LDS Rénovation (nom du propriétaire)"); // never overwritten
+    expect(lds.aliases[0]).toBe("le client du port"); // kept, first
+    expect(lds.aliases).toEqual(expect.arrayContaining(["lds-renov.fr", "desc:cannes"]));
+    expect(new Set(lds.aliases).size).toBe(lds.aliases.length); // no duplicate from the replay
+  });
+
+  it("BOOT SEED: a fact the owner retracted is never written back", async () => {
+    const memory = new PostgresCognitiveMemoryStore(handle.db);
+    const first = await seedClientDirectory(memory, TENANT);
+    expect(first.facts.every((f) => f.outcome === "accepted")).toBe(true);
+    const [row] = await handle.sql<{ id: string }[]>`
+      select id from memory_records where subject_key = 'client.lds-renov.site-internet'`;
+    const scope = { tenantId: TENANT, userId: "user-geoffrey", clientId: LDS, projectId: null };
+    expect(await memory.retract(scope, row.id)).toBe(true);
+
+    const again = await seedClientDirectory(memory, TENANT);
+    expect(
+      again.facts.find((f) => f.subjectKey === "client.lds-renov.site-internet")?.outcome,
+    ).toBe("kept");
+    const rows = await handle.sql<{ status: string }[]>`
+      select status from memory_records where subject_key = 'client.lds-renov.site-internet'`;
+    expect(rows.map((r) => r.status)).toEqual(["retracted"]);
+  });
+
+  it("BOOT SEED: owner facts carry the owner-statement provenance and land in LDS's scope only", async () => {
+    const memory = new PostgresCognitiveMemoryStore(handle.db);
+    const lines: string[] = [];
+    const report = await seedClientDirectoryAtStartup(memory, TENANT, (l) => lines.push(l));
+    expect(report?.entities).toBe(2);
+    expect(lines[0]).toContain("CLIENT_DIRECTORY_SEEDED");
+    const rows = await handle.sql<
+      { client_id: string; provenance: { sourceId: string }; epistemic: string }[]
+    >`select client_id, provenance, epistemic from memory_records
+      where subject_key in ('client.lds-renov.activite', 'client.lds-renov.site-internet')`;
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.client_id).toBe(LDS);
+      expect(r.provenance.sourceId).toBe(OWNER_STATEMENT_2026_10_11);
+      expect(r.epistemic).toBe("SYSTEM_OBSERVED");
+    }
+  });
+
+  it("BOOT SEED: a failing store is logged and never throws", async () => {
+    const lines: string[] = [];
+    const broken = {
+      upsertEntity: async () => {
+        throw new Error("db down");
+      },
+      write: async () => {
+        throw new Error("unreachable");
+      },
+      subjectRecorded: async () => [],
+    };
+    expect(await seedClientDirectoryAtStartup(broken, TENANT, (l) => lines.push(l))).toBeNull();
+    expect(lines[0]).toContain("CLIENT_DIRECTORY_SEED_FAILED");
   });
 });
 
@@ -300,8 +390,10 @@ describe("AMBIGUITY_HANDLING / FAIL_CLOSED", () => {
     const runtime = runtimeWith({ engine });
     const conversation = await runtime.createConversation(ME, {});
 
+    // « Cannes » now resolves LDS (owner statement 2026-10-11); a city nobody declared still
+    // has to ask.
     const result = await runtime.submitTurn(ME, conversation.id, {
-      text: "Et le client de Cannes ?",
+      text: "Et le client de Lyon ?",
       idempotencyKey: k(),
     });
 

@@ -27,6 +27,9 @@ import { composeRuntimeRecovery } from "@/server/recovery/compose-runtime-recove
 import { TemporalWorkflowProbe } from "@/server/recovery/temporal-workflow-probe";
 import { sweepAll } from "@/server/recovery/sweep-all";
 import { cognitiveLaunchRecoverySweeper } from "@/server/cognitive/launch-recovery-sweeper";
+import { seedClientDirectoryAtStartup } from "@/server/cognitive/client-directory-seed";
+import { PostgresCognitiveMemoryStore } from "@/server/cognitive/memory-store";
+import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity";
 import { PendingReviewGateSweeper } from "@/server/workspace-manager/pending-review-gate-sweeper";
 import { CHIEF_BRAIN_ID } from "@/core/workforce/brains";
 import { TERMINAL_ASSIGNMENT_STATUSES } from "@/core/workforce/contracts";
@@ -602,6 +605,19 @@ export async function startProductionServices(
        * is NOTIFY and compute routing owns remediation, so this observes; it never acts.
        */
       if (container.db) await seedObservation(container.scheduledJobs, COMPUTE_HEALTH_OBSERVATION);
+
+      /*
+       * THE CLIENT DIRECTORY (P0 2026-10-11, decision 0063 amendment A). Written only by a
+       * manual script before this, so the live directory was empty and every client reference
+       * became « De quel client parlez-vous ? ». Idempotent, merge-only, owner edits are never
+       * undone; a failure is logged, never fatal (see `seedClientDirectoryAtStartup`).
+       */
+      if (container.db) {
+        await seedClientDirectoryAtStartup(
+          new PostgresCognitiveMemoryStore(container.db),
+          CURRENT_SINGLE_TENANT_ID,
+        );
+      }
 
       /*
        * THE CANONICAL FLEET BOOTSTRAP (live-worker bootstrap lane). Probing was already
