@@ -5,8 +5,9 @@ import type { AgentRegistration, AgentRepository, AgentScope } from "@/server/re
 
 /**
  * Repository en mémoire des agents (voir avertissement dans
- * `src/server/audit/in-memory-audit-log.ts`). Lecture seule (hors `ensureRegistered`, insertion seule d'une identité système) ; travail interne
- * synchrone, exposé derrière un port asynchrone.
+ * `src/server/audit/in-memory-audit-log.ts`). Lecture seule, sauf `ensureRegistered`
+ * (insertion seule d'une identité système) ; travail interne synchrone, exposé derrière
+ * un port asynchrone.
  */
 export class InMemoryAgentRepository implements AgentRepository, AgentRegistration {
   private readonly agents: Agent[];
