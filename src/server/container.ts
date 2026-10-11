@@ -103,7 +103,8 @@ import { PostgresTestDatabaseProvisioner } from "@/server/workspace-manager/test
 import { PostgresWorkspaceRegistry } from "@/server/workspace-manager/postgres-workspace-registry";
 import { PostgresGit } from "@/server/workspace-manager/postgres-git";
 import { SandboxedCommandRunner } from "@/server/workspace-manager/sandboxed-command-runner";
-import { PostgresGateDatabase } from "@/server/workspace-manager/postgres-gate-deps";
+import { DisposableGateDatabase } from "@/server/workspace-manager/disposable-gate-database";
+import { AuditGateReportRecorder } from "@/server/workspace-manager/report";
 import { InMemoryAgentCapabilityRepository } from "@/server/services/in-memory/agent-capability-repository";
 import { PostgresActionRepository } from "@/server/repositories/postgres/action-repository";
 import { PostgresAgentRepository } from "@/server/repositories/postgres/agent-repository";
@@ -507,6 +508,7 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     runner: new InMemoryCommandRunner(),
     database: new InMemoryGateDatabase(),
     control: controlGuard,
+    reports: new AuditGateReportRecorder(new InMemoryAuditRepository(auditLog)),
   });
   const integrationApplier = new IntegrationApplier({
     git,
@@ -852,8 +854,10 @@ export async function buildPostgresContainer(
     git: pgGit,
     manager: workspaceManager,
     runner: new SandboxedCommandRunner(),
-    database: new PostgresGateDatabase(),
+    /* H1 (ADR 0075): one disposable database per PostgreSQL step, behind a gatekeeper socket. */
+    database: new DisposableGateDatabase(),
     control: controlGuard,
+    reports: new AuditGateReportRecorder(audit),
     /* A deployment may verify with something other than pnpm; omitted keys keep defaults. */
     commands: parseGateCommands(env.ICOS_GATE_COMMANDS),
   });

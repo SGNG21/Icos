@@ -26,8 +26,8 @@ import type { CommandRunner, GateCommandContext } from "./integration-gate";
  *   - disk: the worktree (read-write), a disposable HOME (read-write) and the package
  *     store (read-only, public packages only). Not the real HOME, not another worktree,
  *     not the canonical checkout;
- *   - network: denied by the OS, except for the step that must reach its dedicated test
- *     database, which the gate asks for explicitly;
+ *   - network: denied by the OS for every step. The PostgreSQL step reaches its disposable
+ *     database through a UNIX socket ICOS bind-mounts in (H1, `disposable-gate-database.ts`);
  *   - confinement REQUIRED: no backend means the step FAILS. A gate that says PASS on code
  *     it could not contain would authorise integration on a lie.
  */
@@ -101,7 +101,8 @@ export class SandboxedCommandRunner implements CommandRunner {
         timeoutMs: this.timeoutMs,
         maxOutputBytes: this.maxOutputBytes,
         sandbox: {
-          readWritePaths: [ctx.cwd, home.path],
+          /* + the database socket directory, for the PostgreSQL step only (H1). */
+          readWritePaths: [ctx.cwd, home.path, ...(ctx.readWritePaths ?? [])],
           readOnlyPaths: [...this.readOnlyPaths],
           allowNetwork: ctx.network,
         },

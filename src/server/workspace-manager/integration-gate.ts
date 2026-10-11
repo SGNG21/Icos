@@ -5,32 +5,53 @@ import { ControlHeldError, type RuntimeControlGuard } from "@/server/control/run
 
 import { checkMigrations, effectiveScope, scanSecrets, scanSecurity } from "./checks";
 import type { Git } from "./git";
-import { assertWorkerDatabaseName } from "./guards";
 import type { WorkspaceManager } from "./manager";
-import type { ConflictStatus, IntegrationReport, StepStatus } from "./report";
+import type { ConflictStatus, GateReportRecorder, IntegrationReport, StepStatus } from "./report";
 import { checkScope } from "./scope";
-import { workerDatabaseUrl } from "./test-database";
 import { WorkspaceError, type IntegrationDecision, type Workspace } from "./types";
 
 /**
  * What a gate step hands its runner. `env` is the COMPLETE set of variables the gate names
  * — nothing is inherited from this process (P0: the gate runs worker-authored code, see
- * `sandboxed-command-runner.ts`). `network` is granted only to the step that must reach
- * its dedicated test database.
+ * `sandboxed-command-runner.ts`). The gate never sets `network` (H1, ADR 0075): even the
+ * PostgreSQL step reaches its database only through `readWritePaths` — the directory holding
+ * the gatekeeper's socket (see `disposable-gate-database.ts`).
  */
 export interface GateCommandContext {
   cwd: string;
   env: Readonly<Record<string, string>>;
   network: boolean;
+  /** Extra host directories the step may see read-write (the database socket directory). */
+  readWritePaths?: readonly string[];
 }
 
 export interface CommandRunner {
   run(command: string[], ctx: GateCommandContext): Promise<{ code: number; output: string }>;
 }
 
+/**
+ * One PostgreSQL step's database: created empty for this run (migrations are proven from
+ * zero), reachable only as described by the session, destroyed by `close`.
+ */
+export interface GateDatabaseSession {
+  /** Name of the disposable database (and of its role). */
+  readonly database: string;
+  /** The ONLY database variables the step receives: the per-run URL. */
+  readonly env: Readonly<Record<string, string>>;
+  /** Host directories the step must see read-write to reach the database. */
+  readonly readWritePaths: readonly string[];
+  /** Values never to be kept in a report (the per-run password). */
+  readonly secrets: readonly string[];
+  /** The step command, wrapped so it reaches the database from an unshared network. */
+  wrap(command: readonly string[]): string[];
+  /** Connections refused by the gatekeeper during the run (evidence). */
+  refusals(): readonly string[];
+  /** Cuts every connection and drops the database and role. Always called. */
+  close(): Promise<void>;
+}
+
 export interface GateDatabase {
-  /** Recrée la base dédiée à vide : les migrations sont ainsi prouvées depuis zéro. */
-  reset(name: string): Promise<void>;
+  open(ws: Workspace): Promise<GateDatabaseSession>;
 }
 
 export interface GateOptions {
@@ -86,6 +107,8 @@ interface GateDeps {
   commands?: Partial<GateCommands>;
   /** Runtime control (decision 0055): integration refused while not allowed. Wired by the container. */
   control?: Pick<RuntimeControlGuard, "integration">;
+  /** Durable record of every report (see `report.ts`). Recorded BEFORE the transition. */
+  reports?: GateReportRecorder;
 }
 
 /**
@@ -100,11 +123,13 @@ export class IntegrationGate {
   private readonly commands: GateCommands;
 
   private readonly control?: Pick<RuntimeControlGuard, "integration">;
+  private readonly reports?: GateReportRecorder;
 
   constructor(deps: GateDeps) {
     ({ git: this.git, manager: this.manager, runner: this.runner, database: this.database } = deps);
     this.commands = { ...DEFAULT_COMMANDS, ...deps.commands };
     this.control = deps.control;
+    this.reports = deps.reports;
   }
 
   async integrate(workspaceId: string, options: GateOptions): Promise<IntegrationReport> {
@@ -155,6 +180,11 @@ export class IntegrationGate {
     );
 
     const report = await this.evaluate(ws, head, others, options);
+    /*
+     * DURABLE BEFORE IT TAKES EFFECT. A verdict nobody can read back afterwards is not
+     * evidence; if the record fails, the workspace stays `integrating` and the gate retries.
+     */
+    await this.reports?.record(report, { missionId: ws.missionId, taskId: ws.taskId });
 
     const next = { ACCEPT: "accepted", REJECT: "rejected", NEEDS_REBASE: "working" } as const;
     if (report.decision !== "NEEDS_HUMAN_APPROVAL") {
@@ -278,21 +308,37 @@ export class IntegrationGate {
       [
         "postgres",
         async () => {
-          assertWorkerDatabaseName(ws.testDatabase);
           await this.manager.assertLease(
             ws.workspaceId,
             options.lease.owner,
             options.lease.fencingToken,
           );
-          await this.database.reset(ws.testDatabase);
-          return this.command(
-            ws,
-            "tests PostgreSQL",
-            (s) => (report.postgresTests = s),
-            this.commands.postgres,
-            /* The only step that must reach a socket: its own dedicated test database. */
-            { network: true },
-          );
+          /*
+           * H1 (ADR 0075): no network, no shared credential. A database created for this run,
+           * reachable only through the gatekeeper's socket, dropped whatever happens.
+           */
+          const database = await this.database.open(ws);
+          try {
+            const outcome = await this.command(
+              ws,
+              "tests PostgreSQL",
+              (s) => (report.postgresTests = s),
+              this.commands.postgres,
+              { database },
+            );
+            const refused = database.refusals();
+            if (refused.length === 0) return outcome;
+            /* Said, not decisive: the step's own exit status is the verdict. */
+            return {
+              ...outcome,
+              reasons: [
+                ...(outcome.reasons ?? []),
+                `base jetable : ${refused.length} connexion(s) refusée(s) — ${refused.slice(0, 3).join(" ; ")}`,
+              ],
+            };
+          } finally {
+            await database.close();
+          }
         },
       ],
       ["build", () => this.command(ws, "build", (s) => (report.build = s), [this.commands.build])],
@@ -434,32 +480,41 @@ export class IntegrationGate {
    *
    * L'environnement est CONSTRUIT, jamais hérité : ces commandes exécutent le code écrit par
    * le worker (tests, configurations, scripts), qui ne doit voir aucun secret du serveur.
-   * Seule la DB de test dédiée est nommée. `verify-deps-before-run` est coupé : l'installation
-   * est une étape explicite (`install`), pas un effet de bord de `pnpm run`.
+   * Aucune étape n'a le réseau ; seule l'étape PostgreSQL reçoit une URL de base, celle de sa
+   * base jetable (H1). `verify-deps-before-run` est coupé : l'installation est une étape
+   * explicite (`install`), pas un effet de bord de `pnpm run`.
    */
   private async command(
     ws: Workspace,
     label: string,
     set: (s: StepStatus) => void,
     commands: string[][],
-    { withInstall = false, network = false }: { withInstall?: boolean; network?: boolean } = {},
+    {
+      withInstall = false,
+      database,
+    }: { withInstall?: boolean; database?: GateDatabaseSession } = {},
   ): Promise<Outcome> {
     const env: Record<string, string> = {
-      ICOS_TEST_DATABASE_URL: workerDatabaseUrl(ws.testDatabase),
       CI: "1",
       npm_config_verify_deps_before_run: "false",
       pnpm_config_verify_deps_before_run: "false",
+      ...database?.env,
     };
     const list =
       withInstall && !existsSync(path.join(ws.worktreePath, "node_modules"))
         ? [this.commands.install, ...commands]
         : commands;
+    const redact = (text: string) =>
+      (database?.secrets ?? []).reduce((t, secret) => t.split(secret).join("***"), text);
     for (const command of list) {
-      const { code, output } = await this.runner.run(command, {
+      const run = await this.runner.run(database ? database.wrap(command) : command, {
         cwd: ws.worktreePath,
         env,
-        network,
+        network: false,
+        ...(database ? { readWritePaths: database.readWritePaths } : {}),
       });
+      const code = run.code;
+      const output = redact(run.output);
       if (code !== 0) {
         set("FAIL");
         return {

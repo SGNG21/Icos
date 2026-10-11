@@ -22,6 +22,7 @@ import { workerRegistryEntrySchema } from "@/core/contracts/worker-registry";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { TaskExecutionDispatcher } from "@/server/execution/ports";
 import { identities, type TestIdentity } from "@/test/test-identity";
+import { InMemoryGateDatabase } from "./in-memory-gate-deps";
 
 /*
  * DEFECTS 22 + 19, END TO END: a REAL external worker process writes into a GOVERNED
@@ -276,7 +277,7 @@ function buildCoordinator(
       git,
       manager,
       runner: passingRunner,
-      database: { reset: async () => {} },
+      database: new InMemoryGateDatabase(),
     }),
     integrationApplier: applier,
     /*
@@ -706,7 +707,7 @@ describe("DEFECTS 22 + 19 — governed external worker integration, end to end",
         git,
         manager,
         runner: passingRunner,
-        database: { reset: async () => {} },
+        database: new InMemoryGateDatabase(),
       }),
       /* integrationApplier deliberately absent */
       reviewDecisions: {

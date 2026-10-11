@@ -1,5 +1,6 @@
 import { assertWorkerDatabaseName } from "./guards";
-import type { GateCommandContext } from "./integration-gate";
+import { InMemoryGateDatabase } from "./in-memory-gate-deps";
+import type { GateCommandContext, GateDatabaseSession } from "./integration-gate";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -69,10 +70,10 @@ export class FakeProvisioner {
     assertWorkerDatabaseName(name);
     this.databases.delete(name);
   }
-  readonly resets: string[] = [];
-  async reset(name: string): Promise<void> {
-    assertWorkerDatabaseName(name);
-    this.resets.push(name);
+  /** Gate database (H1): one disposable database per PostgreSQL step, always closed. */
+  readonly gate = new InMemoryGateDatabase();
+  async open(): Promise<GateDatabaseSession> {
+    return this.gate.open();
   }
 }
 

@@ -18,6 +18,7 @@ import { WorkspaceManager } from "../src/server/workspace-manager/manager";
 import { FileWorkspaceRegistry } from "../src/server/workspace-manager/registry";
 import { formatReport } from "../src/server/workspace-manager/report";
 import { SandboxedCommandRunner } from "../src/server/workspace-manager/sandboxed-command-runner";
+import { DisposableGateDatabase } from "../src/server/workspace-manager/disposable-gate-database";
 import { PostgresTestDatabaseProvisioner } from "../src/server/workspace-manager/test-database";
 import { WORKSPACE_STATUSES, type WorkspaceStatus } from "../src/server/workspace-manager/types";
 
@@ -106,7 +107,7 @@ async function main(): Promise<number> {
         git,
         manager,
         runner: new SandboxedCommandRunner(),
-        database: provisioner,
+        database: new DisposableGateDatabase(),
       });
       const report = await gate.integrate(need(id, "<id>"), {
         review: values.reviewer

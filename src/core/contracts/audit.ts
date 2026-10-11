@@ -58,6 +58,8 @@ export const auditEventTypeSchema = z.enum([
   // Compute fleet reconciliation (migration 0062): a provider-withdrawn model retired / reinstated.
   "worker.fleet.retired",
   "worker.fleet.reinstated",
+  // Integration gate (migration 0063, ADR 0075): every gate report, durably.
+  "workspace.gate.reported",
 ]);
 
 export const auditActorSchema = z.object({

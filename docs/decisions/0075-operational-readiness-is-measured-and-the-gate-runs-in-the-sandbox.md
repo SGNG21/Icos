@@ -64,8 +64,62 @@ construction, and one security property had been silently re-opened:
 - A grant is still never implicit (0058). `external.realtime` and connector-based
   `tools.governed` reach READY in production only after the owner runs `pnpm tools:grant-realtime`
   (or the grants route); until then they report NOT_CONFIGURED/NOT_CONNECTED, naming the command.
-- The gate's PostgreSQL step has full network (no backend filters by host). It holds no secret and
-  sees only its worktree and its dedicated test database URL.
+- ~~The gate's PostgreSQL step has full network (no backend filters by host).~~ Superseded by
+  amendment H1 below: no gate step has the network.
 - Test suites that the gate runs may not depend on Git (the gitdir is not mounted, by ADR 0073);
   one test was rewritten to read the tree from disk.
 - `PARTIAL` is a new tone in the cockpit (`warn`), distinct from `DEGRADED`.
+
+## Amendment H1 (2026-10-11): the PostgreSQL step reaches only a disposable database
+
+**Residual risk H1.** Decision 1 left one hole: the PostgreSQL step ran with `network: true` and
+the shared test-cluster URL. Worker-authored tests therefore shared the host network namespace —
+every loopback service (model router, Temporal, other Postgres instances, the app) and the
+internet — and held a credential that could read or alter every other workspace's test data.
+
+**Decision.**
+
+1. **No gate step has the network.** The PostgreSQL step runs with the network namespace unshared,
+   like every other step. Non-database steps receive no database URL at all.
+2. **One disposable database per run** (`DisposableGateDatabase`). Outside the sandbox, with the
+   admin test URL (`ICOS_TEST_DATABASE_URL`, which must itself name a test database), ICOS creates a
+   LOGIN role (no SUPERUSER/CREATEDB/CREATEROLE/REPLICATION/BYPASSRLS) and a database it owns, both
+   `icos_test_gate_<sha256(workspaceId)[:10]>_<nonce>`; `CONNECT` is revoked from PUBLIC. They are
+   dropped (`WITH (FORCE)`) in `finally`, success or failure; leftovers of a crashed run of the
+   same workspace are swept at the next open.
+3. **One door: a gatekeeper socket.** ICOS listens on a UNIX socket in a fresh 0700 directory
+   bind-mounted into the sandbox. The gatekeeper reads the PostgreSQL startup packet and forwards to
+   the fixed test-cluster address only when it names exactly this run's database AND role;
+   replication, cancel requests, unknown protocol versions and other identities are refused (the
+   identity check does not rely on `pg_hba.conf`, so it holds on a `trust` cluster). Inside the
+   sandbox a small relay listens on the sandbox's own loopback (`127.0.0.1:5432`) and pipes to the
+   socket, so any client works with a plain URL; the step receives only
+   `ICOS_TEST_DATABASE_URL=postgres://<run role>:<run password>@127.0.0.1:5432/<run db>`. The
+   per-run password is redacted from anything the gate keeps.
+4. **The gate report is durable.** Every `IntegrationReport` is appended to the audit journal as
+   `workspace.gate.reported` (migration 0063 widens `audit_event_type_check`) BEFORE the workspace
+   transitions; if recording fails the gate throws and the workspace stays `integrating`.
+
+**Evidence.** `database-gatekeeper.test.ts` (protocol refusals), `integration-gate.test.ts` (no
+step has the network; close on failure and on throw; redaction; report recorded before the
+transition), `disposable-gate-database.integration.test.ts` (real bwrap + real cluster: the
+worker script uses its own database; cannot reach the cluster port, a loopback service, the
+internet or DNS; does not see the admin URL or role and cannot log in as admin, to `icos_test`,
+to `postgres` or to another live run's database; role privileges and PUBLIC revocation verified
+even bypassing the gatekeeper; database and role dropped on success and on failure),
+`gate-report-audit.integration.test.ts` (persisted, re-read by a fresh handle, append-only).
+
+**Consequences.**
+
+- Production prerequisite: `ICOS_TEST_DATABASE_URL` must point to a test cluster (database name
+  with the `test` token) whose role has `CREATEDB` and `CREATEROLE` (or is superuser of that
+  cluster), reachable from the ICOS host over TCP. If it is unset or unreachable the PostgreSQL
+  step throws (fail closed) and the workspace stays `integrating`.
+- Suites run by the gate may use only their own database: tests that `CREATE DATABASE`, open the
+  `postgres` maintenance database, or need Temporal or any other service fail inside the gate.
+  `scripts/test-db-setup.ts` now opens the target database first and needs the maintenance
+  database only to create a missing one. Deployments choose the suites via `ICOS_GATE_COMMANDS`.
+- The role can still read cluster-wide catalogs (`pg_database`, `pg_roles` names) — metadata, no
+  data. The upstream hop is plain TCP to the test cluster (SSL requests are answered `N`).
+- macOS (Seatbelt) denies UNIX-socket connects with the network: the PostgreSQL step fails closed
+  there. The production host is Linux/bubblewrap.

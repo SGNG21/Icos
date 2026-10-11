@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+
+import type { AuditRepository } from "@/server/repositories/ports";
+
 import type { ScopeStatus } from "./scope";
 import type { IntegrationDecision } from "./types";
 
@@ -54,4 +58,48 @@ export function formatReport(r: IntegrationReport): string {
     `COMMIT_SHA=${r.commitSha}`,
     `REASONS=${r.reasons.length ? r.reasons.join(" | ").replace(/\n/g, " ") : "NONE"}`,
   ].join("\n");
+}
+
+/** Audit event under which every gate report is durably recorded (migration 0063). */
+export const GATE_REPORT_EVENT = "workspace.gate.reported" as const;
+
+export interface GateReportContext {
+  missionId: string | null;
+  taskId: string | null;
+}
+
+/** Durable sink for gate reports. The gate records BEFORE it transitions the workspace. */
+export interface GateReportRecorder {
+  record(report: IntegrationReport, context: GateReportContext): Promise<void>;
+}
+
+/**
+ * Gate reports in the append-only audit journal (`audit_entries`, protected by trigger
+ * against UPDATE/DELETE). The report holds no secret by construction: step outputs reach it
+ * only as a truncated tail, and the PostgreSQL step's only credential — its per-run password —
+ * is redacted by the gate before that (and dies with the run). `taskId`/`missionId` go into
+ * `details`, not the FK columns: a workspace may be manual, with no task row.
+ */
+export class AuditGateReportRecorder implements GateReportRecorder {
+  constructor(
+    private readonly audit: Pick<AuditRepository, "append">,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  async record(report: IntegrationReport, context: GateReportContext): Promise<void> {
+    const at = this.now().toISOString();
+    await this.audit.append({
+      id: `gate-report-${randomUUID()}`,
+      eventType: GATE_REPORT_EVENT,
+      actor: { kind: "system", id: "integration-gate" },
+      details: {
+        formatVersion: 1,
+        missionId: context.missionId,
+        taskId: context.taskId,
+        report: JSON.parse(JSON.stringify(report)),
+      },
+      occurredAt: at,
+      createdAt: at,
+    });
+  }
 }
