@@ -1,3 +1,5 @@
+import type { AutonomyAssessment } from "@/core/autonomy/assessment";
+import { interventionLedger } from "@/core/autonomy/intervention";
 import type { AuditEntry, Task } from "@/core/contracts";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
@@ -63,11 +65,17 @@ export interface CockpitSources {
    * caller that cannot read them keeps the honest miss, requirement code included.
    */
   truth?: TruthProjection;
+  /**
+   * BR-06: the L0–L6 assessment from durable proofs. Optional for the same reason as `truth`:
+   * a caller that cannot read it keeps the honest miss.
+   */
+  autonomy?: Truth<AutonomyAssessment>;
 }
 
 export type MetricKey =
   | "globalHealth"
   | "autonomyLevel"
+  | "interventionDebt"
   | "activeMissions"
   | "activeWorkers"
   | "readyQueue"
@@ -212,6 +220,8 @@ export interface CockpitSnapshot {
     path: { id: string; title: string; status: NodeStatus }[];
   } | null;
   timeline: Truth<TimelineEntry[]>;
+  /** BR-06: full assessment (dimensions, proofs, limits) behind the `autonomyLevel` metric. */
+  autonomy: Truth<AutonomyAssessment>;
 }
 
 const DAY_MS = 86_400_000;
@@ -719,13 +729,30 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
   const reviewBacklog: Truth<number> = isReal(sources.tasks)
     ? real(sources.tasks.value.filter((t) => t.status === "review_pending").length)
     : sources.tasks;
-  const humanInterventions: Truth<number> = recentAudit
+  /*
+   * BR-07: debt is the TAGGED interventions (a human act a mission needed). Untagged human
+   * entries stay the legacy proxy and are named as such in the derivation, never added.
+   */
+  const ledger = recentAudit ? interventionLedger(recentAudit) : null;
+  const humanInterventions: Truth<number> = ledger
     ? real(
-        recentAudit.filter((e) => e.actor.kind === "human" && !e.eventType.startsWith("auth."))
-          .length,
-        "human-actor audit entries in 24h — partial proxy (BR-07)",
+        ledger.tagged,
+        `tagged interventions in 24h (BR-07); ${ledger.untaggedProxy} untagged human entries counted apart as a proxy`,
       )
     : (sources.audit as Truth<number>);
+  const interventionDebt: Truth<number> = ledger
+    ? real(
+        ledger.missionsWithDebt,
+        `missions that needed a tagged human intervention in 24h (${ledger.byReason.APPROVAL_DECISION} approvals, ${ledger.byReason.CONTROL_COMMAND} control commands, ${ledger.byReason.MANUAL_TRANSITION} manual transitions)`,
+      )
+    : (sources.audit as Truth<number>);
+  const autonomy: Truth<AutonomyAssessment> =
+    sources.autonomy ??
+    missing(
+      "not_available",
+      "No autonomy assessment was read by this caller; the level is never guessed.",
+      "BR-06",
+    );
   const mustNow = real(alerts.filter((a) => a.severity === "P0").length, "P0 alerts");
   const telemetry = (what: string) =>
     missing<number>("not_available", `${what} is not measured by any ICOS source yet.`, "BR-04");
@@ -904,11 +931,15 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
         health.level === "unknown"
           ? missing("unknown", health.reasons[0] ?? "")
           : real(health.level, "rolled up from alerts"),
-      autonomyLevel: missing(
-        "not_available",
-        "No autonomy assessment is produced by ICOS; the level is never guessed.",
-        "BR-06",
-      ),
+      autonomyLevel: !isReal(autonomy)
+        ? autonomy
+        : autonomy.value.level === "UNKNOWN"
+          ? missing("unknown", autonomy.value.levelReason, "BR-06")
+          : real(
+              autonomy.value.level,
+              `${autonomy.value.levelReason} [${autonomy.value.certification}]`,
+            ),
+      interventionDebt,
       activeMissions,
       activeWorkers,
       readyQueue,
@@ -929,5 +960,6 @@ export function buildCockpitSnapshot(sources: CockpitSources): CockpitSnapshot {
     timeline: isReal(sources.audit)
       ? real(toTimeline(sources.audit.value).slice(0, 40))
       : (sources.audit as Truth<TimelineEntry[]>),
+    autonomy,
   };
 }

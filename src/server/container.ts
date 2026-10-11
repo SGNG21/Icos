@@ -200,6 +200,10 @@ import { AISelectionEngine } from "./services/ai-selection/ai-selection-engine";
 import type { MissionRepository } from "@/server/mission/ports";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
+import {
+  autonomyAssessmentFor,
+  type AutonomyAssessmentPort,
+} from "@/server/autonomy/autonomy-evidence";
 import type { AutonomousMissionRuntimeRepository } from "@/server/autonomy/runtime";
 import {
   createOmniRouteAutonomousMissionPlanner,
@@ -321,6 +325,8 @@ export interface Container {
   dispatchAttempts: DispatchAttemptRepository;
   reviewer: ReviewerService;
   reviewDecisions: ReviewDecisionRepository;
+  /** BR-06: the L0–L6 assessment, computed from durable proofs only (never exposed as a guess). */
+  autonomyAssessment: AutonomyAssessmentPort;
   qualityControlJobs: QualityControlRepository;
   /** Durable Scheduler (ADR-0025) : file de jobs différés + point d'entrée applicatif. */
   scheduledJobs: ScheduledJobRepository;
@@ -566,6 +572,16 @@ export function buildMemoryContainer(seeds: ContainerSeeds = defaultSeeds): Cont
     dispatchAttempts,
     reviewer: new InMemoryReviewerService(),
     reviewDecisions,
+    /* A demo container declares no tier: its proofs can never be certified. */
+    autonomyAssessment: autonomyAssessmentFor(
+      {
+        audit: new InMemoryAuditRepository(auditLog),
+        goals: goalRepository,
+        missions: mission,
+        reviewDecisions,
+      },
+      undefined,
+    ),
     qualityControlJobs: new InMemoryQualityControlRepository(
       mission,
       tasksRepository,
@@ -1047,6 +1063,10 @@ export async function buildPostgresContainer(
     dispatchAttempts,
     reviewer,
     reviewDecisions,
+    autonomyAssessment: autonomyAssessmentFor(
+      { audit, goals: goalRepository, missions: mission, reviewDecisions },
+      env.ICOS_RUNTIME_TIER,
+    ),
     /* DEFECT 36: governed work completes on its INTEGRATION, not on its review (0049). */
     qualityControlJobs: new PostgresQualityControlRepository(
       handle.db,

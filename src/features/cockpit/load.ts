@@ -277,6 +277,14 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
     escalatedJobs,
     workspaces,
     truth: (await loadTruthProjection()) ?? undefined,
+    /* BR-06: tenant-wide proofs (goals, gate reports, reviews) → owner/admin scope only. */
+    autonomy: global
+      ? await read("Autonomy assessment", () => container.autonomyAssessment.current())
+      : missing(
+          "not_available",
+          "The autonomy assessment is visible to owner/admin scope only.",
+          "BR-06",
+        ),
   };
 });
 

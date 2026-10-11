@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { interventionDetails } from "@/core/autonomy/intervention";
 import type { AuditEntry } from "@/core/contracts";
 import {
   COMMAND_SPECS,
@@ -466,7 +467,12 @@ function auditEntry(
     id,
     eventType,
     actor: { kind: "human", id: userId },
-    details: detail,
+    details: {
+      ...detail,
+      // BR-07: an EXECUTED control command is a human act the runtime needed; tagged at the
+      // source so the cockpit counts debt, not proxies. Rejected/admitted commands are not debt.
+      ...(eventType === "control.command.executed" ? interventionDetails("CONTROL_COMMAND") : {}),
+    },
     occurredAt: at,
     createdAt: at,
   };

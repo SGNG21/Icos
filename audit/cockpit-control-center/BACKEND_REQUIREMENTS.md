@@ -57,6 +57,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - RISK: low
 - BLOCKING_OR_NOT: yes for the score; level is shown as UNKNOWN (never guessed)
 - SUGGESTED_INTERFACE: `AutonomyAssessmentPort.current(): { level: "L0".."L6", dimensions: {...}, evidence: string[] }`
+- STATUS (2026-10-11, FABLE 5.1): IMPLEMENTED on `feat/br06-autonomy-center` — `container.autonomyAssessment` (`src/server/autonomy/autonomy-evidence.ts`, pure ladder in `src/core/autonomy/assessment.ts`), durable proofs only (goal conversions, execution callbacks, review decisions, gate reports, self-development goals); UNKNOWN when a source is unreadable, UNPROVEN when read and empty; certification CODE_READY / LAB_CERTIFIED / LIVE_CERTIFIED from `ICOS_RUNTIME_TIER`; L5/L6 declared unmeasurable; `pnpm autonomy:assess` reproduces the measurement. The in-memory `SelfDevelopmentMetrics` counters are deliberately not exposed as evidence (they reset at boot).
 
 ### BR-07 — Human intervention ledger (autonomy debt)
 - UI_FEATURE: HUMAN INTERVENTIONS, MANUAL INTERVENTION DEBT
@@ -65,6 +66,7 @@ Legend — BLOCKING: `yes` = the UI feature cannot show anything real without it
 - RISK: low
 - BLOCKING_OR_NOT: no
 - SUGGESTED_INTERFACE: audit `details.intervention = true` + reason code
+- STATUS (2026-10-11, FABLE 5.1): PARTIALLY IMPLEMENTED on `feat/br06-autonomy-center` — `src/core/autonomy/intervention.ts` (`interventionDetails`, `interventionLedger`); tagged at the source by `record-action-decision.ts` (APPROVAL_DECISION, human decider) and `control/command-bus.ts` (CONTROL_COMMAND, executed commands only). The cockpit counts TAGGED entries as debt and names untagged human entries as a proxy, apart. Not yet tagged: manual task transitions (MANUAL_TRANSITION reserved), mission holds/re-drives (BR-24), manual RETRY_TASK (BR-23).
 
 ### BR-08 — Improvement candidates (ICOS improves ICOS)
 - UI_FEATURE: SELF-DEVELOPMENT view

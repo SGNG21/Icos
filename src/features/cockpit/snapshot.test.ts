@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { AutonomyAssessment } from "@/core/autonomy/assessment";
+import { interventionDetails } from "@/core/autonomy/intervention";
 import type { AuditEntry, Task } from "@/core/contracts";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
@@ -245,23 +247,35 @@ describe("missions, focus and timeline", () => {
     expect(snap.missions.kind === "real" && snap.missions.value[0].id).toBe("m2");
   });
 
-  it("orders the timeline newest first and counts human interventions", () => {
-    const entry = (id: string, at: string, kind: "human" | "system", type = "task.transitioned") =>
+  it("orders the timeline newest first and counts TAGGED human interventions (BR-07)", () => {
+    const entry = (
+      id: string,
+      at: string,
+      kind: "human" | "system",
+      type = "task.transitioned",
+      details: AuditEntry["details"] = {},
+    ) =>
       ({
         id,
         occurredAt: at,
         createdAt: at,
         eventType: type,
         actor: { kind, id: kind },
-        details: {},
+        details,
       }) as AuditEntry;
     const snap = buildCockpitSnapshot(
       sources({
         audit: real([
+          // Untagged human entry: the legacy proxy, named in the derivation, never counted as debt.
           entry("1", "2026-09-28T10:00:00Z", "human"),
           entry("2", "2026-09-28T11:00:00Z", "system"),
           entry("3", "2026-09-28T09:00:00Z", "human", "auth.login.succeeded"),
           entry("4", "2026-09-20T09:00:00Z", "human"),
+          // Tagged at its source: an approval a mission needed.
+          entry("5", "2026-09-28T08:00:00Z", "human", "approval.recorded", {
+            ...interventionDetails("APPROVAL_DECISION"),
+            missionId: "m1",
+          }),
         ]),
       }),
     );
@@ -269,9 +283,50 @@ describe("missions, focus and timeline", () => {
       "2",
       "1",
       "3",
+      "5",
       "4",
     ]);
-    expect(snap.metrics.humanInterventions).toMatchObject({ kind: "real", value: 1 });
+    expect(snap.metrics.humanInterventions).toMatchObject({
+      kind: "real",
+      value: 1,
+      derivation: expect.stringContaining("1 untagged human entries counted apart as a proxy"),
+    });
+    expect(snap.metrics.interventionDebt).toMatchObject({ kind: "real", value: 1 });
+  });
+
+  it("the autonomy level is the assessment's, UNKNOWN stays a miss, and absence is a miss (BR-06)", () => {
+    const assessment = {
+      level: "L1",
+      levelReason: "L1: Planning proven (2).",
+      unmeasurableLevels: ["L5", "L6"],
+      certification: "LAB_CERTIFIED",
+      tier: "lab",
+      dimensions: [],
+      limits: [],
+      assessedAt: NOW.toISOString(),
+    } as unknown as AutonomyAssessment;
+    expect(
+      buildCockpitSnapshot(sources({ autonomy: real(assessment) })).metrics.autonomyLevel,
+    ).toMatchObject({
+      kind: "real",
+      value: "L1",
+      derivation: "L1: Planning proven (2). [LAB_CERTIFIED]",
+    });
+    expect(
+      buildCockpitSnapshot(
+        sources({
+          autonomy: real({
+            ...assessment,
+            level: "UNKNOWN",
+            levelReason: "L2 cannot be decided: Routing evidence could not be read.",
+          }),
+        }),
+      ).metrics.autonomyLevel,
+    ).toMatchObject({ kind: "unknown", requirement: "BR-06" });
+    expect(buildCockpitSnapshot(sources({})).metrics.autonomyLevel).toMatchObject({
+      kind: "not_available",
+      requirement: "BR-06",
+    });
   });
 
   it("counts review backlog from canonical task status", () => {
