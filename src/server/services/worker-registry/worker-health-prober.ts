@@ -1,4 +1,5 @@
 import type {
+  WorkerProbeErrorClass,
   WorkerProbeOutcome,
   WorkerRegistryEntry,
   WorkerRuntimeDescriptor,
@@ -6,6 +7,7 @@ import type {
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 import type { WorkerRegistrationService } from "./worker-registration-service";
 import { HEALTH_EVIDENCE_MAX_AGE_MS } from "@/core/workers/worker-eligibility";
+import { probeFailureClass } from "@/server/workers/compute-fleet";
 
 /**
  * Autonomous worker health probing (M5.2, defect 14).
@@ -108,8 +110,10 @@ export interface WorkerProbeRecord {
   outcome: WorkerProbeOutcome;
   health: WorkerRegistryEntry["health"];
   availability: WorkerRegistryEntry["availability"];
-  /** Present only for a failed probe. */
+  /** Present only for a failed probe. In-memory report only: never persisted. */
   error?: string;
+  /** Present only for a failed probe: the class persisted on the worker (migration 0062). */
+  errorClass?: WorkerProbeErrorClass;
 }
 
 export interface WorkerHealthSweepReport {
@@ -209,17 +213,27 @@ export class WorkerHealthProber {
        * unhealthy and unavailable until it does. This is the branch that stops
        * a transport error from silently passing as health.
        */
+      const message = error instanceof Error ? error.message : String(error);
+      /*
+       * The CAUSE is persisted as a closed class, never as the message: the message may
+       * be a gateway's own text, and a durable column outlives any redaction we did not
+       * write. Without the class a fleet with no provider credential reads exactly like a
+       * fleet whose provider is down.
+       */
+      const errorClass = probeFailureClass(message);
       await this.registration.probe(worker.id, {
         health: "unhealthy",
         availability: "unavailable",
         outcome: "failed",
+        errorClass,
       });
       return {
         workerId: worker.id,
         outcome: "failed",
         health: "unhealthy",
         availability: "unavailable",
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
+        errorClass,
       };
     }
   }

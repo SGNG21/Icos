@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemoryWorkerRegistryStore } from "@/server/services/in-memory/worker-registry-store";
-import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
+import {
+  FLEET_RETIREMENT_METADATA_KEY,
+  FLEET_RETIREMENT_ORPHAN,
+  WorkerRegistrationService,
+} from "@/server/services/worker-registry/worker-registration-service";
 import { CapabilityRouter } from "@/server/routing/capability-router";
 
 /*
@@ -176,20 +180,95 @@ describe("worker registration", () => {
     expect(await store.list()).toEqual([]);
   });
 
-  it("deactivate keeps the declaration and the last probe but stops routing", async () => {
+  it("deactivate keeps the declaration and the probe date, clears health, and stops routing", async () => {
     const { service, store, router } = harness();
     await service.register(declaration(WORKER_A, ["code-generation"]));
-    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    const probed = await service.probe(WORKER_A, { health: "healthy", availability: "available" });
 
     await service.deactivate(WORKER_A);
 
     const stored = await store.get(WORKER_A);
     expect(stored?.status).toBe("inactive");
-    expect(stored?.health).toBe("healthy");
+    /*
+     * A disabled worker is never probed again, so a kept `healthy` would be a verdict
+     * nothing refreshes or expires — and every reader counting `health = 'healthy'` saw
+     * disabled capacity as routable. Health is reset; the probe DATE stays for audit.
+     */
+    expect(stored?.health).toBe("unknown");
+    expect(stored?.availability).toBe("unknown");
+    expect(stored?.lastProbeOutcome).toBe("stale");
+    expect(stored?.lastProbeAt).toBe(probed?.lastProbeAt);
     expect(stored?.capabilities).toEqual(["code-generation"]);
     expect((await router.route({ requiredCapabilities: ["code-generation"] })).decision).toBe(
       "NO_ELIGIBLE_WORKER",
     );
+  });
+
+  it("DISABLED_WHILE_HEALTHY_NOT_ROUTABLE_ANYWHERE: deactivate leaves no 'healthy' for any reader to count", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+
+    await service.deactivate(WORKER_A);
+    const disabled = (await store.get(WORKER_A))!;
+    /* The exact predicate the self-model probe used to count routable workers. */
+    expect(disabled.health === "healthy" && disabled.availability === "available").toBe(false);
+
+    /* Re-enable is still "never probed": nothing from before the disable is trusted. */
+    await service.reactivate(WORKER_A);
+    const enabled = (await store.get(WORKER_A))!;
+    expect(enabled.status).toBe("active");
+    expect(enabled.lastProbeOutcome).toBe("never");
+    expect(enabled.lastProbeAt).toBeNull();
+  });
+
+  it("deactivating a never-probed worker keeps 'never' (no undatable 'stale')", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+
+    await service.deactivate(WORKER_A);
+
+    const stored = (await store.get(WORKER_A))!;
+    expect(stored.lastProbeOutcome).toBe("never");
+    expect(stored.lastProbeAt).toBeNull();
+    expect(stored.lastProbeErrorClass ?? null).toBeNull();
+  });
+
+  it("a failed probe without a class is recorded UNKNOWN; success clears the class", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+
+    await service.probe(WORKER_A, { health: "unhealthy", availability: "unavailable", outcome: "failed" });
+    expect((await store.get(WORKER_A))!.lastProbeErrorClass).toBe("UNKNOWN");
+
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    expect((await store.get(WORKER_A))!.lastProbeErrorClass).toBeNull();
+  });
+
+  it("retireFleetOrphan marks and deactivates once; reactivate clears the mark", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+
+    const retired = await service.retireFleetOrphan(WORKER_A);
+    expect(retired?.status).toBe("inactive");
+    expect(retired?.metadata[FLEET_RETIREMENT_METADATA_KEY]).toBe(FLEET_RETIREMENT_ORPHAN);
+    /* Idempotent: a second call writes nothing. */
+    expect(await service.retireFleetOrphan(WORKER_A)).toEqual(retired);
+
+    await service.reactivate(WORKER_A);
+    expect((await store.get(WORKER_A))!.metadata[FLEET_RETIREMENT_METADATA_KEY]).toBeUndefined();
+    expect(await service.retireFleetOrphan("33333333-3333-4333-8333-333333333333")).toBeNull();
+  });
+
+  it("retireFleetOrphan never relabels a worker an operator already disabled", async () => {
+    const { service, store } = harness();
+    await service.register(declaration(WORKER_A, ["code-generation"]));
+    await service.deactivate(WORKER_A);
+    const disabled = await store.get(WORKER_A);
+
+    await service.retireFleetOrphan(WORKER_A);
+
+    expect(await store.get(WORKER_A)).toEqual(disabled);
   });
 
   it("deregister removes the worker and reports whether anything was removed", async () => {

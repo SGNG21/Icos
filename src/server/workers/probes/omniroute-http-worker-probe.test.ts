@@ -533,7 +533,8 @@ describe("OmniRoute HTTP worker probe", () => {
 
     /* And availability alone is not routability: taken out of rotation, it routes nothing. */
     await registration.deactivate(declaration.id);
-    expect((await store.get(declaration.id))?.health).toBe("healthy");
+    /* Disabled is not healthy: a worker nothing observes keeps no health verdict. */
+    expect((await store.get(declaration.id))?.health).toBe("unknown");
     expect((await router.route({ requiredCapabilities: ["code_editing"] })).decision).toBe(
       "NO_ELIGIBLE_WORKER",
     );

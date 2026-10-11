@@ -407,6 +407,13 @@
       "when": 1791232012287,
       "tag": "0060_assignment_cancelled",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1791232014287,
+      "tag": "0062_fleet_readiness_evidence",
+      "breakpoints": true
     }
   ]
 }

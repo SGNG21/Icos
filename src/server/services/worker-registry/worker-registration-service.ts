@@ -2,6 +2,7 @@ import {
   workerRegistryEntrySchema,
   type WorkerAvailability,
   type WorkerHealth,
+  type WorkerProbeErrorClass,
   type WorkerProbeOutcome,
   type WorkerRegistryEntry,
 } from "@/core/contracts/worker-registry";
@@ -63,7 +64,24 @@ export interface WorkerProbe {
    * passed silently.
    */
   outcome?: WorkerProbeOutcome;
+  /**
+   * Why a FAILED probe failed (migration 0062). Only meaningful with `outcome: "failed"`,
+   * where an absent class is recorded `UNKNOWN` — a failure is never stored without one.
+   * `stale` keeps the class already stored (the last known cause); every other outcome
+   * clears it. A closed class, never error text.
+   */
+  errorClass?: WorkerProbeErrorClass;
 }
+
+/**
+ * Metadata key marking a compute worker the fleet reconciler RETIRED because the provider
+ * stopped listing it (see `retireFleetOrphan`). Its presence is what distinguishes a
+ * reconciler retirement — which the reconciler may undo — from an operator's
+ * `DISABLE_WORKER`, which it must never undo.
+ */
+export const FLEET_RETIREMENT_METADATA_KEY = "fleetRetirement";
+/** The one retirement reason the reconciler records. */
+export const FLEET_RETIREMENT_ORPHAN = "ORPHAN_NOT_LISTED";
 
 /**
  * The DECLARATION fields of a worker — everything registration owns, and nothing
@@ -165,6 +183,7 @@ export class WorkerRegistrationService {
       availability: "unknown",
       lastProbeAt: null,
       lastProbeOutcome: "never",
+      lastProbeErrorClass: null,
       tags: input.tags ?? [],
       metadata: input.metadata ?? {},
       maxConcurrency: input.maxConcurrency ?? 1,
@@ -198,20 +217,36 @@ export class WorkerRegistrationService {
     }
 
     const at = this.now().toISOString();
+    const outcome = probe.outcome ?? "ok";
 
     return this.workers.upsert({
       ...existing,
       health: probe.health,
       availability: probe.availability,
       lastProbeAt: at,
-      lastProbeOutcome: probe.outcome ?? "ok",
+      lastProbeOutcome: outcome,
+      lastProbeErrorClass:
+        outcome === "failed"
+          ? (probe.errorClass ?? "UNKNOWN")
+          : outcome === "stale"
+            ? (existing.lastProbeErrorClass ?? null)
+            : null,
       updatedAt: at,
     });
   }
 
   /**
    * Takes a worker out of rotation without forgetting it, preserving its
-   * capability declaration and its last probe for audit.
+   * capability declaration, the DATE of its last probe and that probe's failure
+   * class for audit.
+   *
+   * Its health and availability are reset to `unknown` and the evidence marked
+   * `stale` (or left `never` if it was never probed). A disabled worker is no
+   * longer observed — the prober skips inactive rows — so a `healthy` kept on it
+   * was a verdict nothing would ever refresh or expire, and every reader that
+   * counted `health = 'healthy'` saw a disabled worker as routable capacity.
+   * `reactivate()` resets the evidence to "never probed" anyway, so nothing that
+   * routes ever relied on the preserved value.
    */
   async deactivate(workerId: string): Promise<WorkerRegistryEntry | null> {
     const existing = await this.workers.get(workerId);
@@ -219,10 +254,44 @@ export class WorkerRegistrationService {
       return null;
     }
 
-    return this.workers.upsert({
+    return this.workers.upsert(this.deactivated(existing));
+  }
+
+  private deactivated(existing: WorkerRegistryEntry): WorkerRegistryEntry {
+    const probed = existing.lastProbeAt !== null;
+    return {
       ...existing,
       status: "inactive",
+      health: "unknown",
+      availability: "unknown",
+      lastProbeOutcome: probed ? "stale" : "never",
+      lastProbeErrorClass: probed ? (existing.lastProbeErrorClass ?? null) : null,
       updatedAt: this.now().toISOString(),
+    };
+  }
+
+  /**
+   * Retires a compute worker the provider no longer lists (fleet reconciliation).
+   *
+   * Exactly `deactivate()`, plus the retirement marker in metadata, written in the
+   * SAME row write so the two can never disagree. The marker is the only thing that
+   * lets the reconciler later reinstate this worker without ever touching a worker an
+   * operator disabled. Returns null for an unknown worker and leaves a worker that is
+   * already not active untouched (idempotent; an operator's disable is not relabelled).
+   */
+  async retireFleetOrphan(workerId: string): Promise<WorkerRegistryEntry | null> {
+    const existing = await this.workers.get(workerId);
+    if (!existing) {
+      return null;
+    }
+    if (existing.status !== "active") {
+      return existing;
+    }
+
+    const retired = this.deactivated(existing);
+    return this.workers.upsert({
+      ...retired,
+      metadata: { ...existing.metadata, [FLEET_RETIREMENT_METADATA_KEY]: FLEET_RETIREMENT_ORPHAN },
     });
   }
 
@@ -240,6 +309,10 @@ export class WorkerRegistrationService {
       return null;
     }
 
+    /* A re-enabled worker is no longer retired, whoever re-enabled it. */
+    const metadata = { ...existing.metadata };
+    delete metadata[FLEET_RETIREMENT_METADATA_KEY];
+
     return this.workers.upsert({
       ...existing,
       status: "active",
@@ -247,6 +320,8 @@ export class WorkerRegistrationService {
       availability: "unknown",
       lastProbeAt: null,
       lastProbeOutcome: "never",
+      lastProbeErrorClass: null,
+      metadata,
       updatedAt: this.now().toISOString(),
     });
   }

@@ -28,6 +28,27 @@ export type WorkerAvailability = z.infer<typeof workerAvailabilitySchema>;
 export const workerProbeOutcomeSchema = z.enum(["never", "ok", "failed", "unsupported", "stale"]);
 export type WorkerProbeOutcome = z.infer<typeof workerProbeOutcomeSchema>;
 
+/**
+ * WHY the last probe failed, as a closed class (migration 0062).
+ *
+ * The prober used to discard the reason and write `unhealthy/failed` alone, so a fleet
+ * with no provider credential read exactly like a fleet whose provider was down. The
+ * class is derived from the probe error by `classifyProbeFailure`; the RAW error text is
+ * never stored — a gateway or HTTP library may embed a header or a URL in it, and a
+ * durable column is the wrong place to find out.
+ *
+ * Present only while the evidence it explains stands: set on `failed`, kept on `stale`
+ * (the last known cause), cleared by `ok`, `unsupported` and any evidence reset.
+ */
+export const workerProbeErrorClassSchema = z.enum([
+  "NOT_CONFIGURED",
+  "AUTH_FAILURE",
+  "RATE_LIMITED",
+  "UNAVAILABLE",
+  "UNKNOWN",
+]);
+export type WorkerProbeErrorClass = z.infer<typeof workerProbeErrorClassSchema>;
+
 /** Descriptor of a worker's capability (we reuse the capability key). */
 export type WorkerCapabilityDescriptor = z.infer<typeof capabilityKeySchema>;
 
@@ -86,6 +107,14 @@ export const workerRegistryEntrySchema = z.object({
    * must be visible as a failure, never collapse into "we have not looked".
    */
   lastProbeOutcome: workerProbeOutcomeSchema.default("never"),
+  /**
+   * The class of the last FAILED probe (migration 0062). null when the current evidence
+   * is not a failure. Never raw error text.
+   *
+   * OPTIONAL on purpose: absent and null mean the same thing ("no failure class"), so every
+   * entry built before this field existed stays a valid entry. Read it as `?? null`.
+   */
+  lastProbeErrorClass: workerProbeErrorClassSchema.nullable().optional(),
   /**
    * Concurrent executions this worker may hold at once (M5.5).
    *

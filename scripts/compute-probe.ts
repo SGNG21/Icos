@@ -23,7 +23,7 @@ import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import {
   candidateRegistration,
   classifyModels,
-  classifyProbeFailure,
+  probeFailureClass,
   listOmniRouteModels,
   representativeModels,
 } from "@/server/workers/compute-fleet";
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
         .join("<redacted>");
       result = {
         ok: false,
-        classification: /TIMEOUT/.test(message) ? "UNKNOWN" : classifyProbeFailure(message),
+        classification: probeFailureClass(message),
         detail: message,
       };
     }
