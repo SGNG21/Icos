@@ -51,7 +51,7 @@ const GATE_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
  * never an ancestor of it: a grant that broad would be no sandbox at all.
  */
 export function defaultToolchainReadOnlyPaths(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Readonly<Record<string, string | undefined>> = process.env,
   home: string = homedir(),
 ): string[] {
   const candidates = [

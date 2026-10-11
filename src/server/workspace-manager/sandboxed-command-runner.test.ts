@@ -128,25 +128,18 @@ describe("defaultToolchainReadOnlyPaths — jamais le HOME, jamais un ancêtre",
   it("refuse un chemin relatif, absent, le HOME lui-même, ou la racine", () => {
     const home = homedir();
     const got = defaultToolchainReadOnlyPaths(
-      { PNPM_STORE_DIR: "relative/store", XDG_DATA_HOME: "/nonexistent-xdg" } as NodeJS.ProcessEnv,
+      { PNPM_STORE_DIR: "relative/store", XDG_DATA_HOME: "/nonexistent-xdg" },
       home,
     );
     for (const p of got) {
       expect(path.isAbsolute(p)).toBe(true);
       expect(home === p || home.startsWith(`${p}/`)).toBe(false);
     }
+    expect(defaultToolchainReadOnlyPaths({ PNPM_STORE_DIR: home }, home)).not.toContain(home);
     expect(
-      defaultToolchainReadOnlyPaths({ PNPM_STORE_DIR: home } as NodeJS.ProcessEnv, home),
-    ).not.toContain(home);
-    expect(
-      defaultToolchainReadOnlyPaths(
-        { PNPM_STORE_DIR: path.dirname(home) } as NodeJS.ProcessEnv,
-        home,
-      ),
+      defaultToolchainReadOnlyPaths({ PNPM_STORE_DIR: path.dirname(home) }, home),
     ).not.toContain(path.dirname(home));
-    expect(
-      defaultToolchainReadOnlyPaths({ PNPM_STORE_DIR: "/" } as NodeJS.ProcessEnv, "/nohome"),
-    ).toEqual([]);
+    expect(defaultToolchainReadOnlyPaths({ PNPM_STORE_DIR: "/" }, "/nohome")).toEqual([]);
   });
 });
 
