@@ -168,6 +168,12 @@ export interface CapabilityRouterOptions {
   steersModel?: (runtime: WorkerRegistryEntry["runtime"]) => boolean;
   /** Budget for a candidate that declares none: ITS runtime's configured timeout. */
   defaultBudgetMs?: (runtime: WorkerRegistryEntry["runtime"]) => number | undefined;
+  /**
+   * The SYSTEM model allowlist (ICOS_AUTONOMY_ALLOWED_MODELS), applied to the workers that
+   * spend: before it, only the planner was checked against it. A worker refused here is not a
+   * candidate at all. Absent: every worker is a candidate, exactly as before.
+   */
+  modelAllowed?: (worker: WorkerRegistryEntry) => boolean;
 }
 
 export class CapabilityRouter {
@@ -190,7 +196,9 @@ export class CapabilityRouter {
     incoming: WorkerRequirement,
     compute?: ComputeRequest,
   ): Promise<CapabilityRoutingResult> {
-    const pool = await this.workers.list();
+    const registered = await this.workers.list();
+    const allowed = this.options.modelAllowed;
+    const pool = allowed ? registered.filter((w) => allowed(w)) : registered;
     const now = this.now();
 
     /*
@@ -237,6 +245,18 @@ export class CapabilityRouter {
           now.toISOString(),
         ),
         now: now.toISOString(),
+      };
+    }
+
+    if (pool.length === 0 && registered.length > 0) {
+      /* Not transient: only a change of policy can make a refused model eligible. */
+      return {
+        decision: "NO_ELIGIBLE_WORKER",
+        worker: null,
+        requirement,
+        candidates: [],
+        transient: false,
+        reason: `MODEL_NOT_ALLOWED: none of the ${registered.length} registered workers runs a model the system allowlist permits.`,
       };
     }
 
