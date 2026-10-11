@@ -38,6 +38,7 @@ describe("transitions valides", () => {
     ["queued", "awaiting_approval"],
     ["queued", "running"],
     ["awaiting_approval", "running"],
+    ["awaiting_approval", "queued"],
     ["running", "succeeded"],
     ["running", "failed"],
     ["running", "cancelled"],

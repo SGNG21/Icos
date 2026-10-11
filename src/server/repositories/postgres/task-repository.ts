@@ -13,6 +13,7 @@ import type {
   CreateTaskInput,
   CreateTaskResult,
   TaskRepository,
+  TaskTransitionAudit,
   TransitionTaskResult,
 } from "@/server/repositories/ports";
 
@@ -146,7 +147,11 @@ export class PostgresTaskRepository implements TaskRepository {
     };
   }
 
-  async transition(taskId: string, to: TaskStatus): Promise<TransitionTaskResult> {
+  async transition(
+    taskId: string,
+    to: TaskStatus,
+    audit?: TaskTransitionAudit,
+  ): Promise<TransitionTaskResult> {
     const rows = await this.db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
     if (!rows[0]) {
       return { ok: false, reason: "task_not_found", message: `tâche inconnue : ${taskId}` };
@@ -162,11 +167,13 @@ export class PostgresTaskRepository implements TaskRepository {
       id: `audit-${randomUUID()}`,
       occurredAt: result.task.updatedAt,
       eventType: "task.transitioned",
-      actor: current.assignedAgentId
-        ? { kind: "agent", id: current.assignedAgentId }
-        : { kind: "system", id: "icos" },
+      actor:
+        audit?.actor ??
+        (current.assignedAgentId
+          ? { kind: "agent", id: current.assignedAgentId }
+          : { kind: "system", id: "icos" }),
       taskId: current.id,
-      details: { from: current.status, to },
+      details: { ...(audit?.details ?? {}), from: current.status, to },
       createdAt: result.task.updatedAt,
     };
 

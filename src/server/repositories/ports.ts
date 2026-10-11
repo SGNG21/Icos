@@ -3,6 +3,7 @@ import type {
  AgentAction,
  Approval,
  ApprovalStatus,
+ AuditActor,
  AuditEntry,
  Task,
  TaskStatus,
@@ -100,7 +101,23 @@ export interface TaskRepository {
   getById(id: string): Promise<Task | null>;
   getByIdForScope(id: string, scope: AgentScope): Promise<Task | null>;
   create(input: CreateTaskInput): Promise<CreateTaskResult>;
-  transition(taskId: string, to: TaskStatus): Promise<TransitionTaskResult>;
+  /**
+   * `audit` lets the caller name WHO decided and WHY, recorded in the same transaction as the
+   * status change. It can add details and name the actor; it cannot change `from`/`to`.
+   */
+  transition(
+    taskId: string,
+    to: TaskStatus,
+    audit?: TaskTransitionAudit,
+  ): Promise<TransitionTaskResult>;
+}
+
+/** Optional attribution for one task transition's audit entry. */
+export interface TaskTransitionAudit {
+  /** Defaults to the assigned agent, else the system. A human decision names the human. */
+  actor?: AuditActor;
+  /** Extra details, merged UNDER the canonical `from`/`to` (which always win). */
+  details?: Record<string, unknown>;
 }
 
 export interface ActionQuery {

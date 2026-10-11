@@ -1,8 +1,12 @@
 import type { TaskStatus } from "@/core/contracts";
-import type { TaskRepository, TransitionTaskResult } from "@/server/repositories/ports";
+import type {
+  TaskRepository,
+  TaskTransitionAudit,
+  TransitionTaskResult,
+} from "@/server/repositories/ports";
 
 export interface TransitionTaskDeps {
-  tasks: TaskRepository;
+  tasks: Pick<TaskRepository, "transition">;
 }
 
 /**
@@ -12,7 +16,9 @@ export interface TransitionTaskDeps {
  */
 export function transitionTask(
   deps: TransitionTaskDeps,
-  input: { taskId: string; to: TaskStatus },
+  input: { taskId: string; to: TaskStatus; audit?: TaskTransitionAudit },
 ): Promise<TransitionTaskResult> {
-  return deps.tasks.transition(input.taskId, input.to);
+  return input.audit
+    ? deps.tasks.transition(input.taskId, input.to, input.audit)
+    : deps.tasks.transition(input.taskId, input.to);
 }
