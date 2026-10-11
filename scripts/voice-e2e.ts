@@ -62,6 +62,84 @@ if (!authOnlyMode && wavs.length !== 3) {
 const origin = new URL(base).origin;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/* ── OBSERVABILITY ─────────────────────────────────────────────────────────────────────
+ * Every line is timestamped twice: wall clock, so it can be matched against
+ * `journalctl -u icos-web`, and elapsed, so a stall is visible without arithmetic.
+ */
+const T0 = Date.now();
+const since = () => `+${((Date.now() - T0) / 1000).toFixed(1)}s`;
+const log = (line: string) => console.log(`[${new Date().toISOString()} ${since()}] ${line}`);
+
+let phase = "startup";
+const setPhase = (next: string) => {
+  phase = next;
+  log(`── ${next}`);
+};
+
+/** Live sockets and their inboxes: closed on exit, dumped if the global budget expires. */
+const openSockets: WebSocket[] = [];
+const traced: { name: string; inbox: { at: number; m: ServerMessage }[] }[] = [];
+const closeAll = () => {
+  for (const ws of openSockets) {
+    try {
+      if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close();
+    } catch {
+      /* already gone */
+    }
+  }
+};
+
+/** The report is module-scoped so the budget timer can dump whatever exists so far. */
+const report: Record<string, unknown> = {};
+
+const tail = (inbox: { at: number; m: ServerMessage }[], n = 12) =>
+  inbox.slice(-n).map((e) => `${((e.at - T0) / 1000).toFixed(1)}s ${e.m.type}`);
+
+function diagnostic(reason: string): void {
+  console.error(`\n=== E2E DIAGNOSTIC (${reason}) ===`);
+  console.error(`phase        : ${phase}`);
+  console.error(`elapsed      : ${since()}`);
+  console.error(`open sockets : ${openSockets.filter((w) => w.readyState === w.OPEN).length}`);
+  for (const t of traced) console.error(`${t.name} last frames: ${tail(t.inbox).join(" | ")}`);
+  console.error(`partial report:\n${JSON.stringify(report, null, 2)}`);
+}
+
+/*
+ * A BOUNDED RUN. Without this the worst case was the sum of sixteen 150 s waits -- forty
+ * minutes of silence. The budget is deliberately shorter than anyone's patience.
+ */
+const BUDGET_MS = Number(process.env.VOICE_E2E_BUDGET_MS ?? 300_000);
+const budget = setTimeout(() => {
+  diagnostic(`global budget of ${BUDGET_MS / 1000}s expired`);
+  closeAll();
+  process.exit(2);
+}, BUDGET_MS);
+
+/**
+ * One HTTP read, bounded and loud: a 4xx/5xx from the cognitive API used to be invisible
+ * (`body.turns ?? []` swallowed it and the poll just kept going until its budget ran out).
+ */
+async function getJson<T>(path: string, cookie: string, timeoutMs = 15_000): Promise<T | null> {
+  const started = Date.now();
+  try {
+    const res = await fetch(`${base}${path}`, {
+      headers: { cookie, origin },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const ms = Date.now() - started;
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 200).replace(/\s+/g, " ");
+      log(`HTTP ${res.status} ${path} (${ms}ms) — ${body}`);
+      return null;
+    }
+    log(`HTTP ${res.status} ${path} (${ms}ms)`);
+    return (await res.json()) as T;
+  } catch (error) {
+    log(`HTTP FAILED ${path} (${Date.now() - started}ms) — ${error instanceof Error ? error.message : error}`);
+    return null;
+  }
+}
+
 function pcm(path: string): Buffer {
   const wav = readFileSync(path);
   const fmt = wav.indexOf("fmt ");
@@ -123,6 +201,7 @@ async function signIn(): Promise<string> {
  */
 async function authOnly(): Promise<void> {
   const cookie = await signIn();
+  log("sign-in OK, session cookie held (names only, never values)");
   /* Names only: a cookie value is a bearer credential. */
   const names = cookie.split("; ").map((c) => c.split("=")[0]);
   console.log(`SET_COOKIE_RECEIVED=YES names=${names.join(",")}`);
@@ -142,32 +221,67 @@ async function authOnly(): Promise<void> {
 }
 
 type Client = {
+  name: string;
   ws: WebSocket;
   inbox: { at: number; m: ServerMessage }[];
   send: (m: object) => void;
   until: (p: (m: ServerMessage) => boolean, timeoutMs?: number) => Promise<ServerMessage>;
 };
 
+let connections = 0;
+
+/*
+ * The label comes from the predicate's own source, so a wait can never be described
+ * wrongly and no call site had to be edited to gain a name.
+ */
+const describePredicate = (p: (m: ServerMessage) => boolean) =>
+  p
+    .toString()
+    .replace(/\s+/g, " ")
+    .replace(/^\(?m\)? *=> */, "")
+    .replace(/m\.type === /g, "")
+    .slice(0, 100);
+
 function connect(cookie: string): Promise<Client> {
   const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/voice/ws`, {
     headers: { cookie, origin },
   });
+  const name = `conn#${++connections}`;
   const inbox: Client["inbox"] = [];
+  openSockets.push(ws);
+  traced.push({ name, inbox });
   ws.on("message", (data) =>
     inbox.push({ at: Date.now(), m: JSON.parse(String(data)) as ServerMessage }),
   );
+  ws.on("close", (code) => log(`${name} closed (code ${code})`));
   const client: Client = {
+    name,
     ws,
     inbox,
     send: (m) => ws.send(JSON.stringify(m)),
-    until: async (predicate, timeoutMs = 150_000) => {
+    /*
+     * BOUNDED AND NARRATED. 60 s, not 150: every legitimate wait here is seconds, and the
+     * old default meant one stalled provider cost two and a half minutes of silence.
+     */
+    until: async (predicate, timeoutMs = 60_000) => {
+      const label = describePredicate(predicate);
       const start = Date.now();
+      log(`WAIT  ${name} ${label}  (budget ${timeoutMs / 1000}s)`);
       let seen = 0;
       while (Date.now() - start < timeoutMs) {
-        for (; seen < inbox.length; seen++) if (predicate(inbox[seen].m)) return inbox[seen].m;
+        for (; seen < inbox.length; seen++) {
+          if (predicate(inbox[seen].m)) {
+            log(`OK    ${name} ${inbox[seen].m.type} after ${Date.now() - start}ms`);
+            return inbox[seen].m;
+          }
+        }
         await sleep(20);
       }
-      throw new Error("timed out waiting for a server message");
+      /* What DID arrive is the whole diagnosis: engine silent, or harness waiting wrong. */
+      throw new Error(
+        `TIMEOUT after ${Date.now() - start}ms in phase "${phase}" waiting for ${label}; ` +
+          `${name} received: ${tail(inbox).join(" | ") || "nothing"}`,
+      );
     },
   };
   return new Promise((resolve, reject) => {
@@ -197,6 +311,25 @@ async function speak(c: Client, turnId: string, audio: Buffer, start = true) {
   c.send({ type: "turn", turnId, signal: "TURN_COMMIT" });
 }
 
+/**
+ * A wait whose failure is DATA, not a discarded boolean. `.catch(() => false)` is what made
+ * `turnAccepted: false` unexplainable: the message named the cause and was thrown away.
+ */
+async function tryUntil(
+  c: Client,
+  predicate: (m: ServerMessage) => boolean,
+  timeoutMs: number,
+): Promise<{ ok: boolean; why?: string }> {
+  try {
+    await c.until(predicate, timeoutMs);
+    return { ok: true };
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    log(`NOT OK ${c.name}: ${why}`);
+    return { ok: false, why };
+  }
+}
+
 const of = (c: Client, type: string, turnId?: string) =>
   c.inbox.filter(
     (e) => e.m.type === type && (!turnId || ("turnId" in e.m && e.m.turnId === turnId)),
@@ -209,20 +342,23 @@ async function main() {
    */
   if (authOnlyMode) return authOnly();
 
-  const report: Record<string, unknown> = {};
   const [q1, q2, q3] = wavs.map(pcm);
+  log(`fixtures: ${wavs.length} WAV, ${[q1, q2, q3].map((b) => `${b.length}B`).join(" ")}`);
 
+  setPhase("PHASE 1/8 — unauthenticated upgrade must be refused");
   // 1. unauthenticated upgrade
   report.unauthenticated = await connect("")
     .then(() => "ACCEPTED (FAIL)")
     .catch((e: Error) => e.message);
 
   const cookie = await signIn();
+  log("sign-in OK, session cookie held (names only, never values)");
   const c = await connect(cookie);
   c.send({ type: "hello", device: "browser", turnMode: "push_to_talk", language: "fr-FR" });
   const ready = await c.until((m) => m.type === "ready");
   const sessionId = ready.type === "ready" ? ready.sessionId : "";
 
+  setPhase("PHASE 2/8 — speech → STT → cognition → TTS");
   // 2. speech → STT → ICOS → TTS
   const t1 = `e2e-${Date.now()}-1`;
   const spokeAt = Date.now();
@@ -254,10 +390,12 @@ async function main() {
    * (final transcript -> FINAL_RESPONSE) is decomposed into rows that outlive the process.
    */
   const conv1 = accepted1.type === "turn_accepted" ? accepted1.conversationId : "";
-  const log = await fetch(`${base}/api/cognitive/conversations/${conv1}/events`, {
-    headers: { cookie, origin },
-  });
-  const logged = ((await log.json()) as { events?: { type: string; createdAt: string }[] }).events;
+  const logged = (
+    await getJson<{ events?: { type: string; createdAt: string }[] }>(
+      `/api/cognitive/conversations/${conv1}/events`,
+      cookie,
+    )
+  )?.events;
   if (logged?.length) {
     const at = (type: string) => {
       const hit = logged.find((e) => e.type === type);
@@ -278,9 +416,10 @@ async function main() {
       receivedToCompletedMs: span("turn.received", "turn.completed"),
     };
   } else {
-    report.cognitiveBreakdown = { unavailable: `HTTP ${log.status}` };
+    report.cognitiveBreakdown = { unavailable: "see the HTTP line above" };
   }
 
+  setPhase("PHASE 3/8 — barge-in");
   // 3. barge-in during ICOS audio
   const t2 = `e2e-${Date.now()}-2`;
   await speak(c, t2, q2);
@@ -304,6 +443,7 @@ async function main() {
     t3Audio: of(c, "audio", t3).length,
   };
 
+  setPhase("PHASE 4/8 — hang-up, then resume inside the session TTL");
   // 4. phone hang-up after acceptance, then the owner comes back
   const t4 = `e2e-${Date.now()}-4`;
   await speak(c, t4, q1);
@@ -337,15 +477,18 @@ async function main() {
     idempotencyKey: string | null;
     content: { parts: { text: string }[] };
   };
+  let polls = 0;
   let turns: DurableTurn[] = [];
   let mine: DurableTurn | undefined;
   let replies: DurableTurn[] = [];
   while (Date.now() - hungUpAt < 120_000) {
-    const res = await fetch(`${base}/api/cognitive/conversations/${conversationId}`, {
-      headers: { cookie, origin },
-    });
-    const body = (await res.json()) as { turns?: DurableTurn[] };
-    turns = body.turns ?? [];
+    polls += 1;
+    const body = await getJson<{ turns?: DurableTurn[] }>(
+      `/api/cognitive/conversations/${conversationId}`,
+      cookie,
+    );
+    turns = body?.turns ?? [];
+    log(`poll ${polls}: ${turns.length} durable turn(s), roles=${turns.map((t) => t.role).join(",")}`);
     mine = turns.find((t) => t.role === "user" && t.idempotencyKey === t4);
     replies = turns.filter((t) => t.role === "assistant" && mine && t.replyToTurnId === mine.id);
     if (replies.length > 0) break;
@@ -356,10 +499,7 @@ async function main() {
   // A new turn must be accepted immediately on the resumed connection.
   const t5 = `e2e-${Date.now()}-5`;
   await speak(back, t5, q2);
-  const accepted5 = await back
-    .until((m) => m.type === "turn_accepted" && m.turnId === t5, 60_000)
-    .then(() => true)
-    .catch(() => false);
+  const accepted5 = await tryUntil(back, (m) => m.type === "turn_accepted" && m.turnId === t5, 60_000);
 
   report.phoneHangUp = {
     conversationId,
@@ -372,9 +512,12 @@ async function main() {
     /* Exactly one of each, or acceptance was not idempotent across the reconnect. */
     userTurnsForT4: turns.filter((t) => t.idempotencyKey === t4).length,
     assistantRepliesForT4: replies.length,
-    nextTurnAcceptedAfterResume: accepted5,
+    nextTurnAcceptedAfterResume: accepted5.ok,
+    nextTurnRefusedBecause: accepted5.why ?? null,
+    errorsOnResumedConnection: of(back, "error").map((e) => (e.m.type === "error" ? e.m.code : "")),
   };
 
+  setPhase("PHASE 5/8 — reconnect with an unknown sessionId plus the conversationId");
   /*
    * CONTINUITY WITHOUT PROCESS MEMORY, proven on purpose and without waiting out the TTL:
    * an unknown sessionId plus the conversationId is the documented path back. If this
@@ -388,30 +531,122 @@ async function main() {
     device: "browser",
   });
   const fresh = await afterExpiry.until((m) => m.type === "ready");
-  const t6 = `e2e-${Date.now()}-6`;
-  await speak(afterExpiry, t6, q3);
-  const accepted6 = await afterExpiry
-    .until((m) => m.type === "turn_accepted" && m.turnId === t6, 60_000)
-    .then(() => true)
-    .catch(() => false);
   report.continuityWithoutSession = {
     sessionExpiredReported: of(afterExpiry, "error").some(
       (e) => e.m.type === "error" && e.m.code === "SESSION_EXPIRED",
     ),
     sameConversation: fresh.type === "ready" && fresh.conversationId === conversationId,
     newSession: fresh.type === "ready" && !fresh.resumed,
-    turnAccepted: accepted6,
+  };
+
+  /*
+   * ONE WRITER PER CONVERSATION, asserted on purpose. t5 is still being answered on the
+   * other connection, so this turn MUST be refused: `cognitive_turns_one_inflight` is a
+   * unique index, and the refusal travelling back to the speaker is the invariant working.
+   * This is the step that previously looked like lost continuity.
+   */
+  setPhase("PHASE 6/8 — one writer per conversation (simultaneous turn must be refused)");
+  const stillInFlight = of(back, "response_final", t5).length === 0;
+  const t6a = `e2e-${Date.now()}-6a`;
+  await speak(afterExpiry, t6a, q2);
+  const askedAt = Date.now();
+  /* EITHER outcome ends the wait: a refusal is an answer, and waiting past it is why this
+   * step used to cost twenty seconds of silence. */
+  const verdict = await tryUntil(
+    afterExpiry,
+    (m) =>
+      (m.type === "turn_accepted" && m.turnId === t6a) ||
+      (m.type === "error" && m.turnId === t6a),
+    20_000,
+  );
+  const answer = afterExpiry.inbox
+    .map((e) => e.m)
+    .find(
+      (m) =>
+        (m.type === "turn_accepted" && m.turnId === t6a) ||
+        (m.type === "error" && m.turnId === t6a),
+    );
+  const refusal = answer?.type === "error" ? answer : null;
+  report.oneWriterPerConversation = {
+    firstTurnStillInFlightWhenSecondSpoke: stillInFlight,
+    verdict: refusal ? "REFUSED" : answer ? "ACCEPTED" : "NO ANSWER",
+    answeredInMs: answer ? Date.now() - askedAt : null,
+    noAnswerBecause: verdict.why ?? null,
+    refusalCode: refusal?.code ?? null,
+    refusalMessage: refusal?.message?.slice(0, 120) ?? null,
+    /*
+     * An OUTAGE and a GOVERNED REFUSAL used to arrive as the same code. TURN_IN_PROGRESS
+     * means the server distinguishes them; COGNITIVE_UNAVAILABLE here means it does not yet
+     * (the deployed build), and the refusal is only attributable by its timing and by the
+     * fact that every other turn of this very run succeeded.
+     */
+    /* Compared as text on purpose: this harness runs against builds whose contracts
+     * predate the code, and a narrowed union would refuse to compile against them. */
+    refusalIsExplicit: String(refusal?.code) === "TURN_IN_PROGRESS",
+    allErrorCodesOnThisConnection: of(afterExpiry, "error").map((e) =>
+      e.m.type === "error" ? e.m.code : "",
+    ),
+    invariantHeld: stillInFlight ? Boolean(refusal) : null,
+  };
+
+  /*
+   * CONTINUITY, measured once the exchange is actually over -- which is the real story: the
+   * phone died, the owner came back on another connection, the previous answer finished,
+   * and the conversation continues from rows alone.
+   */
+  setPhase("PHASE 7/8 — continuity once the previous exchange has completed");
+  const firstFinished = await tryUntil(
+    back,
+    (m) => m.type === "response_final" && m.turnId === t5,
+    90_000,
+  );
+  const t6 = `e2e-${Date.now()}-6`;
+  await speak(afterExpiry, t6, q3);
+  const accepted6 = await tryUntil(
+    afterExpiry,
+    (m) => m.type === "turn_accepted" && m.turnId === t6,
+    60_000,
+  );
+  report.continuityAfterCompletion = {
+    previousExchangeCompleted: firstFinished.ok,
+    previousExchangeWhy: firstFinished.why ?? null,
+    turnAccepted: accepted6.ok,
+    turnRefusedBecause: accepted6.why ?? null,
   };
   back.ws.close();
   afterExpiry.ws.close();
 
+  setPhase("PHASE 8/8 — report");
   console.log(JSON.stringify(report, null, 2));
 }
 
-main().catch((error: unknown) => {
-  /* THE STACK, not just the message: a bare `reading 'length'` names no frame, and that
-   * is precisely what turned a one-line argv mistake into a blind hunt. Stacks carry file
-   * paths and line numbers, never values, so this leaks nothing. */
-  console.error("E2E FAILED:", error instanceof Error ? (error.stack ?? error.message) : error);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    closeAll();
+    clearTimeout(budget);
+    log(`DONE in ${since()}`);
+    /*
+     * AND IT MUST ACTUALLY EXIT. An open socket or a live timer keeps the event loop
+     * alive, and a harness that hangs after its last assertion reads exactly like a
+     * harness that hangs before one. Unref'd, so a clean run exits before it fires.
+     */
+    const linger = setTimeout(() => {
+      const handles = (process as unknown as { _getActiveHandles?: () => unknown[] })
+        ._getActiveHandles?.();
+      console.error(
+        `still running 3s after DONE: ${handles?.length ?? "?"} active handle(s) — forcing exit`,
+      );
+      process.exit(0);
+    }, 3_000);
+    linger.unref();
+  })
+  .catch((error: unknown) => {
+    /* THE STACK, not just the message: a bare `reading 'length'` names no frame, and that
+     * is precisely what turned a one-line argv mistake into a blind hunt. Stacks carry file
+     * paths and line numbers, never values, so this leaks nothing. */
+    console.error("E2E FAILED:", error instanceof Error ? (error.stack ?? error.message) : error);
+    diagnostic("failed");
+    closeAll();
+    clearTimeout(budget);
+    process.exit(1);
+  });
