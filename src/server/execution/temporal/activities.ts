@@ -34,6 +34,7 @@ import {
   SandboxedCommandRunner,
   defaultToolchainReadOnlyPaths,
   offlineInstallEnv,
+  pnpmOfflineSettings,
 } from "@/server/workspace-manager/sandboxed-command-runner";
 import {
   EXEC_PLACEHOLDERS,
@@ -672,6 +673,8 @@ export async function runGovernedWorker(
        * allow-list below is constructed, not inherited.
        */
       env: {
+        /* What every `pnpm` the writer runs must see (W10, run 10 attempt 1): no reinstall. */
+        ...(dependencies === "none" ? {} : pnpmOfflineSettings()),
         HOME: home.path,
         /*
          * AND ITS TEMPORARY DIRECTORY TOO. `TMPDIR` is on the child-environment allowlist, so

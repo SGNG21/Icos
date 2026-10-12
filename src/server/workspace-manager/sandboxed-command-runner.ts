@@ -93,9 +93,23 @@ export function offlineInstallEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
   home: string = homedir(),
 ): Record<string, string> {
+  return { CI: "1", ...pnpmOfflineSettings(env, home) };
+}
+
+/**
+ * THE SAME SETTINGS FOR EVERY `pnpm` THE WRITER RUNS (`pnpm exec eslint …`, `pnpm vitest …`).
+ * N1 run 10, attempt 1 (2026-10-12 13:40): the worktree had its node_modules, the writer ran
+ * exactly the permitted forms, and pnpm 11 — seeing a shell without these settings — judged the
+ * install out of date, tried to remove node_modules and aborted for want of a TTY
+ * (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`). The settings the install was made with are
+ * the settings its consumers must see; `verify_deps_before_run=false` is the explicit one.
+ */
+export function pnpmOfflineSettings(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  home: string = homedir(),
+): Record<string, string> {
   const [store] = defaultToolchainReadOnlyPaths(env, home);
   return {
-    CI: "1",
     npm_config_verify_deps_before_run: "false",
     pnpm_config_verify_deps_before_run: "false",
     pnpm_config_trust_lockfile: "true",
