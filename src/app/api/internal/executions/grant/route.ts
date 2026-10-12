@@ -1,8 +1,5 @@
 import { getContainer } from "@/server/container";
-import {
-  ExecutionScopeMismatchError,
-  type ExecutionScope,
-} from "@/core/execution/execution-scope";
+import { ExecutionScopeMismatchError, type ExecutionScope } from "@/core/execution/execution-scope";
 import { verifyExecutionCallback } from "@/server/execution/callback-auth";
 import { ExecutionScopeReader } from "@/server/execution/execution-scope-reader";
 import { zodDetails } from "@/server/http/errors";
@@ -110,10 +107,14 @@ export async function POST(request: Request): Promise<Response> {
      * safe answer; the alternative is an ungoverned write.
      */
     if (writeAllowed && !container.workspaceManager) {
-      return apiError("persistence_unavailable", "WORKSPACE_MANAGER_ABSENT: écriture non gouvernable");
+      return apiError(
+        "persistence_unavailable",
+        "WORKSPACE_MANAGER_ABSENT: écriture non gouvernable",
+      );
     }
     const workspace = (await container.workspaceManager?.list())?.find(
-      (candidate) => candidate.workflowId === parsed.data.workflowId && candidate.releasedAt === null,
+      (candidate) =>
+        candidate.workflowId === parsed.data.workflowId && candidate.releasedAt === null,
     );
     if (writeAllowed && !workspace) {
       return apiError("invalid_input", "WORKSPACE_NOT_ALLOCATED: aucun worktree gouverné actif");
@@ -148,8 +149,17 @@ export async function POST(request: Request): Promise<Response> {
      * routed to — the one source. The activity substitutes it for `{{model}}`; without it a
      * launch command that names the model is refused rather than run on the CLI's default.
      */
+    /*
+     * THE DURABLE STORE, not the in-process view. The view is seeded when ITS container is
+     * built; a route handler's container can be older than the fleet bootstrap that registered
+     * the routed worker, and then answers "no such worker" — measured 2026-10-12 (FABLE lab,
+     * three runs): the router chose codex/gpt-5.6-sol from the durable rows, the grant found
+     * nothing in its view, and every launch failed WORKER_EXEC_UNROUTABLE. The rows the router
+     * decided from are the rows the grant identifies from.
+     */
     const routedWorker = attempt.workerId
-      ? container.workerRegistry.getWorker(attempt.workerId)
+      ? ((await container.workerRegistryStore.get(attempt.workerId)) ??
+        container.workerRegistry.getWorker(attempt.workerId))
       : undefined;
     const routedIdentity = routedWorker ? identityOf(routedWorker) : undefined;
 
