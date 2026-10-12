@@ -1,0 +1,52 @@
+# N1 — certification de la première mission autonome en laboratoire isolé (2026-10-12)
+
+Laboratoire FABLE (jamais la production) : Postgres dédié `fable-pg-lab` (:55460), serveur Temporal
+du labo `p0au-temporal` (:17233) **namespace `icos-fable-lab`**, queue `icos-fable-lab`, clone cible
+`/srv/icos/worktrees/fable-n1-target` (branche `lab/fable-base`, intégration `integration/fable-n1`),
+worktrees sous `/srv/icos/worktrees/fable-n1-trees`, app + worker détachés (`setsid`, sans TTY) via
+`~/.icos-fable-lab/lab.sh`. Writer **Claude Code CLI 2.1.292 via OmniRoute sur `codex/gpt-5.6-sol`**
+(option B), reviewer **Nemotron 3 Ultra + retry borné**, planner `codex/gpt-5.5-low`. Rien n'a touché
+`icos.env` (md5 `34325566dad2`), `icos-web`, OmniRoute, Temporal prod, ni le labo N1 de W6/W8.
+
+## 1. Commits isolés (branche `feat/fable-5-1-convergence`, non poussée)
+
+| Commit    | Correctif                                                                                                                                                                                                                                                                                                                                                                                                                | Preuve                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0a27ae3` | **Reviewer** : `OmniRouteReviewer` — 1 tentative initiale + 1 tentative corrective sur `INVALID_OUTPUT`/`INVALID_RESPONSE` (même règle que `CommandReviewer`), correctif explicite sans suggérer de verdict, contexte renvoyé inchangé ; verdicts/timeouts/erreurs fournisseur jamais réessayés ; après la dernière tentative l'échec reste (aucun PASS) ; timeout par tentative ≤ 180 s (validé). Décision 0054 intacte | 61/61 `src/server/review` (6 nouveaux cas) ; diagnostic réel : 1 JSON malformé `{"}decision":…` sur 6 appels frais de Nemotron                          |
+| `96daa94` | **Metering** : une erreur fournisseur dans un flux 2xx (`event error` avant tout `message_start`) = appel échoué (réservation rendue, rien enregistré), pas une consommation non mesurable ; tout autre flux illisible reste UNMETERED, avec sa forme (octets, événements, erreur) journalisée (`SPEND_PROVIDER_ERROR_STREAM`, `SPEND_STREAM_UNMETERED`). Aucun zéro fabriqué, règle de fenêtre intacte                  | 341/341 budget + review ; labo W6/W8 : 2 lignes `cx/gpt-5.6-sol UNMETERED USAGE_ABSENT` → `UNMETERED_USAGE_IN_WINDOW` sur toutes les missions suivantes |
+| `714c468` | **Découverte de flotte** : un retry chaud après timeout + `ICOS_COMPUTE_DISCOVERY_TIMEOUT_MS`                                                                                                                                                                                                                                                                                                                            | 38/38 ; OmniRoute `/v1/models` 5–6 s à froid puis < 1 s ; flotte 6/14 inscrite dès le boot du labo (jamais avant)                                       |
+| `8b58eb7` | **Dispatcher Temporal** : le `Client` est construit dans `TEMPORAL_NAMESPACE` (il démarrait chaque workflow dans `default`)                                                                                                                                                                                                                                                                                              | test de construction ; labo : workflow `Running` dans `default` alors que le worker sondait `icos-fable-lab`                                            |
+| `0e20c24` | **Sonde de reprise** : même namespace que le dispatcher                                                                                                                                                                                                                                                                                                                                                                  | test de construction                                                                                                                                    |
+| `7c53d73` | fusion du hub `bab1a3b` : l'allowlist système gouverne les workers qui dépensent (writer `codex/gpt-5.6-sol` routé au lieu de nemotron) ; objectif + périmètre de fichiers transmis au worker ; rien ne démarre sans worker routable                                                                                                                                                                                     | 798/798 sur les suites touchées                                                                                                                         |
+| `bf1e863` | **Grant** : identité du worker routé lue dans le registre durable (la vue en mémoire du conteneur de la route était antérieure au bootstrap de flotte → `WORKER_EXEC_UNROUTABLE: … declares none` à chaque run)                                                                                                                                                                                                          | 7/7 route ; run 4 : modèle transmis, Claude Code lancé                                                                                                  |
+
+Config : `ICOS_AUTONOMY_ALLOWED_PROVIDERS` ne doit **pas** être posé (le planner s'identifie
+`omniroute` → `PROVIDER_NOT_IN_ALLOWLIST`, 82 reconversions silencieuses observées) ; le planner
+doit figurer dans `ICOS_AUTONOMY_ALLOWED_MODELS` ; allow-bash du writer restreint à
+`pnpm vitest run src/*` et `pnpm exec eslint src/*` ; `ICOS_GOAL_MAX_TOTAL_TOKENS=1500000`.
+Reportés dans `deploy/vps/env/icos.env.autonomy.example` et le candidat.
+
+## 2. Runs du laboratoire (chaque run = base vierge, détection → mission sans intervention)
+
+| Run | Chaîne atteinte                                                                | Arrêt                                                                                               | Mesure réelle                                                                                                                             |
+| --- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | goal détecté (W11) → mission `draft`                                           | 82 × `goal.converted` : allumage refusé en silence (`PROVIDER_NOT_IN_ALLOWLIST`, planner)           | 0 appel goal                                                                                                                              |
+| 1b  | … → task → dispatch                                                            | workflow dans `default` (dispatcher) ; 3 instances d'app empilées (ancien processus tenant le port) | —                                                                                                                                         |
+| 2   | goal → task → dispatch dans `icos-fable-lab` → activité worker (11 s)          | `WORKER_EXEC_UNROUTABLE` (grant sans modèle) → QC `ESCALATE` → `mission.failed`                     | planner 1 049 tokens                                                                                                                      |
+| 3   | idem avec writer `codex/gpt-5.6-sol` routé (hub `bab1a3b`)                     | idem (grant)                                                                                        | —                                                                                                                                         |
+| 4   | goal → task → dispatch → **Claude Code réel sous bwrap, proxy compté** (4 min) | `RESERVATION_EXCEEDS_CAP` : 394 748 + 82 292 > 450 000 → QC `ESCALATE` → `mission.failed`           | **20 appels METERED, 394 748 tokens** ; diff réel `in-memory-git.ts` +33/−12 ; contexte 4,6 k → 29 k                                      |
+| 5   | idem, plafond 1,5 M (9 min)                                                    | `RESERVATION_EXCEEDS_CAP` : 1 372 827 dépensés                                                      | **27 appels, 1 371 778 tokens** ; diff +11/−11 ; un appel passe de 48 k à 94 k puis 140 k tokens (sortie d'une commande de test complète) |
+| 6   | allow-bash ciblé                                                               | en cours (addendum)                                                                                 |                                                                                                                                           |
+
+Ce que les runs prouvent déjà, sans intervention humaine : détection → objectif → mission →
+planification → routage gouverné par l'allowlist → dispatch dans le bon namespace → worktree isolé
+→ **exécution réelle de Claude Code** sous bubblewrap avec chaque appel réservé et mesuré →
+**plafond de tokens opposé avant l'appel** → QC → settlement durable (`mission.failed` audité).
+Pas encore atteint : revue Nemotron sur un résultat réel, correction, porte, `mission.succeeded`.
+
+## 3. État du déploiement et des services VPS
+
+Inchangés depuis F1 : `icos-web` sur release `5719213` (actif, 0 restart), `icos-temporal-worker`
+non installé, `icos-gate-postgres` actif et isolé (:5434), namespace `icos-prod` créé (0 workflow),
+`icos.env` intact ; candidat `/srv/icos/etc/icos.env.candidate-20261012` mis à jour (allowlist
+modèles seulement, planner inclus, allow-bash ciblé, plafond 1,5 M).
