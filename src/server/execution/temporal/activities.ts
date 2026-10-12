@@ -17,7 +17,7 @@
  * authenticated by a constant-time secret comparison — a second, in-process writer would
  * be a second settlement authority.
  */
-import { lstat, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { access as fsAccess, lstat, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -29,6 +29,11 @@ import {
 } from "@/server/workers/metered-egress-proxy";
 import { workerEgressFetch, workerEgressUpstream } from "@/server/workers/metered-egress";
 import { runNonInteractive } from "@/server/workers/process/run-process";
+import { parseGateCommands } from "@/server/workspace-manager/integration-gate";
+import {
+  SandboxedCommandRunner,
+  defaultToolchainReadOnlyPaths,
+} from "@/server/workspace-manager/sandboxed-command-runner";
 import {
   EXEC_PLACEHOLDERS,
   parseWorkerExecCommands,
@@ -116,7 +121,6 @@ function workspaceRoot(): string {
   }
   return resolve(configured);
 }
-
 
 /**
  * The execution budget. Matches `ICOS_WORKER_EXECUTION_TIMEOUT_MS` when the deployment
@@ -553,6 +557,16 @@ export async function runGovernedWorker(
     throw new Error("WORKER_WORKSPACE_MISSING: écriture accordée sans worktree alloué");
   }
   const gitPointer = worktree ? await assertGitPointer(worktree) : null;
+  /*
+   * W10 — THE WRITER CAN VERIFY ITS OWN WORK. N1 lab, 2026-10-12 (runs 8–9): the allocated
+   * worktree had no node_modules, so `eslint`/`vitest` could not run inside the sandbox, the
+   * writer could never prove its lint, the independent reviewer (rightly) kept requesting
+   * changes, and three corrections burnt 3.8 M tokens before the cap ended the mission. The
+   * dependencies are installed BEFORE launch with the gate's own sandboxed runner: offline
+   * (frozen lockfile, read-only pnpm store), no network, ephemeral HOME, no secret — the same
+   * confinement the gate uses, not a new one. Fail-closed: no deps ⇒ no writer run.
+   */
+  const dependencies = worktree ? await ensureWorktreeDependencies(worktree) : "none";
   const workspace = scratch;
   /*
    * Only a WRITER needs watching: a reader holds no worktree, so there is no authority
@@ -618,10 +632,21 @@ export async function runGovernedWorker(
      * folder. The workspace ICOS declares must be the one the executor runs in.
      */
     const usageFile = join(workspace, "usage.json");
+    /*
+     * W7 — THE CONSIGNE MATCHES THE AUTHORISATION. The executor refuses every shell command
+     * outside its allowlist without any prompt (`--permission-prompts none`); a writer that
+     * does not know the allowed forms guesses (`npx eslint …`), is refused, and reports it
+     * could not verify (N1 lab runs 8–9). The prompt now states the exact permitted commands
+     * and whether the worktree is runnable, from the declaration the executor enforces.
+     */
+    const launchPrompt = withExecutionEnvironment(prompt, {
+      shellPatterns: allowBashPatterns(declared.args),
+      dependencies,
+    });
     const args = declared.args.map((arg) =>
       arg
         .split(EXEC_PLACEHOLDERS.prompt)
-        .join(prompt)
+        .join(launchPrompt)
         .split(EXEC_PLACEHOLDERS.workspace)
         .join(workspace)
         .split(EXEC_PLACEHOLDERS.model)
@@ -722,6 +747,8 @@ export async function runGovernedWorker(
         readOnlyPaths: [
           workspaceRoot(),
           ...access.programPaths,
+          /* The pnpm store the worktree's node_modules links into (public packages only). */
+          ...(dependencies === "none" ? [] : defaultToolchainReadOnlyPaths()),
           /*
            * Nested inside the writable worktree and still READ-ONLY: both backends let the
            * narrower grant win (ADR 0072, phase 0). A narrowing, never a widening.
@@ -830,7 +857,9 @@ export async function runGovernedWorker(
        */
       const reason = firstLineRedacted(run.stderr.trim());
       throw new Error(
-        reason && !run.stdout.trim() ? `${classified.message} (stderr: ${reason})` : classified.message,
+        reason && !run.stdout.trim()
+          ? `${classified.message} (stderr: ${reason})`
+          : classified.message,
       );
     }
 
@@ -913,4 +942,84 @@ export async function reportFailure(input: {
     startedAt: input.startedAt,
     completedAt: input.completedAt,
   });
+}
+
+/** What the worktree offers the writer's verification commands. */
+export type WorktreeDependencies = "none" | "not_a_package" | "present" | "installed";
+
+const DEFAULT_INSTALL_COMMAND = ["pnpm", "install", "--frozen-lockfile", "--offline"] as const;
+
+async function exists(path: string): Promise<boolean> {
+  return fsAccess(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * Installs the worktree's dependencies when it is a pnpm package without `node_modules`, with the
+ * integration gate's sandboxed runner (`ICOS_GATE_COMMANDS.install`, default frozen + offline):
+ * no network, ephemeral HOME, read-only pnpm store. A worktree that is not a package (no
+ * `package.json` + `pnpm-lock.yaml`) needs nothing. A failed install fails the run closed.
+ */
+export async function ensureWorktreeDependencies(
+  worktree: string,
+  runner: Pick<SandboxedCommandRunner, "run"> = new SandboxedCommandRunner(),
+): Promise<WorktreeDependencies> {
+  const [pkg, lock, modules] = await Promise.all([
+    exists(join(worktree, "package.json")),
+    exists(join(worktree, "pnpm-lock.yaml")),
+    exists(join(worktree, "node_modules")),
+  ]);
+  if (!pkg || !lock) return "not_a_package";
+  if (modules) return "present";
+  const install = parseGateCommands(process.env.ICOS_GATE_COMMANDS)?.install ?? [
+    ...DEFAULT_INSTALL_COMMAND,
+  ];
+  const run = await runner.run([...install], {
+    cwd: worktree,
+    env: {
+      CI: "1",
+      npm_config_verify_deps_before_run: "false",
+      pnpm_config_verify_deps_before_run: "false",
+    },
+    network: false,
+  });
+  if (run.code !== 0) {
+    throw new Error(
+      `WORKER_DEPENDENCIES_UNAVAILABLE: ${install.join(" ")} exited ${run.code}: ${run.output.slice(-400)}`,
+    );
+  }
+  return "installed";
+}
+
+/** The `--allow-bash` values of the declared launch command, in order. */
+export function allowBashPatterns(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length - 1; i += 1) {
+    if (args[i] === "--allow-bash") out.push(args[i + 1]!);
+  }
+  return out;
+}
+
+/** The execution environment, stated to the writer from the declaration the executor enforces. */
+export function withExecutionEnvironment(
+  prompt: string,
+  environment: { shellPatterns: readonly string[]; dependencies: WorktreeDependencies },
+): string {
+  const lines = [
+    prompt,
+    "",
+    "Execution environment (ICOS sandbox, enforced — not advice):",
+    environment.dependencies === "present" || environment.dependencies === "installed"
+      ? "- Dependencies are installed in this worktree (node_modules present). Do not install anything."
+      : environment.dependencies === "not_a_package"
+        ? "- This worktree is not a package: no dependency install is possible."
+        : "- No worktree: edit nothing, report only.",
+    environment.shellPatterns.length > 0
+      ? `- Shell commands permitted, in these exact forms and no other: ${environment.shellPatterns.map((p) => `\`${p}\``).join(" ; ")}`
+      : "- No shell command is permitted: edit files only.",
+    "- Any other command is refused without a prompt; do not retry it — verify with the permitted forms and report their output.",
+  ];
+  return lines.join("\n");
 }

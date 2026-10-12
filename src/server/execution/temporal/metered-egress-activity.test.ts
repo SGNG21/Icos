@@ -40,7 +40,12 @@ vi.mock("@/server/workers/process/run-process", () => ({
       workerCalls.push(
         await new Promise((done, fail) => {
           const req = httpRequest(
-            { socketPath, method: "POST", path: "/v1/messages", headers: { "content-type": "application/json" } },
+            {
+              socketPath,
+              method: "POST",
+              path: "/v1/messages",
+              headers: { "content-type": "application/json" },
+            },
             (res) => {
               let body = "";
               res.on("data", (c: Buffer) => (body += c.toString()));
@@ -53,9 +58,19 @@ vi.mock("@/server/workers/process/run-process", () => ({
       );
     }
     if (options.env?.ICOS_WORKER_STATUS_FILE) {
-      writeFileSync(options.env.ICOS_WORKER_STATUS_FILE, JSON.stringify({ completed: true, failed: false }));
+      writeFileSync(
+        options.env.ICOS_WORKER_STATUS_FILE,
+        JSON.stringify({ completed: true, failed: false }),
+      );
     }
-    return { stdout: "RESULT", stderr: "", timedOut: false, aborted: false, exitCode: 0, confinement: "bubblewrap" };
+    return {
+      stdout: "RESULT",
+      stderr: "",
+      timedOut: false,
+      aborted: false,
+      exitCode: 0,
+      confinement: "bubblewrap",
+    };
   }),
 }));
 
@@ -95,13 +110,23 @@ describe("runGovernedWorker — metered egress executor", () => {
     process.env.ICOS_EXECUTION_CALLBACK_SECRET = "a".repeat(48);
     process.env.ICOS_WORKSPACE_ROOT = realpathSync(mkdtempSync(join(tmpdir(), "icos-canon-")));
     process.env.ICOS_WORKER_EXEC_COMMANDS = JSON.stringify({
-      binary: { command: ADAPTER, args: ["--prompt", "{{prompt}}", "--model", "{{model}}"], timeoutMs: 5_000 },
+      binary: {
+        command: ADAPTER,
+        args: ["--prompt", "{{prompt}}", "--model", "{{model}}"],
+        timeoutMs: 5_000,
+      },
     });
   });
   afterEach(() => vi.unstubAllGlobals());
 
   const answer = (g: Record<string, unknown>) =>
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ grant: g }) }) as unknown as Response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({ ok: true, status: 200, json: async () => ({ grant: g }) }) as unknown as Response,
+      ),
+    );
 
   it("no network, socket + adapter read-only, routed model in argv, calls attributed to the goal", async () => {
     answer(grant());
@@ -116,7 +141,11 @@ describe("runGovernedWorker — metered egress executor", () => {
       expect.arrayContaining([realpathSync(ADAPTER), resolve(socket, "..")]),
     );
     expect(options!.sandbox?.readWritePaths).not.toContain(resolve(socket, ".."));
-    expect(options!.args).toEqual(["--prompt", "do it", "--model", "routed/model"]);
+    /* The objective leads the prompt; the execution-environment block (W7) follows it. */
+    const argv = options!.args ?? [];
+    expect(argv[0]).toBe("--prompt");
+    expect(argv[1]?.startsWith("do it\n")).toBe(true);
+    expect(argv.slice(2)).toEqual(["--model", "routed/model"]);
 
     expect(workerCalls).toEqual([{ status: 200, body: "{}" }]);
     expect(meterAttributions).toEqual([{ missionId: "mission-1", goalId: "goal-1" }]);
@@ -125,17 +154,17 @@ describe("runGovernedWorker — metered egress executor", () => {
   it("a budget DENY fails the run WORKER_BUDGET_DENIED, whatever the worker printed", async () => {
     meterMode = "deny";
     answer(grant());
-    await expect(runGovernedWorker({ taskId: "task-1", workflowId: "wf-1" }, "do it")).rejects.toThrow(
-      /^WORKER_BUDGET_DENIED: BUDGET_DENIED:TOKEN_CAP_REACHED/,
-    );
+    await expect(
+      runGovernedWorker({ taskId: "task-1", workflowId: "wf-1" }, "do it"),
+    ).rejects.toThrow(/^WORKER_BUDGET_DENIED: BUDGET_DENIED:TOKEN_CAP_REACHED/);
     expect(workerCalls[0]!.status).toBe(402);
   });
 
   it("a launch command naming {{model}} with no routed model is refused before anything runs", async () => {
     answer(grant({ model: null }));
-    await expect(runGovernedWorker({ taskId: "task-1", workflowId: "wf-1" }, "do it")).rejects.toThrow(
-      "WORKER_EXEC_UNROUTABLE",
-    );
+    await expect(
+      runGovernedWorker({ taskId: "task-1", workflowId: "wf-1" }, "do it"),
+    ).rejects.toThrow("WORKER_EXEC_UNROUTABLE");
     expect(runs).toHaveLength(0);
   });
 
