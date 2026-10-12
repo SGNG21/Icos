@@ -212,3 +212,100 @@ describe("readAnthropicStream — flux SSE /v1/messages", () => {
     });
   });
 });
+
+describe("Anthropic cache presence — JSON and SSE", () => {
+  const counters = [undefined, 0, 7];
+  const stream = (start: unknown, ...deltas: unknown[]) =>
+    [
+      { type: "message_start", message: { usage: start } },
+      ...deltas.map((usage) => ({ type: "message_delta", usage })),
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join("");
+
+  for (const read of counters)
+    for (const creation of counters) {
+      it.each(["JSON", "SSE"])(`%s preserves read=${read}, creation=${creation}`, (format) => {
+        const raw = {
+          input_tokens: 10,
+          output_tokens: 2,
+          ...(read === undefined ? {} : { cache_read_input_tokens: read }),
+          ...(creation === undefined ? {} : { cache_creation_input_tokens: creation }),
+        };
+        const outcome =
+          format === "JSON"
+            ? readUsage({ usage: raw })
+            : readAnthropicStream(stream(raw, { output_tokens: 5 }, { output_tokens: 2 })).usage;
+        const cache = {
+          ...(read === undefined ? {} : { read }),
+          ...(creation === undefined ? {} : { creation }),
+        };
+        expect(JSON.parse(JSON.stringify(outcome))).toEqual({
+          kind: "METERED",
+          usage: {
+            promptTokens: 10 + (read ?? 0) + (creation ?? 0),
+            completionTokens: 2,
+            totalTokens: 12 + (read ?? 0) + (creation ?? 0),
+            ...(read === undefined && creation === undefined ? {} : { cache }),
+          },
+        });
+      });
+    }
+
+  for (const field of ["cache_read_input_tokens", "cache_creation_input_tokens"]) {
+    it.each([null, -1, 1.5, "7", MAX_PLAUSIBLE_TOKENS_PER_CALL + 1])(
+      `rejects invalid ${field}=%j in JSON and SSE`,
+      (value) => {
+        const raw = { input_tokens: 10, output_tokens: 2, [field]: value };
+        const expected = {
+          kind: "UNMETERED",
+          reason:
+            typeof value === "number" && value > MAX_PLAUSIBLE_TOKENS_PER_CALL
+              ? "USAGE_IMPLAUSIBLE"
+              : "USAGE_INVALID",
+        };
+        expect(readUsage({ usage: raw })).toEqual(expected);
+        expect(readAnthropicStream(stream(raw)).usage).toEqual(expected);
+        expect(
+          readAnthropicStream(
+            stream({ input_tokens: 10, output_tokens: 2, [field]: 3 }, { [field]: value }),
+          ).usage,
+        ).toEqual(expected);
+      },
+    );
+  }
+
+  it("merges independent cumulative counters, retaining explicit zero", () => {
+    expect(
+      readAnthropicStream(
+        stream(
+          { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 7 },
+          { cache_creation_input_tokens: 5, output_tokens: 3 },
+          { cache_read_input_tokens: 0, output_tokens: 8 },
+        ),
+      ).usage,
+    ).toEqual({
+      kind: "METERED",
+      usage: {
+        promptTokens: 15,
+        completionTokens: 8,
+        totalTokens: 23,
+        cache: { read: 0, creation: 5 },
+      },
+    });
+  });
+  it("preserves the existing total when a delta omits numeric output with null", () => {
+    expect(
+      readAnthropicStream(stream({ input_tokens: 10, output_tokens: 2 }, { output_tokens: null }))
+        .usage,
+    ).toEqual({
+      kind: "METERED",
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    });
+  });
+  it("does not invent missing SSE output", () => {
+    expect(
+      readAnthropicStream(stream({ input_tokens: 10, cache_read_input_tokens: 0 })).usage,
+    ).toEqual({ kind: "UNMETERED", reason: "USAGE_INCOMPLETE" });
+  });
+});

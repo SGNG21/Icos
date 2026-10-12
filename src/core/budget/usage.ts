@@ -96,7 +96,12 @@ function anthropicUsage(raw: Record<string, unknown>): UsageOutcome {
       completionTokens: output,
       totalTokens,
       ...(cacheCreation !== undefined || cacheRead !== undefined
-        ? { cache: { read: cacheRead ?? 0, creation: cacheCreation ?? 0 } }
+        ? {
+            cache: {
+              ...(cacheRead !== undefined ? { read: cacheRead } : {}),
+              ...(cacheCreation !== undefined ? { creation: cacheCreation } : {}),
+            },
+          }
         : {}),
     },
   };
@@ -154,7 +159,10 @@ export function readAnthropicStream(text: string): AnthropicStreamReading {
       if (isPlainObject(event.message.usage)) Object.assign(merged, event.message.usage);
     } else if (event.type === "message_delta" && isPlainObject(event.usage)) {
       for (const [key, value] of Object.entries(event.usage)) {
-        if (value !== null && value !== undefined) merged[key] = value;
+        // A present invalid cache counter must reach validation, never retain an older value.
+        const cacheCounter =
+          key === "cache_read_input_tokens" || key === "cache_creation_input_tokens";
+        if (value !== undefined && (value !== null || cacheCounter)) merged[key] = value;
       }
     } else if (event.type === "error" && !started && providerError === undefined) {
       const error = isPlainObject(event.error) ? event.error : {};
