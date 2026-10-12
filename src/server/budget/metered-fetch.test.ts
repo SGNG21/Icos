@@ -8,7 +8,13 @@ import { emptyWindow } from "@/core/budget/spend";
 
 import { InMemorySpendLedger } from "./in-memory-spend-ledger";
 import { BudgetDeniedError, BudgetLedgerError, meteredFetch } from "./metered-fetch";
-import type { SpendEntry, SpendLedgerPort } from "./ports";
+import type {
+  ReserveOutcome,
+  SpendEntry,
+  SpendLedgerPort,
+  SpendReservation,
+  SpendReservationPort,
+} from "./ports";
 
 const COMPLETION_BODY = {
   id: "chatcmpl-1",
@@ -465,8 +471,8 @@ describe("meteredFetch — API Anthropic /v1/messages (sortie mesurée des worke
     const stream =
       `data: ${JSON.stringify({ type: "message_start", message: { model: "m/x", usage: { input_tokens: 30, output_tokens: 1 } } })}\n\n` +
       `data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 12 } })}\n\n`;
-    const inner = vi.fn<typeof fetch>(async () =>
-      new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+    const inner = vi.fn<typeof fetch>(
+      async () => new Response(stream, { headers: { "content-type": "text/event-stream" } }),
     );
     const ledger = new FakeLedger();
     const response = await meteredFetch(inner, { ledger })(MESSAGES_URL, messagesInit);
@@ -474,7 +480,10 @@ describe("meteredFetch — API Anthropic /v1/messages (sortie mesurée des worke
     expect(ledger.recorded).toHaveLength(1);
     expect(ledger.recorded[0]).toMatchObject({
       modelId: "m/x",
-      usage: { kind: "METERED", usage: { promptTokens: 30, completionTokens: 12, totalTokens: 42 } },
+      usage: {
+        kind: "METERED",
+        usage: { promptTokens: 30, completionTokens: 12, totalTokens: 42 },
+      },
     });
   });
 
@@ -491,11 +500,149 @@ describe("meteredFetch — API Anthropic /v1/messages (sortie mesurée des worke
   });
 
   it("un flux SSE OpenAI-compatible garde son comportement : non lu, UNMETERED", async () => {
-    const inner = vi.fn<typeof fetch>(async () =>
-      new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } }),
+    const inner = vi.fn<typeof fetch>(
+      async () =>
+        new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } }),
     );
     const ledger = new FakeLedger();
     await meteredFetch(inner, { ledger })(URL_UNDER_TEST, chatInit());
     expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "NON_JSON_BODY" });
+  });
+});
+
+describe("meteredFetch — une erreur fournisseur DANS le flux n'est pas une consommation", () => {
+  const MESSAGES_URL = "http://gateway.invalid/v1/messages";
+  const messagesInit: RequestInit = {
+    method: "POST",
+    body: JSON.stringify({ model: "cx/gpt-5.6-sol", max_tokens: 100, messages: [], stream: true }),
+  };
+  const sse = (...events: unknown[]) =>
+    events.map((e) => `event: x\ndata: ${JSON.stringify(e)}\n\n`).join("");
+
+  it("un flux 2xx qui ne contient qu'un événement error avant tout message_start n'est PAS enregistré — comme un non-2xx — et l'appelant reçoit le flux intact", async () => {
+    const stream = sse({
+      type: "error",
+      error: {
+        type: "rate_limit_error",
+        message: "All credentials for model gpt-5.6-sol are cooling down",
+      },
+    });
+    const ledger = new FakeLedger();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const response = await meteredFetch(
+        async () => new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+        { ledger },
+      )(MESSAGES_URL, messagesInit);
+      expect(await response.text()).toBe(stream);
+      expect(ledger.recorded).toHaveLength(0);
+      const line = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
+      expect(line).toMatchObject({
+        event: "SPEND_PROVIDER_ERROR_STREAM",
+        modelId: "cx/gpt-5.6-sol",
+        reason: "USAGE_ABSENT",
+        providerError: { type: "rate_limit_error" },
+        events: { error: 1 },
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("un flux 2xx sans message_start et SANS erreur reste UNMETERED (enregistré), avec sa forme dans le journal", async () => {
+    const stream = sse({ type: "ping" });
+    const ledger = new FakeLedger();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await meteredFetch(
+        async () => new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+        { ledger },
+      )(MESSAGES_URL, messagesInit);
+      expect(ledger.recorded).toHaveLength(1);
+      expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "USAGE_ABSENT" });
+      const line = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
+      expect(line).toMatchObject({ event: "SPEND_STREAM_UNMETERED", events: { ping: 1 } });
+      expect(line).not.toHaveProperty("providerError");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("une erreur APRÈS message_start n'efface rien : la consommation déjà produite est mesurée et enregistrée", async () => {
+    const stream = sse(
+      {
+        type: "message_start",
+        message: { model: "gpt-5.6-sol", usage: { input_tokens: 30, output_tokens: 1 } },
+      },
+      { type: "message_delta", usage: { output_tokens: 12 } },
+      { type: "error", error: { type: "overloaded_error", message: "cut" } },
+    );
+    const ledger = new FakeLedger();
+    await meteredFetch(
+      async () => new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+      { ledger },
+    )(MESSAGES_URL, messagesInit);
+    expect(ledger.recorded[0]).toMatchObject({
+      modelId: "gpt-5.6-sol",
+      usage: {
+        kind: "METERED",
+        usage: { promptTokens: 30, completionTokens: 12, totalTokens: 42 },
+      },
+    });
+  });
+});
+
+describe("meteredFetch — chemin RÉSERVÉ : une erreur fournisseur dans le flux rend la réservation", () => {
+  const MESSAGES_URL = "http://gateway.invalid/v1/messages";
+  const messagesInit: RequestInit = {
+    method: "POST",
+    body: JSON.stringify({ model: "cx/gpt-5.6-sol", max_tokens: 100, messages: [], stream: true }),
+  };
+  const sse = (...events: unknown[]) =>
+    events.map((e) => `event: x\ndata: ${JSON.stringify(e)}\n\n`).join("");
+
+  class FakeReservations implements SpendReservationPort {
+    readonly settled: unknown[] = [];
+    readonly released: string[] = [];
+    async reserve(): Promise<ReserveOutcome> {
+      return {
+        kind: "RESERVED",
+        reservation: { id: "r-1", ownerToken: "t-1", reservedTokens: 100 },
+      };
+    }
+    async settle(reservation: SpendReservation, entry: unknown): Promise<never> {
+      this.settled.push({ reservation, entry });
+      throw new Error("settle must not be reached for a failed call");
+    }
+    async renew(): Promise<boolean> {
+      return true;
+    }
+    async release(reservation: SpendReservation): Promise<boolean> {
+      this.released.push(reservation.id);
+      return true;
+    }
+  }
+
+  it("ne solde rien, rend la réservation, laisse le journal vide, et l'appelant reçoit le flux", async () => {
+    const stream = sse({ type: "error", error: { type: "overloaded_error", message: "upstream" } });
+    const ledger = new FakeLedger();
+    const reservations = new FakeReservations();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const response = await meteredFetch(
+        async () => new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+        { ledger, reservations },
+      )(MESSAGES_URL, messagesInit);
+      expect(await response.text()).toBe(stream);
+      expect(reservations.released).toEqual(["r-1"]);
+      expect(reservations.settled).toHaveLength(0);
+      expect(ledger.recorded).toHaveLength(0);
+      expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+        event: "SPEND_PROVIDER_ERROR_STREAM",
+        providerError: { type: "overloaded_error" },
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

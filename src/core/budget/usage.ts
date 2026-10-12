@@ -106,9 +106,26 @@ function anthropicUsage(raw: Record<string, unknown>): UsageOutcome {
  *
  * Rend la forme d'un corps non-streamé (`{model, usage}`) pour réutiliser {@link readUsage}.
  */
-export function readAnthropicStream(text: string): { usage: UsageOutcome; model?: string } {
+export interface AnthropicStreamReading {
+  readonly usage: UsageOutcome;
+  readonly model?: string;
+  /**
+   * An in-stream provider error (`{"type":"error"}` event) that arrived BEFORE any
+   * `message_start`: the gateway had already answered 2xx, then the provider failed — a
+   * cooldown, a quota, an upstream outage. No completion was produced and nothing was counted.
+   * Reported so the caller can treat it like a non-2xx answer instead of a consumption it
+   * cannot measure (measured 2026-10-12: two such calls locked a lab goal's budget window).
+   */
+  readonly providerError?: { readonly type: string; readonly message: string };
+  /** What the stream actually contained, for the diagnostic line when nothing was measurable. */
+  readonly stream: { readonly bytes: number; readonly events: Readonly<Record<string, number>> };
+}
+
+export function readAnthropicStream(text: string): AnthropicStreamReading {
   let model: string | undefined;
   let started = false;
+  let providerError: AnthropicStreamReading["providerError"];
+  const events: Record<string, number> = {};
   const merged: Record<string, unknown> = {};
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith("data:")) continue;
@@ -118,9 +135,12 @@ export function readAnthropicStream(text: string): { usage: UsageOutcome; model?
     try {
       event = JSON.parse(data);
     } catch {
+      events["(unparseable)"] = (events["(unparseable)"] ?? 0) + 1;
       continue;
     }
     if (!isPlainObject(event)) continue;
+    const type = typeof event.type === "string" ? event.type : "(untyped)";
+    events[type] = (events[type] ?? 0) + 1;
     if (event.type === "message_start" && isPlainObject(event.message)) {
       started = true;
       if (typeof event.message.model === "string") model = event.message.model;
@@ -129,8 +149,21 @@ export function readAnthropicStream(text: string): { usage: UsageOutcome; model?
       for (const [key, value] of Object.entries(event.usage)) {
         if (value !== null && value !== undefined) merged[key] = value;
       }
+    } else if (event.type === "error" && !started && providerError === undefined) {
+      const error = isPlainObject(event.error) ? event.error : {};
+      providerError = {
+        type: typeof error.type === "string" ? error.type : "unknown",
+        message: typeof error.message === "string" ? error.message.slice(0, 300) : "",
+      };
     }
   }
-  if (!started) return { usage: unmetered("USAGE_ABSENT") };
-  return { usage: readUsage({ usage: merged }), ...(model ? { model } : {}) };
+  const stream = { bytes: text.length, events };
+  if (!started) {
+    return {
+      usage: unmetered("USAGE_ABSENT"),
+      ...(providerError ? { providerError } : {}),
+      stream,
+    };
+  }
+  return { usage: readUsage({ usage: merged }), ...(model ? { model } : {}), stream };
 }

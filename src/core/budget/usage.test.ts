@@ -135,15 +135,21 @@ describe("readAnthropicStream — flux SSE /v1/messages", () => {
 
   it("entrée de message_start, sortie CUMULÉE du dernier message_delta, modèle rapporté", () => {
     const text = sse(
-      { type: "message_start", message: { model: "m/x", usage: { input_tokens: 40, output_tokens: 1 } } },
+      {
+        type: "message_start",
+        message: { model: "m/x", usage: { input_tokens: 40, output_tokens: 1 } },
+      },
       { type: "content_block_delta", delta: { text: "hi" } },
       { type: "message_delta", usage: { output_tokens: 9 } },
       { type: "message_delta", usage: { output_tokens: 15 } },
       { type: "message_stop" },
     );
-    expect(readAnthropicStream(text)).toEqual({
+    expect(readAnthropicStream(text)).toMatchObject({
       model: "m/x",
-      usage: { kind: "METERED", usage: { promptTokens: 40, completionTokens: 15, totalTokens: 55 } },
+      usage: {
+        kind: "METERED",
+        usage: { promptTokens: 40, completionTokens: 15, totalTokens: 55 },
+      },
     });
   });
 
@@ -151,6 +157,52 @@ describe("readAnthropicStream — flux SSE /v1/messages", () => {
     expect(readAnthropicStream(sse({ type: "ping" })).usage).toEqual({
       kind: "UNMETERED",
       reason: "USAGE_ABSENT",
+    });
+  });
+
+  it("dit ce que le flux contenait quand rien n'est mesurable (octets, événements)", () => {
+    const reading = readAnthropicStream(
+      sse({ type: "ping" }, { type: "ping" }) + "data: {oops\n\n",
+    );
+    expect(reading.usage).toEqual({ kind: "UNMETERED", reason: "USAGE_ABSENT" });
+    expect(reading.stream.events).toEqual({ ping: 2, "(unparseable)": 1 });
+    expect(reading.stream.bytes).toBeGreaterThan(0);
+    expect(reading.providerError).toBeUndefined();
+  });
+
+  it("une ERREUR FOURNISSEUR dans le flux, avant tout message_start, est rapportée comme telle", () => {
+    const reading = readAnthropicStream(
+      sse({
+        type: "error",
+        error: {
+          type: "rate_limit_error",
+          message: "All credentials for model gpt-5.6-sol are cooling down",
+        },
+      }),
+    );
+    expect(reading.usage).toEqual({ kind: "UNMETERED", reason: "USAGE_ABSENT" });
+    expect(reading.providerError).toEqual({
+      type: "rate_limit_error",
+      message: "All credentials for model gpt-5.6-sol are cooling down",
+    });
+    expect(reading.stream.events).toEqual({ error: 1 });
+  });
+
+  it("une erreur APRÈS message_start n'efface pas la consommation déjà mesurée", () => {
+    const reading = readAnthropicStream(
+      sse(
+        {
+          type: "message_start",
+          message: { model: "m/x", usage: { input_tokens: 40, output_tokens: 1 } },
+        },
+        { type: "message_delta", usage: { output_tokens: 9 } },
+        { type: "error", error: { type: "overloaded_error", message: "cut" } },
+      ),
+    );
+    expect(reading.providerError).toBeUndefined();
+    expect(reading.usage).toEqual({
+      kind: "METERED",
+      usage: { promptTokens: 40, completionTokens: 9, totalTokens: 49 },
     });
   });
 });

@@ -10,7 +10,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   type BoundedRequest,
 } from "@/core/budget/request-bounds";
-import { readAnthropicStream, readUsage } from "@/core/budget/usage";
+import { readAnthropicStream, readUsage, type AnthropicStreamReading } from "@/core/budget/usage";
 
 import type { SpendLedgerPort, SpendReservation, SpendReservationPort } from "./ports";
 
@@ -147,10 +147,43 @@ function requestedModel(init: RequestInit | undefined): string | undefined {
  * cloné : lire un flux SSE jusqu'au bout attendrait la fin de la complétion et casserait
  * le streaming de l'appelant.
  */
-async function observe(
-  response: Response,
-  input: RequestInfo | URL,
-): Promise<{ usage: UsageOutcome; model?: string }> {
+/** What one answer taught us: its consumption, and when nothing was measurable, why. */
+interface Observation {
+  readonly usage: UsageOutcome;
+  readonly model?: string;
+  readonly providerError?: AnthropicStreamReading["providerError"];
+  readonly stream?: AnthropicStreamReading["stream"];
+}
+
+/**
+ * A FAILED CALL IS NOT A CONSUMPTION. The non-2xx rule below already says so; this is its
+ * streaming twin: a 2xx event-stream whose only content is a provider `error` event before any
+ * `message_start` delivered nothing and counted nothing. Recording it UNMETERED would make the
+ * goal's window refuse every later call (`UNMETERED_USAGE_IN_WINDOW`) — measured on the N1 lab,
+ * 2026-10-12: one such stream, then every retry denied. The caller still receives the error.
+ * A stream that is unreadable for any OTHER reason stays UNMETERED, with its shape logged.
+ */
+function failedBeforeAnyToken(observed: Observation): boolean {
+  return observed.providerError !== undefined && observed.usage.kind === UNMETERED;
+}
+
+function logStreamDiagnostic(
+  event: "SPEND_PROVIDER_ERROR_STREAM" | "SPEND_STREAM_UNMETERED",
+  observed: Observation,
+  modelId: string,
+): void {
+  console.warn(
+    JSON.stringify({
+      event,
+      modelId,
+      ...(observed.usage.kind === UNMETERED ? { reason: observed.usage.reason } : {}),
+      ...(observed.providerError ? { providerError: observed.providerError } : {}),
+      ...(observed.stream ? { bytes: observed.stream.bytes, events: observed.stream.events } : {}),
+    }),
+  );
+}
+
+async function observe(response: Response, input: RequestInfo | URL): Promise<Observation> {
   /*
    * LA MESURE NE DOIT JAMAIS CASSER L'APPEL. `meteredFetch` est typé `typeof fetch`, donc
    * un `inner` conforme rend un vrai `Response` — mais un adaptateur de test, un proxy ou
@@ -273,9 +306,17 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     if (!isCompletionRequest(input)) return response;
 
     const observed = await observe(response, input);
+    const modelId = observed.model ?? requestedModel(init) ?? "UNKNOWN";
+    if (failedBeforeAnyToken(observed)) {
+      logStreamDiagnostic("SPEND_PROVIDER_ERROR_STREAM", observed, modelId);
+      return response;
+    }
+    if (observed.stream && observed.usage.kind === UNMETERED) {
+      logStreamDiagnostic("SPEND_STREAM_UNMETERED", observed, modelId);
+    }
     try {
       await deps.ledger.record({
-        modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
+        modelId,
         usage: observed.usage,
         attribution,
         at: now().toISOString(),
@@ -353,6 +394,23 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     }
 
     const observed = await observe(response, input);
+    if (failedBeforeAnyToken(observed)) {
+      /* Like a non-2xx: the reservation is given back, nothing is settled. */
+      logStreamDiagnostic(
+        "SPEND_PROVIDER_ERROR_STREAM",
+        observed,
+        observed.model ?? requestedModel(init) ?? "UNKNOWN",
+      );
+      await reservations.release(reservation).catch(() => undefined);
+      return response;
+    }
+    if (observed.stream && observed.usage.kind === UNMETERED) {
+      logStreamDiagnostic(
+        "SPEND_STREAM_UNMETERED",
+        observed,
+        observed.model ?? requestedModel(init) ?? "UNKNOWN",
+      );
+    }
     try {
       /*
        * Le solde n'accepte AUCUNE imputation (verrou C2) : celle du journal est relue depuis

@@ -635,7 +635,7 @@ describe("OmniRouteReviewer — bounded corrective retry on a malformed answer (
     const reviewer = new OmniRouteReviewer({ ...options, fetch: fetchMock });
     const verdict = await reviewer.review(makeBaseInput());
     expect(verdict.decision).toBe("APPROVE");
-    expect(verdict.providerMetadata.model).toBe(options.model);
+    expect(verdict.providerMetadata?.model).toBe(options.model);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const second = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
       messages: Array<{ role: string; content: string }>;
