@@ -59,6 +59,19 @@ export const OMNIROUTE_MAX_LISTED_MODELS = 500;
 export const OMNIROUTE_MAX_MODEL_ID_LENGTH = 200;
 
 /** Lists the models OmniRoute serves. The credential is sent, never returned or logged. */
+/**
+ * How many times one listing may be asked. Exactly one WARM retry, and only after a timeout:
+ * measured on the VPS, OmniRoute's first `/v1/models` after an idle period takes 5–6 s
+ * (provider re-resolution) and the next one under a second, so the retry is almost always the
+ * one that answers. Any other failure (HTTP status, oversized or malformed listing) is final:
+ * asking again cannot change what the gateway serves.
+ */
+export const LISTING_ATTEMPTS = 2;
+
+function isTimeout(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
 export async function listOmniRouteModels(options: {
   baseUrl: string;
   credential: string;
@@ -66,10 +79,20 @@ export async function listOmniRouteModels(options: {
   timeoutMs?: number;
 }): Promise<string[]> {
   const doFetch = options.fetch ?? globalThis.fetch;
-  const response = await doFetch(`${options.baseUrl.replace(/\/+$/, "")}/v1/models`, {
-    headers: { Authorization: ["Bearer", options.credential].join(" ") },
-    signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-  });
+  const url = `${options.baseUrl.replace(/\/+$/, "")}/v1/models`;
+  let response: Response | undefined;
+  for (let attempt = 1; attempt <= LISTING_ATTEMPTS; attempt += 1) {
+    try {
+      response = await doFetch(url, {
+        headers: { Authorization: ["Bearer", options.credential].join(" ") },
+        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+      });
+      break;
+    } catch (error) {
+      if (!isTimeout(error) || attempt === LISTING_ATTEMPTS) throw error;
+    }
+  }
+  if (!response) throw new Error("COMPUTE_DISCOVERY_NO_RESPONSE");
   if (!response.ok) throw new Error(`COMPUTE_DISCOVERY_HTTP_${response.status}`);
   const text = await response.text();
   if (text.length > OMNIROUTE_MAX_LISTING_BYTES) {

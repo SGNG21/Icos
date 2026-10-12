@@ -136,6 +136,10 @@ export async function bootstrapComputeFleetAtStartup(
       credential: env.OMNIROUTE_API_KEY!,
       options: { runtime: "binary", capabilities: [...DEFAULT_COMPUTE_CAPABILITIES] },
       workers: container.workerRegistryStore,
+      /* Per-attempt ceiling of the listing; the listing itself retries once after a timeout. */
+      ...(env.ICOS_COMPUTE_DISCOVERY_TIMEOUT_MS !== undefined
+        ? { timeoutMs: env.ICOS_COMPUTE_DISCOVERY_TIMEOUT_MS }
+        : {}),
     });
   } catch (error) {
     const outcome = {

@@ -89,6 +89,15 @@ const envSchema = z.object({
    */
   ICOS_WORKER_PROBE_HTTP_TIMEOUT_MS: optionalPositiveInteger,
   /*
+   * Fleet discovery (`GET /v1/models` on OmniRoute) at boot and at every periodic
+   * reconciliation. Default 10 s. Measured on the VPS (2026-10-12): OmniRoute answers the
+   * FIRST listing after an idle period in 5–6 s (provider re-resolution), the next ones in
+   * under a second; under host load the first one crosses 10 s and the fleet stays empty
+   * (`COMPUTE_BOOTSTRAP PROVIDER_UNAVAILABLE`). The listing also gets one warm retry after a
+   * timeout (compute-fleet.ts); this raises the per-attempt ceiling for a slower host.
+   */
+  ICOS_COMPUTE_DISCOVERY_TIMEOUT_MS: optionalPositiveInteger,
+  /*
    * How often the durable `probe_workers` job sweeps the fleet (M6). Defaults to a
    * quarter of the health-evidence horizon, so evidence never expires between
    * sweeps. A value at or above the horizon is REFUSED at composition time.
@@ -275,7 +284,10 @@ const envSchema = z.object({
   /* Plafond JOURNALIER de tokens de la proposition (imputation `self-development=`). Défaut 50 000. */
   ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS: optionalPositiveInteger,
   /* Chemins du dépôt sondés par ESLint, relatifs, séparés par des virgules. Défaut `src`. */
-  ICOS_SELF_DEVELOPMENT_DETECTOR_PATHS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  ICOS_SELF_DEVELOPMENT_DETECTOR_PATHS: z.preprocess(
+    emptyAsUndefined,
+    z.string().min(1).optional(),
+  ),
   /* Durée maximale de la sonde de qualité. Défaut 300 000 ms. */
   ICOS_SELF_DEVELOPMENT_DETECTOR_TIMEOUT_MS: optionalPositiveInteger,
   SCHEDULER_LEASE_MS: optionalPositiveInteger,
