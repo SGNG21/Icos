@@ -32,12 +32,24 @@ import process from "node:process";
 /** The only tools Claude Code is given. Bash appears only with ICOS-supplied patterns. */
 const FILE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep"];
 /** Belt and braces: what must never run even if a pattern were too broad. */
-const ALWAYS_DENIED = ["WebFetch", "WebSearch", "Bash(git:*)", "Bash(git *)", "Bash(curl:*)", "Bash(wget:*)"];
+const ALWAYS_DENIED = [
+  "WebFetch",
+  "WebSearch",
+  "Bash(git:*)",
+  "Bash(git *)",
+  "Bash(curl:*)",
+  "Bash(wget:*)",
+];
 /** A dummy credential: Claude Code wants one, the gateway needs none, the proxy drops it. */
 const DUMMY_KEY = "icos-metered";
 
 export function parseArgs(argv) {
-  const out = { allowBash: [], claudeBin: "/usr/bin/claude", maxBudgetUsd: "0.50", timeoutMs: 840_000 };
+  const out = {
+    allowBash: [],
+    claudeBin: "/usr/bin/claude",
+    maxBudgetUsd: "0.50",
+    timeoutMs: 840_000,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
@@ -47,14 +59,29 @@ export function parseArgs(argv) {
       return value;
     };
     switch (flag) {
-      case "--prompt": out.prompt = need(); break;
-      case "--model": out.model = need(); break;
-      case "--max-budget-usd": out.maxBudgetUsd = need(); break;
-      case "--timeout-ms": out.timeoutMs = Number(need()); break;
-      case "--allow-bash": out.allowBash.push(need()); break;
-      case "--claude-bin": out.claudeBin = need(); break;
-      case "--max-output-tokens": out.maxOutputTokens = need(); break;
-      default: throw new Error(`unknown argument ${flag}`);
+      case "--prompt":
+        out.prompt = need();
+        break;
+      case "--model":
+        out.model = need();
+        break;
+      case "--max-budget-usd":
+        out.maxBudgetUsd = need();
+        break;
+      case "--timeout-ms":
+        out.timeoutMs = Number(need());
+        break;
+      case "--allow-bash":
+        out.allowBash.push(need());
+        break;
+      case "--claude-bin":
+        out.claudeBin = need();
+        break;
+      case "--max-output-tokens":
+        out.maxOutputTokens = need();
+        break;
+      default:
+        throw new Error(`unknown argument ${flag}`);
     }
   }
   if (!out.prompt) throw new Error("--prompt is required");
@@ -62,7 +89,8 @@ export function parseArgs(argv) {
   if (!/^\d+(\.\d+)?$/.test(out.maxBudgetUsd) || Number(out.maxBudgetUsd) <= 0) {
     throw new Error("--max-budget-usd must be a positive number");
   }
-  if (!Number.isFinite(out.timeoutMs) || out.timeoutMs <= 0) throw new Error("--timeout-ms must be positive");
+  if (!Number.isFinite(out.timeoutMs) || out.timeoutMs <= 0)
+    throw new Error("--timeout-ms must be positive");
   for (const pattern of out.allowBash) {
     /* A pattern is a Claude Code permission rule body; it may not smuggle a second rule. */
     if (!pattern || /[(),]/.test(pattern)) throw new Error("invalid --allow-bash pattern");
@@ -152,6 +180,15 @@ function writeStatus(status) {
   if (file) writeFileSync(file, JSON.stringify(status));
 }
 
+/** The `pnpm_config_*` / `npm_config_*` settings of an environment, and nothing else. */
+export function packageManagerSettings(source) {
+  const out = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (typeof value === "string" && /^(pnpm|npm)_config_[a-z0-9_]+$/.test(name)) out[name] = value;
+  }
+  return out;
+}
+
 /** Reads Claude Code's `--output-format json` result. Null when it is not one. */
 export function parseClaudeResult(stdout) {
   const text = stdout.trim();
@@ -180,7 +217,9 @@ async function main() {
   const socketPath = process.env.ICOS_EGRESS_SOCKET;
   if (!socketPath) {
     writeStatus({ completed: false, failed: true, error: "EGRESS_SOCKET_MISSING" });
-    process.stderr.write("icos-claude-worker: ICOS_EGRESS_SOCKET missing: no metered egress, no run\n");
+    process.stderr.write(
+      "icos-claude-worker: ICOS_EGRESS_SOCKET missing: no metered egress, no run\n",
+    );
     process.exit(2);
   }
 
@@ -195,6 +234,15 @@ async function main() {
       HOME: process.env.HOME ?? "",
       TMPDIR: process.env.TMPDIR ?? process.env.HOME ?? "/tmp",
       LANG: process.env.LANG ?? "C.UTF-8",
+      /*
+       * THE PACKAGE-MANAGER SETTINGS ICOS CONSTRUCTED FOR THIS WORKTREE (W10). The worktree's
+       * node_modules were installed offline with a named store, a trusted lockfile and a frozen
+       * store; a `pnpm exec eslint …` in a shell WITHOUT those settings judges the install out
+       * of date, tries to reinstall and aborts for want of a TTY (N1 run 10, attempts 1–3:
+       * ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY). Only these two prefixes pass; nothing
+       * else of the adapter's environment reaches the CLI — the surface stays constructed.
+       */
+      ...packageManagerSettings(process.env),
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -204,12 +252,20 @@ async function main() {
 
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (d) => { stdout += d; });
-  child.stderr.on("data", (d) => { if (stderr.length < 64_000) stderr += d; });
+  child.stdout.on("data", (d) => {
+    stdout += d;
+  });
+  child.stderr.on("data", (d) => {
+    if (stderr.length < 64_000) stderr += d;
+  });
 
   let timedOut = false;
   const killGroup = (signal) => {
-    try { process.kill(-child.pid, signal); } catch { /* already gone */ }
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      /* already gone */
+    }
   };
   const timer = setTimeout(() => {
     timedOut = true;
@@ -217,11 +273,17 @@ async function main() {
     setTimeout(() => killGroup("SIGKILL"), 5_000).unref();
   }, options.timeoutMs);
   for (const signal of ["SIGTERM", "SIGINT"]) {
-    process.on(signal, () => { killGroup("SIGKILL"); process.exit(1); });
+    process.on(signal, () => {
+      killGroup("SIGKILL");
+      process.exit(1);
+    });
   }
 
   const [code, signal] = await new Promise((resolve) => {
-    child.on("error", (error) => { stderr += String(error.message); resolve([127, null]); });
+    child.on("error", (error) => {
+      stderr += String(error.message);
+      resolve([127, null]);
+    });
     child.on("close", (c, s) => resolve([c, s]));
   });
   clearTimeout(timer);
@@ -234,7 +296,12 @@ async function main() {
     process.stderr.write(`icos-claude-worker: claude timed out after ${options.timeoutMs}ms\n`);
     process.exit(1);
   }
-  const ok = code === 0 && result !== null && result.is_error === false && typeof result.result === "string" && result.result.trim() !== "";
+  const ok =
+    code === 0 &&
+    result !== null &&
+    result.is_error === false &&
+    typeof result.result === "string" &&
+    result.result.trim() !== "";
   writeStatus({
     completed: ok,
     failed: !ok,
@@ -256,7 +323,10 @@ async function main() {
 }
 
 /* Imported by the unit test for its pure helpers; executed as the adapter otherwise. */
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("icos-claude-worker.mjs")) {
+if (
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("icos-claude-worker.mjs")
+) {
   main().catch((error) => {
     writeStatus({ completed: false, failed: true, error: "ADAPTER_CRASH" });
     process.stderr.write(`icos-claude-worker: ${error?.message ?? error}\n`);

@@ -101,7 +101,13 @@ describe("icos-claude-worker adapter", () => {
   ];
 
   it("runs claude headless through the loopback forwarder to the socket, and reports the contract", async () => {
-    const result = await run([...base(), "--allow-bash", "pnpm test*", "--allow-bash", "node --test *"]);
+    const result = await run([
+      ...base(),
+      "--allow-bash",
+      "pnpm test*",
+      "--allow-bash",
+      "node --test *",
+    ]);
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
     expect(result.stdout.trim()).toBe('done via 200 {"via":"socket"}');
@@ -110,7 +116,10 @@ describe("icos-claude-worker adapter", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]!.url).toBe("/v1/messages?beta=true");
 
-    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<string, unknown>;
+    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(status).toEqual({
       completed: true,
       failed: false,
@@ -136,12 +145,14 @@ describe("icos-claude-worker adapter", () => {
     );
     expect(flag("--disallowedTools")).toContain("Bash(git:*)");
     expect(argv).toEqual(
-      expect.arrayContaining(["--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"]),
+      expect.arrayContaining([
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+      ]),
     );
     expect(flag("--setting-sources")).toBe("user");
-    expect(argv).toEqual(
-      expect.arrayContaining(["--no-session-persistence"]),
-    );
+    expect(argv).toEqual(expect.arrayContaining(["--no-session-persistence"]));
     /* NEVER a global bypass. */
     expect(argv.join(" ")).not.toMatch(/dangerously|bypassPermissions/);
 
@@ -158,6 +169,30 @@ describe("icos-claude-worker adapter", () => {
     expect(env.ICOS_WORKER_STATUS_FILE).toBeUndefined();
   });
 
+  it("PACKAGE_MANAGER_SETTINGS_PASS: pnpm_config_*/npm_config_* reach claude's shell, nothing else does", async () => {
+    /*
+     * W10 (N1 run 10, attempts 1–3): the worktree's node_modules were installed with a named
+     * store, a trusted lockfile and a frozen store; the writer's `pnpm exec eslint …` ran in a
+     * shell without those settings, pnpm judged the install out of date and aborted a
+     * reinstall for want of a TTY. The settings ICOS constructed must reach the shell — and
+     * only they do: the adapter's surface stays constructed, never inherited.
+     */
+    const result = await run([...base(), "--allow-bash", "pnpm exec eslint src/*"], {
+      pnpm_config_store_dir: "/srv/store/v11",
+      pnpm_config_verify_deps_before_run: "false",
+      npm_config_verify_deps_before_run: "false",
+      ICOS_NOT_FOR_THE_WRITER: "canary",
+      PNPM_HOME: "/not/forwarded",
+    });
+    expect(result.code).toBe(0);
+    const { env } = JSON.parse(await readFile(join(dir, "record.json"), "utf8")) as Recorded;
+    expect(env.pnpm_config_store_dir).toBe("/srv/store/v11");
+    expect(env.pnpm_config_verify_deps_before_run).toBe("false");
+    expect(env.npm_config_verify_deps_before_run).toBe("false");
+    expect(env.ICOS_NOT_FOR_THE_WRITER).toBeUndefined();
+    expect(env.PNPM_HOME).toBeUndefined();
+  });
+
   it("without --allow-bash, claude gets no Bash tool at all", async () => {
     await run(base());
     const { argv } = JSON.parse(await readFile(join(dir, "record.json"), "utf8")) as Recorded;
@@ -170,7 +205,10 @@ describe("icos-claude-worker adapter", () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("error_max_budget_usd");
-    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<string, unknown>;
+    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(status).toMatchObject({ completed: false, failed: true });
   });
 
@@ -180,7 +218,10 @@ describe("icos-claude-worker adapter", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("timed out");
-    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<string, unknown>;
+    const status = JSON.parse(await readFile(join(dir, "status.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(status).toMatchObject({ completed: false, failed: true, error: "TIMEOUT" });
   });
 
