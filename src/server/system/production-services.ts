@@ -472,7 +472,8 @@ export function composeAutonomyRuntime(container: Container): {
           }),
           proposer: improvementProposer,
           maxProposalsPerDay:
-            detectionEnv.ICOS_SELF_DEVELOPMENT_MAX_PROPOSALS_PER_DAY ?? DEFAULT_MAX_PROPOSALS_PER_DAY,
+            detectionEnv.ICOS_SELF_DEVELOPMENT_MAX_PROPOSALS_PER_DAY ??
+            DEFAULT_MAX_PROPOSALS_PER_DAY,
         })
       : undefined;
 
@@ -559,8 +560,14 @@ function createRecoveryScheduler(
   container: Container,
   options: { intervalMs: number; selfDevelopment: boolean },
 ): ProductionServiceScheduler {
-  const { supervisor, wakeup, recovery, pendingReviewGate, selfDevelopment, selfDevelopmentDetection } =
-    composeAutonomyRuntime(container);
+  const {
+    supervisor,
+    wakeup,
+    recovery,
+    pendingReviewGate,
+    selfDevelopment,
+    selfDevelopmentDetection,
+  } = composeAutonomyRuntime(container);
   if (!container.autonomousRuntime) {
     throw new Error("AUTONOMY_RECOVERY_RUNTIME_UNAVAILABLE");
   }
@@ -620,7 +627,13 @@ function createRecoveryScheduler(
         executionResults: container.executionResults,
         dispatchAttempts: container.dispatchAttempts,
         digitalosFacadePath: env.DIGITALOS_FACADE_PATH,
-        probe: new TemporalWorkflowProbe(env.TEMPORAL_ADDRESS, env.TEMPORAL_DISPATCH_TIMEOUT_MS),
+        probe: new TemporalWorkflowProbe(
+          env.TEMPORAL_ADDRESS,
+          env.TEMPORAL_DISPATCH_TIMEOUT_MS,
+          undefined,
+          /* Same namespace as the dispatcher (container.ts): recovery looks where work runs. */
+          env.TEMPORAL_NAMESPACE,
+        ),
         control: container.control?.guard,
       })
     : null;

@@ -13,6 +13,13 @@ export class TemporalWorkflowProbe implements WorkflowProbe {
     private readonly address = "localhost:7233",
     private readonly timeoutMs = 10_000,
     private readonly mockClient?: Pick<Client, "workflow">, // TEST ONLY
+    /**
+     * THE DISPATCHER'S NAMESPACE, or the probe describes the wrong Temporal. A probe left in
+     * `default` while workflows run in TEMPORAL_NAMESPACE answers "not found" for every live
+     * attempt, and recovery then supersedes work that is in fact running — the opposite of
+     * recovery. Only ever read, never created here.
+     */
+    private readonly namespace = "default",
   ) {}
 
   private client(): Promise<Pick<Client, "workflow">> {
@@ -21,7 +28,7 @@ export class TemporalWorkflowProbe implements WorkflowProbe {
       address: this.address,
       connectTimeout: this.timeoutMs,
     })
-      .then((connection) => new Client({ connection }))
+      .then((connection) => new Client({ connection, namespace: this.namespace }))
       .catch((error: unknown) => {
         this.clientPromise = undefined; // an outage must not poison later sweeps
         throw error;
