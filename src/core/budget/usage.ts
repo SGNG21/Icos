@@ -91,7 +91,14 @@ function anthropicUsage(raw: Record<string, unknown>): UsageOutcome {
   if (totalTokens > MAX_PLAUSIBLE_TOKENS_PER_CALL) return unmetered("USAGE_IMPLAUSIBLE");
   return {
     kind: "METERED",
-    usage: { promptTokens: prompt, completionTokens: output, totalTokens },
+    usage: {
+      promptTokens: prompt,
+      completionTokens: output,
+      totalTokens,
+      ...(cacheCreation !== undefined || cacheRead !== undefined
+        ? { cache: { read: cacheRead ?? 0, creation: cacheCreation ?? 0 } }
+        : {}),
+    },
   };
 }
 

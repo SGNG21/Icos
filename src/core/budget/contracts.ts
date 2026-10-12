@@ -163,6 +163,14 @@ export interface TokenUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
   readonly totalTokens: number;
+  /**
+   * HOW THE PROMPT WAS SERVED, when the provider says (Anthropic format): `read` tokens came
+   * from the prompt cache, `creation` tokens were written to it, the rest were fresh input.
+   * All three are billed input and all three are IN `promptTokens` — this split changes no
+   * total and no cap; it exists so a report can say how much of an agent's growing context
+   * was cached rather than re-read, and price the parts differently once prices are known.
+   */
+  readonly cache?: { readonly read: number; readonly creation: number };
 }
 
 /** Résultat de lecture de la consommation d'un appel. */

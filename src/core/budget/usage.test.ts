@@ -110,7 +110,13 @@ describe("readUsage — format Anthropic (/v1/messages)", () => {
       }),
     ).toEqual({
       kind: "METERED",
-      usage: { promptTokens: 112, completionTokens: 20, totalTokens: 132 },
+      usage: {
+        promptTokens: 112,
+        completionTokens: 20,
+        totalTokens: 132,
+        /* The split rides beside the total: cached and created input are IN promptTokens. */
+        cache: { read: 7, creation: 5 },
+      },
     });
   });
 
