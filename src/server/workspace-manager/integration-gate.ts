@@ -2,6 +2,7 @@ import { sameEffectiveModel } from "@/core/workers/compute-routing";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { ControlHeldError, type RuntimeControlGuard } from "@/server/control/runtime-control";
+import { offlineInstallEnv } from "./sandboxed-command-runner";
 
 import { checkMigrations, effectiveScope, scanSecrets, scanSecurity } from "./checks";
 import type { Git } from "./git";
@@ -495,9 +496,8 @@ export class IntegrationGate {
     }: { withInstall?: boolean; database?: GateDatabaseSession } = {},
   ): Promise<Outcome> {
     const env: Record<string, string> = {
-      CI: "1",
-      npm_config_verify_deps_before_run: "false",
-      pnpm_config_verify_deps_before_run: "false",
+      /* The gate's named variables + what an OFFLINE install needs inside the sandbox (W10). */
+      ...offlineInstallEnv(),
       ...database?.env,
     };
     const list =

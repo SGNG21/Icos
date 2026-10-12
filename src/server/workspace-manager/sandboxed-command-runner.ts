@@ -71,6 +71,39 @@ export function defaultToolchainReadOnlyPaths(
   return [...out];
 }
 
+/**
+ * THE SETTINGS THAT MAKE `pnpm install --frozen-lockfile --offline` TRUE INSIDE THE SANDBOX.
+ *
+ * Measured on pnpm 11.10 (VPS, 2026-10-12): without them the install hangs for minutes and
+ * fails, in three ways, each one a request the sandbox rightly refuses.
+ *  - `store_dir`: pnpm derives its store from HOME, and HOME is ephemeral here — so it looked
+ *    in an empty store and reported every package missing. The real store is named.
+ *  - `trust_lockfile`: pnpm 11 defaults `minimumReleaseAge` to 1440 min and re-verifies every
+ *    lockfile entry against the registry (metadata + attestations) even offline: 826 requests,
+ *    each retried for a minute. The lockfile is the one the base commit carries, already
+ *    verified where it was produced; the sandbox is not where supply-chain policy is decided.
+ *  - `frozen_store`: the store is bound READ-ONLY (it is a shared cache, never the worktree's
+ *    to write), and pnpm's index is SQLite, opened read-write by default — `unable to open
+ *    database file`. `frozenStore` opens it through an immutable URI instead.
+ * The result: 649 packages linked offline from the read-only store in ~60 s, no network.
+ *
+ * pnpm 11 reads settings from `pnpm_config_*` — not `npm_config_*` — so these are the keys.
+ */
+export function offlineInstallEnv(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  home: string = homedir(),
+): Record<string, string> {
+  const [store] = defaultToolchainReadOnlyPaths(env, home);
+  return {
+    CI: "1",
+    npm_config_verify_deps_before_run: "false",
+    pnpm_config_verify_deps_before_run: "false",
+    pnpm_config_trust_lockfile: "true",
+    pnpm_config_frozen_store: "true",
+    ...(store ? { pnpm_config_store_dir: store } : {}),
+  };
+}
+
 export class SandboxedCommandRunner implements CommandRunner {
   private readonly runProcess: NonInteractiveRunner;
   private readonly readOnlyPaths: readonly string[];

@@ -202,15 +202,23 @@ describe("IntegrationGate — l'environnement est construit, jamais hérité", (
     expect(report.decision).toBe("ACCEPT");
 
     expect(calls.length).toBeGreaterThan(0);
+    const [storeDir] = defaultToolchainReadOnlyPaths();
     for (const call of calls) {
       expect(Object.values(call.env)).not.toContain(CANARY);
       const pg = /test:db:setup|test:integration/.test(call.command);
-      expect(Object.keys(call.env).sort()).toEqual([
-        "CI",
-        ...(pg ? ["ICOS_TEST_DATABASE_URL"] : []),
-        "npm_config_verify_deps_before_run",
-        "pnpm_config_verify_deps_before_run",
-      ]);
+      expect(Object.keys(call.env).sort()).toEqual(
+        [
+          "CI",
+          ...(pg ? ["ICOS_TEST_DATABASE_URL"] : []),
+          "npm_config_verify_deps_before_run",
+          "pnpm_config_verify_deps_before_run",
+          /* W10: what an offline install needs — a named store, no re-verification, read-only index. */
+          "pnpm_config_trust_lockfile",
+          "pnpm_config_frozen_store",
+          ...(storeDir ? ["pnpm_config_store_dir"] : []),
+        ].sort(),
+      );
+      if (storeDir) expect(call.env.pnpm_config_store_dir).toBe(storeDir);
       /* H1 (ADR 0075): no step has the network, not even PostgreSQL's. */
       expect(call.network).toBe(false);
     }

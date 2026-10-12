@@ -33,6 +33,7 @@ import { parseGateCommands } from "@/server/workspace-manager/integration-gate";
 import {
   SandboxedCommandRunner,
   defaultToolchainReadOnlyPaths,
+  offlineInstallEnv,
 } from "@/server/workspace-manager/sandboxed-command-runner";
 import {
   EXEC_PLACEHOLDERS,
@@ -978,11 +979,7 @@ export async function ensureWorktreeDependencies(
   ];
   const run = await runner.run([...install], {
     cwd: worktree,
-    env: {
-      CI: "1",
-      npm_config_verify_deps_before_run: "false",
-      pnpm_config_verify_deps_before_run: "false",
-    },
+    env: offlineInstallEnv(),
     network: false,
   });
   if (run.code !== 0) {

@@ -144,8 +144,15 @@ describe("W10 — the writer's worktree has its dependencies before it runs", ()
         "TMPDIR",
         "npm_config_verify_deps_before_run",
         "pnpm_config_verify_deps_before_run",
+        "pnpm_config_trust_lockfile",
+        "pnpm_config_frozen_store",
+        "pnpm_config_store_dir",
       ].sort(),
     );
+    /* The store pnpm links from is the one bound read-only — read-only for pnpm too. */
+    expect(i!.env?.pnpm_config_frozen_store).toBe("true");
+    expect(i!.env?.pnpm_config_trust_lockfile).toBe("true");
+    expect(i!.sandbox?.readOnlyPaths).toContain(i!.env?.pnpm_config_store_dir);
     /* Ordered: the install completes before the writer is launched. */
     expect(calls.indexOf(i!)).toBeLessThan(calls.indexOf(launch()));
     /* The pnpm store the links resolve into is readable by the writer, read-only. */
@@ -248,9 +255,9 @@ describe("W7 — the writer is told exactly what the executor will allow", () =>
 
     await runGovernedWorker({ taskId: "task-1", workflowId: "icos-task-task-1" }, "fix the lint");
 
-    const prompt = (calls.find((c) => c.command === WORKER_COMMAND) as RunOptions).args.at(
-      -1,
-    ) as string;
+    const prompt = String(
+      ((calls.find((c) => c.command === WORKER_COMMAND) as RunOptions).args ?? []).at(-1),
+    );
     expect(prompt.startsWith("fix the lint")).toBe(true);
     for (const pattern of ALLOW) expect(prompt).toContain(`\`${pattern}\``);
     expect(prompt).toContain("refused without a prompt");
