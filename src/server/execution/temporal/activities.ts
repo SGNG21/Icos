@@ -1106,6 +1106,7 @@ export function withExecutionEnvironment(
       ? `- Shell commands permitted, in these exact forms and no other: ${environment.shellPatterns.map((p) => `\`${p}\``).join(" ; ")}`
       : "- No shell command is permitted: edit files only.",
     "- Any other command is refused without a prompt; do not retry it — verify with the permitted forms and report their output.",
+    "- Keep tool output short: run the permitted commands only on the files in scope, read only what the task needs, never print whole files. Context is metered.",
   ];
   return lines.join("\n");
 }
