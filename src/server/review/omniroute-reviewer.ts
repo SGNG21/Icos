@@ -107,7 +107,11 @@ export class OmniRouteReviewer implements ReviewerPort {
     if (!resolved.baseUrl || !resolved.credential || !resolved.model) {
       throw reviewerError("CONFIGURATION_INCOMPLETE");
     }
-    if (!Number.isSafeInteger(resolved.timeoutMs) || resolved.timeoutMs <= 0) {
+    if (
+      !Number.isSafeInteger(resolved.timeoutMs) ||
+      resolved.timeoutMs <= 0 ||
+      resolved.timeoutMs > OmniRouteReviewer.MAX_ATTEMPT_TIMEOUT_MS
+    ) {
       throw reviewerError("INVALID_TIMEOUT");
     }
     this.options = resolved;
@@ -115,7 +119,58 @@ export class OmniRouteReviewer implements ReviewerPort {
     this.fetchImpl = resolved.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
+  /**
+   * How many times one review may be put to the model: the initial attempt and ONE corrective
+   * attempt. Same measured reason as `CommandReviewer.MAX_ATTEMPTS`: a real model answers the
+   * `.strict()` schema correctly most of the time and not every time (Nemotron 3 Ultra, 2026-10-12:
+   * one `{"}decision":…` in six fresh answers), and a shape failure says nothing about the change
+   * under review. Only shape failures are retried — a timeout, a provider error or an abort are
+   * conditions asking again cannot improve — and a verdict is never retried: a REQUEST_CHANGES
+   * or a BLOCK is an answer, not a malfunction. After the last attempt the failure stands:
+   * there is no default verdict.
+   */
+  static readonly MAX_ATTEMPTS = 2;
+  /** Per-attempt ceiling, so a review never consumes more than this of a mission's budget. */
+  static readonly MAX_ATTEMPT_TIMEOUT_MS = 180_000;
+
   async review(input: ReviewInput): Promise<{
+    decision: ReviewDecision;
+    reasons: string[];
+    requestedChanges?: RequestedChange[];
+    confidence?: number;
+    providerMetadata: ReviewerProviderMetadata;
+  }> {
+    let lastShapeError: Error | undefined;
+    let correction: string | undefined;
+    for (let attempt = 1; attempt <= OmniRouteReviewer.MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.reviewOnce(input, correction);
+      } catch (error) {
+        const retryable =
+          error instanceof Error &&
+          (error.message === `${ERROR_PREFIX}INVALID_OUTPUT` ||
+            error.message === `${ERROR_PREFIX}INVALID_RESPONSE`);
+        if (!retryable) throw error;
+        lastShapeError = error;
+        /*
+         * The corrective attempt tells the model WHAT was wrong with the envelope, never what
+         * to decide: the policy, the vocabulary and the schema are repeated verbatim by the
+         * system prompt, and the review context is resent unchanged.
+         */
+        correction = [
+          `Your previous answer was rejected (${error.message.slice(ERROR_PREFIX.length)}):`,
+          "it was not exactly one JSON object matching the schema in the system prompt.",
+          "Answer again with exactly one JSON object and nothing else.",
+        ].join(" ");
+      }
+    }
+    throw lastShapeError;
+  }
+
+  private async reviewOnce(
+    input: ReviewInput,
+    correction: string | undefined,
+  ): Promise<{
     decision: ReviewDecision;
     reasons: string[];
     requestedChanges?: RequestedChange[];
@@ -150,6 +205,7 @@ export class OmniRouteReviewer implements ReviewerPort {
           messages: [
             { role: "system", content: this.systemPrompt() },
             { role: "user", content: this.userPrompt(input) },
+            ...(correction ? [{ role: "user", content: correction }] : []),
           ],
         }),
         cache: "no-store",

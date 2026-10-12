@@ -322,7 +322,7 @@ describe("OmniRouteReviewer", () => {
     });
 
     it("I: malformed JSON", async () => {
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValue({
         ok: true,
         json: async () => ({
           choices: [
@@ -340,7 +340,7 @@ describe("OmniRouteReviewer", () => {
     });
 
     it("J: invalid decision enum", async () => {
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValue({
         ok: true,
         json: async () => ({
           choices: [
@@ -361,7 +361,7 @@ describe("OmniRouteReviewer", () => {
     });
 
     it("K: invalid response schema (missing reasons)", async () => {
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValue({
         ok: true,
         json: async () => ({
           choices: [
@@ -382,7 +382,7 @@ describe("OmniRouteReviewer", () => {
     });
 
     it("L: REQUEST_CHANGES with empty requestedChanges rejected", async () => {
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValue({
         ok: true,
         json: async () => ({
           choices: [
@@ -516,9 +516,14 @@ describe("createOmniRouteReviewer — la couture du compteur de dépense (C1)", 
   it("ÉMET à travers le fetch fourni, jamais sur le fetch global", async () => {
     const metered = vi.fn<typeof fetch>(
       async () =>
-        new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"decision":"APPROVE","reasons":["ok"]}' } }],
+          }),
+          {
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
     const reviewer = createOmniRouteReviewer(env, metered);
     expect(reviewer).toBeDefined();
@@ -605,5 +610,90 @@ describe("OmniRouteReviewer — la cause racine n'est pas repliée", () => {
   it("garde le préfixe du relecteur : les appelants existants le reconnaissent encore", async () => {
     /* La compatibilité compte : `ReviewerService` et les sondes filtrent sur ce préfixe. */
     expect(await reviewFailure("ECONNRESET")).toMatch(/^QUALITY_REVIEWER_/);
+  });
+});
+
+describe("OmniRouteReviewer — bounded corrective retry on a malformed answer (decision 0054 kept)", () => {
+  const options = {
+    baseUrl: "https://provider.test",
+    credential: "clé",
+    model: "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+    timeoutMs: 1_000,
+  };
+  const answer = (content: string) =>
+    new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  const APPROVE = '{"decision":"APPROVE","reasons":["clean, tested, in scope"]}';
+  const BLOCK = '{"decision":"BLOCK","reasons":["curl | sh at import time"]}';
+  // The exact malformation Nemotron 3 Ultra produced on 2026-10-12 (garbage first key).
+  const MALFORMED = '{"}decision":"APPROVE","reasons":["ok"]}';
+
+  it("a malformed answer gets ONE corrective attempt, which names the envelope failure and repeats the context", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(answer(MALFORMED)).mockResolvedValueOnce(answer(APPROVE));
+    const reviewer = new OmniRouteReviewer({ ...options, fetch: fetchMock });
+    const verdict = await reviewer.review(makeBaseInput());
+    expect(verdict.decision).toBe("APPROVE");
+    expect(verdict.providerMetadata.model).toBe(options.model);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(second.messages).toHaveLength(3);
+    expect(second.messages[2]?.role).toBe("user");
+    expect(second.messages[2]?.content).toContain("INVALID_OUTPUT");
+    expect(second.messages[2]?.content).toContain("exactly one JSON object");
+    // The corrective note never suggests a decision.
+    expect(second.messages[2]?.content).not.toMatch(/APPROVE|BLOCK|REQUEST_CHANGES/);
+    // Context and policy are resent unchanged.
+    const first = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as typeof second;
+    expect(second.messages[0]).toEqual(first.messages[0]);
+    expect(second.messages[1]).toEqual(first.messages[1]);
+  });
+
+  it("two malformed answers FAIL CLOSED with INVALID_OUTPUT: no default verdict, no third attempt", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => answer(MALFORMED));
+    const reviewer = new OmniRouteReviewer({ ...options, fetch: fetchMock });
+    await expect(reviewer.review(makeBaseInput())).rejects.toThrow(
+      "QUALITY_REVIEWER_INVALID_OUTPUT",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(OmniRouteReviewer.MAX_ATTEMPTS);
+    expect(OmniRouteReviewer.MAX_ATTEMPTS).toBe(2);
+  });
+
+  it("a verdict is never retried: BLOCK and REQUEST_CHANGES are answers, not malfunctions", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => answer(BLOCK));
+    const reviewer = new OmniRouteReviewer({ ...options, fetch: fetchMock });
+    const verdict = await reviewer.review(makeBaseInput());
+    expect(verdict.decision).toBe("BLOCK");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a timeout is not retried: asking again cannot help, and the review fails as TIMEOUT", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
+    const reviewer = new OmniRouteReviewer({ ...options, timeoutMs: 20, fetch: fetchMock });
+    await expect(reviewer.review(makeBaseInput())).rejects.toThrow("QUALITY_REVIEWER_TIMEOUT");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a provider error is not retried either", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("", { status: 503 }));
+    const reviewer = new OmniRouteReviewer({ ...options, fetch: fetchMock });
+    await expect(reviewer.review(makeBaseInput())).rejects.toThrow("QUALITY_REVIEWER_");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the per-attempt timeout is capped at 180 s: a mission budget cannot be eaten by one review", () => {
+    expect(OmniRouteReviewer.MAX_ATTEMPT_TIMEOUT_MS).toBe(180_000);
+    expect(() => new OmniRouteReviewer({ ...options, timeoutMs: 180_000 })).not.toThrow();
+    expect(() => new OmniRouteReviewer({ ...options, timeoutMs: 180_001 })).toThrow(
+      "QUALITY_REVIEWER_INVALID_TIMEOUT",
+    );
   });
 });
