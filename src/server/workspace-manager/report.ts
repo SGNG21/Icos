@@ -30,6 +30,8 @@ export interface IntegrationReport {
   decision: IntegrationDecision;
   commitSha: string;
   reasons: string[];
+  /** Steps re-run once after a first failure (bounded retry). Absent in older records. */
+  retried?: string[];
 }
 
 const list = (items: readonly string[]) => (items.length ? items.join(",") : "NONE");

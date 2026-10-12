@@ -137,7 +137,8 @@ export class IntegrationGate {
     // Control plane first: refused before any workspace transition or evaluation (fail closed).
     if (this.control) {
       const decision = await this.control.integration();
-      if (!decision.allowed) throw new ControlHeldError(decision.reason, `integration of ${workspaceId}`);
+      if (!decision.allowed)
+        throw new ControlHeldError(decision.reason, `integration of ${workspaceId}`);
     }
     let ws = await this.manager.get(workspaceId);
     const precondition = (why: string) =>
@@ -174,11 +175,7 @@ export class IntegrationGate {
     const others = (await this.manager.list()).filter(
       (w) => w.workspaceId !== workspaceId && w.releasedAt === null,
     );
-    await this.manager.assertLease(
-      workspaceId,
-      options.lease.owner,
-      options.lease.fencingToken,
-    );
+    await this.manager.assertLease(workspaceId, options.lease.owner, options.lease.fencingToken);
 
     const report = await this.evaluate(ws, head, others, options);
     /*
@@ -229,6 +226,7 @@ export class IntegrationGate {
       decision: "ACCEPT",
       commitSha: head,
       reasons: [],
+      retried: [],
     };
     const changed = await git.changedFiles(ws.baseCommit, head);
     const added = await git.addedLines(ws.baseCommit, head);
@@ -292,19 +290,18 @@ export class IntegrationGate {
       [
         "typecheck",
         () =>
-          this.command(
-            ws,
-            "typecheck",
-            (s) => (report.typecheck = s),
-            [this.commands.typecheck],
-            { withInstall: true },
-          ),
+          this.command(ws, "typecheck", (s) => (report.typecheck = s), [this.commands.typecheck], {
+            withInstall: true,
+          }),
       ],
       ["lint", () => this.command(ws, "lint", (s) => (report.lint = s), [this.commands.lint])],
       [
         "unit",
         () =>
-          this.command(ws, "tests unitaires", (s) => (report.unitTests = s), [this.commands.unit]),
+          this.command(ws, "tests unitaires", (s) => (report.unitTests = s), [this.commands.unit], {
+            retryOnce: true,
+            onRetry: () => (report.retried ??= []).push("unit"),
+          }),
       ],
       [
         "postgres",
@@ -440,7 +437,11 @@ export class IntegrationGate {
            * SAME MODEL = SAME JUDGE (decision 0054). A different worker running the model that
            * wrote the change is not an independent review, whichever account or route served it.
            */
-          if (r.reviewerModel && r.writerModel && sameEffectiveModel(r.reviewerModel, r.writerModel))
+          if (
+            r.reviewerModel &&
+            r.writerModel &&
+            sameEffectiveModel(r.reviewerModel, r.writerModel)
+          )
             return {
               decision: "NEEDS_HUMAN_APPROVAL",
               reasons: [
@@ -454,7 +455,9 @@ export class IntegrationGate {
            * pre-0054 deployment — but the report says so, durably.
            */
           if (r.reviewer === "llm" && (!r.reviewerModel || !r.writerModel))
-            return { reasons: ["indépendance non vérifiée : modèle effectif inconnu (écriture ou revue)"] };
+            return {
+              reasons: ["indépendance non vérifiée : modèle effectif inconnu (écriture ou revue)"],
+            };
           return {};
         },
       ],
@@ -493,7 +496,21 @@ export class IntegrationGate {
     {
       withInstall = false,
       database,
-    }: { withInstall?: boolean; database?: GateDatabaseSession } = {},
+      retryOnce = false,
+      onRetry,
+    }: {
+      withInstall?: boolean;
+      database?: GateDatabaseSession;
+      /**
+       * ONE BOUNDED RE-RUN of a failing step, same command, same sandbox (N1 run 10: the
+       * unit step failed 4 tests the gate could not name, and the same commit passed
+       * 4 476/4 476 in the same sandbox minutes later — timeouts under host load). The
+       * re-run is recorded in the report (`retried`) with both output tails; a step that
+       * fails twice is a REJECT, as before. Never a skip, never a step turned into PASS.
+       */
+      retryOnce?: boolean;
+      onRetry?: () => void;
+    } = {},
   ): Promise<Outcome> {
     const env: Record<string, string> = {
       /* The gate's named variables + what an OFFLINE install needs inside the sandbox (W10). */
@@ -506,6 +523,9 @@ export class IntegrationGate {
         : commands;
     const redact = (text: string) =>
       (database?.secrets ?? []).reduce((t, secret) => t.split(secret).join("***"), text);
+    /* The END of the output, where vitest/tsc/eslint put their verdict: 2 000 chars, bounded. */
+    const tail = (text: string) => text.slice(-2_000).replace(/\s+/g, " ");
+    const notes: string[] = [];
     for (const command of list) {
       const run = await this.runner.run(database ? database.wrap(command) : command, {
         cwd: ws.worktreePath,
@@ -513,20 +533,34 @@ export class IntegrationGate {
         network: false,
         ...(database ? { readWritePaths: database.readWritePaths } : {}),
       });
-      const code = run.code;
-      const output = redact(run.output);
+      let code = run.code;
+      let output = redact(run.output);
+      const retryNote: string[] = [];
+      if (code !== 0 && retryOnce) {
+        retryNote.push(
+          `${label} relancé une fois (${command.join(" ")}) ; 1er échec : ${tail(output)}`,
+        );
+        onRetry?.();
+        const again = await this.runner.run(database ? database.wrap(command) : command, {
+          cwd: ws.worktreePath,
+          env,
+          network: false,
+          ...(database ? { readWritePaths: database.readWritePaths } : {}),
+        });
+        code = again.code;
+        output = redact(again.output);
+      }
       if (code !== 0) {
         set("FAIL");
         return {
           decision: "REJECT",
-          reasons: [
-            `${label} en échec (${command.join(" ")}) : ${output.slice(-300).replace(/\s+/g, " ")}`,
-          ],
+          reasons: [...retryNote, `${label} en échec (${command.join(" ")}) : ${tail(output)}`],
         };
       }
+      notes.push(...retryNote);
     }
     set("PASS");
-    return {};
+    return notes.length > 0 ? { reasons: notes } : {};
   }
 }
 
@@ -564,7 +598,8 @@ export function parseGateCommands(raw?: string | null): Partial<GateCommands> | 
   const record = parsed as Record<string, unknown>;
   for (const key of ["install", "typecheck", "lint", "unit", "build"] as const) {
     if (record[key] === undefined) continue;
-    if (!isArgv(record[key])) throw new Error(`GATE_COMMANDS_INVALID: ${key} must be a non-empty argv array`);
+    if (!isArgv(record[key]))
+      throw new Error(`GATE_COMMANDS_INVALID: ${key} must be a non-empty argv array`);
     out[key] = record[key] as string[];
   }
   if (record.postgres !== undefined) {

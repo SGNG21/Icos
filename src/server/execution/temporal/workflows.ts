@@ -28,7 +28,20 @@ import type * as activities from "./activities";
  */
 const { runGovernedWorker } = proxyActivities<typeof activities>({
   startToCloseTimeout: "16 minutes",
-  retry: { maximumAttempts: 1 },
+  /*
+   * A DEAD WORKER IS SEEN IN 90 SECONDS, NOT 16 MINUTES (W6 recovery, N1 run 10). The
+   * activity heartbeats every 15 s while the executor runs; silence past this means the
+   * worker is gone or hung, and the server schedules the activity's second — and last —
+   * try on a live worker, which first resets the worktree to the attempt's base. The run's
+   * own failures are `GovernedRunFailure` (non-retryable): the one retry exists for the
+   * transport, never to re-run work ICOS saw fail.
+   */
+  heartbeatTimeout: "90 seconds",
+  retry: {
+    maximumAttempts: 2,
+    initialInterval: "5 seconds",
+    nonRetryableErrorTypes: ["GovernedRunFailure"],
+  },
 });
 
 /**

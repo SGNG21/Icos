@@ -40,6 +40,7 @@
     "worker:temporal": "tsx scripts/temporal-worker.ts"
   },
   "dependencies": {
+    "@temporalio/activity": "1.23.0",
     "@temporalio/client": "^1.23.0",
     "@temporalio/common": "1.23.0",
     "@temporalio/worker": "1.23.0",

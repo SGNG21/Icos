@@ -143,6 +143,33 @@ describe("REJECT", () => {
       unitTests: "FAIL",
       build: "SKIPPED",
     });
+    /* BOUNDED: a step that fails twice ran exactly twice, both tails are in the record. */
+    expect(commands().filter((c) => c.includes("pnpm test"))).toHaveLength(2);
+    expect(report.retried).toEqual(["unit"]);
+    expect(report.reasons.some((r) => r.includes("relancé une fois"))).toBe(true);
+    expect(report.reasons.some((r) => r.includes("tests unitaires en échec"))).toBe(true);
+  });
+
+  it("UNIT_RETRIED_ONCE: un échec unitaire non reproduit à la relance passe, et la relance est consignée", async () => {
+    /*
+     * N1 run 10 (2026-10-12 14:06): la porte a rejeté sur 4 tests qu'elle ne pouvait pas
+     * nommer ; le même commit passait 4 476/4 476 dans le même sandbox quelques minutes plus
+     * tard. Une relance, une seule, même commande, même sandbox — jamais un test exclu.
+     */
+    runner.failOnce = ["pnpm test"];
+    const report = await gate.integrate(await prepare("7a", { "src/7a/x.ts": "x\n" }), APPROVED);
+    expect(report).toMatchObject({ decision: "ACCEPT", unitTests: "PASS", retried: ["unit"] });
+    expect(commands().filter((c) => c.includes("pnpm test"))).toHaveLength(2);
+    expect(
+      report.reasons.some((r) => r.includes("relancé une fois") && r.includes("timed out")),
+    ).toBe(true);
+  });
+
+  it("TYPECHECK_NEVER_RETRIED: seule l'étape unitaire a droit à la relance", async () => {
+    runner.failOnce = ["typecheck"];
+    const report = await gate.integrate(await prepare("7a", { "src/7a/x.ts": "x\n" }), APPROVED);
+    expect(report).toMatchObject({ decision: "REJECT", typecheck: "FAIL", retried: [] });
+    expect(commands().filter((c) => c.includes("typecheck"))).toHaveLength(1);
   });
 
   it("si un test PostgreSQL échoue", async () => {
@@ -504,7 +531,9 @@ describe("H1 — l'étape PostgreSQL : base jetable, aucun réseau, aucun identi
   function session(log: string[]): GateDatabaseSession {
     return {
       database: "icos_test_gate_abc_1",
-      env: { ICOS_TEST_DATABASE_URL: `postgres://r:${PASSWORD}@127.0.0.1:5432/icos_test_gate_abc_1` },
+      env: {
+        ICOS_TEST_DATABASE_URL: `postgres://r:${PASSWORD}@127.0.0.1:5432/icos_test_gate_abc_1`,
+      },
       readWritePaths: ["/tmp/icos-gate-db-x"],
       secrets: [PASSWORD],
       wrap: (command) => ["node", "/tmp/icos-gate-db-x/relay.mjs", "--", ...command],
@@ -534,7 +563,9 @@ describe("H1 — l'étape PostgreSQL : base jetable, aucun réseau, aucun identi
     expect(report.decision).toBe("ACCEPT");
     expect(log).toEqual(["open", "close"]);
     expect(seen.every((s) => s.network === false)).toBe(true);
-    const pg = seen.filter((s) => s.command.includes("test:integration") || s.command.includes("test:db:setup"));
+    const pg = seen.filter(
+      (s) => s.command.includes("test:integration") || s.command.includes("test:db:setup"),
+    );
     expect(pg).toHaveLength(2);
     for (const step of pg) {
       expect(step.command.slice(0, 3)).toEqual(["node", "/tmp/icos-gate-db-x/relay.mjs", "--"]);

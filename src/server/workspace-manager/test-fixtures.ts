@@ -86,9 +86,16 @@ export class FakeRunner {
     network: boolean;
   }[] = [];
   failing: string[] = [];
+  /** Commands that fail on their FIRST run only (a flaky step the gate may re-run once). */
+  failOnce: string[] = [];
   async run(command: string[], ctx: GateCommandContext) {
     const text = command.join(" ");
     this.calls.push({ command: text, cwd: ctx.cwd, env: ctx.env, network: ctx.network });
+    const once = this.failOnce.findIndex((f) => text.includes(f));
+    if (once >= 0) {
+      this.failOnce.splice(once, 1);
+      return { code: 1, output: "flaky: Test timed out in 10000ms" };
+    }
     const fail = this.failing.some((f) => text.includes(f));
     return { code: fail ? 1 : 0, output: fail ? "boom" : "ok" };
   }

@@ -28,6 +28,10 @@ import {
   type MeteredEgressProxy,
 } from "@/server/workers/metered-egress-proxy";
 import { workerEgressFetch, workerEgressUpstream } from "@/server/workers/metered-egress";
+import { Context as ActivityContext } from "@temporalio/activity";
+import { ApplicationFailure } from "@temporalio/common";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { runNonInteractive } from "@/server/workers/process/run-process";
 import { parseGateCommands } from "@/server/workspace-manager/integration-gate";
 import {
@@ -458,7 +462,87 @@ export interface GovernedRun {
   readonly actualModel?: string;
 }
 
+/** The failure type the workflow's retry policy treats as NON-retryable: the run itself failed. */
+export const GOVERNED_RUN_FAILURE = "GovernedRunFailure";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Temporal's try number of this activity when it runs inside a worker; `1` elsewhere
+ * (tests, direct calls). Every use is best-effort: the activity never depends on a worker.
+ */
+export function activityAttempt(): number {
+  try {
+    return ActivityContext.current().info.attempt;
+  } catch {
+    return 1;
+  }
+}
+
+function heartbeatIntervalMs(): number {
+  const configured = Number(process.env.ICOS_WORKER_HEARTBEAT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15_000;
+}
+
+/**
+ * THE WORKER PROVES IT IS ALIVE while the executor runs (W6 recovery, N1 run 10). Without a
+ * heartbeat, a worker killed mid-run left its activity "started" until the 16-minute
+ * start-to-close timeout, and the only ways out were a manual kill and a manual Temporal
+ * reset. With one, the server sees the silence within `heartbeatTimeout` and schedules the
+ * activity's second (and last) try on a live worker. Best-effort outside a worker.
+ */
+function startHeartbeat(ctx: ExecutionContext): { stop: () => void } {
+  const beat = () => {
+    try {
+      ActivityContext.current().heartbeat({ taskId: ctx.taskId, at: new Date().toISOString() });
+    } catch {
+      /* not inside a Temporal activity (tests, direct calls): nothing to prove to */
+    }
+  };
+  beat();
+  const timer = setInterval(beat, heartbeatIntervalMs());
+  timer.unref?.();
+  return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * THE SECOND TRY STARTS FROM THE ATTEMPT'S BASE. A worker that died mid-run leaves the
+ * worktree with whatever its executor had written (ICOS commits governed work only on a
+ * reported success, `finalize-successful-worker-execution`). Re-launching on top of that
+ * would hand the writer half of a dead run's edits as if they were the base. Tracked files
+ * return to HEAD, untracked files go — except the dependencies installed before the first
+ * try, which are the one thing worth keeping.
+ */
+export async function resetWorktreeForRetry(worktree: string): Promise<void> {
+  await execFileAsync("git", ["-C", worktree, "checkout", "--", "."]);
+  await execFileAsync("git", ["-C", worktree, "clean", "-fdq", "-e", "node_modules"]);
+}
+
+/**
+ * Every failure of the run itself is final for Temporal: `GovernedRunFailure`, non-retryable.
+ * Only the transport's own timeouts (heartbeat, start-to-close — a dead or hung worker) may
+ * trigger the activity's single retry. ICOS's QC keeps deciding RETRY/CORRECT/ESCALATE on the
+ * canonical failure code, exactly as before: the message is unchanged.
+ */
 export async function runGovernedWorker(
+  ctx: ExecutionContext,
+  prompt: string,
+): Promise<GovernedRun> {
+  try {
+    return await runGovernedWorkerUnguarded(ctx, prompt);
+  } catch (error) {
+    if (error instanceof ApplicationFailure) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw ApplicationFailure.create({
+      type: GOVERNED_RUN_FAILURE,
+      message,
+      nonRetryable: true,
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
+}
+
+async function runGovernedWorkerUnguarded(
   ctx: ExecutionContext,
   prompt: string,
 ): Promise<GovernedRun> {
@@ -559,6 +643,7 @@ export async function runGovernedWorker(
     throw new Error("WORKER_WORKSPACE_MISSING: écriture accordée sans worktree alloué");
   }
   const gitPointer = worktree ? await assertGitPointer(worktree) : null;
+  if (worktree && activityAttempt() > 1) await resetWorktreeForRetry(worktree);
   /*
    * W10 — THE WRITER CAN VERIFY ITS OWN WORK. N1 lab, 2026-10-12 (runs 8–9): the allocated
    * worktree had no node_modules, so `eslint`/`vitest` could not run inside the sandbox, the
@@ -656,6 +741,7 @@ export async function runGovernedWorker(
         .split(EXEC_PLACEHOLDERS.provider)
         .join(routed.provider ?? ""),
     );
+    const pulse = startHeartbeat(ctx);
     const run = await runNonInteractive({
       command: declared.command,
       args,
@@ -773,7 +859,7 @@ export async function runGovernedWorker(
          */
         allowNetwork: !meteredEgress,
       },
-    });
+    }).finally(() => pulse.stop());
 
     /*
      * AUTHORITY FIRST. A run that lost its lease must fail for THAT reason, before its
