@@ -209,6 +209,8 @@ describe("IntegrationGate — l'environnement est construit, jamais hérité", (
       expect(Object.keys(call.env).sort()).toEqual(
         [
           "CI",
+          /* The gate's own NODE_ENV, never the server's (N1 runs 10–11: production leaked in). */
+          "NODE_ENV",
           ...(pg ? ["ICOS_TEST_DATABASE_URL"] : []),
           "npm_config_verify_deps_before_run",
           "pnpm_config_verify_deps_before_run",
@@ -219,6 +221,7 @@ describe("IntegrationGate — l'environnement est construit, jamais hérité", (
         ].sort(),
       );
       if (storeDir) expect(call.env.pnpm_config_store_dir).toBe(storeDir);
+      expect(call.env.NODE_ENV).toBe("test");
       /* H1 (ADR 0075): no step has the network, not even PostgreSQL's. */
       expect(call.network).toBe(false);
     }

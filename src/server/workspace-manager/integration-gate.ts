@@ -515,6 +515,16 @@ export class IntegrationGate {
     const env: Record<string, string> = {
       /* The gate's named variables + what an OFFLINE install needs inside the sandbox (W10). */
       ...offlineInstallEnv(),
+      /*
+       * THE GATE IS A TEST ENVIRONMENT, SAID EXPLICITLY. `NODE_ENV` is on the child-environment
+       * allowlist, so the SERVER's value — `production` on a deployed ICOS — reached every gate
+       * step. N1 runs 10 and 11 (2026-10-12): the unit step failed exactly the four tests that
+       * build a container, with `PersistenceConfigError: PERSISTENCE doit être défini
+       * explicitement en production`, on a change that touched none of them; the same commit
+       * passed 4 476/4 476 where NODE_ENV was unset. Vitest would set `test` itself only when
+       * nothing is set; the gate does not leave that to chance.
+       */
+      NODE_ENV: "test",
       ...database?.env,
     };
     const list =
