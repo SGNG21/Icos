@@ -42,6 +42,25 @@ const routerOver = (workers: WorkerRegistryEntry[]) =>
   new CapabilityRouter(new InMemoryWorkerRegistryStore(workers));
 
 describe("capability router", () => {
+  it("the system model allowlist removes refused model workers from the pool", async () => {
+    const allowedOnly = (w: WorkerRegistryEntry) => w.metadata?.model === "codex/gpt-5.6-sol";
+    const pool = [
+      worker({ id: "nemotron", metadata: { model: "nvidia/nemotron", provider: "nvidia" } }),
+      worker({ id: "sol", metadata: { model: "codex/gpt-5.6-sol", provider: "codex" } }),
+    ];
+    const routed = await new CapabilityRouter(new InMemoryWorkerRegistryStore(pool), {
+      modelAllowed: allowedOnly,
+    }).route({ requiredCapabilities: ["code-generation"] });
+    expect(routed.worker?.id).toBe("sol");
+
+    const refused = await new CapabilityRouter(new InMemoryWorkerRegistryStore([pool[0]!]), {
+      modelAllowed: allowedOnly,
+    }).route({ requiredCapabilities: ["code-generation"] });
+    expect(refused.decision).toBe("NO_ELIGIBLE_WORKER");
+    expect(refused.transient).toBe(false);
+    expect(refused.reason).toMatch(/^MODEL_NOT_ALLOWED/);
+  });
+
   it("ROUTING_UNCONFIGURED: an empty registry is not a routing table", async () => {
     const result = await routerOver([]).route({ requiredCapabilities: ["code-generation"] });
 

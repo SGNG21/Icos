@@ -73,7 +73,7 @@ describe("E2E success scenario", () => {
     // Reset the UUID index for each test
     uuidIndex = 0;
     // Force in-memory persistence for test isolation
-    process.env.PERSISTENCE = 'memory';
+    process.env.PERSISTENCE = "memory";
     // Create a fresh container
     container = await import("@/server/container").then(({ createContainer }) => createContainer());
     if (!container) throw new Error("Container is null");
@@ -202,7 +202,9 @@ describe("E2E success scenario", () => {
         missionId,
         taskId: taskA.taskId, // Use canonical taskId, not MissionTask.id
         taskTitle: taskA.title,
-        prompt: executionPrompt(taskA.description || taskA.title),
+        prompt: executionPrompt(taskA.description || taskA.title, {
+          missionObjective: mission.objective,
+        }),
         workerKind: taskA.workerKind || undefined,
         capability: undefined,
         digitalosFacadePath: undefined,

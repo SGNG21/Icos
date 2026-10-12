@@ -252,7 +252,9 @@ describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () 
     expect(container.taskExecution.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: missionTaskA.taskId,
-        prompt: executionPrompt(missionTaskA.description || missionTaskA.title),
+        prompt: executionPrompt(missionTaskA.description || missionTaskA.title, {
+          missionObjective: mission.objective,
+        }),
         workerKind: "agent",
         capability: undefined,
         digitalosFacadePath: undefined,
@@ -351,7 +353,9 @@ describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () 
     expect(container.taskExecution.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: missionTaskB.taskId,
-        prompt: executionPrompt(missionTaskB.description || missionTaskB.title),
+        prompt: executionPrompt(missionTaskB.description || missionTaskB.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 
@@ -545,7 +549,9 @@ describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () 
     expect(container.taskExecution.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: missionTaskA.taskId,
-        prompt: executionPrompt(missionTaskA.description || missionTaskA.title),
+        prompt: executionPrompt(missionTaskA.description || missionTaskA.title, {
+          missionObjective: mission.objective,
+        }),
         workerKind: "agent",
         capability: undefined,
         digitalosFacadePath: undefined,
@@ -616,7 +622,9 @@ describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () 
     expect(container.taskExecution.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: missionTaskB.taskId,
-        prompt: executionPrompt(missionTaskB.description || missionTaskB.title),
+        prompt: executionPrompt(missionTaskB.description || missionTaskB.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 
@@ -686,7 +694,9 @@ describe("Real E2E failure with PostgreSQL + Temporal + Hermes (simulated)", () 
     expect(container.taskExecution.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: missionTaskC.taskId,
-        prompt: executionPrompt(missionTaskC.description || missionTaskC.title),
+        prompt: executionPrompt(missionTaskC.description || missionTaskC.title, {
+          missionObjective: mission.objective,
+        }),
       }),
     );
 

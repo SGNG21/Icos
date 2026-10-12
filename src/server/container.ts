@@ -52,7 +52,8 @@ import { InMemoryCapabilityRepository } from "@/server/services/in-memory/capabi
 import { MirroringWorkerRegistryStore } from "@/server/services/worker-registry/mirroring-worker-registry-store";
 import { InMemoryWorkerRegistry } from "@/server/services/worker-registry/in-memory-worker-registry";
 import { AdaptedAIResourceCatalog } from "@/server/services/ai-selection/adapted-ai-resource-catalog";
-import { CapabilityRouter } from "@/server/routing/capability-router";
+import { CapabilityRouter, type CapabilityRouterOptions } from "@/server/routing/capability-router";
+import { isModelAllowed } from "@/core/autonomy/model-allowlist";
 import { WorkerRegistrationService } from "@/server/services/worker-registry/worker-registration-service";
 import { WorkerHealthProber } from "@/server/services/worker-registry/worker-health-prober";
 import { CommandWorkerProbe } from "@/server/workers/probes/command-worker-probe";
@@ -839,6 +840,7 @@ export async function buildPostgresContainer(
           arg.includes("{{model}}"),
         ),
       ),
+    ...workerModelPolicy(env),
   });
   const workerRegistration = new WorkerRegistrationService(workerRegistryStore);
   const workerHealthProber = new WorkerHealthProber(workerRegistryStore, workerRegistration, {
@@ -1313,6 +1315,24 @@ export async function resetContainer(): Promise<void> {
  * refusal to boot when two backends are configured: which model reviewed a change is
  * audit-relevant, so it must never be decided by which environment variable happened to win.
  */
+/**
+ * The system model allowlist applied to MODEL workers (those registered with a model): the
+ * same policy the planner is checked against. Non-model workers are not affected; with no
+ * allowlist configured nothing is filtered.
+ */
+function workerModelPolicy(env: Env): Pick<CapabilityRouterOptions, "modelAllowed"> {
+  const allowlist = resolveSystemModelAllowlist(env);
+  if (allowlist.mode === "unrestricted") return {};
+  return {
+    modelAllowed: (worker) => {
+      const model = worker.metadata?.model;
+      if (typeof model !== "string" || model.length === 0) return true;
+      const provider = worker.metadata?.provider;
+      return isModelAllowed(allowlist, model, typeof provider === "string" ? provider : undefined);
+    },
+  };
+}
+
 function buildLlmReviewer(env: Env, missionFetch?: typeof fetch): ReviewerPort | undefined {
   const command = parseReviewerCommand(env.ICOS_REVIEWER_COMMAND);
   /*

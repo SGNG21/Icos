@@ -518,7 +518,11 @@ export class SupervisorService {
               "awaiting_approval",
             );
           } else {
-            await this.taskRiskGate.park({ missionId: mission.id, missionTask: task, evaluation: gate });
+            await this.taskRiskGate.park({
+              missionId: mission.id,
+              missionTask: task,
+              evaluation: gate,
+            });
           }
           continue;
         }
@@ -541,8 +545,6 @@ export class SupervisorService {
        * The objective PLUS the output contract the reviewer will apply. Sending the bare
        * description meant the worker was judged against a rubric it had never been shown.
        */
-      const prompt = executionPrompt(task.description || task.title);
-
       /*
        * GOVERNED WORKSPACE ALLOCATION (M9, defect 23).
        *
@@ -553,8 +555,13 @@ export class SupervisorService {
        */
       /* Only read the canonical Task when a coordinator exists to act on the decision. */
       const canonicalTask = this.workspaceExecutionCoordinator
-        ? await this.taskRepository.getById(task.taskId)
+        ? (gateTask ?? (await this.taskRepository.getById(task.taskId)))
         : null;
+      const prompt = executionPrompt(task.description || task.title, {
+        missionObjective: mission.objective,
+        ...(canonicalTask?.allowedFileScope ? { fileScope: canonicalTask.allowedFileScope } : {}),
+        readOnly: canonicalTask?.riskClass === "read_only",
+      });
       const allocation: WorkspaceAllocationDecision = this.workspaceExecutionCoordinator
         ? decideWorkspaceAllocation({
             taskId: task.taskId,
