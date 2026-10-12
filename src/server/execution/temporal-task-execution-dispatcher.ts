@@ -125,7 +125,15 @@ export class TemporalTaskExecutionDispatcher implements TaskExecutionDispatcher 
       address: this.address,
       connectTimeout: this.timeoutMs,
     })
-      .then((connection) => new Client({ connection }))
+      /*
+       * THE SAME NAMESPACE EVERYWHERE. The consumer guard already asked `describeTaskQueue`
+       * in `this.namespace`; the client that STARTS and DESCRIBES workflows must live there
+       * too, or a deployment with TEMPORAL_NAMESPACE set proves its worker is polling and
+       * then starts every workflow in `default`, where nothing polls. Measured 2026-10-12
+       * (FABLE lab, TEMPORAL_NAMESPACE=icos-fable-lab): dispatch recorded, workflow Running
+       * in `default`, task never executed.
+       */
+      .then((connection) => new Client({ connection, namespace: this.namespace }))
       .catch(() => {
         // A temporary outage must not poison this dispatcher instance forever;
         // later reconciliation retries need a fresh connection attempt.
