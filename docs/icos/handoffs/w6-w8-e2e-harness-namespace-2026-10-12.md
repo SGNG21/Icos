@@ -55,3 +55,13 @@ dispatché malgré lui ; ce n'est pas la cause du blocage.
 
 Reproductible depuis le VPS avec la commande ci-dessus (base jetable + `icos-fable-lab` sur le
 serveur labo, qui existe toujours).
+
+## Addendum (2026-10-12, 11:00 UTC) — ce n'était pas seulement le harnais
+
+Reproduit dans le chemin de **production** (labo FABLE, `TEMPORAL_NAMESPACE=icos-fable-lab`) :
+le dispatcher décrivait la queue dans le bon namespace puis démarrait chaque workflow dans
+`default` — `new Client({ connection })` sans `namespace`
+(`src/server/execution/temporal-task-execution-dispatcher.ts`). Même défaut dans la sonde de
+reprise (`src/server/recovery/temporal-workflow-probe.ts`). Corrigés et épinglés par tests sur
+`feat/fable-5-1-convergence` (`8b58eb7`, `0e20c24`). Le harnais `p0-autonomy-e2e` doit être
+rejoué avec ces correctifs : la première cause de ses timeouts était ce client, pas le test.
