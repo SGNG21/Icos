@@ -32,6 +32,7 @@
     "compute:probe": "tsx scripts/compute-probe.ts",
     "mission:trace": "tsx scripts/mission-trace.ts",
     "autonomy:assess": "tsx scripts/autonomy-assess.ts",
+    "reviewer:certify": "tsx scripts/reviewer-certify.ts",
     "voice:serve": "tsx scripts/voice-server.ts",
     "workforce:bootstrap": "tsx scripts/workforce-bootstrap.ts",
     "tools:grant-realtime": "tsx scripts/tool-gateway-grant-realtime.ts",
