@@ -98,3 +98,15 @@ Inchangés depuis F1 : `icos-web` sur release `5719213` (actif, 0 restart), `ico
 non installé, `icos-gate-postgres` actif et isolé (:5434), namespace `icos-prod` créé (0 workflow),
 `icos.env` intact ; candidat `/srv/icos/etc/icos.env.candidate-20261012` mis à jour (allowlist
 modèles seulement, planner inclus, allow-bash ciblé, plafond 1,5 M).
+
+## 4. Run 10 (2026-10-12, 13:36–14:07 UTC) — jusqu'à l'IntegrationGate
+
+Rapport complet : `docs/icos/N1_RUN10_CERTIFICATION_2026-10-12.md`. Résumé : W10/W7 corrigés
+(`b3e0ffb`, `07ceb0d`, `090f80d`, `e83b8f0`), préflight PASS, un seul run : détection → mission →
+3 exécutions Claude Code (`cc/claude-sonnet-5`) → revue indépendante (`codex/gpt-5.6-sol` :
+RETRY, RETRY, APPROVE) → **IntegrationGate atteint** (typecheck/lint/secrets/périmètre PASS, tests
+unitaires FAIL ×4) → REJECT → `mission.failed`. 1 715 079 tokens / 3 M. Deux interventions
+manuelles (kill du worker après correctif, reset Temporal de l'attempt 3). **N1_CERTIFIED : FAIL**,
+blocages exacts reproduits : (a) réglages pnpm non transmis par l'adaptateur au shell du writer
+(corrigé `e83b8f0`, non encore prouvé en run) ; (b) 4 tests unitaires en échec dans le sandbox de la
+porte, indépendants du changement (reproduction en §8 du rapport).
