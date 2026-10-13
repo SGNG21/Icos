@@ -107,7 +107,12 @@ renouvellement réel puis assertion SQL d'une échéance supérieure à maintena
 Trois renouvellements et refus d'une réservation supplémentaire vérifiés. L'expiration
 et le fencing restent testés séparément. Aucun code de production modifié.
 
-## SQL de rollback exécuté
+## SQL de rollback exécuté à l’étape 3 — archive, ne pas réutiliser
+
+Ce SQL historique exécutait la demande de l'étape 3 sur deux lignes sans cache.
+La revue indépendante et le dispatch de l'étape 4 le remplacent comme procédure de
+rollback : **conserver les colonnes et les mesures ; supprimer seulement les contraintes**.
+Aucune suppression de colonne n'a été exécutée à l'étape 4.
 
 Uniquement sur `icos_test_w9_cache` dans l'instance jetable fournie :
 
@@ -146,3 +151,127 @@ Aucun appel applicatif pendant l'absence des colonnes.
   schéma n'est promise.
 - Aucun déploiement, fusion, push, redémarrage, arrêt/suppression de conteneur ou appel
   fournisseur. Aucun accès aux autres bases. Rapport puis arrêt.
+
+## Étape 4 — corrections après revue indépendante
+
+Dispatch lu intégralement : `/home/icos/.icos-fable-lab/dispatch/w9-step4.md`.
+Revue lue intégralement en lecture seule :
+`/srv/icos/worktrees/fable-5-1-convergence/docs/icos/handoffs/w9-cache-review-6daef30-2026-10-14.md`.
+Base de cette étape : `e6e4970`, worktree propre avant modification.
+L'autorisation de création de la migration et du schéma avait été donnée par le
+propriétaire à l'étape 2 (« Le contrat de modification W9 est validé » et demande
+explicite d'une migration additive). La correction de 0065 et ses deux réapplications
+sur 55500 sont explicitement demandées par le dispatch de l'étape 4.
+
+Le correctif de bail est déjà dans le commit distinct `c6b6ae3` ; aucun nouveau
+commit ni changement du code des réservations n'est nécessaire pour ce point.
+L'échec sous charge (1/62) et la preuve SQL renforcée sont documentés plus haut.
+
+Modifications :
+
+- `drizzle/0065_spend_ledger_cache.sql` : sections DATA SAFETY et ROLLBACK ;
+  deux colonnes `IF NOT EXISTS`, trois gardes `pg_constraint` associant nom et
+  table ; une seule instruction DO atomique. Même effet métier, aucun défaut,
+  aucun backfill. Ajout des colonnes sans réécriture, validation des CHECK et
+  verrou ACCESS EXCLUSIVE explicités ; trigger append-only non déclenché par ALTER.
+- `src/server/budget/postgres-spend-ledger.integration.test.ts` : titre 0055/0065,
+  commentaire indiquant l'URL du harness et l'exigence de 0065 pour les deux suites ;
+  suppression du commentaire « Prepared only / never target the shared test database ».
+- `src/server/mission/mission-trace.ts` : sept lignes de couverture facultative,
+  par compteur, pour les seules entrées de cette mission. Un zéro explicite compte
+  comme connu, NULL comme inconnu. Aucun total cache annoncé.
+- `src/server/mission/mission-trace.test.ts` : couverture partielle et indépendante,
+  zéro explicite, UNMETERED et exclusion des entrées goal-shared vérifiés.
+- Ce rapport : résultats rejoués, rollback corrigé et limites.
+
+### Preuves rejouées
+
+Toujours exclusivement `postgres://icos@127.0.0.1:55500/icos_test_w9_cache`.
+Aucun setup, aucune autre base, aucune réécriture du journal Drizzle.
+
+| Vérification                                     | Résultat                                                                                                                                      |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deux réapplications manuelles du fichier 0065    | PASS, code 0 ; première et seconde sans changement du schéma ou des données                                                                   |
+| Données et catalogue après chaque application    | PASS : snapshots de toutes les lignes, colonnes/types/nullabilité/défauts, définitions et OID des CHECK, index, trigger et son OID identiques |
+| Mesures présentes avant réapplication            | PASS : lecture mission `read=0, creation=5` et `read=7, creation=null` identique après deux applications                                      |
+| Tests locaux ciblés                              | PASS : 369/369, 16 fichiers, 26,55 s                                                                                                          |
+| Lot budget PostgreSQL                            | PASS : 62/62, 2 fichiers, 14,38 s ; inclut les onze tests cache et les tests de concurrence, fencing et idempotence                           |
+| `pnpm typecheck`                                 | PASS, code 0                                                                                                                                  |
+| ESLint sur les trois fichiers TypeScript touchés | PASS, code 0, aucune erreur ni avertissement                                                                                                  |
+| Prettier sur TypeScript et rapport touchés       | PASS                                                                                                                                          |
+| Diff                                             | PASS : `git diff --check`, diff relu, périmètre W9 uniquement                                                                                 |
+
+Commandes exécutées :
+
+```sh
+pnpm exec vitest run src/core/budget src/server/budget src/server/mission/mission-trace.test.ts
+pnpm typecheck
+pnpm exec eslint src/server/budget/postgres-spend-ledger.integration.test.ts src/server/mission/mission-trace.ts src/server/mission/mission-trace.test.ts
+pnpm exec prettier --check src/server/budget/postgres-spend-ledger.integration.test.ts src/server/mission/mission-trace.ts src/server/mission/mission-trace.test.ts docs/icos/handoffs/w9-cache-postgres-certification-2026-10-14.md
+export ICOS_TEST_DATABASE_URL=postgres://icos@127.0.0.1:55500/icos_test_w9_cache
+pnpm exec tsx /tmp/w9-step4-idempotence.ts
+pnpm exec vitest run --config vitest.integration.config.ts src/server/budget/
+git diff --check
+```
+
+Les commandes PostgreSQL ont été autorisées hors sandbox pour le socket tsx et
+l'accès à 55500 ; aucune modification de cible. Le probe impose l'URL exacte,
+contrôle `current_database()`, insère deux fixtures mesurées, capture les snapshots,
+exécute le fichier SQL deux fois et contrôle la restitution. Aucun rollback exécuté.
+
+```text
+PASS replay 1: rows, columns, defaults, CHECK definitions/OIDs, indexes and trigger unchanged
+PASS replay 2: rows, columns, defaults, CHECK definitions/OIDs, indexes and trigger unchanged
+PASS measured cache retained: read=0 creation=5; read=7 creation=NULL
+PASS both cache columns nullable with no default; no rollback or column deletion performed
+
+Test Files  16 passed (16)
+     Tests  369 passed (369)
+  Duration  26.55s
+
+Test Files  2 passed (2)
+     Tests  62 passed (62)
+  Duration  14.38s
+```
+
+Les NOTICE PostgreSQL `42701` (« already exists, skipping ») sur les colonnes sont
+attendues avec IF NOT EXISTS ; aucune exception et code final 0.
+Logs locaux : `/tmp/w9-step4-idempotence.ts`, `/tmp/w9-step4-idempotence.log`,
+`/tmp/w9-step4-local-tests.log`, `/tmp/w9-step4-integration.log`,
+`/tmp/w9-step4-typecheck.log`, `/tmp/w9-step4-eslint.log`, `/tmp/w9-step4-prettier.log`.
+SHA256 du SQL 0065 rejoué :
+`e5ea3bd007814e487df2bb0106e1ae0f6a318654865298c0d0951d25b1cdae2d`.
+
+### Rollback désormais documenté — colonnes conservées
+
+```sql
+ALTER TABLE spend_ledger
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_usage_check,
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_read_check,
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_creation_check;
+```
+
+Les deux colonnes et toutes les mesures restent présentes. Réappliquer 0065
+restaurerait les CHECK si les valeurs retenues sont valides. Ce rollback corrigé
+est documenté, pas exécuté à l'étape 4 ; l'archive destructive de l'étape 3
+ne constitue plus une instruction applicable.
+
+### Portée de la certification après correction
+
+**CERTIFIÉ** : preuves W9 demandées sur l'instance isolée, idempotence de la
+réapplication sur le schéma déjà installé, mesures conservées, tests locaux et
+budget PostgreSQL PASS. Les limites de l'étape 3 restent applicables.
+
+**NON CERTIFIÉ** : première installation de la nouvelle version du bloc DO sur
+une nouvelle base vierge, exécution du rollback corrigé, compatibilité avec un
+schéma historique incomplet, migrations sur une base existante hors laboratoire,
+parcours UI/N1, production, fournisseurs et approbation finale du reviewer.
+Le journal de la base jetable conserve le hash de la version 0065 appliquée à
+l'étape 3 ; modifier le fichier conformément à cette revue ne réécrit pas ce hash.
+Un contrôle d'égalité des hashes du journal avec le fichier corrigé n'est donc
+pas une preuve fournie ; aucun alignement forcé n'a été effectué.
+
+Aucun autre worktree modifié, aucun push, fusion, déploiement, redémarrage,
+arrêt de conteneur, appel fournisseur ou suppression de colonne à l'étape 4.
+Les nettoyages de fixtures des tests restent limités à la base jetable.
+Rapport puis arrêt.

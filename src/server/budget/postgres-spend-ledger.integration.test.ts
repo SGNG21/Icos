@@ -11,7 +11,7 @@ import { PostgresSpendLedger } from "./postgres-spend-ledger";
 import type { BudgetCapResolver, SpendEntry } from "./ports";
 
 /**
- * Preuves PostgreSQL du journal de dépense durable (migration 0055_spend_ledger.sql) :
+ * Preuves PostgreSQL du journal de dépense durable (migrations 0055_spend_ledger.sql et 0065_spend_ledger_cache.sql) :
  * le SQL lui-même, les CHECK qui rendent « une absence n'est jamais un zéro » non
  * contournable, le trigger append-only, la durabilité à travers une connexion NEUVE, et la
  * borne de dépassement sous appels réellement simultanés contre une vraie base.
@@ -76,7 +76,7 @@ const pgCode = async (p: Promise<unknown>): Promise<string> => {
   }
 };
 
-describe("spend_ledger (base de test locale, migration 0055)", () => {
+describe("spend_ledger (base de test locale, migrations 0055 et 0065)", () => {
   let ctx: { handle: DatabaseHandle };
 
   beforeAll(() => {
@@ -97,8 +97,9 @@ describe("spend_ledger (base de test locale, migration 0055)", () => {
     priceTable: PriceTable = PRICE_TABLE,
   ) => new PostgresSpendLedger({ db: ctx.handle.db, tenantId, caps, priceTable });
 
-  // Prepared only: run serially on a dedicated disposable PostgreSQL instance
-  // after applying the migration there. Never target the shared test database.
+  // Runs serially against TEST_DATABASE_URL (ICOS_TEST_DATABASE_URL when set).
+  // scripts/test-db-setup.ts applies the journal through 0065. Both ledger and
+  // reservation suites require 0065 because record() names the cache columns.
   for (const read of [undefined, 0, 7]) {
     for (const creation of [undefined, 0, 5]) {
       it(`cache round-trip read=${read}, creation=${creation}`, async () => {

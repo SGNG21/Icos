@@ -57,7 +57,25 @@ describe("mission trace cache reporting", () => {
     const output = formatMissionTrace(trace);
     expect(output).toContain("cache read=0 creation=5");
     expect(output).toContain("cache read=unknown creation=unknown");
+    expect(output).toContain(
+      "cache coverage: read known on 1/2 calls, creation known on 1/2 calls",
+    );
     expect(output).toContain("UNPRICED");
     expect(output).toContain("unmetered");
+    if (!("entries" in trace.cost)) throw new Error("expected fixture entries");
+    const partial = {
+      ...trace,
+      cost: {
+        ...trace.cost,
+        entries: [
+          { ...trace.cost.entries[0], cacheCreation: null },
+          trace.cost.entries[1],
+          { ...trace.cost.entries[0], id: "shared", scope: "goal-shared" as const },
+        ],
+      },
+    };
+    expect(formatMissionTrace(partial)).toContain(
+      "cache coverage: read known on 1/2 calls, creation known on 0/2 calls",
+    );
   });
 });
