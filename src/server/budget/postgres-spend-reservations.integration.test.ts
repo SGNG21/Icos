@@ -423,17 +423,28 @@ describe("spend_reservations — réservation atomique par goal (migration 0056)
    */
   describe("C3 — prolongation, reddition et fencing du bail", () => {
     it("PROLONGE un bail vivant : l'appel qui dure garde son engagement", async () => {
-      /* 120 ms : assez court pour expirer pendant le test, assez long pour être prolongé. */
-      const store = reservations({ leaseMs: 120 });
+      // Test PostgreSQL's deadline directly: a 120 ms lease can expire merely
+      // because the host pauses the test process, before renew gets scheduled.
+      const store = reservations({ leaseMs: 60_000 });
       const r = await store.reserve(G1, 1_000);
       if (r.kind !== "RESERVED") throw new Error("attendu RESERVED");
 
       for (let i = 0; i < 3; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        // Arrange a live deadline shorter than the configured renewal duration.
+        await ctx.handle.db.execute(sql`
+          update spend_reservations set lease_until = now() + interval '30 seconds'
+           where tenant_id = ${TENANT} and id = ${r.reservation.id}
+        `);
         expect(await store.renew(r.reservation)).toBe(true);
+        const rows = await ctx.handle.db.execute(sql`
+          select lease_until > now() + interval '45 seconds' as extended
+            from spend_reservations
+           where tenant_id = ${TENANT} and id = ${r.reservation.id}
+        `);
+        expect(rows[0]?.extended).toBe(true);
       }
 
-      /* 180 ms après la réservation, bien au-delà du bail initial : toujours engagé. */
+      /* The extended live lease still holds the entire goal's budget. */
       expect(await openTokens()).toBe(1_000);
       expect(await reservations().reserve(G1, 1)).toMatchObject({
         kind: "DENY",
