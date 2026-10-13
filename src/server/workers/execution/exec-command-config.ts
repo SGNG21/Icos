@@ -5,6 +5,7 @@ import {
   type WorkerRegistryEntry,
   type WorkerRuntimeDescriptor,
 } from "@/core/contracts/worker-registry";
+import { isMetaRoute } from "@/core/workers/meta-route";
 
 /**
  * Where WORKER LAUNCH COMMANDS come from (M6.3).
@@ -41,6 +42,36 @@ export const EXEC_PLACEHOLDERS = {
   provider: "{{provider}}",
 } as const;
 
+/** Flags whose NEXT argv entry is a model id. `--model=<id>` is read too. */
+const MODEL_FLAGS = new Set(["--model", "-m"]);
+const MODEL_FLAG_INLINE = "--model=";
+
+/**
+ * Decision 0078 §3: a launch command may not hard-code an OmniRoute meta-route as its model.
+ * `{{model}}` is the routed candidate's registration, already guarded at registration; this
+ * refuses the LITERAL path. Checked statically on argv only — what an arbitrary binary does
+ * with its arguments is not inspected.
+ *
+ *   - the value after `--model` / `-m`, or of `--model=<id>`: any meta-route, bare `auto`
+ *     included;
+ *   - any other argv entry that is a meta-route, EXCEPT bare `auto`, which is an ordinary CLI
+ *     value elsewhere (`--color auto`) and is only a model when a model flag says so.
+ */
+function metaRouteArgs(args: readonly string[]): string[] {
+  const found: string[] = [];
+  args.forEach((raw, index) => {
+    const arg = raw.trim();
+    const previous = index > 0 ? args[index - 1]!.trim() : undefined;
+    const value = arg.startsWith(MODEL_FLAG_INLINE) ? arg.slice(MODEL_FLAG_INLINE.length) : arg;
+    const isModelValue =
+      arg.startsWith(MODEL_FLAG_INLINE) || (previous !== undefined && MODEL_FLAGS.has(previous));
+    if (isMetaRoute(value) && (isModelValue || value !== "auto")) {
+      found.push(`[${index}]=${raw}`);
+    }
+  });
+  return found;
+}
+
 const execCommandSchema = z
   .object({
     /** Executable, resolved by the OS. Never expanded by a shell. */
@@ -64,7 +95,22 @@ const execCommandSchema = z
      */
     requireStructuredResult: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((command, ctx) => {
+    for (const [field, args] of [
+      ["args", command.args],
+      ["resumeArgs", command.resumeArgs ?? []],
+    ] as const) {
+      const found = metaRouteArgs(args);
+      if (found.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: [field],
+          message: `AUTO_COMBO_NOT_ADMISSIBLE: ${field}${found.join(",")} is an OmniRoute meta-route (the gateway chooses the served model), refused`,
+        });
+      }
+    }
+  });
 
 export type WorkerExecCommand = z.infer<typeof execCommandSchema>;
 
@@ -108,9 +154,7 @@ export function parseWorkerExecCommands(raw?: string | null): WorkerExecCommands
 }
 
 /** Resolves the launch command for one worker, or null when it cannot. */
-export type WorkerExecCommandResolver = (
-  worker: WorkerRegistryEntry,
-) => WorkerExecCommand | null;
+export type WorkerExecCommandResolver = (worker: WorkerRegistryEntry) => WorkerExecCommand | null;
 
 export function createWorkerExecResolver(
   configured: WorkerExecCommands,
@@ -119,9 +163,7 @@ export function createWorkerExecResolver(
 }
 
 /** The runtimes this process can actually execute work on. */
-export function executableRuntimes(
-  configured: WorkerExecCommands,
-): WorkerRuntimeDescriptor[] {
+export function executableRuntimes(configured: WorkerExecCommands): WorkerRuntimeDescriptor[] {
   return (Object.keys(configured) as WorkerRuntimeDescriptor[]).sort();
 }
 

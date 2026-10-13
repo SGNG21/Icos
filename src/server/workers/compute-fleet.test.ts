@@ -5,6 +5,7 @@ import {
   OMNIROUTE_MAX_LISTED_MODELS,
   OMNIROUTE_MAX_LISTING_BYTES,
   OMNIROUTE_MAX_MODEL_ID_LENGTH,
+  classifyModels,
   listOmniRouteModels,
 } from "./compute-fleet";
 
@@ -153,5 +154,21 @@ describe("listOmniRouteModels — one WARM retry after a timeout, nothing else r
       }),
     ).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("classifyModels skips every meta-route form the gateway resolves (decision 0078 §3)", () => {
+  it("bare auto, auto/*, and their no-think/ and claude/ aliases are never candidates", () => {
+    const got = classifyModels([
+      "auto",
+      "auto/claude-sonnet-5",
+      "no-think/auto/claude-sonnet-5",
+      "claude/auto/claude-sonnet-5",
+      "claude/combo/claude-sonnet-5",
+      "cc/claude-sonnet-5",
+      "no-think/cc/claude-sonnet-5",
+    ]).map((d) => d.modelId);
+
+    expect(got).toEqual(["cc/claude-sonnet-5", "no-think/cc/claude-sonnet-5"]);
   });
 });

@@ -6,6 +6,7 @@ import {
   type WorkerProbeOutcome,
   type WorkerRegistryEntry,
 } from "@/core/contracts/worker-registry";
+import { isMetaRoute } from "@/core/workers/meta-route";
 import type { WorkerRegistryStore } from "@/server/repositories/worker-ports";
 
 /**
@@ -191,6 +192,19 @@ export class WorkerRegistrationService {
       capacityPoolLimit: input.capacityPoolLimit ?? null,
       updatedAt: this.now().toISOString(),
     });
+
+    /*
+     * Decision 0078 §3: a worker's `metadata.model` is the model it runs. An OmniRoute
+     * meta-route there would make the gateway, not ICOS, choose the model (possibly a paid
+     * one) for every task routed to this worker, whatever the allowlist mode. Refused before
+     * the no-op comparison, like every other contract violation.
+     */
+    const model = entry.metadata.model;
+    if (typeof model === "string" && isMetaRoute(model.trim())) {
+      throw new Error(
+        `AUTO_COMBO_NOT_ADMISSIBLE:metadata.model: \`${model}\` is an OmniRoute meta-route (the gateway chooses the served model), refused`,
+      );
+    }
 
     const existing = await this.workers.get(entry.id);
     if (existing && sameWorkerDeclaration(existing, entry)) {

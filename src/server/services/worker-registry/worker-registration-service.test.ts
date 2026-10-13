@@ -74,7 +74,12 @@ describe("worker registration", () => {
   it("runtimeSupport defaults to UNKNOWN: declaring a runtime is not being able to run it", async () => {
     const { service, store } = harness();
 
-    await service.register({ id: WORKER_A, workerKind: "agent", displayName: "W", runtime: "node" });
+    await service.register({
+      id: WORKER_A,
+      workerKind: "agent",
+      displayName: "W",
+      runtime: "node",
+    });
 
     expect((await store.get(WORKER_A))?.runtimeSupport).toBe("UNKNOWN");
   });
@@ -176,7 +181,9 @@ describe("worker registration", () => {
   it("probing an unregistered worker returns null rather than inventing one", async () => {
     const { service, store } = harness();
 
-    expect(await service.probe(WORKER_A, { health: "healthy", availability: "available" })).toBeNull();
+    expect(
+      await service.probe(WORKER_A, { health: "healthy", availability: "available" }),
+    ).toBeNull();
     expect(await store.list()).toEqual([]);
   });
 
@@ -238,7 +245,11 @@ describe("worker registration", () => {
     const { service, store } = harness();
     await service.register(declaration(WORKER_A, ["code-generation"]));
 
-    await service.probe(WORKER_A, { health: "unhealthy", availability: "unavailable", outcome: "failed" });
+    await service.probe(WORKER_A, {
+      health: "unhealthy",
+      availability: "unavailable",
+      outcome: "failed",
+    });
     expect((await store.get(WORKER_A))!.lastProbeErrorClass).toBe("UNKNOWN");
 
     await service.probe(WORKER_A, { health: "healthy", availability: "available" });
@@ -303,5 +314,56 @@ describe("worker registration", () => {
     expect((await router.route({ requiredCapabilities: ["code-generation"] })).worker?.id).toBe(
       WORKER_A,
     );
+  });
+});
+
+describe("OmniRoute meta-routes are never registered nor routed (decision 0078 §3)", () => {
+  it.each(["auto/best-free", "auto", "no-think/auto/best-free", " auto/coding:free "])(
+    "registration refuses metadata.model=%j, whatever the allowlist mode",
+    async (model) => {
+      const { service, store } = harness();
+
+      await expect(
+        service.register({ ...declaration(WORKER_A, ["code-generation"]), metadata: { model } }),
+      ).rejects.toThrow(/^AUTO_COMBO_NOT_ADMISSIBLE:metadata\.model/);
+      expect(await store.get(WORKER_A)).toBeNull();
+    },
+  );
+
+  it("a real model still registers", async () => {
+    const { service } = harness();
+
+    const registered = await service.register({
+      ...declaration(WORKER_A, ["code-generation"]),
+      metadata: { model: "cc/claude-sonnet-5" },
+    });
+
+    expect(registered.metadata.model).toBe("cc/claude-sonnet-5");
+  });
+
+  it("the router never ranks a meta-route row written around the service, even unrestricted", async () => {
+    const { service, store, router } = harness();
+    await service.register({
+      ...declaration(WORKER_A, ["code-generation"]),
+      metadata: { model: "cc/claude-sonnet-5" },
+    });
+    await service.probe(WORKER_A, { health: "healthy", availability: "available" });
+    const healthy = (await store.get(WORKER_A))!;
+    await store.upsert({
+      ...healthy,
+      id: WORKER_B,
+      metadata: { model: "auto/best-free" },
+    });
+
+    const routed = await router.route({ requiredCapabilities: ["code-generation"] });
+    expect(routed.decision).toBe("ROUTED");
+    expect(routed.worker?.id).toBe(WORKER_A);
+    expect(routed.candidates.map((c) => c.workerId)).not.toContain(WORKER_B);
+
+    await store.remove(WORKER_A);
+    const alone = await router.route({ requiredCapabilities: ["code-generation"] });
+    expect(alone.decision).toBe("NO_ELIGIBLE_WORKER");
+    expect(alone.worker).toBeNull();
+    expect(alone.reason).toMatch(/^AUTO_COMBO_NOT_ADMISSIBLE/);
   });
 });

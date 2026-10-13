@@ -23,6 +23,7 @@ import {
   type ComputeOutcome,
   type ComputeRequirement,
 } from "@/core/workers/compute-routing";
+import { isMetaRoute } from "@/core/workers/meta-route";
 
 /**
  * Capability routing (M4, mission N15, decision 0031).
@@ -198,7 +199,13 @@ export class CapabilityRouter {
   ): Promise<CapabilityRoutingResult> {
     const registered = await this.workers.list();
     const allowed = this.options.modelAllowed;
-    const pool = allowed ? registered.filter((w) => allowed(w)) : registered;
+    /*
+     * Decision 0078 §3, defence in depth: registration refuses a meta-route model, but a row
+     * written before that guard (or by another writer) must still never be ranked — with or
+     * without a system allowlist.
+     */
+    const admissible = registered.filter((w) => !runsMetaRoute(w));
+    const pool = allowed ? admissible.filter((w) => allowed(w)) : admissible;
     const now = this.now();
 
     /*
@@ -256,7 +263,10 @@ export class CapabilityRouter {
         requirement,
         candidates: [],
         transient: false,
-        reason: `MODEL_NOT_ALLOWED: none of the ${registered.length} registered workers runs a model the system allowlist permits.`,
+        reason:
+          admissible.length === 0
+            ? `AUTO_COMBO_NOT_ADMISSIBLE: all ${registered.length} registered workers run an OmniRoute meta-route, never a candidate.`
+            : `MODEL_NOT_ALLOWED: none of the ${registered.length} registered workers runs a model the system allowlist permits.`,
       };
     }
 
@@ -387,4 +397,10 @@ function maxEligibleTier(
     .map((w) => computeProfileOf(w).tier)
     .filter((t): t is number => t !== undefined);
   return tiers.length > 0 ? Math.max(...tiers) : undefined;
+}
+
+/** A worker whose registered model is an OmniRoute meta-route (decision 0078 §3). */
+function runsMetaRoute(worker: WorkerRegistryEntry): boolean {
+  const model = worker.metadata?.model;
+  return typeof model === "string" && isMetaRoute(model.trim());
 }

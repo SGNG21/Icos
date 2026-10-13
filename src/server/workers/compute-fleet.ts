@@ -193,8 +193,9 @@ export async function omniRouteChatCompletion(
 
 /**
  * Classifies model ids into the six families. Unrecognised ids are ignored (reported in the
- * snapshot's count), and the `auto/*` meta-routes are skipped (`isMetaRoute`, the one shared
- * definition, decision 0078 §3): a candidate must be ONE model,
+ * snapshot's count), and OmniRoute meta-routes are skipped (`isMetaRoute`, the one shared
+ * definition, decision 0078 §3: bare `auto`, `auto/*`, and their `no-think/` / `claude/`
+ * aliases, plus `claude/combo/*`): a candidate must be ONE model,
  * or history and independence would be attributed to whatever the meta-route picked that day.
  */
 export function classifyModels(modelIds: readonly string[]): DiscoveredModel[] {

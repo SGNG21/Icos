@@ -269,8 +269,23 @@ describe("méta-routes OmniRoute refusées au démarrage (décision 0078 §3)", 
     expect(isModelAllowed(resolveSystemModelAllowlist(env), "nvidia/nemotron-ultra")).toBe(true);
   });
 
-  it("`auto` sans barre, `autonomous/x` et `x/auto/y` ne sont PAS des méta-routes", () => {
-    for (const id of ["auto", "autonomous/x", "x/auto/y"]) {
+  it.each(["auto", "no-think/auto/best-free", "claude/combo/team"])(
+    "%s (routage automatique ou alias pelé par la passerelle) est refusé partout",
+    (id) => {
+      for (const variable of [
+        "ICOS_AUTONOMY_ALLOWED_MODELS",
+        "ICOS_REVIEWER_MODEL",
+        "ICOS_PLANNER_MODEL",
+      ]) {
+        expect(() => loadEnv({ [variable]: id })).toThrow(
+          new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable}`),
+        );
+      }
+    },
+  );
+
+  it("`autonomous/x`, `x/auto/y` et `AUTO/x` ne sont PAS des méta-routes", () => {
+    for (const id of ["autonomous/x", "x/auto/y", "AUTO/x"]) {
       expect(() =>
         loadEnv({
           ICOS_AUTONOMY_ALLOWED_MODELS: id,

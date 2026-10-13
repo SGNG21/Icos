@@ -52,7 +52,8 @@ export type ModelDecisionReason =
   | "MODEL_ALLOWLIST_MISSING"
   | "MODEL_NOT_IN_ALLOWLIST"
   | "PROVIDER_NOT_IN_ALLOWLIST"
-  | "MODEL_ID_INVALID";
+  | "MODEL_ID_INVALID"
+  | "AUTO_COMBO_NOT_ADMISSIBLE";
 
 export interface ModelDecision {
   allowed: boolean;
@@ -105,6 +106,15 @@ export function decideModel(
 
   if (typeof modelId !== "string" || modelId.trim().length === 0) {
     return { allowed: false, reason: "MODEL_ID_INVALID" };
+  }
+
+  /*
+   * Décision 0078 §3, AVANT le mode : « non restreint » veut dire « tout modèle », et une
+   * méta-route n'est pas un modèle. Sans ce garde, un worker enregistré avec `auto/*`
+   * passerait dès que le système ne borne rien.
+   */
+  if (isMetaRoute(modelId.trim())) {
+    return { allowed: false, reason: "AUTO_COMBO_NOT_ADMISSIBLE" };
   }
 
   if (allowlist.mode === "unrestricted") {

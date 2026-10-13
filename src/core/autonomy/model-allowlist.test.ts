@@ -291,8 +291,32 @@ describe("méta-routes OmniRoute inexprimables (décision 0078 §3)", () => {
     );
   });
 
-  it("modelAllowlist accepte `auto` sans barre et `autonomous/x`", () => {
-    expect(modelAllowlist(["auto", "autonomous/x"]).modelIds).toEqual(["auto", "autonomous/x"]);
+  it("modelAllowlist refuse aussi `auto` nu et les alias pelés par la passerelle", () => {
+    for (const id of ["auto", "no-think/auto/best-free", "claude/combo/team"]) {
+      expect(() => modelAllowlist([id])).toThrow(/AUTO_COMBO_NOT_ADMISSIBLE:modelIds\[0\]/);
+    }
+  });
+
+  it("modelAllowlist accepte `autonomous/x` et `x/auto/y`", () => {
+    expect(modelAllowlist(["autonomous/x", "x/auto/y"]).modelIds).toEqual([
+      "autonomous/x",
+      "x/auto/y",
+    ]);
+  });
+
+  it.each<[string, MissionModelAllowlist]>([
+    ["non restreint", MODEL_ALLOWLIST_UNRESTRICTED],
+    ["borné, objet construit à la main", { mode: "allowlist", modelIds: ["auto/best-free"] }],
+  ])("decideModel refuse une méta-route même en mode %s", (_label, allowlist) => {
+    for (const modelId of ["auto/best-free", "auto", "no-think/auto/best-free"]) {
+      expect(decideModel(allowlist, { modelId })).toEqual({
+        allowed: false,
+        reason: "AUTO_COMBO_NOT_ADMISSIBLE",
+      });
+    }
+    expect(
+      decideModel(MODEL_ALLOWLIST_UNRESTRICTED, { modelId: "cc/claude-sonnet-5" }).allowed,
+    ).toBe(true);
   });
 
   it("un fournisseur n'est pas un modèle : providerIds n'est pas concerné", () => {
@@ -314,7 +338,9 @@ describe("méta-routes OmniRoute inexprimables (décision 0078 §3)", () => {
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues[0]?.message).toMatch(/^AUTO_COMBO_NOT_ADMISSIBLE/);
     expect(
-      requestedComputePolicySchema.safeParse({ allowedModels: ["autonomous/x", "auto"] }).success,
+      requestedComputePolicySchema.safeParse({ allowedModels: ["autonomous/x", "x/auto/y"] })
+        .success,
     ).toBe(true);
+    expect(requestedComputePolicySchema.safeParse({ allowedModels: ["auto"] }).success).toBe(false);
   });
 });
