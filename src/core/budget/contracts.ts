@@ -169,8 +169,10 @@ export interface TokenUsage {
    * All three are billed input and all three are IN `promptTokens` — this split changes no
    * total and no cap; it exists so a report can say how much of an agent's growing context
    * was cached rather than re-read, and price the parts differently once prices are known.
+   * Each counter is independent: absent means unknown, zero means measured zero.
+   * Fresh input is known only when both counters are known. Empty cache means unknown.
    */
-  readonly cache?: { readonly read: number; readonly creation: number };
+  readonly cache?: { readonly read?: number; readonly creation?: number };
 }
 
 /** Résultat de lecture de la consommation d'un appel. */

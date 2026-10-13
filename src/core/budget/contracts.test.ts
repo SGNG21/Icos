@@ -10,6 +10,7 @@ import {
   UNMETERED_REASONS,
   UNPRICED,
   type Attribution,
+  type TokenUsage,
 } from "./contracts";
 
 describe("budget contracts", () => {
@@ -93,5 +94,28 @@ describe("budget contracts", () => {
     for (const key of ["UNATTRIBUTED", "", "=g1", "inconnu=g1", "goal=", "goal=%E0%A4%A", "goal"]) {
       expect(attributionFromKey(key), key).toBeNull();
     }
+  });
+});
+
+// Compile the independently optional fields as well as their JSON representation.
+describe("TokenUsage.cache", () => {
+  it.each([
+    undefined,
+    {},
+    { read: 0 },
+    { creation: 0 },
+    { read: 7 },
+    { creation: 5 },
+    { read: 0, creation: 0 },
+    { read: 7, creation: 5 },
+  ])("preserves independent counters: %j", (cache) => {
+    const usage: TokenUsage = {
+      promptTokens: 20,
+      completionTokens: 2,
+      totalTokens: 22,
+      ...(cache === undefined ? {} : { cache }),
+    };
+    const json = JSON.parse(JSON.stringify(usage));
+    expect(json.cache).toEqual(cache);
   });
 });

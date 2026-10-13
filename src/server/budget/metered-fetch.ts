@@ -184,6 +184,31 @@ function logStreamDiagnostic(
   );
 }
 
+/** Emit only after persistence succeeds; absent counters remain unknown in the journal. */
+function logUsageSplit(
+  usage: UsageOutcome,
+  modelId: string,
+  attribution: Attribution | null,
+): void {
+  if (usage.kind !== "METERED") return;
+  const { promptTokens, completionTokens, cache } = usage.usage;
+  console.info(
+    JSON.stringify({
+      event: "SPEND_USAGE_SPLIT",
+      modelId,
+      attribution: attribution ? attributionKey(attribution) : null,
+      prompt: promptTokens,
+      fresh:
+        cache?.read !== undefined && cache.creation !== undefined
+          ? promptTokens - cache.read - cache.creation
+          : null,
+      cacheRead: cache?.read ?? null,
+      cacheCreation: cache?.creation ?? null,
+      output: completionTokens,
+    }),
+  );
+}
+
 async function observe(response: Response, input: RequestInfo | URL): Promise<Observation> {
   /*
    * LA MESURE NE DOIT JAMAIS CASSER L'APPEL. `meteredFetch` est typé `typeof fetch`, donc
@@ -325,28 +350,7 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     } catch (cause) {
       throw new BudgetLedgerError(cause);
     }
-    /*
-     * THE SPLIT, beside the total. The ledger holds the billed total (prompt + completion,
-     * cache included — N1 run 9: 3.8 M tokens over 95 calls, context 18 k → 73 k each call);
-     * what it cannot say is how much of that prompt was cache. One line per metered call,
-     * fresh/cached/created/output, so a cost report separates measured tokens from cached
-     * tokens without touching the ledger, the caps or the reservation.
-     */
-    if (observed.usage.kind === "METERED") {
-      const { promptTokens, completionTokens, cache } = observed.usage.usage;
-      console.info(
-        JSON.stringify({
-          event: "SPEND_USAGE_SPLIT",
-          modelId,
-          attribution: attribution ? attributionKey(attribution) : null,
-          prompt: promptTokens,
-          fresh: promptTokens - (cache?.read ?? 0) - (cache?.creation ?? 0),
-          cacheRead: cache?.read ?? null,
-          cacheCreation: cache?.creation ?? null,
-          output: completionTokens,
-        }),
-      );
-    }
+    logUsageSplit(observed.usage, modelId, attribution);
 
     return response;
   };
@@ -434,19 +438,27 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
         observed.model ?? requestedModel(init) ?? "UNKNOWN",
       );
     }
+    let settledAttribution: Attribution | null;
     try {
       /*
        * Le solde n'accepte AUCUNE imputation (verrou C2) : celle du journal est relue depuis
        * la ligne de réservation, sous le même verrou que `reserve`.
        */
-      await reservations.settle(reservation, {
+      const settlement = await reservations.settle(reservation, {
         modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
         usage: observed.usage,
         at: now().toISOString(),
       });
+      settledAttribution = settlement.attributedTo;
     } catch (cause) {
       throw new BudgetLedgerError(cause);
     }
+
+    logUsageSplit(
+      observed.usage,
+      observed.model ?? requestedModel(init) ?? "UNKNOWN",
+      settledAttribution,
+    );
 
     return response;
   };

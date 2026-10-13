@@ -4,7 +4,7 @@ import type { Attribution, SpendDecision } from "@/core/budget/contracts";
 import { MICROS_PER_EUR } from "@/core/budget/contracts";
 import type { PriceTable } from "@/core/budget/price-table";
 import type { SpendWindow } from "@/core/budget/spend";
-import { emptyWindow } from "@/core/budget/spend";
+import { settleReservation, emptyWindow } from "@/core/budget/spend";
 
 import { InMemorySpendLedger } from "./in-memory-spend-ledger";
 import { BudgetDeniedError, BudgetLedgerError, meteredFetch } from "./metered-fetch";
@@ -645,4 +645,189 @@ describe("meteredFetch — chemin RÉSERVÉ : une erreur fournisseur dans le flu
       warn.mockRestore();
     }
   });
+});
+
+describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () => {
+  const url = "https://gateway.invalid/v1/messages";
+  const ambient = { goalId: "ambient" };
+  const effective = { goalId: "reserved" };
+  const reservation = { id: "cache-test", ownerToken: "owner", reservedTokens: 100 };
+
+  function reservedPort(
+    ledger: SpendLedgerPort,
+    attributedTo: Attribution | null,
+    fail = false,
+  ): SpendReservationPort {
+    return {
+      reserve: vi.fn(async () => ({ kind: "RESERVED" as const, reservation })),
+      renew: vi.fn(async () => true),
+      release: vi.fn(async () => true),
+      settle: vi.fn(async (_reservation, entry) => {
+        if (fail) throw new Error("settle failed");
+        await ledger.record({ ...entry, attribution: attributedTo });
+        return {
+          ...settleReservation(reservation.reservedTokens, entry.usage),
+          closed: false,
+          unauthenticated: attributedTo === null,
+          attributedTo,
+        };
+      }),
+    };
+  }
+
+  for (const reserved of [false, true])
+    for (const format of ["JSON", "SSE"]) {
+      for (const read of [undefined, 0, 7])
+        for (const creation of [undefined, 0, 5]) {
+          it(`${reserved ? "settle" : "record"} ${format}, read=${read}, creation=${creation}: one entry then one honest split`, async () => {
+            const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+            try {
+              const ledger = new FakeLedger({ kind: "ALLOW" }, () =>
+                expect(info).not.toHaveBeenCalled(),
+              );
+              const reservations = reserved ? reservedPort(ledger, effective) : undefined;
+              const raw = {
+                input_tokens: 10,
+                output_tokens: 2,
+                ...(read === undefined ? {} : { cache_read_input_tokens: read }),
+                ...(creation === undefined ? {} : { cache_creation_input_tokens: creation }),
+              };
+              const response =
+                format === "JSON"
+                  ? jsonResponse({ model: "test/model", usage: raw })
+                  : new Response(
+                      `data: ${JSON.stringify({ type: "message_start", message: { model: "test/model", usage: raw } })}\n\ndata: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 2 } })}\n\n`,
+                      { headers: { "content-type": "text/event-stream" } },
+                    );
+              await meteredFetch(async () => response, {
+                ledger,
+                attribution: ambient,
+                reservations,
+              })(url, chatInit());
+              expect(ledger.recorded).toHaveLength(1);
+              expect(ledger.recorded[0]?.attribution).toEqual(reserved ? effective : ambient);
+              expect(info).toHaveBeenCalledTimes(1);
+              expect(JSON.parse(String(info.mock.calls[0]?.[0]))).toEqual({
+                event: "SPEND_USAGE_SPLIT",
+                modelId: "test/model",
+                attribution: reserved ? "goal=reserved" : "goal=ambient",
+                prompt: 10 + (read ?? 0) + (creation ?? 0),
+                output: 2,
+                fresh: read === undefined || creation === undefined ? null : 10,
+                cacheRead: read ?? null,
+                cacheCreation: creation ?? null,
+              });
+              if (reservations) expect(reservations.settle).toHaveBeenCalledTimes(1);
+            } finally {
+              info.mockRestore();
+            }
+          });
+        }
+    }
+
+  it("uses a null settlement attribution without falling back to ambient", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const ledger = new FakeLedger();
+      await meteredFetch(async () => jsonResponse(COMPLETION_BODY), {
+        ledger,
+        attribution: ambient,
+        reservations: reservedPort(ledger, null),
+      })(url, chatInit());
+      expect(JSON.parse(String(info.mock.calls[0]?.[0])).attribution).toBeNull();
+      expect(ledger.recorded[0]?.attribution).toBeNull();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "no false success split on persistence failure (reserved=%s)",
+    async (reserved) => {
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      try {
+        const ledger = new FakeLedger({ kind: "ALLOW" }, () => {
+          throw new Error("record failed");
+        });
+        const reservations = reserved ? reservedPort(ledger, effective, true) : undefined;
+        await expect(
+          meteredFetch(async () => jsonResponse(COMPLETION_BODY), { ledger, reservations })(
+            url,
+            chatInit(),
+          ),
+        ).rejects.toThrow(BudgetLedgerError);
+        expect(info).not.toHaveBeenCalled();
+        expect(ledger.recorded).toHaveLength(0);
+        if (reservations) expect(reservations.settle).toHaveBeenCalledTimes(1);
+      } finally {
+        info.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "UNMETERED is recorded once without numeric split (reserved=%s)",
+    async (reserved) => {
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      try {
+        const ledger = new FakeLedger();
+        await meteredFetch(
+          async () =>
+            jsonResponse({
+              usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: null },
+            }),
+          {
+            ledger,
+            reservations: reserved ? reservedPort(ledger, effective) : undefined,
+          },
+        )(url, chatInit());
+        expect(ledger.recorded).toHaveLength(1);
+        expect(ledger.recorded[0]?.usage).toEqual({ kind: "UNMETERED", reason: "USAGE_INVALID" });
+        expect(info).not.toHaveBeenCalled();
+      } finally {
+        info.mockRestore();
+      }
+    },
+  );
+
+  it.each([undefined, {}, { read: 0 }, { creation: 5 }, { read: 7, creation: 5 }])(
+    "split does not change totals, costs or budget decisions: %j",
+    async (cache) => {
+      const makeLedger = () =>
+        new InMemorySpendLedger({
+          caps: async () => ({ kind: "CAPPED", maxTotalTokens: 14 }),
+          priceTable: PRICE_TABLE,
+        });
+      const plain = makeLedger();
+      const split = makeLedger();
+      const entry: SpendEntry = {
+        modelId: "test/model",
+        attribution: ambient,
+        at: "2026-10-12T00:00:00.000Z",
+        usage: {
+          kind: "METERED",
+          usage: { promptTokens: 12, completionTokens: 2, totalTokens: 14 },
+        },
+      };
+      await plain.record(entry);
+      await split.record({
+        ...entry,
+        usage: {
+          kind: "METERED",
+          usage: {
+            promptTokens: 12,
+            completionTokens: 2,
+            totalTokens: 14,
+            ...(cache === undefined ? {} : { cache }),
+          },
+        },
+      });
+      expect(await split.windowFor(ambient)).toEqual(await plain.windowFor(ambient));
+      expect(await split.checkBudget(ambient)).toEqual(await plain.checkBudget(ambient));
+      expect(await split.checkBudget(ambient)).toMatchObject({
+        kind: "DENY",
+        reason: "TOKEN_CAP_REACHED",
+      });
+    },
+  );
 });

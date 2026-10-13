@@ -436,12 +436,21 @@ export function formatMissionTrace(trace: MissionTrace): string {
       const tokens = e.totalTokens === null ? "unmetered" : `${e.totalTokens} tokens`;
       const amount =
         e.amount === null ? (e.costKind ?? "no cost") : `${e.amount} ${e.currency ?? ""}`.trim();
-      lines.push(`  ${e.observedAt}  ${e.scope.padEnd(11)} ${e.modelId}  ${tokens}  ${amount}`);
+      lines.push(
+        `  ${e.observedAt}  ${e.scope.padEnd(11)} ${e.modelId}  ${tokens}  ${amount}  cache read=${e.cacheRead ?? "unknown"} creation=${e.cacheCreation ?? "unknown"}`,
+      );
     }
     const t = trace.cost.total;
     lines.push(
       `  mission total: ${t.calls} calls, ${t.totalTokens} tokens (prompt ${t.promptTokens}, completion ${t.completionTokens}), ` +
         `${t.amount} ${t.currency} priced over ${t.pricedCalls} calls, ${t.unpricedCalls} unpriced, ${t.unmeteredCalls} unmetered`,
+    );
+    const missionEntries = trace.cost.entries.filter((e) => e.scope === "mission");
+    const knownRead = missionEntries.filter((e) => e.cacheRead !== null).length;
+    const knownCreation = missionEntries.filter((e) => e.cacheCreation !== null).length;
+    lines.push(
+      `  cache coverage: read known on ${knownRead}/${missionEntries.length} calls, ` +
+        `creation known on ${knownCreation}/${missionEntries.length} calls`,
     );
     const g = trace.cost.goalShared;
     if (g.calls > 0) {

@@ -1,6 +1,8 @@
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import * as spend from "@/core/budget/spend";
 
 import { UNMETERED, type Attribution, type BudgetCap } from "@/core/budget/contracts";
 import type { PriceEntry, PriceTable } from "@/core/budget/price-table";
@@ -379,5 +381,103 @@ describe("PostgresSpendLedger — la borne de dépassement annoncée", () => {
        dépassement n'est pas une constante — c'est le prix du choix (a). */
     expect(await overshoot(2)).toBe(10);
     expect(await overshoot(16)).toBe(150);
+  });
+});
+
+describe("PostgresSpendLedger — independent cache counters", () => {
+  for (const read of [undefined, 0, 7]) {
+    for (const creation of [undefined, 0, 5]) {
+      it(`persists and reports read=${read}, creation=${creation} without changing budgets`, async () => {
+        const db = new FakeLedgerDb();
+        const l = ledger(db, { kind: "CAPPED", maxTotalTokens: 100 });
+        const baseline = metered(20, 2);
+        await l.record({
+          ...baseline,
+          attribution: { ...G1, missionId: "m1" },
+          usage: {
+            kind: "METERED",
+            usage: {
+              ...baseline.usage.usage,
+              cache: {
+                ...(read !== undefined ? { read } : {}),
+                ...(creation !== undefined ? { creation } : {}),
+              },
+            },
+          },
+        });
+        expect(db.rows[0]).toMatchObject({
+          cache_read: read ?? null,
+          cache_creation: creation ?? null,
+        });
+        const plainDb = new FakeLedgerDb();
+        await ledger(plainDb, { kind: "UNCAPPED" }).record(baseline);
+        const folding = vi.spyOn(spend, "accumulate");
+        await l.windowFor(G1);
+        const expectedCache = {
+          ...(read !== undefined ? { read } : {}),
+          ...(creation !== undefined ? { creation } : {}),
+        };
+        expect(folding.mock.calls[0][1].usage).toEqual({
+          kind: "METERED",
+          usage: {
+            ...baseline.usage.usage,
+            ...(read !== undefined || creation !== undefined ? { cache: expectedCache } : {}),
+          },
+        });
+        folding.mockRestore();
+        expect(await l.windowFor(G1)).toEqual(
+          await ledger(plainDb, { kind: "UNCAPPED" }).windowFor(G1),
+        );
+        expect(await l.checkBudget(G1)).toEqual({ kind: "ALLOW" });
+        // Return persisted rows through a fresh reader, checking the actual mission SELECT.
+        const reader = ledger(
+          {
+            execute: async (query) => {
+              const q = dialect.sqlToQuery(query);
+              expect(q.sql).toContain("cache_read, cache_creation");
+              expect(q.sql).toContain("where tenant_id =");
+              return db.rows;
+            },
+          },
+          { kind: "UNCAPPED" },
+        );
+        const report = await reader.listForMission("m1");
+        expect(report.entries[0]).toMatchObject({
+          cacheRead: read ?? null,
+          cacheCreation: creation ?? null,
+          scope: "mission",
+        });
+        expect(report.total.totalTokens).toBe(22);
+        expect(report.goalShared.calls).toBe(0);
+      });
+    }
+  }
+
+  it("keeps UNMETERED unknown and UNPRICED measured with its cache split", async () => {
+    const db = new FakeLedgerDb();
+    const l = ledger(db, { kind: "UNCAPPED" }, {});
+    await l.record(unmetered());
+    await l.record({
+      ...metered(10),
+      usage: {
+        kind: "METERED",
+        usage: {
+          promptTokens: 10,
+          completionTokens: 0,
+          totalTokens: 10,
+          cache: { read: 0, creation: 5 },
+        },
+      },
+    });
+    expect(db.rows[0]).toMatchObject({
+      usage_kind: "UNMETERED",
+      cache_read: null,
+      cache_creation: null,
+    });
+    expect(db.rows[1]).toMatchObject({ cost_kind: "UNPRICED", cache_read: 0, cache_creation: 5 });
+    const window = await l.windowFor(G1);
+    expect(window.unmeteredCalls).toBe(1);
+    expect(window.unpricedCalls).toBe(1);
+    expect(window.totalTokens).toBe(10);
   });
 });

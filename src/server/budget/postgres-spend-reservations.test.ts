@@ -280,3 +280,36 @@ describe("PostgresSpendReservations — forme et fermeture", () => {
     expect(db.sqlSeen[2]).toContain("'EXPIRED'");
   });
 });
+
+describe("settlement cache transport", () => {
+  it("inserts the split once inside settlement with reservation attribution", async () => {
+    const db = new FakeTxDb();
+    const value = entry(20);
+    await store(db).settle(
+      { id: "r1", ownerToken: "o1", reservedTokens: 100 },
+      {
+        ...value,
+        usage: {
+          kind: "METERED",
+          usage: { promptTokens: 20, completionTokens: 0, totalTokens: 20, cache: { read: 0 } },
+        },
+      },
+    );
+    const inserts = db.sqlSeen
+      .map((sql, i) => ({ sql, params: db.params[i] }))
+      .filter(({ sql }) => /insert into spend_ledger/.test(sql));
+    expect(inserts).toHaveLength(1);
+    const insert = inserts[0];
+    const columns = /\(([^)]*)\)\s*values/
+      .exec(insert.sql)![1]
+      .split(",")
+      .map((s) => s.trim());
+    const row = Object.fromEntries(columns.map((c, i) => [c, insert.params[i]]));
+    expect(row).toMatchObject({
+      tenant_id: "default",
+      attribution_key: "goal=g1",
+      cache_read: 0,
+      cache_creation: null,
+    });
+  });
+});

@@ -117,6 +117,14 @@ function toObservation(row: Row): SpendObservation {
     promptTokens: count(row.prompt_tokens),
     completionTokens: count(row.completion_tokens),
     totalTokens: count(row.total_tokens),
+    ...(row.cache_read != null || row.cache_creation != null
+      ? {
+          cache: {
+            ...(row.cache_read != null ? { read: count(row.cache_read) } : {}),
+            ...(row.cache_creation != null ? { creation: count(row.cache_creation) } : {}),
+          },
+        }
+      : {}),
   };
   if (row.cost_kind === UNPRICED) {
     return {
@@ -188,7 +196,7 @@ export class PostgresSpendLedger implements SpendLedgerPort {
     await this.options.db.execute(sql`
       insert into spend_ledger (
         id, tenant_id, attribution_key, mission_id, goal_id, brain_id, model_id,
-        usage_kind, prompt_tokens, completion_tokens, total_tokens, unmetered_reason,
+        usage_kind, prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation, unmetered_reason,
         cost_kind, currency, amount, unpriced_reason, observed_at
       ) values (
         ${this.newId()},
@@ -202,6 +210,8 @@ export class PostgresSpendLedger implements SpendLedgerPort {
         ${metered?.promptTokens ?? null},
         ${metered?.completionTokens ?? null},
         ${metered?.totalTokens ?? null},
+        ${metered?.cache?.read ?? null},
+        ${metered?.cache?.creation ?? null},
         ${entry.usage.kind === UNMETERED ? entry.usage.reason : null},
         ${cost?.kind ?? null},
         ${cost?.kind === "COST" ? cost.currency : null},
@@ -214,7 +224,7 @@ export class PostgresSpendLedger implements SpendLedgerPort {
 
   async windowFor(attribution: Attribution | null): Promise<SpendWindow> {
     const rows = (await this.options.db.execute(sql`
-      select model_id, usage_kind, prompt_tokens, completion_tokens, total_tokens,
+      select model_id, usage_kind, prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation,
              unmetered_reason, cost_kind, currency, amount
         from spend_ledger
        where tenant_id = ${this.tenantId}
@@ -241,7 +251,7 @@ export class PostgresSpendLedger implements SpendLedgerPort {
     const goalId = options.goalId ?? null;
     const rows = (await this.options.db.execute(sql`
       select id, attribution_key, mission_id, goal_id, brain_id, model_id, usage_kind,
-             prompt_tokens, completion_tokens, total_tokens, unmetered_reason, cost_kind,
+             prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation, unmetered_reason, cost_kind,
              currency, amount, unpriced_reason, observed_at, recorded_at
         from spend_ledger
        where tenant_id = ${this.tenantId}
@@ -265,6 +275,8 @@ export class PostgresSpendLedger implements SpendLedgerPort {
       promptTokens: row.prompt_tokens === null ? null : Number(row.prompt_tokens),
       completionTokens: row.completion_tokens === null ? null : Number(row.completion_tokens),
       totalTokens: row.total_tokens === null ? null : Number(row.total_tokens),
+      cacheRead: row.cache_read == null ? null : count(row.cache_read),
+      cacheCreation: row.cache_creation == null ? null : count(row.cache_creation),
       costKind: (row.cost_kind as string | null) ?? null,
       currency: (row.currency as string | null) ?? null,
       amount: row.amount === null ? null : Number(row.amount),
@@ -299,6 +311,8 @@ export interface MissionSpendRow {
   readonly promptTokens: number | null;
   readonly completionTokens: number | null;
   readonly totalTokens: number | null;
+  readonly cacheRead: number | null;
+  readonly cacheCreation: number | null;
   readonly costKind: string | null;
   readonly currency: string | null;
   readonly amount: number | null;
