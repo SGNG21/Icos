@@ -436,7 +436,9 @@ export function formatMissionTrace(trace: MissionTrace): string {
       const tokens = e.totalTokens === null ? "unmetered" : `${e.totalTokens} tokens`;
       const amount =
         e.amount === null ? (e.costKind ?? "no cost") : `${e.amount} ${e.currency ?? ""}`.trim();
-      lines.push(`  ${e.observedAt}  ${e.scope.padEnd(11)} ${e.modelId}  ${tokens}  ${amount}`);
+      lines.push(
+        `  ${e.observedAt}  ${e.scope.padEnd(11)} ${e.modelId}  ${tokens}  ${amount}  cache read=${e.cacheRead ?? "unknown"} creation=${e.cacheCreation ?? "unknown"}`,
+      );
     }
     const t = trace.cost.total;
     lines.push(

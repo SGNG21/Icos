@@ -97,6 +97,47 @@ describe("spend_ledger (base de test locale, migration 0055)", () => {
     priceTable: PriceTable = PRICE_TABLE,
   ) => new PostgresSpendLedger({ db: ctx.handle.db, tenantId, caps, priceTable });
 
+  // Prepared only: run serially on a dedicated disposable PostgreSQL instance
+  // after applying the migration there. Never target the shared test database.
+  for (const read of [undefined, 0, 7]) {
+    for (const creation of [undefined, 0, 5]) {
+      it(`cache round-trip read=${read}, creation=${creation}`, async () => {
+        const base = metered(20, 2, { missionId: "cache-mission", goalId: "g1" });
+        await ledger().record({
+          ...base,
+          usage: {
+            kind: "METERED",
+            usage: {
+              promptTokens: 20,
+              completionTokens: 2,
+              totalTokens: 22,
+              cache: {
+                ...(read !== undefined ? { read } : {}),
+                ...(creation !== undefined ? { creation } : {}),
+              },
+            },
+          },
+        });
+        const rows = await ctx.handle.db.execute(
+          sql`select cache_read, cache_creation from spend_ledger`,
+        );
+        expect(
+          rows.map((r) => ({
+            read: r.cache_read === null ? null : Number(r.cache_read),
+            creation: r.cache_creation === null ? null : Number(r.cache_creation),
+          })),
+        ).toEqual([{ read: read ?? null, creation: creation ?? null }]);
+        const report = await ledger().listForMission("cache-mission");
+        expect(report.entries[0]).toMatchObject({
+          cacheRead: read ?? null,
+          cacheCreation: creation ?? null,
+        });
+        expect(report.total.totalTokens).toBe(22);
+        expect((await ledger(OTHER_TENANT).listForMission("cache-mission")).entries).toEqual([]);
+      });
+    }
+  }
+
   const rowCount = async () => {
     const rows = (await ctx.handle.db.execute(
       sql`select count(*)::int as n from spend_ledger`,
@@ -170,6 +211,24 @@ describe("spend_ledger (base de test locale, migration 0055)", () => {
         sql`insert into spend_ledger (id, tenant_id, attribution_key, model_id, observed_at, ${sql.raw(columns)})
             values ('x', ${TENANT}, 'goal=g1', 'test/model', now(), ${values})`,
       );
+
+    for (const column of ["cache_read", "cache_creation"]) {
+      it(`rejects negative ${column} and a measured zero on UNMETERED`, async () => {
+        expect(
+          await pgCode(
+            insert(
+              `usage_kind, prompt_tokens, completion_tokens, total_tokens, cost_kind, unpriced_reason, ${column}`,
+              sql`'METERED', 10, 0, 10, 'UNPRICED', 'fixture', -1`,
+            ),
+          ),
+        ).toBe("23514");
+        expect(
+          await pgCode(
+            insert(`usage_kind, unmetered_reason, ${column}`, sql`'UNMETERED', 'USAGE_ABSENT', 0`),
+          ),
+        ).toBe("23514");
+      });
+    }
 
     it("refuse un METERED sans compteurs (un inconnu blanchi en mesure)", async () => {
       expect(await pgCode(insert("usage_kind, cost_kind", sql`'METERED', 'UNPRICED'`))).toBe(

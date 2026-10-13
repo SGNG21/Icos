@@ -1338,6 +1338,9 @@ export const spendLedger = pgTable(
     promptTokens: bigint("prompt_tokens", { mode: "number" }),
     completionTokens: bigint("completion_tokens", { mode: "number" }),
     totalTokens: bigint("total_tokens", { mode: "number" }),
+    /** Independent reported counters: NULL is unknown, zero is measured. */
+    cacheRead: bigint("cache_read", { mode: "number" }),
+    cacheCreation: bigint("cache_creation", { mode: "number" }),
     unmeteredReason: text("unmetered_reason"),
     costKind: text("cost_kind"),
     currency: text("currency"),
@@ -1347,6 +1350,12 @@ export const spendLedger = pgTable(
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    check("spend_ledger_cache_read_check", sql`${t.cacheRead} >= 0`),
+    check("spend_ledger_cache_creation_check", sql`${t.cacheCreation} >= 0`),
+    check(
+      "spend_ledger_cache_usage_check",
+      sql`${t.usageKind} = 'METERED' or (${t.cacheRead} is null and ${t.cacheCreation} is null)`,
+    ),
     check("spend_ledger_usage_kind_check", sql`${t.usageKind} in ('METERED','UNMETERED')`),
     check("spend_ledger_cost_kind_check", sql`${t.costKind} in ('COST','UNPRICED')`),
     index("spend_ledger_window_idx").on(t.tenantId, t.attributionKey, t.recordedAt, t.id),
