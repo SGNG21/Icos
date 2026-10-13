@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { childEnvironment } from "@/server/workers/process/child-environment";
 import type {
   NonInteractiveProcessResult,
   NonInteractiveProcessSpec,
@@ -226,6 +227,72 @@ describe("IntegrationGate — l'environnement est construit, jamais hérité", (
       expect(call.network).toBe(false);
     }
   });
+
+  /*
+   * THE WHOLE CHAIN, with the parent environment injected instead of mutated: what the gate
+   * names → the runner's overlay → `childEnvironment` with the runner's empty passthrough.
+   * `NODE_ENV` is on the default allowlist, so without the gate's overlay the server's value
+   * would reach the step — exactly N1 runs 10–11 — and with it, the step is a test environment
+   * whatever the server is.
+   */
+  const parents: ReadonlyArray<readonly [string | undefined, string]> = [
+    ["production", "le serveur déployé"],
+    ["test", "un serveur de test"],
+    [undefined, "un serveur sans NODE_ENV"],
+  ];
+  it.each(parents)(
+    "NODE_ENV=%s chez le parent (%s) : l'étape voit toujours NODE_ENV=test",
+    async (parentValue) => {
+      const db = new FakeProvisioner();
+      const git = new Git(fx.master);
+      const manager = new WorkspaceManager({
+        git,
+        registry: new InMemoryWorkspaceRegistry(),
+        provisioner: db,
+        worktreeRoot: fx.root,
+        masterRepo: fx.master,
+      });
+      const specs: NonInteractiveProcessSpec[] = [];
+      const gate = new IntegrationGate({
+        git,
+        manager,
+        database: db,
+        runner: new SandboxedCommandRunner({
+          run: async (spec) => {
+            specs.push(spec);
+            return ok();
+          },
+          readOnlyPaths: [],
+          createHome: async () => ({ path: "/tmp/icos-gate-home-env", dispose: async () => {} }),
+        }),
+      });
+      const id = await prepare(fx, manager, "nodeenv", {
+        "src/nodeenv/x.ts": "export const x = 1;\n",
+      });
+      expect((await gate.integrate(id, APPROVED)).decision).toBe("ACCEPT");
+      expect(specs.length).toBeGreaterThan(0);
+
+      /* The ProcessEnv augmentation describes THIS process; the parent modelled here is any server. */
+      const parent = {
+        PATH: "/usr/bin",
+        ICOS_P0_CANARY_SECRET: CANARY,
+        ...(parentValue === undefined ? {} : { NODE_ENV: parentValue }),
+      } as unknown as NodeJS.ProcessEnv;
+      for (const spec of specs) {
+        expect(spec.envPassthrough).toEqual([]);
+        const child = childEnvironment({
+          parent,
+          passthrough: spec.envPassthrough,
+          ...(spec.env ? { overlay: spec.env } : {}),
+        });
+        expect(child.NODE_ENV).toBe("test");
+        expect(Object.values(child)).not.toContain(CANARY);
+      }
+      /* The defect, kept visible: without the gate's overlay the server's value leaks through. */
+      const bare = childEnvironment({ parent, passthrough: [] });
+      expect(bare.NODE_ENV).toBe(parentValue);
+    },
+  );
 });
 
 const LEASE = { owner: "gate-owner", fencingToken: 1 };
