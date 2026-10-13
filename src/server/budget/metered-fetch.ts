@@ -184,7 +184,11 @@ function logStreamDiagnostic(
   );
 }
 
-/** Emit only after persistence succeeds; absent counters remain unknown in the journal. */
+/**
+ * Emit only after persistence succeeds; absent counters remain unknown in the journal.
+ * On stderr, like the stream diagnostics above: an operational line of counters, never a
+ * result. `console.info` is reserved to nothing in shipped source (no-debug-logging.test.ts).
+ */
 function logUsageSplit(
   usage: UsageOutcome,
   modelId: string,
@@ -192,7 +196,7 @@ function logUsageSplit(
 ): void {
   if (usage.kind !== "METERED") return;
   const { promptTokens, completionTokens, cache } = usage.usage;
-  console.info(
+  console.warn(
     JSON.stringify({
       event: "SPEND_USAGE_SPLIT",
       modelId,

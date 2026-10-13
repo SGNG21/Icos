@@ -680,7 +680,7 @@ describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () =>
       for (const read of [undefined, 0, 7])
         for (const creation of [undefined, 0, 5]) {
           it(`${reserved ? "settle" : "record"} ${format}, read=${read}, creation=${creation}: one entry then one honest split`, async () => {
-            const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+            const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
             try {
               const ledger = new FakeLedger({ kind: "ALLOW" }, () =>
                 expect(info).not.toHaveBeenCalled(),
@@ -726,7 +726,7 @@ describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () =>
     }
 
   it("uses a null settlement attribution without falling back to ambient", async () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const ledger = new FakeLedger();
       await meteredFetch(async () => jsonResponse(COMPLETION_BODY), {
@@ -744,7 +744,7 @@ describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () =>
   it.each([false, true])(
     "no false success split on persistence failure (reserved=%s)",
     async (reserved) => {
-      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       try {
         const ledger = new FakeLedger({ kind: "ALLOW" }, () => {
           throw new Error("record failed");
@@ -768,7 +768,7 @@ describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () =>
   it.each([false, true])(
     "UNMETERED is recorded once without numeric split (reserved=%s)",
     async (reserved) => {
-      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       try {
         const ledger = new FakeLedger();
         await meteredFetch(
