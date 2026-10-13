@@ -275,3 +275,117 @@ Aucun autre worktree modifié, aucun push, fusion, déploiement, redémarrage,
 arrêt de conteneur, appel fournisseur ou suppression de colonne à l'étape 4.
 Les nettoyages de fixtures des tests restent limités à la base jetable.
 Rapport puis arrêt.
+
+## Première installation et rollback, base vierge n°2
+
+Étape 5, dispatch `/home/icos/.icos-fable-lab/dispatch/w9-step5.md` lu intégralement.
+Base de code `8e4f844`, worktree propre avant exécution. Aucun code ni migration
+modifié à cette étape ; seul ce rapport change.
+
+La seconde base `icos_test_w9_fresh` a été créée dans le conteneur jetable fourni
+`w9-pg-cert`. La seule connexion de maintenance à `postgres` est celle explicitement
+prescrite pour CREATE DATABASE ; elle n'a servi à aucune autre opération. Toutes
+les preuves utilisent ensuite exclusivement
+`postgres://icos@127.0.0.1:55500/icos_test_w9_fresh`.
+La première base `icos_test_w9_cache` n'a pas été sollicitée à cette étape.
+
+### Résultats
+
+| Vérification                          | Résultat                                                                                                                                                                          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Création et état initial              | PASS : CREATE DATABASE réussi ; `current_database()` = `icos_test_w9_fresh`, zéro table hors catalogues avant setup                                                               |
+| Première installation du nouveau 0065 | PASS : `pnpm test:db:setup`, code 0 ; migrations du journal jusqu'à 0065, avec le bloc DO de `8e4f844`                                                                            |
+| Schéma initial                        | PASS : `\d spend_ledger` ; `cache_read` et `cache_creation` bigint nullable sans défaut ; trois CHECK cache présents et trigger append-only intact                                |
+| Journal Drizzle                       | PASS : `LEDGER_OK 62 rows match the journal; migrate() would apply nothing` ; comparaison de tous les hashes et timestamps, y compris le nouveau texte 0065                       |
+| Lot budget sur la seconde base        | PASS : 62/62, deux fichiers, aucun skip, 13,10 s ; inclut round-trips cache, contraintes, concurrence, transactions, attribution, fencing et idempotence                          |
+| Rollback exact de l'en-tête           | PASS : seules les trois contraintes cache ont disparu ; toutes les colonnes, leurs numéros d'attribut, toutes les valeurs des lignes, index, trigger et journal Drizzle inchangés |
+| Lecture pendant le rollback           | PASS : `listForMission` identique avant/après ; compteurs `[0,5]`, `[7,null]`, `[null,null]`, UNMETERED `[null,null]` préservés                                                   |
+| Réapplication manuelle de 0065        | PASS : trois CHECK restaurés avec les mêmes définitions ; colonnes inchangées, toutes les données conservées, journal inchangé                                                    |
+| Contraintes restaurées effectives     | PASS : pour chaque compteur, valeur négative sur METERED et zéro sur UNMETERED rejetés avec SQLSTATE `23514` ; quatre rejets contrôlés                                            |
+| Contrôle final du journal             | PASS : les 62 hashes et timestamps correspondent toujours aux fichiers du repository après rollback/réapplication                                                                 |
+| Contrôles du rapport                  | Prettier et `git diff --check` ; diff relu, seul fichier autorisé modifié                                                                                                         |
+
+### Commandes exécutées
+
+Création explicitement prescrite :
+
+```sh
+docker exec w9-pg-cert psql -U icos -d postgres -c 'create database icos_test_w9_fresh'
+```
+
+Ensuite, sur la seconde base uniquement :
+
+```sh
+export ICOS_TEST_DATABASE_URL=postgres://icos@127.0.0.1:55500/icos_test_w9_fresh
+pnpm test:db:setup
+docker exec w9-pg-cert psql -U icos -d icos_test_w9_fresh -c '\d spend_ledger'
+pnpm db:verify-ledger postgres://icos@127.0.0.1:55500/icos_test_w9_fresh
+pnpm exec vitest run --config vitest.integration.config.ts src/server/budget/
+pnpm exec tsx /tmp/w9-step5-rollback.ts
+pnpm db:verify-ledger postgres://icos@127.0.0.1:55500/icos_test_w9_fresh
+```
+
+Sorties conservées :
+
+```text
+CREATE DATABASE
+icos_test_w9_fresh|0
+test database ready: icos_test_w9_fresh
+LEDGER_OK 62 rows match the journal; migrate() would apply nothing
+
+Test Files  2 passed (2)
+     Tests  62 passed (62)
+  Start at  00:35:06
+  Duration  13.10s (transform 938ms, setup 0ms, import 3.52s, tests 8.91s, environment 0ms)
+
+PASS header rollback: exactly three cache CHECKs removed; columns/attribute numbers, ALL row values, indexes, trigger and migration journal preserved
+PASS cache after rollback: [0,5], [7,NULL], [NULL,NULL], UNMETERED [NULL,NULL]; mission read-back identical
+PASS replay 0065: three CHECK definitions restored; columns are a no-op; all data and journal unchanged
+PASS restored CHECK cache_read unmetered-zero: SQLSTATE 23514
+PASS restored CHECK cache_read negative: SQLSTATE 23514
+PASS restored CHECK cache_creation unmetered-zero: SQLSTATE 23514
+PASS restored CHECK cache_creation negative: SQLSTATE 23514
+PASS final state: same rows, columns, CHECK definitions, indexes, trigger and migration journal as before rollback
+```
+
+Le probe temporaire impose l'URL exacte et contrôle `current_database()` avant
+opération. Après les tests budget, il insère quatre fixtures (deux ventilations
+mesurées, une METERED sans cache et une UNMETERED), puis capture les données et le
+catalogue. Le SQL de rollback exécuté est comparé au texte de l'en-tête de 0065
+avant exécution :
+
+```sql
+ALTER TABLE spend_ledger
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_usage_check,
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_read_check,
+  DROP CONSTRAINT IF EXISTS spend_ledger_cache_creation_check;
+```
+
+Le contenu exact de `drizzle/0065_spend_ledger_cache.sql` est ensuite rejoué.
+Les NOTICE « already exists, skipping » sont attendues ; aucune exception.
+Les OID des contraintes recréées ne sont pas supposés identiques ; leurs noms
+et définitions le sont. Le trigger append-only et son OID restent inchangés.
+Aucune suppression de colonne, aucune perte de mesure, aucun ajustement manuel
+du journal. Aucun second lancement du migrateur après l'installation initiale.
+
+SHA256 de 0065 installé puis rejoué :
+`e5ea3bd007814e487df2bb0106e1ae0f6a318654865298c0d0951d25b1cdae2d`.
+Logs locaux : `/tmp/w9-step5-setup.log`, `/tmp/w9-step5-schema.log`,
+`/tmp/w9-step5-ledger.log`, `/tmp/w9-step5-integration.log`,
+`/tmp/w9-step5-rollback.ts`, `/tmp/w9-step5-rollback.log`,
+`/tmp/w9-step5-ledger-final.log`.
+
+### Verdict après l'étape 5
+
+**CERTIFIÉ** : première installation du bloc DO corrigé de 0065 sur base vierge,
+journal Drizzle conforme au texte actuel, lot budget PostgreSQL, rollback conservant
+les colonnes et les mesures, restauration des CHECK puis rejets SQL effectifs.
+Les deux réserves correspondantes de l'étape 4 sont levées sur cette seconde base.
+La différence de hash historique signalée sur la première base n'est pas corrigée
+ni masquée : elle ne concerne pas le journal neuf et conforme de cette seconde base.
+
+**NON CERTIFIÉ** : N1, production, déploiement, fournisseurs, parcours UI et revue
+indépendante finale. Les autres limites hors périmètre de la certification W9
+restent applicables. Aucun accès à une autre base que la création de maintenance
+explicitement demandée et `icos_test_w9_fresh`, aucun autre worktree modifié,
+aucun push, aucune fusion, aucun arrêt de conteneur. Rapport puis arrêt.
