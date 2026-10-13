@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isMetaRoute } from "@/core/workers/meta-route";
+
 /**
  * Per-mission model/provider restriction.
  *
@@ -146,6 +148,20 @@ function isAllowlist(value: unknown): value is MissionModelAllowlist {
   return mode === "allowlist" && Array.isArray((value as { modelIds?: unknown }).modelIds);
 }
 
+/**
+ * Décision 0078 §3 : un combo OmniRoute `auto/*` n'est pas UN modèle — la passerelle choisit
+ * le modèle servi, et il peut être payant (`auto/best-free` a servi `claude-opus-5`). Une liste
+ * d'autorisation qui le nommerait admettrait un modèle qu'elle ne liste pas : il est donc
+ * INEXPRIMABLE ici, refusé par une erreur nommée, jamais écarté en silence.
+ */
+function assertNotMetaRoute(id: string, where: string): void {
+  if (isMetaRoute(id.trim())) {
+    throw new Error(
+      `AUTO_COMBO_NOT_ADMISSIBLE:${where}: \`${id}\` est une méta-route OmniRoute (modèle servi choisi par la passerelle), refusée`,
+    );
+  }
+}
+
 function frozenIds(ids: readonly string[], field: string): string[] {
   if (!Array.isArray(ids)) {
     throw new Error(`MODEL_ALLOWLIST_INVALID:${field} must be an array`);
@@ -154,6 +170,10 @@ function frozenIds(ids: readonly string[], field: string): string[] {
   return ids.map((id, index) => {
     if (typeof id !== "string" || id.trim().length === 0) {
       throw new Error(`MODEL_ALLOWLIST_INVALID:${field}[${index}] must be a non-blank string`);
+    }
+
+    if (field === "modelIds") {
+      assertNotMetaRoute(id, `${field}[${index}]`);
     }
 
     return id;
@@ -167,7 +187,18 @@ function frozenIds(ids: readonly string[], field: string): string[] {
  */
 export const requestedComputePolicySchema = z
   .object({
-    allowedModels: z.array(z.string().trim().min(1)).optional(),
+    allowedModels: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .refine((id) => !isMetaRoute(id), {
+            message:
+              "AUTO_COMBO_NOT_ADMISSIBLE: méta-route OmniRoute (modèle servi choisi par la passerelle), refusée",
+          }),
+      )
+      .optional(),
     allowedProviders: z.array(z.string().trim().min(1)).optional(),
   })
   .strict();
@@ -205,6 +236,13 @@ export function narrowModelAllowlist(
   if (policy.allowedModels === undefined && policy.allowedProviders === undefined) {
     return { allowlist: system, refused: [] };
   }
+
+  /*
+   * Une méta-route demandée par un goal est refusée AVANT toute réduction, quel que soit le
+   * système : sinon elle serait seulement « non autorisée » sous un système borné, et
+   * accordée telle quelle sous un système non restreint.
+   */
+  policy.allowedModels?.forEach((id, index) => assertNotMetaRoute(id, `allowedModels[${index}]`));
 
   const refused: string[] = [];
 

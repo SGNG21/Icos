@@ -6,6 +6,7 @@ import {
   modelAllowlist,
   type MissionModelAllowlist,
 } from "@/core/autonomy/model-allowlist";
+import { isMetaRoute } from "@/core/workers/meta-route";
 
 /**
  * Les variables optionnelles vides (`FOO=`) sont traitées comme absentes :
@@ -28,6 +29,38 @@ const optionalNonNegativeInteger = z.preprocess(
   emptyAsUndefined,
   z.coerce.number().int().nonnegative().optional(),
 );
+
+/*
+ * UNE MÉTA-ROUTE OMNIROUTE N'EST PAS UN MODÈLE (décision 0078 §3).
+ *
+ * Le modèle servi par un combo `auto/*` est choisi par la passerelle, pas par ICOS, et peut
+ * être payant (mesuré : `auto/best-free` a servi `claude-opus-5`). Là où un opérateur NOMME un
+ * modèle, un combo est donc refusé au démarrage, avec le nom de la variable — jamais ignoré.
+ * La règle est `isMetaRoute` (préfixe exact `auto/`), appliquée à l'id débarrassé de ses
+ * espaces, comme `splitIds` le transmet ensuite.
+ */
+function refuseMetaRoutes(variable: string, ids: (value: string) => readonly string[]) {
+  return (value: string, ctx: z.RefinementCtx<string>) => {
+    for (const id of ids(value).map((raw) => raw.trim())) {
+      if (isMetaRoute(id)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `AUTO_COMBO_NOT_ADMISSIBLE:${variable} : \`${id}\` est une méta-route OmniRoute (modèle servi choisi par la passerelle), refusée`,
+        });
+      }
+    }
+  };
+}
+
+const oneModel = (value: string) => [value];
+const modelList = (value: string) => value.split(",");
+
+/* Un modèle NOMMÉ par l'opérateur : vide = absent, méta-route = refus au démarrage. */
+const optionalNamedModel = (variable: string) =>
+  z.preprocess(
+    emptyAsUndefined,
+    z.string().min(1).superRefine(refuseMetaRoutes(variable, oneModel)).optional(),
+  );
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -263,6 +296,7 @@ const envSchema = z.object({
   ICOS_AUTONOMY_ALLOWED_MODELS: z
     .string()
     .min(1, "ICOS_AUTONOMY_ALLOWED_MODELS vide : ambigu, l'omettre pour « non restreint »")
+    .superRefine(refuseMetaRoutes("ICOS_AUTONOMY_ALLOWED_MODELS", modelList))
     .optional(),
   ICOS_AUTONOMY_ALLOWED_PROVIDERS: z
     .string()
@@ -308,9 +342,9 @@ const envSchema = z.object({
   // OmniRoute configuration
   OMNIROUTE_BASE_URL: optionalUrl,
   OMNIROUTE_API_KEY: optionalSecret,
-  ICOS_PLANNER_MODEL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  ICOS_PLANNER_MODEL: optionalNamedModel("ICOS_PLANNER_MODEL"),
   ICOS_PLANNER_TIMEOUT_MS: optionalPositiveInteger,
-  ICOS_REVIEWER_MODEL: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  ICOS_REVIEWER_MODEL: optionalNamedModel("ICOS_REVIEWER_MODEL"),
   ICOS_REVIEWER_TIMEOUT_MS: optionalPositiveInteger,
 });
 

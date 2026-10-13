@@ -283,3 +283,38 @@ describe("requestedComputePolicySchema", () => {
     expect(requestedComputePolicySchema.safeParse({ allowedModels: "cheap" }).success).toBe(false);
   });
 });
+
+describe("méta-routes OmniRoute inexprimables (décision 0078 §3)", () => {
+  it("modelAllowlist refuse un combo `auto/*`, erreur nommée", () => {
+    expect(() => modelAllowlist(["cheap", "auto/x"])).toThrow(
+      /AUTO_COMBO_NOT_ADMISSIBLE:modelIds\[1\]/,
+    );
+  });
+
+  it("modelAllowlist accepte `auto` sans barre et `autonomous/x`", () => {
+    expect(modelAllowlist(["auto", "autonomous/x"]).modelIds).toEqual(["auto", "autonomous/x"]);
+  });
+
+  it("un fournisseur n'est pas un modèle : providerIds n'est pas concerné", () => {
+    expect(modelAllowlist(["cheap"], ["auto/x"]).providerIds).toEqual(["auto/x"]);
+  });
+
+  it.each<[string, MissionModelAllowlist]>([
+    ["système non restreint", MODEL_ALLOWLIST_UNRESTRICTED],
+    ["système borné", modelAllowlist(["cheap"])],
+  ])("un goal qui demande `auto/best-free` est refusé (%s)", (_label, system) => {
+    expect(() =>
+      narrowModelAllowlist(system, { allowedModels: ["cheap", "auto/best-free"] }),
+    ).toThrow(/AUTO_COMBO_NOT_ADMISSIBLE:allowedModels\[1\]/);
+  });
+
+  it("le schéma de politique de goal refuse une méta-route à l'entrée", () => {
+    const parsed = requestedComputePolicySchema.safeParse({ allowedModels: ["auto/best-free"] });
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toMatch(/^AUTO_COMBO_NOT_ADMISSIBLE/);
+    expect(
+      requestedComputePolicySchema.safeParse({ allowedModels: ["autonomous/x", "auto"] }).success,
+    ).toBe(true);
+  });
+});

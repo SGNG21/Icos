@@ -11,6 +11,7 @@ import {
   MODEL_FAMILIES,
   type ModelFamily,
 } from "@/core/workers/compute-routing";
+import { isMetaRoute } from "@/core/workers/meta-route";
 
 /**
  * THE COMPUTE FLEET, from provider truth (decision 0054).
@@ -192,12 +193,13 @@ export async function omniRouteChatCompletion(
 
 /**
  * Classifies model ids into the six families. Unrecognised ids are ignored (reported in the
- * snapshot's count), and the `auto/*` meta-routes are skipped: a candidate must be ONE model,
+ * snapshot's count), and the `auto/*` meta-routes are skipped (`isMetaRoute`, the one shared
+ * definition, decision 0078 §3): a candidate must be ONE model,
  * or history and independence would be attributed to whatever the meta-route picked that day.
  */
 export function classifyModels(modelIds: readonly string[]): DiscoveredModel[] {
   return modelIds
-    .filter((id) => !id.startsWith("auto/"))
+    .filter((id) => !isMetaRoute(id))
     .flatMap((modelId) => {
       const family = inferModelFamily(modelId);
       if (!family) return [];

@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AUTONOMY_BOUNDS_CEILING } from "@/core/autonomy/bounds";
-import {
-  MODEL_ALLOWLIST_UNRESTRICTED,
-  isModelAllowed,
-} from "@/core/autonomy/model-allowlist";
+import { MODEL_ALLOWLIST_UNRESTRICTED, isModelAllowed } from "@/core/autonomy/model-allowlist";
 
 import { loadEnv, resolveAutonomyBounds, resolveSystemModelAllowlist } from "./env";
 
@@ -108,7 +105,9 @@ describe("loadEnv", () => {
 
 describe("ICOS_GOAL_MAX_TOTAL_TOKENS", () => {
   it("porte le seul plafond réellement applicable aujourd'hui", () => {
-    expect(loadEnv({ ICOS_GOAL_MAX_TOTAL_TOKENS: "50000" }).ICOS_GOAL_MAX_TOTAL_TOKENS).toBe(50_000);
+    expect(loadEnv({ ICOS_GOAL_MAX_TOTAL_TOKENS: "50000" }).ICOS_GOAL_MAX_TOTAL_TOKENS).toBe(
+      50_000,
+    );
   });
 
   it("absente, reste indéfinie — et NON zéro, qui serait un plafond de zéro token", () => {
@@ -171,9 +170,9 @@ describe("plafonds d'autonomie configurables (P0-E)", () => {
 
   it("REFUSE DE DÉMARRER si un déploiement tente d'ÉLARGIR au-dessus du plafond", () => {
     /* Un élargissement silencieusement ramené au plafond est une politique mensongère. */
-    expect(() =>
-      resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_CYCLES: "100000" })),
-    ).toThrow(/ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING/);
+    expect(() => resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_CYCLES: "100000" }))).toThrow(
+      /ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING/,
+    );
     expect(() =>
       resolveAutonomyBounds(loadEnv({ ICOS_AUTONOMY_MAX_RUNTIME_MS: "86400000" })),
     ).toThrow(/ICOS_AUTONOMY_BOUNDS_ABOVE_CEILING/);
@@ -233,5 +232,59 @@ describe("pool de compute autorisé par le SYSTÈME (P0-F)", () => {
     expect(() =>
       resolveSystemModelAllowlist(loadEnv({ ICOS_AUTONOMY_ALLOWED_MODELS: "cheap,,other" })),
     ).toThrow(/MODEL_ALLOWLIST_INVALID/);
+  });
+});
+
+describe("méta-routes OmniRoute refusées au démarrage (décision 0078 §3)", () => {
+  /*
+   * Règle : un id est une méta-route ssi il commence par `auto/` (préfixe exact, après
+   * suppression des espaces). Mesuré : `auto/best-free` a servi `claude-opus-5`.
+   */
+  it.each([
+    ["ICOS_AUTONOMY_ALLOWED_MODELS", "cc/claude-sonnet-5,auto/best-free"],
+    ["ICOS_AUTONOMY_ALLOWED_MODELS", "cc/claude-sonnet-5, auto/best-free "],
+    ["ICOS_REVIEWER_MODEL", "auto/best-free"],
+    ["ICOS_PLANNER_MODEL", "auto/coding:free"],
+  ])("%s=%s refuse de démarrer, erreur nommée", (variable, value) => {
+    expect(() => loadEnv({ [variable]: value })).toThrow(
+      new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable} : \`auto/`),
+    );
+  });
+
+  it("le message nomme la méta-route et la raison", () => {
+    expect(() => loadEnv({ ICOS_REVIEWER_MODEL: "auto/best-free" })).toThrow(
+      "ICOS_REVIEWER_MODEL : `auto/best-free` est une méta-route OmniRoute (modèle servi choisi par la passerelle), refusée",
+    );
+  });
+
+  it("un modèle nommé ordinaire reste accepté", () => {
+    const env = loadEnv({
+      ICOS_AUTONOMY_ALLOWED_MODELS: "cc/claude-sonnet-5,nvidia/nemotron-ultra",
+      ICOS_REVIEWER_MODEL: "nvidia/nemotron-ultra",
+      ICOS_PLANNER_MODEL: "cc/claude-sonnet-5",
+    });
+
+    expect(env.ICOS_REVIEWER_MODEL).toBe("nvidia/nemotron-ultra");
+    expect(env.ICOS_PLANNER_MODEL).toBe("cc/claude-sonnet-5");
+    expect(isModelAllowed(resolveSystemModelAllowlist(env), "nvidia/nemotron-ultra")).toBe(true);
+  });
+
+  it("`auto` sans barre, `autonomous/x` et `x/auto/y` ne sont PAS des méta-routes", () => {
+    for (const id of ["auto", "autonomous/x", "x/auto/y"]) {
+      expect(() =>
+        loadEnv({
+          ICOS_AUTONOMY_ALLOWED_MODELS: id,
+          ICOS_REVIEWER_MODEL: id,
+          ICOS_PLANNER_MODEL: id,
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it("une variable vide reste absente, pas refusée", () => {
+    expect(loadEnv({ ICOS_REVIEWER_MODEL: "", ICOS_PLANNER_MODEL: "" })).toMatchObject({
+      ICOS_REVIEWER_MODEL: undefined,
+      ICOS_PLANNER_MODEL: undefined,
+    });
   });
 });
