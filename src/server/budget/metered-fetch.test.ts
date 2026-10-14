@@ -231,7 +231,8 @@ describe("meteredFetch — ne mesure que les complétions", () => {
   const MODELS_BODY = { object: "list", data: [{ id: "auto/best-chat" }] };
 
   it("N'ENREGISTRE RIEN pour une requête qui n'est pas une complétion", async () => {
-    // `OmniRouteCeoClient.resolveModel` fait GET /v1/models par le MÊME fetch injecté.
+    // `OmniRouteCeoClient.resolveModel` faisait GET /v1/models par le MÊME fetch injecté (retiré
+    // le 2026-10-14 : le modèle n'est plus choisi par la liste de la passerelle) ; la règle reste.
     // Cette réponse est un 2xx JSON sans `usage` : l'enregistrer UNMETERED condamnait
     // l'imputation entière dès la découverte des modèles, sans décroissance ni remise à zéro.
     const ledger = new FakeLedger();
@@ -830,4 +831,212 @@ describe("SPEND_USAGE_SPLIT — persisted usage on both accounting paths", () =>
       });
     },
   );
+});
+
+describe("SPEND_MODEL_SUBSTITUTED — the served model is checked against the requested one", () => {
+  const REQUESTED = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+  const usage = { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 };
+  const answer = (model: string, header?: string) =>
+    new Response(JSON.stringify({ model, choices: [], usage }), {
+      headers: {
+        "content-type": "application/json",
+        ...(header ? { "x-omniroute-model": header } : {}),
+      },
+    });
+  const events = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as { event: string })
+      .filter((e) => e.event === "SPEND_MODEL_SUBSTITUTED");
+
+  const reservedPort = (ledger: SpendLedgerPort, attributedTo: Attribution | null) => {
+    const reservation = { id: "sub", ownerToken: "o", reservedTokens: 100 };
+    return {
+      reserve: vi.fn(async () => ({ kind: "RESERVED" as const, reservation })),
+      renew: vi.fn(async () => true),
+      release: vi.fn(async () => true),
+      settle: vi.fn(async (_r: SpendReservation, entry: Omit<SpendEntry, "attribution">) => {
+        await ledger.record({ ...entry, attribution: attributedTo });
+        return {
+          ...settleReservation(reservation.reservedTokens, entry.usage),
+          closed: false,
+          unauthenticated: false,
+          attributedTo,
+        };
+      }),
+    } satisfies SpendReservationPort;
+  };
+
+  for (const reserved of [false, true]) {
+    const path = reserved ? "reserved (goal)" : "unreserved";
+
+    it(`${path}: a concrete request served by another model is reported, priced on the served one`, async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const ledger = new FakeLedger();
+        const goal = { goalId: "g-sub" };
+        const response = await meteredFetch(async () => answer("claude-opus-5"), {
+          ledger,
+          attribution: goal,
+          ...(reserved ? { reservations: reservedPort(ledger, goal) } : {}),
+        })(URL_UNDER_TEST, chatInit(REQUESTED));
+
+        expect(events(warn)).toEqual([
+          {
+            event: "SPEND_MODEL_SUBSTITUTED",
+            reason: "DIFFERENT_MODEL",
+            requested: REQUESTED,
+            served: "claude-opus-5",
+            servedHeader: null,
+            attribution: "goal=g-sub",
+          },
+        ]);
+        /* Reported, not refused: the caller gets the answer, the ledger the served model. */
+        expect(response.ok).toBe(true);
+        expect(ledger.recorded.map((e) => e.modelId)).toEqual(["claude-opus-5"]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it(`${path}: the gateway prefix alone is not a substitution`, async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const ledger = new FakeLedger();
+        await meteredFetch(
+          async () =>
+            answer("nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-super-120b-a12b"),
+          { ledger, ...(reserved ? { reservations: reservedPort(ledger, null) } : {}) },
+        )(URL_UNDER_TEST, chatInit(REQUESTED));
+        expect(events(warn)).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  it("the header catches a body echoed back to the requested name (echoRequestedModelName)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await meteredFetch(async () => answer(REQUESTED, "claude-opus-5"), {
+        ledger: new FakeLedger(),
+      })(URL_UNDER_TEST, chatInit(REQUESTED));
+      expect(events(warn)).toMatchObject([
+        { reason: "DIFFERENT_MODEL", served: REQUESTED, servedHeader: "claude-opus-5" },
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a requested meta-route is reported whatever it served", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await meteredFetch(async () => answer("claude-opus-5"), { ledger: new FakeLedger() })(
+        URL_UNDER_TEST,
+        chatInit("auto/best-free"),
+      );
+      expect(events(warn)).toMatchObject([{ reason: "META_ROUTE_REQUESTED" }]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("nothing is reported when the spend could not be persisted", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const failing = new FakeLedger({ kind: "ALLOW" }, () => {
+        throw new Error("db down");
+      });
+      await expect(
+        meteredFetch(async () => answer("claude-opus-5"), { ledger: failing })(
+          URL_UNDER_TEST,
+          chatInit(REQUESTED),
+        ),
+      ).rejects.toBeInstanceOf(BudgetLedgerError);
+      expect(events(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("the ledger records the SERVED identity: X-OmniRoute-Model first, then the body", () => {
+  const REQUESTED = "cc/claude-haiku-4-5";
+  const raw = { input_tokens: 10, output_tokens: 2 };
+  const json = (bodyModel: string, header?: string) =>
+    new Response(JSON.stringify({ model: bodyModel, choices: [], usage: raw }), {
+      headers: {
+        "content-type": "application/json",
+        ...(header ? { "x-omniroute-model": header } : {}),
+      },
+    });
+  /* Anthropic stream: the only stream whose usage is read (the egress path of workers). */
+  const sse = (bodyModel: string, header?: string) =>
+    new Response(
+      `data: ${JSON.stringify({ type: "message_start", message: { model: bodyModel, usage: raw } })}\n\ndata: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 2 } })}\n\n`,
+      {
+        headers: {
+          "content-type": "text/event-stream",
+          ...(header ? { "x-omniroute-model": header } : {}),
+        },
+      },
+    );
+  const reservedPort = (ledger: SpendLedgerPort) => {
+    const reservation = { id: "id", ownerToken: "o", reservedTokens: 100 };
+    return {
+      reserve: vi.fn(async () => ({ kind: "RESERVED" as const, reservation })),
+      renew: vi.fn(async () => true),
+      release: vi.fn(async () => true),
+      settle: vi.fn(async (_r: SpendReservation, entry: Omit<SpendEntry, "attribution">) => {
+        await ledger.record({ ...entry, attribution: null });
+        return {
+          ...settleReservation(reservation.reservedTokens, entry.usage),
+          closed: false,
+          unauthenticated: true,
+          attributedTo: null,
+        };
+      }),
+    } satisfies SpendReservationPort;
+  };
+
+  for (const reserved of [false, true])
+    for (const [format, url, make] of [
+      ["JSON", URL_UNDER_TEST, json],
+      ["SSE", "https://gateway.invalid/v1/messages", sse],
+    ] as const) {
+      const path = `${reserved ? "reserved" : "unreserved"} ${format}`;
+
+      it(`${path}: echoRequestedModelName (body = requested, header = served) records the header`, async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          const ledger = new FakeLedger();
+          await meteredFetch(async () => make(REQUESTED, "claude-opus-5"), {
+            ledger,
+            ...(reserved ? { reservations: reservedPort(ledger) } : {}),
+          })(url, chatInit(REQUESTED));
+          expect(ledger.recorded.map((e) => e.modelId)).toEqual(["claude-opus-5"]);
+          expect(
+            warn.mock.calls
+              .map((c) => JSON.parse(String(c[0])) as { event: string })
+              .filter((e) => e.event === "SPEND_MODEL_SUBSTITUTED"),
+          ).toMatchObject([{ served: REQUESTED, servedHeader: "claude-opus-5" }]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it(`${path}: without the header, the body's model is recorded`, async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          const ledger = new FakeLedger();
+          await meteredFetch(async () => make("claude-haiku-4-5"), {
+            ledger,
+            ...(reserved ? { reservations: reservedPort(ledger) } : {}),
+          })(url, chatInit(REQUESTED));
+          expect(ledger.recorded.map((e) => e.modelId)).toEqual(["claude-haiku-4-5"]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    }
 });

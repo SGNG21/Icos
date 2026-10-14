@@ -318,17 +318,21 @@ describe("worker registration", () => {
 });
 
 describe("OmniRoute meta-routes are never registered nor routed (decision 0078 §3)", () => {
-  it.each(["auto/best-free", "auto", "no-think/auto/best-free", " auto/coding:free "])(
-    "registration refuses metadata.model=%j, whatever the allowlist mode",
-    async (model) => {
-      const { service, store } = harness();
+  it.each([
+    "auto/best-free",
+    "auto",
+    "no-think/auto/best-free",
+    " auto/coding:free ",
+    "openrouter/ auto",
+    "cu /auto",
+  ])("registration refuses metadata.model=%j, whatever the allowlist mode", async (model) => {
+    const { service, store } = harness();
 
-      await expect(
-        service.register({ ...declaration(WORKER_A, ["code-generation"]), metadata: { model } }),
-      ).rejects.toThrow(/^AUTO_COMBO_NOT_ADMISSIBLE:metadata\.model/);
-      expect(await store.get(WORKER_A)).toBeNull();
-    },
-  );
+    await expect(
+      service.register({ ...declaration(WORKER_A, ["code-generation"]), metadata: { model } }),
+    ).rejects.toThrow(/^AUTO_COMBO_NOT_ADMISSIBLE:metadata\.model/);
+    expect(await store.get(WORKER_A)).toBeNull();
+  });
 
   it("a real model still registers", async () => {
     const { service } = harness();

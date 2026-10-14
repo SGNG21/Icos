@@ -9,6 +9,8 @@
  * workloads: they already have their own models (`ICOS_PLANNER_MODEL`, `ICOS_WORKER_MODEL`,
  * `ICOS_REVIEWER_MODEL`) chosen by the planner, the router and the reviewer — not per turn.
  */
+import { explicitConversationModels, namedConversationModel } from "./conversation-models";
+
 export const WORKLOAD_CLASSES = [
   /** Short exchange: an answer, a confirmation, a quick question. Latency matters most. */
   "CONVERSATION_FAST",
@@ -55,17 +57,24 @@ export function modelFor(routes: ModelRoutes, workload: WorkloadClass): string {
   return routes[workload] ?? routes.default;
 }
 
-/** `ICOS_COGNITIVE_MODEL` is the default; `_FAST` / `_DEEP` / `_VOICE` override per class. */
+/**
+ * `ICOS_COGNITIVE_MODEL` is the default; `_FAST` / `_DEEP` / `_VOICE` override per class.
+ * Without it, `ICOS_CEO_MODEL`, then the FIRST entry of `ICOS_CONVERSATION_MODELS` (decision
+ * 0078 §3 migration: one variable can configure every conversation path). Every one of these
+ * is a NAMED model: a meta-route throws `ConversationModelConfigError` instead of being sent.
+ */
 export function modelRoutesFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): ModelRoutes | null {
-  const def = env.ICOS_COGNITIVE_MODEL ?? env.ICOS_CEO_MODEL;
-  if (!def) return null;
-  const pick = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
-  return {
-    default: def,
-    CONVERSATION_FAST: pick(env.ICOS_COGNITIVE_MODEL_FAST),
-    CONVERSATION_DEEP: pick(env.ICOS_COGNITIVE_MODEL_DEEP),
-    VOICE: pick(env.ICOS_COGNITIVE_MODEL_VOICE),
+  /* All read BEFORE choosing: a meta-route is refused even where a higher variable wins. */
+  const cognitive = namedConversationModel(env, "ICOS_COGNITIVE_MODEL");
+  const ceo = namedConversationModel(env, "ICOS_CEO_MODEL");
+  const def = cognitive ?? ceo ?? explicitConversationModels(env)?.[0];
+  const routes = {
+    CONVERSATION_FAST: namedConversationModel(env, "ICOS_COGNITIVE_MODEL_FAST"),
+    CONVERSATION_DEEP: namedConversationModel(env, "ICOS_COGNITIVE_MODEL_DEEP"),
+    VOICE: namedConversationModel(env, "ICOS_COGNITIVE_MODEL_VOICE"),
   };
+  if (!def) return null;
+  return { default: def, ...routes };
 }

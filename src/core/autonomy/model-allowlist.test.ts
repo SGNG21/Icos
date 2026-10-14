@@ -292,7 +292,14 @@ describe("méta-routes OmniRoute inexprimables (décision 0078 §3)", () => {
   });
 
   it("modelAllowlist refuse aussi `auto` nu et les alias pelés par la passerelle", () => {
-    for (const id of ["auto", "no-think/auto/best-free", "claude/combo/team"]) {
+    for (const id of [
+      "auto",
+      "no-think/auto/best-free",
+      "claude/combo/team",
+      "openrouter/ auto",
+      "cu /auto",
+      "auto /best-free",
+    ]) {
       expect(() => modelAllowlist([id])).toThrow(/AUTO_COMBO_NOT_ADMISSIBLE:modelIds\[0\]/);
     }
   });

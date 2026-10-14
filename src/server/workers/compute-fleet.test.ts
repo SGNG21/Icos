@@ -171,4 +171,27 @@ describe("classifyModels skips every meta-route form the gateway resolves (decis
 
     expect(got).toEqual(["cc/claude-sonnet-5", "no-think/cc/claude-sonnet-5"]);
   });
+
+  /*
+   * EXPLICIT BEHAVIOUR CHANGE, NIL IN OUTPUT TODAY: provider-side automatic models are now
+   * meta-routes, so `classifyModels` filters them first. None of the registry's router ids
+   * carries a family token, so the family table already dropped them: the fleet is unchanged.
+   * The filter makes that a rule rather than a coincidence of naming (the predicate itself is
+   * mutation-tested in meta-route.test.ts); this pins the unchanged output.
+   */
+  it("provider-side automatic models are never candidates; concrete ids still are", () => {
+    const got = classifyModels([
+      "openrouter/auto",
+      "openrouter/openrouter/auto",
+      "cursor/auto",
+      "kg/kilo-auto/frontier",
+      "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    ]).map((d) => d.modelId);
+
+    expect(got).toEqual([
+      "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    ]);
+  });
 });

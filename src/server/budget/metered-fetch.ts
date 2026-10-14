@@ -6,6 +6,7 @@ import {
   type UsageOutcome,
   attributionKey,
 } from "@/core/budget/contracts";
+import { compareServedModel } from "@/core/budget/model-substitution";
 import {
   boundCompletionBody,
   DEFAULT_MAX_OUTPUT_TOKENS,
@@ -213,6 +214,85 @@ function logUsageSplit(
   );
 }
 
+/** OmniRoute's resolved backend model, sent beside the body (chatCore.ts:4594-4600). */
+const SERVED_MODEL_HEADER = "x-omniroute-model";
+
+function servedModelHeader(response: Response): string | undefined {
+  const headers: unknown = (response as { headers?: unknown }).headers;
+  if (typeof (headers as Headers | undefined)?.get !== "function") return undefined;
+  const value = (headers as Headers).get(SERVED_MODEL_HEADER)?.trim();
+  return value ? value : undefined;
+}
+
+/**
+ * THE MODEL THE LEDGER RECORDS — the most reliable SERVED identity available, in this order:
+ *
+ *   1. `X-OmniRoute-Model`: the gateway's resolved backend model, set from the same `model`
+ *      variable on the non-streaming path (chatCore.ts:4584-4586 → nonStreamingResponseHeaders.ts:34-36)
+ *      and the streaming path (chatCore.ts:4697-4700 → streamingResponseHeaders.ts:26-28 →
+ *      responseHeaders.ts:186), written by omnirouteResponseMeta.ts:159-161. The opt-in
+ *      `echoRequestedModelName` rewrites the BODY (chatCore.ts:4601-4602) and the SSE chunks
+ *      (streamingPipeline.ts:111-114) to the REQUESTED name, never this header;
+ *   2. the body's `model` (equal to the header when echo is off, chatCore.ts:4594-4600);
+ *   3. the requested model; 4. `UNKNOWN`.
+ * Without (1), a gateway with echo on would make the ledger price the model ICOS ASKED for
+ * while another one served. Header presence on streams is read from the gateway source, not
+ * measured live; when it is absent (another gateway, or an older build), (2) is all there is.
+ */
+function ledgerModelId(
+  header: string | undefined,
+  observed: Observation,
+  init: RequestInit | undefined,
+): string {
+  return header ?? observed.model ?? requestedModel(init) ?? "UNKNOWN";
+}
+
+/**
+ * SERVED ≠ REQUESTED (decision 0078 §3, runtime half). A gateway combo, pattern mapping or
+ * routing override bound to a concrete-looking id is invisible to `isMetaRoute`; the answer is
+ * the only place it shows. Both the body `model` and `X-OmniRoute-Model` are compared, because
+ * the gateway's opt-in `echoRequestedModelName` rewrites the BODY back to the requested name
+ * (open-sse/services/responseModelEcho.ts:1-12) but not the header.
+ *
+ * A NAMED REPORT, NOT A REFUSAL, on every seam (goal, conversation, operational). Why not deny:
+ *   - the spend is already made when the answer arrives, and the ledger records it under the
+ *     SERVED identity (`ledgerModelId`: the `X-OmniRoute-Model` header first, then the body),
+ *     so a paid substitute is priced as itself, or UNPRICED and then closes a money-capped
+ *     window by itself (`decide`). That holds only as far as the gateway tells the truth in
+ *     that header: without it and with echo on, the body names the requested model;
+ *   - denying LATER calls of the same goal needs a durable substitution count in the spend
+ *     window, i.e. a new ledger column, a migration and a new `DenyReason` — a contract change
+ *     that deserves its own ADR, not a side effect of this lot;
+ *   - the comparison has known false positives (a provider model alias canonicalised by the
+ *     gateway), and a refusal on a false positive would stop autonomy for nothing.
+ * Emitted only after persistence succeeded, like the usage split.
+ */
+function reportSubstitution(
+  init: RequestInit | undefined,
+  observed: Observation,
+  header: string | undefined,
+  attribution: Attribution | null,
+): void {
+  const requested = requestedModel(init);
+  if (requested === undefined) return;
+  for (const served of [observed.model, header]) {
+    if (served === undefined) continue;
+    const verdict = compareServedModel(requested, served);
+    if (verdict.kind === "SAME") continue;
+    console.warn(
+      JSON.stringify({
+        event: "SPEND_MODEL_SUBSTITUTED",
+        reason: verdict.kind,
+        requested,
+        served: observed.model ?? null,
+        servedHeader: header ?? null,
+        attribution: attribution ? attributionKey(attribution) : null,
+      }),
+    );
+    return;
+  }
+}
+
 async function observe(response: Response, input: RequestInfo | URL): Promise<Observation> {
   /*
    * LA MESURE NE DOIT JAMAIS CASSER L'APPEL. `meteredFetch` est typé `typeof fetch`, donc
@@ -336,7 +416,8 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     if (!isCompletionRequest(input)) return response;
 
     const observed = await observe(response, input);
-    const modelId = observed.model ?? requestedModel(init) ?? "UNKNOWN";
+    const servedHeader = servedModelHeader(response);
+    const modelId = ledgerModelId(servedHeader, observed, init);
     if (failedBeforeAnyToken(observed)) {
       logStreamDiagnostic("SPEND_PROVIDER_ERROR_STREAM", observed, modelId);
       return response;
@@ -355,6 +436,7 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
       throw new BudgetLedgerError(cause);
     }
     logUsageSplit(observed.usage, modelId, attribution);
+    reportSubstitution(init, observed, servedHeader, attribution);
 
     return response;
   };
@@ -425,22 +507,16 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
     }
 
     const observed = await observe(response, input);
+    const servedHeader = servedModelHeader(response);
+    const modelId = ledgerModelId(servedHeader, observed, init);
     if (failedBeforeAnyToken(observed)) {
       /* Like a non-2xx: the reservation is given back, nothing is settled. */
-      logStreamDiagnostic(
-        "SPEND_PROVIDER_ERROR_STREAM",
-        observed,
-        observed.model ?? requestedModel(init) ?? "UNKNOWN",
-      );
+      logStreamDiagnostic("SPEND_PROVIDER_ERROR_STREAM", observed, modelId);
       await reservations.release(reservation).catch(() => undefined);
       return response;
     }
     if (observed.stream && observed.usage.kind === UNMETERED) {
-      logStreamDiagnostic(
-        "SPEND_STREAM_UNMETERED",
-        observed,
-        observed.model ?? requestedModel(init) ?? "UNKNOWN",
-      );
+      logStreamDiagnostic("SPEND_STREAM_UNMETERED", observed, modelId);
     }
     let settledAttribution: Attribution | null;
     try {
@@ -449,7 +525,7 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
        * la ligne de réservation, sous le même verrou que `reserve`.
        */
       const settlement = await reservations.settle(reservation, {
-        modelId: observed.model ?? requestedModel(init) ?? "UNKNOWN",
+        modelId,
         usage: observed.usage,
         at: now().toISOString(),
       });
@@ -458,11 +534,8 @@ export function meteredFetch(inner: typeof fetch, deps: MeteredFetchDeps): typeo
       throw new BudgetLedgerError(cause);
     }
 
-    logUsageSplit(
-      observed.usage,
-      observed.model ?? requestedModel(init) ?? "UNKNOWN",
-      settledAttribution,
-    );
+    logUsageSplit(observed.usage, modelId, settledAttribution);
+    reportSubstitution(init, observed, servedHeader, settledAttribution);
 
     return response;
   };
