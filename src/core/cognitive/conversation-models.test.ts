@@ -54,6 +54,9 @@ describe("conversationModelPlan — an explicit, ordered list of concrete models
     [{ ICOS_CEO_MODEL: "auto/nvidia-chat" }, "ICOS_CEO_MODEL"],
     [{ ICOS_REVIEWER_MODEL: "openrouter/auto" }, "ICOS_REVIEWER_MODEL"],
     [{ ICOS_CONVERSATION_MODELS: `${SUPER},auto/best-free` }, "ICOS_CONVERSATION_MODELS"],
+    [{ ICOS_CONVERSATION_MODELS: `${SUPER},openrouter/ auto` }, "ICOS_CONVERSATION_MODELS"],
+    [{ ICOS_CONVERSATION_MODELS: "cu /auto" }, "ICOS_CONVERSATION_MODELS"],
+    [{ ICOS_CEO_MODEL: "openrouter / auto" }, "ICOS_CEO_MODEL"],
     /* A meta-route is refused even where a higher-precedence variable would win. */
     [{ ICOS_CONVERSATION_MODELS: SUPER, ICOS_CEO_MODEL: "auto/best-chat" }, "ICOS_CEO_MODEL"],
   ])("refuses a meta-route with the variable's name: %j", (env, variable) => {

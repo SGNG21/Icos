@@ -44,7 +44,6 @@ describe("isMetaRoute — decision 0078 §3", () => {
     "combo/x",
     "AUTO/best-free",
     "Auto",
-    " auto/best-free",
     "no-think/",
     "claude/",
     "",
@@ -110,7 +109,8 @@ describe("isMetaRoute — provider-side automatic models (gateway registry, exac
     "nvidia/nvidia/nemotron-3-super-120b-a12b",
     "cursor/claude-sonnet-5",
     "kilo-auto/frontier",
-    "trae/auto ",
+    "open router/auto",
+    "openrouter/au to",
   ])("%j is not a meta-route (exact match only)", (id) => {
     expect(isMetaRoute(id)).toBe(false);
   });
@@ -120,5 +120,30 @@ describe("isMetaRoute — provider-side automatic models (gateway registry, exac
       expect(route).toMatch(/^[a-z][a-z0-9-]*\/[^\s]+$/);
       expect(route.startsWith(".")).toBe(false);
     }
+  });
+});
+
+describe("isMetaRoute — whitespace is normalised like the gateway (model.ts:401, :416-418)", () => {
+  it.each([
+    "openrouter/ auto",
+    "openrouter /auto",
+    "openrouter / auto",
+    "cu/ auto",
+    " cu/auto ",
+    "trae/auto ",
+    "openrouter/auto [1m]",
+    "openrouter/ auto[1m]",
+    "kg/ kilo-auto / frontier",
+    " auto/best-free",
+    "auto /best-free",
+    "auto/ best-free",
+    " auto ",
+    "no-think/ auto/best-free",
+    "no-think / openrouter/auto",
+    "claude/ combo/team",
+    "claude / openrouter / auto",
+    "openrouter/\tauto",
+  ])("%j is a meta-route once whitespace is normalised", (id) => {
+    expect(isMetaRoute(id)).toBe(true);
   });
 });

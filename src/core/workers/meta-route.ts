@@ -9,9 +9,17 @@
  * `--model` — a meta-route would attribute history, independence and price to whatever the
  * gateway picked that day.
  *
- * THE RULE, exactly (case-sensitive, untrimmed: OmniRoute compares ids that way; callers that
- * trim, such as env lists, trim before asking). Read in the installed gateway
+ * THE RULE, exactly (case-sensitive). Read in the installed gateway
  * (/usr/lib/node_modules/omniroute):
+ *
+ *   0. WHITESPACE IS NORMALISED FIRST, the way the gateway does it and then some. parseModel
+ *      trims the whole id (open-sse/services/model.ts:401) and then trims the provider and the
+ *      model SEPARATELY around the first `/` (:416-418), so `openrouter/ auto`, `cu/ auto` and
+ *      `openrouter /auto` reach `openrouter/auto`. Here the id is trimmed and whitespace on
+ *      EITHER side of EVERY `/` is removed, before the wrappers are peeled and again after the
+ *      `[1m]` marker is dropped. That is a superset of the gateway's normalisation: it can only
+ *      make MORE ids meta-routes, never fewer — the safe side for a refusal. (Ids carrying
+ *      control characters are rejected outright by the gateway, :383.)
  *
  *   1. Leading request-side wrappers are peeled, repeatedly and in any order, because the
  *      gateway removes them BEFORE automatic routing and combo resolution:
@@ -39,7 +47,8 @@
  *      strings.
  *
  * NOT meta-routes by this rule: `autonomous/x`, `automatic-model`, `x/auto/y`, `AUTO/x`,
- * ` auto/x` (untrimmed), `./auto`. A router model a provider adds to its DYNAMIC catalogue
+ * `./auto`, `open router/auto` (whitespace INSIDE a segment is not normalised: the gateway keeps
+ * it, and `open router` is no provider). A router model a provider adds to its DYNAMIC catalogue
  * after 3.8.49, and gateway-configured redirections (model-combo mappings, task-aware
  * routing), are NOT detected: the first is not in the registry this list was read from, the
  * second is gateway state no pure predicate can read — the metered proxy's served-model check
@@ -118,8 +127,13 @@ export const PROVIDER_AUTO_ROUTES: ReadonlySet<string> = new Set(
   ),
 );
 
+/** Trim, and drop whitespace around every `/` (rule 0). */
+function normaliseWhitespace(id: string): string {
+  return id.trim().replace(/\s*\/\s*/g, "/");
+}
+
 export function isMetaRoute(modelId: string): boolean {
-  let id = modelId;
+  let id = normaliseWhitespace(modelId);
 
   for (;;) {
     if (id.startsWith(NO_THINK_WRAPPER)) {
@@ -132,7 +146,9 @@ export function isMetaRoute(modelId: string): boolean {
     }
   }
 
-  if (id.endsWith(EXTENDED_CONTEXT_SUFFIX)) id = id.slice(0, -EXTENDED_CONTEXT_SUFFIX.length);
+  if (id.endsWith(EXTENDED_CONTEXT_SUFFIX)) {
+    id = normaliseWhitespace(id.slice(0, -EXTENDED_CONTEXT_SUFFIX.length));
+  }
 
   return id === AUTO_ROUTE || id.startsWith(META_ROUTE_PREFIX) || PROVIDER_AUTO_ROUTES.has(id);
 }

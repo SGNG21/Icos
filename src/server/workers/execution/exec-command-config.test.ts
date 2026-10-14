@@ -15,6 +15,10 @@ describe("a launch command never hard-codes an OmniRoute meta-route (decision 00
     [["-m", "no-think/auto/best-free"]],
     [["run", "auto/best-free"]],
     [["run", "claude/combo/team"]],
+    /* Whitespace normalised like the gateway (model.ts:401, :416-418). */
+    [["--model", "openrouter/ auto"]],
+    [["--model=cu/ auto"]],
+    [["run", "openrouter /auto"]],
   ])("args %j are refused at parse, named", (args) => {
     expect(() => parseWorkerExecCommands(config(args))).toThrow(
       /WORKER_EXEC_COMMANDS_INVALID: [\s\S]*AUTO_COMBO_NOT_ADMISSIBLE: args\[/,

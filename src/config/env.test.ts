@@ -269,7 +269,7 @@ describe("méta-routes OmniRoute refusées au démarrage (décision 0078 §3)", 
     expect(isModelAllowed(resolveSystemModelAllowlist(env), "nvidia/nemotron-ultra")).toBe(true);
   });
 
-  it.each(["auto", "no-think/auto/best-free", "claude/combo/team"])(
+  it.each(["auto", "no-think/auto/best-free", "claude/combo/team", "openrouter/ auto", "cu /auto"])(
     "%s (routage automatique ou alias pelé par la passerelle) est refusé partout",
     (id) => {
       for (const variable of [
@@ -318,11 +318,16 @@ describe("modèles de conversation refusés au démarrage s'ils sont des méta-r
     expect(() => loadEnv({ [variable]: "openrouter/auto" })).toThrow(
       new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable}`),
     );
+    expect(() => loadEnv({ [variable]: "openrouter/ auto" })).toThrow(
+      new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable}`),
+    );
   });
 
   it.each([
     ["nvidia/nvidia/nemotron-3-super-120b-a12b,auto/best-chat", /méta-route/],
     ["nvidia/nvidia/nemotron-3-super-120b-a12b,openrouter/auto", /méta-route/],
+    ["nvidia/nvidia/nemotron-3-super-120b-a12b,openrouter/ auto", /méta-route/],
+    ["cu /auto", /méta-route/],
     ["a,,b", /entrée vide/],
     ["a,b,a", /en double/],
   ])("ICOS_CONVERSATION_MODELS=%s refuse de démarrer", (value, reason) => {
