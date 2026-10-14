@@ -303,3 +303,44 @@ describe("méta-routes OmniRoute refusées au démarrage (décision 0078 §3)", 
     });
   });
 });
+
+describe("modèles de conversation refusés au démarrage s'ils sont des méta-routes (migration 2026-10-14)", () => {
+  it.each([
+    "ICOS_CEO_MODEL",
+    "ICOS_COGNITIVE_MODEL",
+    "ICOS_COGNITIVE_MODEL_FAST",
+    "ICOS_COGNITIVE_MODEL_DEEP",
+    "ICOS_COGNITIVE_MODEL_VOICE",
+  ])("%s=auto/best-chat refuse de démarrer, erreur nommée", (variable) => {
+    expect(() => loadEnv({ [variable]: "auto/best-chat" })).toThrow(
+      new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable}`),
+    );
+    expect(() => loadEnv({ [variable]: "openrouter/auto" })).toThrow(
+      new RegExp(`AUTO_COMBO_NOT_ADMISSIBLE:${variable}`),
+    );
+  });
+
+  it.each([
+    ["nvidia/nvidia/nemotron-3-super-120b-a12b,auto/best-chat", /méta-route/],
+    ["nvidia/nvidia/nemotron-3-super-120b-a12b,openrouter/auto", /méta-route/],
+    ["a,,b", /entrée vide/],
+    ["a,b,a", /en double/],
+  ])("ICOS_CONVERSATION_MODELS=%s refuse de démarrer", (value, reason) => {
+    expect(() => loadEnv({ ICOS_CONVERSATION_MODELS: value })).toThrow(
+      /CONVERSATION_MODEL_NOT_ADMISSIBLE:ICOS_CONVERSATION_MODELS/,
+    );
+    expect(() => loadEnv({ ICOS_CONVERSATION_MODELS: value })).toThrow(reason);
+  });
+
+  it("une liste de modèles concrets et des modèles nommés concrets démarrent", () => {
+    const env = loadEnv({
+      ICOS_CONVERSATION_MODELS:
+        "nvidia/nvidia/nemotron-3-super-120b-a12b, nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      ICOS_CEO_MODEL: "nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      ICOS_COGNITIVE_MODEL: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      ICOS_COGNITIVE_MODEL_VOICE: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+    });
+    expect(env.ICOS_COGNITIVE_MODEL).toBe("nvidia/nvidia/nemotron-3-super-120b-a12b");
+    expect(loadEnv({ ICOS_CONVERSATION_MODELS: "" }).ICOS_CONVERSATION_MODELS).toBeUndefined();
+  });
+});

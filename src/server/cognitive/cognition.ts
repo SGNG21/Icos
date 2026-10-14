@@ -4,11 +4,27 @@ import {
 } from "@/core/autonomy/mission-autonomy-policy";
 import { cognitionOutputSchema, type CognitionOutput } from "@/core/cognitive/contracts";
 import {
+  cognitionModelChain,
+  explicitConversationModels,
+} from "@/core/cognitive/conversation-models";
+import {
   modelFor,
   modelRoutesFromEnv,
   type ModelRoutes,
   type WorkloadClass,
 } from "@/core/cognitive/workload";
+import {
+  completeWithModelFallback,
+  ConversationHttpError,
+} from "@/server/services/conversation-model-fallback";
+
+/**
+ * The cognition call's whole budget. The voice transport waits 130 s for a FINAL_RESPONSE
+ * (voice/compose.ts), so a fallback must fit INSIDE it, never extend it: with a fallback
+ * chain each attempt gets half, without one the single attempt keeps the full 90 s.
+ */
+const COGNITION_TIMEOUT_MS = 90_000;
+const COGNITION_ATTEMPT_WITH_FALLBACK_MS = 45_000;
 
 /**
  * Model-independent cognition boundary (decision 0056). An engine turns (context, user
@@ -143,13 +159,24 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
     private readonly apiKey: string,
     model: string | ModelRoutes,
     private readonly fetchImpl: typeof fetch = fetch,
+    /**
+     * ICOS_CONVERSATION_MODELS, in order: the ONLY models a turn may fall back to, on 429 /
+     * 5xx / timeout of its workload's model. Empty = no fallback (the behaviour before).
+     */
+    private readonly fallbackModels: readonly string[] = [],
   ) {
     this.routes = typeof model === "string" ? { default: model } : model;
     // The label names the whole routing table: the one model, or the default plus overrides.
     const overrides = (["CONVERSATION_FAST", "CONVERSATION_DEEP", "VOICE"] as const)
       .filter((k) => this.routes[k] && this.routes[k] !== this.routes.default)
       .map((k) => `${k.toLowerCase()}=${this.routes[k]}`);
-    this.label = `omniroute:${this.routes.default}${overrides.length ? ` (${overrides.join(",")})` : ""}`;
+    const fallback = fallbackModels.length ? ` fallback=${fallbackModels.join(">")}` : "";
+    this.label = `omniroute:${this.routes.default}${overrides.length ? ` (${overrides.join(",")})` : ""}${fallback}`;
+  }
+
+  /** The models a turn of this workload tries, in order. Exposed for the same reason. */
+  modelChain(workload: WorkloadClass | undefined): readonly string[] {
+    return cognitionModelChain(this.modelFor(workload), this.fallbackModels);
   }
 
   /** The model a workload class resolves to. Exposed so routing is testable without a call. */
@@ -169,17 +196,39 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
   ): CognitionEngine {
     const base = env.OMNIROUTE_BASE_URL;
     const key = env.OMNIROUTE_API_KEY;
+    /* Validated even when the engine ends up NOT_CONNECTED: a meta-route never lies in wait. */
     const routes = modelRoutesFromEnv(env);
+    const fallbacks = explicitConversationModels(env) ?? [];
     if (!base || !key || !routes) return new NotConnectedCognitionEngine();
-    return new OmniRouteCognitionEngine(base.replace(/\/+$/, ""), key, routes, fetchImpl ?? fetch);
+    return new OmniRouteCognitionEngine(
+      base.replace(/\/+$/, ""),
+      key,
+      routes,
+      fetchImpl ?? fetch,
+      fallbacks,
+    );
   }
 
   async think(input: CognitionInput, signal: AbortSignal): Promise<CognitionOutput> {
+    const chain = this.modelChain(input.workload);
+    return completeWithModelFallback(chain, (model, attempt) => this.call(model, input, attempt), {
+      signal,
+      totalTimeoutMs: COGNITION_TIMEOUT_MS,
+      attemptTimeoutMs:
+        chain.length > 1 ? COGNITION_ATTEMPT_WITH_FALLBACK_MS : COGNITION_TIMEOUT_MS,
+    });
+  }
+
+  private async call(
+    model: string,
+    input: CognitionInput,
+    signal: AbortSignal,
+  ): Promise<CognitionOutput> {
     const response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify({
-        model: this.modelFor(input.workload),
+        model,
         temperature: 0.1,
         /*
          * EXPLICIT, because this function reads ONE JSON body. An OpenAI-compatible
@@ -199,9 +248,15 @@ export class OmniRouteCognitionEngine implements CognitionEngine {
         ],
       }),
       cache: "no-store",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]),
+      signal,
     });
-    if (!response.ok) throw new Error(`OmniRoute chat HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new ConversationHttpError(
+        response.status,
+        model,
+        `OmniRoute chat HTTP ${response.status}`,
+      );
+    }
     const payload = (await response.json()) as { choices?: { message?: { content?: string } }[] };
     return parseCognitionOutput(payload.choices?.[0]?.message?.content ?? "");
   }

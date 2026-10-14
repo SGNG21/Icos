@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { governOutcome, launchPolicy } from "@/core/cognitive/turn-policy";
 import { InMemoryScheduledJobRepository } from "@/server/scheduler/in-memory-scheduled-job-repository";
@@ -593,5 +593,90 @@ describe("the response shape is declared, never inherited from the gateway", () 
     });
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     await expect(response.json()).rejects.toThrow();
+  });
+});
+
+describe("conversation models: fallback only within ICOS_CONVERSATION_MODELS (2026-10-14)", () => {
+  const SUPER = "nvidia/nvidia/nemotron-3-super-120b-a12b";
+  const ULTRA = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+  const BASE = { OMNIROUTE_BASE_URL: "http://o", OMNIROUTE_API_KEY: "k" };
+  const reply = () =>
+    new Response(
+      JSON.stringify({ choices: [{ message: { content: '{"result":{"kind":"NO_ACTION"}}' } }] }),
+      { status: 200 },
+    );
+
+  function gateway(statusByModel: Record<string, number>) {
+    const models: string[] = [];
+    const impl = (async (_url: string, init: RequestInit) => {
+      const model = (JSON.parse(String(init.body)) as { model: string }).model;
+      models.push(model);
+      const status = statusByModel[model] ?? 200;
+      return status === 200 ? reply() : new Response("", { status });
+    }) as unknown as typeof fetch;
+    return { impl, models };
+  }
+
+  it("the workload's model first, then the explicit list in order, on 5xx", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const gw = gateway({ "voice-model": 503, [ULTRA]: 429 });
+    const engine = OmniRouteCognitionEngine.fromEnv(
+      {
+        ...BASE,
+        ICOS_COGNITIVE_MODEL: "deep-model",
+        ICOS_COGNITIVE_MODEL_VOICE: "voice-model",
+        ICOS_CONVERSATION_MODELS: `${ULTRA},${SUPER}`,
+      },
+      gw.impl,
+    ) as OmniRouteCognitionEngine;
+    const out = await engine.think({ ...input, workload: "VOICE" }, new AbortController().signal);
+    expect(out.result).toEqual({ kind: "NO_ACTION" });
+    expect(gw.models).toEqual(["voice-model", ULTRA, SUPER]);
+    expect(engine.label).toContain(`fallback=${ULTRA}>${SUPER}`);
+    warn.mockRestore();
+  });
+
+  it("without an explicit list there is NO fallback: one model, the named HTTP failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const gw = gateway({ "deep-model": 503 });
+    const engine = OmniRouteCognitionEngine.fromEnv(
+      { ...BASE, ICOS_COGNITIVE_MODEL: "deep-model" },
+      gw.impl,
+    );
+    await expect(engine.think(input, new AbortController().signal)).rejects.toThrow(
+      "CONVERSATION_MODELS_EXHAUSTED: deep-model → HTTP 503",
+    );
+    expect(gw.models).toEqual(["deep-model"]);
+    warn.mockRestore();
+  });
+
+  it("ICOS_CONVERSATION_MODELS alone connects cognition, on its first entry", () => {
+    const engine = OmniRouteCognitionEngine.fromEnv({
+      ...BASE,
+      ICOS_CONVERSATION_MODELS: `${SUPER},${ULTRA}`,
+    }) as OmniRouteCognitionEngine;
+    expect(engine.modelChain("CONVERSATION_FAST")).toEqual([SUPER, ULTRA]);
+  });
+
+  it.each([
+    "ICOS_COGNITIVE_MODEL",
+    "ICOS_CEO_MODEL",
+    "ICOS_COGNITIVE_MODEL_FAST",
+    "ICOS_COGNITIVE_MODEL_DEEP",
+    "ICOS_COGNITIVE_MODEL_VOICE",
+  ])("a meta-route in %s is refused, never sent", (variable) => {
+    expect(() =>
+      OmniRouteCognitionEngine.fromEnv({
+        ...BASE,
+        ICOS_COGNITIVE_MODEL: "deep-model",
+        [variable]: "auto/best-chat",
+      }),
+    ).toThrow(new RegExp(`CONVERSATION_MODEL_NOT_ADMISSIBLE:${variable}`));
+  });
+
+  it("a meta-route is refused even when the engine would be NOT_CONNECTED", () => {
+    expect(() =>
+      OmniRouteCognitionEngine.fromEnv({ ICOS_CONVERSATION_MODELS: "auto/best-free" }),
+    ).toThrow(/CONVERSATION_MODEL_NOT_ADMISSIBLE:ICOS_CONVERSATION_MODELS/);
   });
 });

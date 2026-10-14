@@ -6,6 +6,10 @@ import {
   modelAllowlist,
   type MissionModelAllowlist,
 } from "@/core/autonomy/model-allowlist";
+import {
+  CONVERSATION_MODELS_VARIABLE,
+  explicitConversationModels,
+} from "@/core/cognitive/conversation-models";
 import { isMetaRoute } from "@/core/workers/meta-route";
 
 /**
@@ -346,6 +350,32 @@ const envSchema = z.object({
   ICOS_PLANNER_TIMEOUT_MS: optionalPositiveInteger,
   ICOS_REVIEWER_MODEL: optionalNamedModel("ICOS_REVIEWER_MODEL"),
   ICOS_REVIEWER_TIMEOUT_MS: optionalPositiveInteger,
+  /*
+   * CONVERSATION MODELS (décision 0078 §3, migration du 2026-10-14). Liste ORDONNÉE de modèles
+   * concrets : la conversation ne bascule que vers l'entrée suivante, sur 429 / 5xx / délai.
+   * Absente : ICOS_CEO_MODEL / ICOS_REVIEWER_MODEL seul (compatibilité), sinon le défaut
+   * gratuit mesuré. Une méta-route, une entrée vide ou un doublon refusent le démarrage —
+   * même règle que le client, une seule définition (`explicitConversationModels`).
+   */
+  ICOS_CONVERSATION_MODELS: z.preprocess(
+    emptyAsUndefined,
+    z
+      .string()
+      .superRefine((value, ctx) => {
+        try {
+          explicitConversationModels({ [CONVERSATION_MODELS_VARIABLE]: value });
+        } catch (error) {
+          ctx.addIssue({ code: "custom", message: (error as Error).message });
+        }
+      })
+      .optional(),
+  ),
+  /* Les modèles NOMMÉS des chemins conversationnels : méta-route = refus au démarrage. */
+  ICOS_CEO_MODEL: optionalNamedModel("ICOS_CEO_MODEL"),
+  ICOS_COGNITIVE_MODEL: optionalNamedModel("ICOS_COGNITIVE_MODEL"),
+  ICOS_COGNITIVE_MODEL_FAST: optionalNamedModel("ICOS_COGNITIVE_MODEL_FAST"),
+  ICOS_COGNITIVE_MODEL_DEEP: optionalNamedModel("ICOS_COGNITIVE_MODEL_DEEP"),
+  ICOS_COGNITIVE_MODEL_VOICE: optionalNamedModel("ICOS_COGNITIVE_MODEL_VOICE"),
 });
 
 export type Env = z.infer<typeof envSchema>;
