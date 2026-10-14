@@ -13,7 +13,7 @@ import {
   type PlanBase,
   type PlanCeilings,
 } from "@/core/workers/inference-plan";
-import type { PriceRecord, PriceRegistry } from "@/core/pricing/registry";
+import type { FreeTierPriceRecord, PriceRecord, PriceRegistry } from "@/core/pricing/registry";
 import { MICROS_PER_UNIT } from "@/core/pricing/registry";
 import { effectiveModelKey, sameEffectiveModel } from "@/core/workers/compute-routing";
 import { CapabilityRouter } from "@/server/routing/capability-router";
@@ -711,6 +711,75 @@ describe("inference plan — money fails closed on an unknown price", () => {
     );
     expect(r.refused[0]!.because).toContain("COST_UNPROVABLE");
     expect(r.refused[0]!.costUnprovableBecause).toMatch(/STALE/);
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ */
+
+describe("inference plan — a verified free tier is a proven 0, bounded in tokens (ADR 0078)", () => {
+  /* FICTIONAL record: the source is not a real terms page, and no real record exists. */
+  const free = (modelId: string, over: Partial<FreeTierPriceRecord> = {}): FreeTierPriceRecord => ({
+    kind: "FREE_TIER",
+    provider: modelId.split("/")[0]!,
+    modelId,
+    currency: "EUR",
+    provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-10-01" },
+    conditions: "fixture: evaluation only",
+    verifiedQuota: "fixture: 20 requests/minute",
+    effectiveAt: "2026-10-01T00:00:00.000Z",
+    staleAfter: "2026-10-31T00:00:00.000Z",
+    ...over,
+  });
+  const MONEY = { tokens: 1_000, moneyMicros: 1, moneyEnforced: true } as const;
+
+  it("passes moneyEnforced with a token ceiling, recorded as FREE_TIER rather than as a rate", async () => {
+    const workers = [candidate("n120")];
+    const p = expectPlan(
+      plan(workers, await base(workers), { topology: "single", governed: MONEY }, [
+        free(MODELS.n120),
+      ]),
+    );
+    const only = p.stages[0]!.candidates[0]!;
+    expect(only.worstCaseCostMicros).toBe(0);
+    expect(only.costKind).toBe("FREE_TIER");
+  });
+
+  it("is refused COST_UNPROVABLE: STALE once expired — never still free", async () => {
+    const workers = [candidate("n120")];
+    const r = expectRefusal(
+      plan(workers, await base(workers), { topology: "single", governed: MONEY }, [
+        free(MODELS.n120, {
+          provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-09-01" },
+          effectiveAt: "2026-09-01T00:00:00.000Z",
+          staleAfter: "2026-10-01T00:00:00.000Z",
+        }),
+      ]),
+    );
+    expect(r.refused[0]!.because).toContain("COST_UNPROVABLE");
+    expect(r.refused[0]!.costUnprovableBecause).toMatch(/STALE/);
+  });
+
+  it("is still refused CONTEXT_BELOW_TOKEN_CEILING: free in money, not in tokens", async () => {
+    const workers = [candidate("n120", { metadata: { contextWindow: "500" } })];
+    const r = expectRefusal(
+      plan(workers, await base(workers), { topology: "single", governed: MONEY }, [
+        free(MODELS.n120),
+      ]),
+    );
+    expect(r.refused[0]!.because).toContain("CONTEXT_BELOW_TOKEN_CEILING");
+  });
+
+  it("with money enforced and no token ceiling it is still refused: the worst case is unbounded", async () => {
+    const workers = [candidate("n120")];
+    const r = expectRefusal(
+      plan(
+        workers,
+        await base(workers),
+        { topology: "single", governed: { moneyMicros: 1, moneyEnforced: true } },
+        [free(MODELS.n120)],
+      ),
+    );
+    expect(r.refused[0]!.because).toContain("COST_UNPROVABLE");
   });
 });
 

@@ -95,6 +95,7 @@ const emptyish = {
   currency: "EUR" as const,
   amount: 0,
   pricedCalls: 0,
+  freeTierCalls: 0,
   unpricedCalls: 0,
   unmeteredCalls: 0,
   saturated: false,

@@ -6,6 +6,7 @@ import { accumulate, decide, emptyWindow } from "@/core/budget/spend";
 
 import {
   DEFAULT_FRESHNESS_DAYS,
+  FREE_TIER_MAX_FRESHNESS_DAYS,
   ICOS_PRICE_REGISTRY,
   MICROS_PER_UNIT,
   UNKNOWN_PRICE,
@@ -16,7 +17,9 @@ import {
   recordDefect,
   resolvePrice,
   staleAfterFrom,
+  type FreeTierPriceRecord,
   type PriceRecord,
+  type RatePriceRecord,
 } from "./registry";
 
 /**
@@ -27,7 +30,7 @@ import {
 
 const NOW = new Date("2026-10-02T12:00:00.000Z");
 
-const record = (overrides: Partial<PriceRecord> = {}): PriceRecord => ({
+const record = (overrides: Partial<RatePriceRecord> = {}): RatePriceRecord => ({
   provider: "test",
   modelId: "test/model",
   currency: "EUR",
@@ -93,7 +96,7 @@ describe("recordDefect", () => {
     const free = [record({ promptMicrosPerMillion: 0, completionMicrosPerMillion: 0 })];
     const outcome = priceUsageMicros(free, "test/model", usage(1_000_000, 1_000_000), NOW);
     expect(outcome.kind).toBe(UNKNOWN_PRICE);
-    if (outcome.kind === "COST_MICROS") throw new Error("attendu UNKNOWN_PRICE");
+    if (outcome.kind !== UNKNOWN_PRICE) throw new Error("attendu UNKNOWN_PRICE");
     expect(outcome.defect).toBe("INVALID_ENTRY");
   });
 });
@@ -243,5 +246,160 @@ describe("fermeture par défaut sur le budget (registre vide)", () => {
     expect(
       decide(window("auto/best-chat", 600, 600), { kind: "CAPPED", maxTotalTokens: 1_000 }),
     ).toMatchObject({ kind: "DENY", reason: "TOKEN_CAP_REACHED" });
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ */
+
+describe("FREE_TIER — une gratuité vérifiée et datée, jamais un zéro par défaut (décision 0078)", () => {
+  /* FICTIF : `example.invalid` n'est pas une page de conditions, `test/free` n'est pas un modèle. */
+  const freeRecord = (overrides: Partial<FreeTierPriceRecord> = {}): FreeTierPriceRecord => ({
+    kind: "FREE_TIER",
+    provider: "test",
+    modelId: "test/free",
+    currency: "EUR",
+    provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-10-01" },
+    conditions: "fixture : évaluation seulement, pas de production",
+    verifiedQuota: "fixture : 20 requêtes/minute, 50/jour",
+    effectiveAt: "2026-10-01T00:00:00.000Z",
+    staleAfter: staleAfterFrom("2026-10-01T00:00:00.000Z", FREE_TIER_MAX_FRESHNESS_DAYS),
+    ...overrides,
+  });
+
+  it("le registre livré ne contient AUCUNE gratuité : en inscrire une est un acte du propriétaire", () => {
+    expect(ICOS_PRICE_REGISTRY.filter((r) => r.kind === "FREE_TIER")).toEqual([]);
+  });
+
+  it("une gratuité valide se résout FREE_TIER, jamais PRICE", () => {
+    expect(recordDefect(freeRecord())).toBeNull();
+    const resolved = resolvePrice([freeRecord()], "test/free", NOW);
+    expect(resolved.kind).toBe("FREE_TIER");
+  });
+
+  it("se chiffre FREE_TIER à 0 micro avec sa provenance datée — pas COST_MICROS 0", () => {
+    const outcome = priceUsageMicros([freeRecord()], "test/free", usage(1_000, 500), NOW);
+    expect(outcome).toEqual({
+      kind: "FREE_TIER",
+      modelId: "test/free",
+      currency: "EUR",
+      micros: 0,
+      provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-10-01" },
+    });
+  });
+
+  it("passé staleAfter, elle redevient UNPRICED/STALE — jamais COST, jamais encore gratuite", () => {
+    const after = new Date("2026-10-31T00:00:00.000Z");
+    const outcome = priceUsageMicros([freeRecord()], "test/free", usage(10, 10), after);
+    expect(outcome.kind).toBe(UNKNOWN_PRICE);
+    if (outcome.kind !== UNKNOWN_PRICE) throw new Error("attendu UNKNOWN_PRICE");
+    expect(outcome.defect).toBe("STALE");
+  });
+
+  it("avant effectiveAt elle est NOT_YET_EFFECTIVE, horloge illisible UNUSABLE_CLOCK", () => {
+    const early = resolvePrice(
+      [freeRecord({ effectiveAt: "2026-10-05T00:00:00.000Z" })],
+      "test/free",
+      NOW,
+    );
+    expect(early).toMatchObject({ kind: UNKNOWN_PRICE, defect: "NOT_YET_EFFECTIVE" });
+    expect(resolvePrice([freeRecord()], "test/free", new Date(Number.NaN))).toMatchObject({
+      kind: UNKNOWN_PRICE,
+      defect: "UNUSABLE_CLOCK",
+    });
+  });
+
+  it(`refuse un horizon de plus de ${FREE_TIER_MAX_FRESHNESS_DAYS} jours après la vérification`, () => {
+    const tooLong = freeRecord({
+      staleAfter: staleAfterFrom("2026-10-01T00:00:00.000Z", FREE_TIER_MAX_FRESHNESS_DAYS + 1),
+    });
+    expect(recordDefect(tooLong)).toMatch(/horizon de gratuité trop long/);
+    expect(resolvePrice([tooLong], "test/free", NOW)).toMatchObject({ defect: "INVALID_ENTRY" });
+  });
+
+  it("l'horizon se compte depuis la VÉRIFICATION, pas depuis une entrée en vigueur tardive", () => {
+    const shifted = freeRecord({
+      effectiveAt: "2026-10-10T00:00:00.000Z",
+      staleAfter: "2026-11-05T00:00:00.000Z",
+    });
+    expect(recordDefect(shifted)).toMatch(/horizon de gratuité trop long/);
+  });
+
+  it("refuse une entrée en vigueur antérieure à la vérification", () => {
+    expect(
+      recordDefect(
+        freeRecord({
+          effectiveAt: "2026-09-30T00:00:00.000Z",
+          staleAfter: "2026-10-20T00:00:00.000Z",
+        }),
+      ),
+    ).toMatch(/antérieur à la vérification/);
+  });
+
+  it.each([
+    ["source vide", { provenance: { source: "  ", verifiedOn: "2026-10-01" } }],
+    ["date de vérification vide", { provenance: { source: "https://x.invalid", verifiedOn: "" } }],
+    [
+      "date de vérification non ISO",
+      { provenance: { source: "https://x.invalid", verifiedOn: "1er octobre" } },
+    ],
+    ["conditions vides", { conditions: " " }],
+    ["quota vide", { verifiedQuota: "" }],
+    ["provider vide", { provider: "" }],
+    ["devise non supportée", { currency: "USD" as "EUR" }],
+  ] as const)("refuse : %s (INVALID_ENTRY)", (_label, overrides) => {
+    const bad = freeRecord(overrides as Partial<FreeTierPriceRecord>);
+    expect(recordDefect(bad)).not.toBeNull();
+    expect(resolvePrice([bad], "test/free", NOW)).toMatchObject({
+      kind: UNKNOWN_PRICE,
+      defect: "INVALID_ENTRY",
+    });
+  });
+
+  it("une gratuité ne porte AUCUN tarif — pas même un zéro (type ET exécution)", () => {
+    // @ts-expect-error -- un FREE_TIER n'a pas de champ de tarif : il n'y a nulle part où taper 0.
+    const typed: FreeTierPriceRecord = { ...freeRecord(), promptMicrosPerMillion: 0 };
+    expect(recordDefect(typed)).toBe("une gratuité ne porte aucun tarif");
+  });
+
+  it("un kind inconnu n'est pas un tarif par défaut", () => {
+    const odd = { ...record(), kind: "FREE" } as unknown as PriceRecord;
+    expect(recordDefect(odd)).toMatch(/kind FREE inconnu/);
+  });
+
+  it("un tarif à zéro reste INVALID_ENTRY : la gratuité ne passe que par FREE_TIER", () => {
+    const zero = record({ promptMicrosPerMillion: 0, completionMicrosPerMillion: 0 });
+    expect(resolvePrice([zero], "test/model", NOW)).toMatchObject({ defect: "INVALID_ENTRY" });
+  });
+
+  it("un tarif ET une gratuité pour le même modèle sont AMBIGUOUS : aucun n'est choisi", () => {
+    const both: PriceRecord[] = [record({ modelId: "test/free" }), freeRecord()];
+    expect(resolvePrice(both, "test/free", NOW)).toMatchObject({
+      kind: UNKNOWN_PRICE,
+      defect: "AMBIGUOUS",
+    });
+  });
+
+  it("modèle inconnu, coût inconnu et coût nul sont trois issues distinctes", () => {
+    const registry: PriceRecord[] = [
+      freeRecord(),
+      record({ modelId: "test/stale", staleAfter: "2026-09-15T00:00:00.000Z" }),
+    ];
+    const unknownModel = priceUsageMicros(registry, "test/absent", usage(1, 1), NOW);
+    const unknownCost = priceUsageMicros(registry, "test/stale", usage(1, 1), NOW);
+    const nil = priceUsageMicros(registry, "test/free", usage(1, 1), NOW);
+    expect(unknownModel).toMatchObject({ kind: UNKNOWN_PRICE, defect: "ABSENT" });
+    expect(unknownCost).toMatchObject({ kind: UNKNOWN_PRICE, defect: "STALE" });
+    expect(nil).toMatchObject({ kind: "FREE_TIER", micros: 0 });
+  });
+
+  it("UNPRICED_TOKENS ne s'applique pas : la gratuité couvre l'appel, pas des classes de tokens", () => {
+    expect(costMicros(freeRecord(), usage(10, 10, 50))).toMatchObject({ kind: "FREE_TIER" });
+  });
+
+  it("un décompte illisible reste NOT_REPRESENTABLE, même gratuit", () => {
+    expect(costMicros(freeRecord(), usage(-1, 0))).toMatchObject({
+      kind: UNKNOWN_PRICE,
+      defect: "NOT_REPRESENTABLE",
+    });
   });
 });

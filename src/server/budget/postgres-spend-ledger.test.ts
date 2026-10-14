@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import * as spend from "@/core/budget/spend";
 
 import { UNMETERED, type Attribution, type BudgetCap } from "@/core/budget/contracts";
-import type { PriceEntry, PriceTable } from "@/core/budget/price-table";
+import type { FreeTierPriceEntry, PriceEntry, PriceTable } from "@/core/budget/price-table";
+import { FREE_TIER_MAX_FRESHNESS_DAYS, staleAfterFrom } from "@/core/pricing/registry";
 
 import { PostgresSpendLedger, type SqlExec } from "./postgres-spend-ledger";
 
@@ -35,6 +36,20 @@ const PRICED: PriceEntry = {
   asOf: "2026-10-02",
 };
 const table: PriceTable = { "test/model": PRICED };
+
+/* Gratuité FICTIVE valide aujourd'hui : le journal chiffre à l'horloge murale. */
+const TODAY = new Date().toISOString().slice(0, 10);
+const FREE: FreeTierPriceEntry = {
+  kind: "FREE_TIER",
+  modelId: "test/free",
+  currency: "EUR",
+  provider: "test",
+  provenance: { source: "https://example.invalid/terms", verifiedOn: TODAY },
+  conditions: "fixture",
+  verifiedQuota: "fixture",
+  effectiveAt: `${TODAY}T00:00:00.000Z`,
+  staleAfter: staleAfterFrom(`${TODAY}T00:00:00.000Z`, FREE_TIER_MAX_FRESHNESS_DAYS),
+};
 
 /**
  * Faux `execute`. Il ne simule PAS PostgreSQL : il reconnaît les deux seules requêtes du
@@ -479,5 +494,63 @@ describe("PostgresSpendLedger — independent cache counters", () => {
     expect(window.unmeteredCalls).toBe(1);
     expect(window.unpricedCalls).toBe(1);
     expect(window.totalTokens).toBe(10);
+  });
+});
+
+describe("PostgresSpendLedger — FREE_TIER, le troisième mot (décision 0078)", () => {
+  const freeCall = (attribution: Attribution | null = G1) => ({
+    ...metered(100, 50, attribution),
+    modelId: "test/free",
+  });
+
+  it("écrit FREE_TIER, montant 0, devise et preuve datée — jamais COST 0 ni UNPRICED", async () => {
+    const db = new FakeLedgerDb();
+    await ledger(db, { kind: "UNCAPPED" }, { ...table, "test/free": FREE }).record(freeCall());
+    expect(db.rows[0]).toMatchObject({
+      cost_kind: "FREE_TIER",
+      amount: 0,
+      currency: "EUR",
+      unpriced_reason: null,
+      free_tier_provenance: "https://example.invalid/terms",
+      free_tier_verified_on: TODAY,
+    });
+  });
+
+  it("relit FREE_TIER comme une gratuité : chiffrée, comptée à part, prouvable sous plafond", async () => {
+    const db = new FakeLedgerDb();
+    const l = ledger(
+      db,
+      { kind: "CAPPED", maxCostMicros: 10, maxTotalTokens: 1_000 },
+      { ...table, "test/free": FREE },
+    );
+    await l.record(freeCall());
+    expect(await l.windowFor(G1)).toMatchObject({
+      pricedCalls: 1,
+      freeTierCalls: 1,
+      unpricedCalls: 0,
+      amount: 0,
+      totalTokens: 150,
+    });
+    expect(await l.checkBudget(G1)).toEqual({ kind: "ALLOW" });
+  });
+
+  it("sans entrée de gratuité, le même modèle s'écrit UNPRICED : le modèle inconnu n'est pas gratuit", async () => {
+    const db = new FakeLedgerDb();
+    await ledger(db, { kind: "UNCAPPED" }).record(freeCall());
+    expect(db.rows[0]).toMatchObject({
+      cost_kind: "UNPRICED",
+      amount: null,
+      free_tier_provenance: null,
+      free_tier_verified_on: null,
+    });
+  });
+
+  it("un cost_kind inconnu se relit UNPRICED — l'ancienne branche finale le lisait COST", async () => {
+    const db = new FakeLedgerDb();
+    const l = ledger(db, { kind: "UNCAPPED" });
+    await l.record(metered(10));
+    db.rows[0].cost_kind = "SOMETHING_NEW";
+    db.rows[0].amount = 0;
+    expect(await l.windowFor(G1)).toMatchObject({ pricedCalls: 0, unpricedCalls: 1 });
   });
 });

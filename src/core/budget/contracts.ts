@@ -41,6 +41,28 @@ export type Unmetered = typeof UNMETERED;
 export const UNPRICED = "UNPRICED" as const;
 export type Unpriced = typeof UNPRICED;
 
+/**
+ * GRATUITÉ VÉRIFIÉE ET DATÉE (décision 0078). Troisième mot du chiffrage, à côté de `COST` et
+ * d'`UNPRICED` : ce n'est NI un `COST` de montant 0, NI un `UNPRICED` à la raison aimable. Il
+ * n'est produit QUE par un enregistrement `FREE_TIER` du registre de prix, qui porte la source
+ * des conditions, la date de vérification, les conditions d'usage et le quota constatés, et un
+ * horizon de fraîcheur de 30 jours au plus. Passé cet horizon, l'appel redevient `UNPRICED`
+ * (défaut `STALE`) — jamais « encore gratuit ».
+ *
+ * Trois faits, trois mots : modèle inconnu = `UNPRICED` + `ABSENT`/`AMBIGUOUS` ; coût inconnu =
+ * `UNPRICED` + tout autre défaut ; coût réellement nul = `FREE_TIER` + provenance datée.
+ */
+export const FREE_TIER = "FREE_TIER" as const;
+export type FreeTier = typeof FREE_TIER;
+
+/** D'où vient une gratuité : la page de conditions lue et le JOUR où elle l'a été. */
+export interface FreeTierProvenance {
+  /** URL (ou référence de document) des conditions ou de la page de tarif lue. */
+  readonly source: string;
+  /** Jour de la vérification, ISO `YYYY-MM-DD`. */
+  readonly verifiedOn: string;
+}
+
 /** Appel sans attribution fournie. On l'enregistre tel quel, on n'en invente pas une. */
 export const UNATTRIBUTED = "UNATTRIBUTED" as const;
 export type Unattributed = typeof UNATTRIBUTED;
@@ -183,7 +205,16 @@ export type UsageOutcome =
 /** Résultat du chiffrage d'une consommation mesurée. */
 export type CostOutcome =
   | { readonly kind: "COST"; readonly currency: BudgetCurrency; readonly amount: number }
-  | { readonly kind: Unpriced; readonly modelId: string; readonly reason: string };
+  | { readonly kind: Unpriced; readonly modelId: string; readonly reason: string }
+  | {
+      /** Gratuité vérifiée : un appel CHIFFRÉ à zéro, preuve datée à l'appui. */
+      readonly kind: FreeTier;
+      readonly currency: BudgetCurrency;
+      /** Toujours 0 : le type ne laisse aucune place à un autre montant. */
+      readonly amount: 0;
+      readonly modelId: string;
+      readonly provenance: FreeTierProvenance;
+    };
 
 /**
  * Plafond de dépense. `UNCAPPED` doit être choisi explicitement : l'absence de plafond

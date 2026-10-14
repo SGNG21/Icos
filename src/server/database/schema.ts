@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  date,
   doublePrecision,
   index,
   integer,
@@ -1321,6 +1322,11 @@ export const controlReauthProofs = pgTable(
  * raison, un appel UNPRICED a `amount` à NULL et une raison. Un vrai zéro mesuré est
  * `usage_kind = 'METERED'` avec trois zéros et reste distinguable pour toujours. Les CHECK
  * de la migration rendent toute autre combinaison non représentable.
+ *
+ * TROIS FAITS, TROIS FORMES (décision 0078, migration 0066) : `UNPRICED` (modèle ou coût
+ * inconnu, `amount` NULL), `COST` (montant chiffré), `FREE_TIER` (`amount = 0` IMPOSÉ par
+ * CHECK, devise et preuve datée requises). Une ligne `FREE_TIER` de montant non nul est
+ * non représentable.
  */
 export const spendLedger = pgTable(
   "spend_ledger",
@@ -1346,6 +1352,14 @@ export const spendLedger = pgTable(
     currency: text("currency"),
     amount: doublePrecision("amount"),
     unpricedReason: text("unpriced_reason"),
+    /**
+     * Décision 0078 (migration 0066) : la preuve datée d'une ligne `FREE_TIER` — la source des
+     * conditions lues et le jour de leur vérification. NULL sur toute autre ligne (CHECK
+     * `spend_ledger_cost_shape`). Pour un tarif le montant est la preuve ; pour une gratuité le
+     * montant (0) ne prouve rien, c'est la vérification datée qui prouve.
+     */
+    freeTierProvenance: text("free_tier_provenance"),
+    freeTierVerifiedOn: date("free_tier_verified_on", { mode: "string" }),
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1357,7 +1371,7 @@ export const spendLedger = pgTable(
       sql`${t.usageKind} = 'METERED' or (${t.cacheRead} is null and ${t.cacheCreation} is null)`,
     ),
     check("spend_ledger_usage_kind_check", sql`${t.usageKind} in ('METERED','UNMETERED')`),
-    check("spend_ledger_cost_kind_check", sql`${t.costKind} in ('COST','UNPRICED')`),
+    check("spend_ledger_cost_kind_check", sql`${t.costKind} in ('COST','UNPRICED','FREE_TIER')`),
     index("spend_ledger_window_idx").on(t.tenantId, t.attributionKey, t.recordedAt, t.id),
   ],
 );

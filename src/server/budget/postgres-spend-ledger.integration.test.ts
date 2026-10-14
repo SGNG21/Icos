@@ -2,7 +2,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { UNMETERED, type Attribution } from "@/core/budget/contracts";
-import type { PriceEntry, PriceTable } from "@/core/budget/price-table";
+import type { FreeTierPriceEntry, PriceEntry, PriceTable } from "@/core/budget/price-table";
+import { FREE_TIER_MAX_FRESHNESS_DAYS, staleAfterFrom } from "@/core/pricing/registry";
 import { createDatabase, type DatabaseHandle } from "@/server/database/client";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
 
@@ -11,7 +12,8 @@ import { PostgresSpendLedger } from "./postgres-spend-ledger";
 import type { BudgetCapResolver, SpendEntry } from "./ports";
 
 /**
- * Preuves PostgreSQL du journal de dépense durable (migrations 0055_spend_ledger.sql et 0065_spend_ledger_cache.sql) :
+ * Preuves PostgreSQL du journal de dépense durable (migrations 0055_spend_ledger.sql, 0065_spend_ledger_cache.sql
+ * et 0066_spend_ledger_free_tier.sql) :
  * le SQL lui-même, les CHECK qui rendent « une absence n'est jamais un zéro » non
  * contournable, le trigger append-only, la durabilité à travers une connexion NEUVE, et la
  * borne de dépassement sous appels réellement simultanés contre une vraie base.
@@ -43,6 +45,20 @@ const PRICED: PriceEntry = {
   asOf: "2026-10-02",
 };
 const PRICE_TABLE: PriceTable = { "test/model": PRICED };
+
+/* Gratuité FICTIVE valide aujourd'hui (le journal chiffre à l'horloge murale). Décision 0078. */
+const TODAY = new Date().toISOString().slice(0, 10);
+const FREE: FreeTierPriceEntry = {
+  kind: "FREE_TIER",
+  modelId: "test/free",
+  currency: "EUR",
+  provider: "test",
+  provenance: { source: "https://example.invalid/terms", verifiedOn: TODAY },
+  conditions: "fixture",
+  verifiedQuota: "fixture",
+  effectiveAt: `${TODAY}T00:00:00.000Z`,
+  staleAfter: staleAfterFrom(`${TODAY}T00:00:00.000Z`, FREE_TIER_MAX_FRESHNESS_DAYS),
+};
 
 const metered = (
   prompt: number,
@@ -298,6 +314,80 @@ describe("spend_ledger (base de test locale, migrations 0055 et 0065)", () => {
       expect(window.unmeteredCalls).toBe(0);
       expect(window.calls).toBe(1);
       expect(await l.checkBudget(G1)).toEqual({ kind: "ALLOW" });
+    });
+  });
+
+  describe("FREE_TIER — le troisième mot, contre une vraie base (décision 0078, migration 0066)", () => {
+    const freeCall = (missionId = "free-mission"): SpendEntry => ({
+      ...metered(100, 50, { goalId: "g1", missionId }),
+      modelId: "test/free",
+    });
+
+    it("aller-retour : FREE_TIER, montant 0, devise et preuve datée relus tels quels", async () => {
+      const l = ledger(
+        TENANT,
+        async () => ({ kind: "CAPPED", maxCostMicros: 10, maxTotalTokens: 1_000 }),
+        { ...PRICE_TABLE, "test/free": FREE },
+      );
+      await l.record(freeCall());
+      const rows = (await ctx.handle.db.execute(
+        sql`select cost_kind, amount, currency, unpriced_reason, free_tier_provenance,
+                   free_tier_verified_on::text as verified_on
+              from spend_ledger`,
+      )) as unknown as Record<string, unknown>[];
+      expect(rows).toEqual([
+        {
+          cost_kind: "FREE_TIER",
+          amount: 0,
+          currency: "EUR",
+          unpriced_reason: null,
+          free_tier_provenance: "https://example.invalid/terms",
+          verified_on: TODAY,
+        },
+      ]);
+      expect(await l.windowFor(G1)).toMatchObject({
+        pricedCalls: 1,
+        freeTierCalls: 1,
+        unpricedCalls: 0,
+        amount: 0,
+      });
+      expect(await l.checkBudget(G1)).toEqual({ kind: "ALLOW" });
+      const report = await l.listForMission("free-mission");
+      expect(report.entries[0]).toMatchObject({
+        costKind: "FREE_TIER",
+        amount: 0,
+        freeTier: { source: "https://example.invalid/terms", verifiedOn: TODAY },
+      });
+      expect(report.total.freeTierCalls).toBe(1);
+    });
+
+    it("le même modèle sans preuve s'écrit UNPRICED et bloque un plafond monétaire", async () => {
+      const l = ledger(TENANT, async () => ({ kind: "CAPPED", maxCostMicros: 10 }));
+      await l.record(freeCall());
+      expect(await l.checkBudget(G1)).toMatchObject({ reason: "UNPRICED_USAGE_IN_WINDOW" });
+    });
+
+    it("CHECK : un FREE_TIER de montant 1 est non représentable", async () => {
+      expect(
+        await pgCode(
+          ctx.handle.db.execute(
+            sql`insert into spend_ledger (id, tenant_id, attribution_key, model_id, usage_kind,
+                  prompt_tokens, completion_tokens, total_tokens, cost_kind, currency, amount,
+                  free_tier_provenance, free_tier_verified_on, observed_at)
+                values ('f1', ${TENANT}, 'goal=g1', 'test/free', 'METERED', 1, 1, 2, 'FREE_TIER',
+                  'EUR', 1, 'https://example.invalid/terms', '2026-10-14', now())`,
+          ),
+        ),
+      ).toBe("23514");
+    });
+
+    it("un COST de montant 0 reste écrivable — et se relit COST, jamais FREE_TIER (option a)", async () => {
+      await ctx.handle.db.execute(
+        sql`insert into spend_ledger (id, tenant_id, attribution_key, model_id, usage_kind,
+              prompt_tokens, completion_tokens, total_tokens, cost_kind, currency, amount, observed_at)
+            values ('c0', ${TENANT}, 'goal=g1', 'test/model', 'METERED', 0, 0, 0, 'COST', 'EUR', 0, now())`,
+      );
+      expect(await ledger().windowFor(G1)).toMatchObject({ pricedCalls: 1, freeTierCalls: 0 });
     });
   });
 

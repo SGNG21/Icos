@@ -239,6 +239,11 @@ export interface PlannedCandidate {
    * no price, or no token ceiling to bound it. Absent is never read as cheap.
    */
   worstCaseCostMicros?: number;
+  /**
+   * `FREE_TIER` when `worstCaseCostMicros` is 0 because of a verified free-tier record, so the
+   * evidence never reads as a measured rate. Absent for a rate.
+   */
+  costKind?: "FREE_TIER";
   /** Why the cost is not proven. Present exactly when `worstCaseCostMicros` is absent. */
   costUnprovableBecause?: string;
   /**
@@ -442,12 +447,18 @@ function worstCaseCost(
   tokens: number | undefined,
   prices: PriceRegistry,
   now: Date,
-): { micros: number } | { unprovable: string } {
+): { micros: number; freeTier?: true } | { unprovable: string } {
   if (model === undefined) return { unprovable: "le candidat ne déclare aucun modèle" };
   if (tokens === undefined) {
     return { unprovable: "aucun plafond de tokens : le pire cas n'est pas borné" };
   }
   const resolved = resolvePrice(prices, model, now);
+  /*
+   * A verified, unexpired free tier (decision 0078) is a proven 0 — still bounded in tokens by
+   * the ceiling checked above. Past its `staleAfter` it resolves UNPRICED/STALE and lands in the
+   * `unprovable` branch below, so `moneyEnforced` refuses it COST_UNPROVABLE.
+   */
+  if (resolved.kind === "FREE_TIER") return { micros: 0, freeTier: true };
   if (resolved.kind !== "PRICE") return { unprovable: `${resolved.defect}: ${resolved.reason}` };
   const { promptMicrosPerMillion: pm, completionMicrosPerMillion: cm } = resolved.record;
   /* All on one side, so `totalTokens === prompt + completion` and UNPRICED_TOKENS cannot fire. */
@@ -544,7 +555,10 @@ function admit(
       /* The router's own relaxation, carried so it is recorded rather than lost. */
       ...defined("routerFallback", verdict.fallback),
       ...("micros" in cost
-        ? { worstCaseCostMicros: cost.micros }
+        ? {
+            worstCaseCostMicros: cost.micros,
+            ...(cost.freeTier ? { costKind: "FREE_TIER" as const } : {}),
+          }
         : { costUnprovableBecause: cost.unprovable }),
     },
   };
