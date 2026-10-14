@@ -17,6 +17,10 @@ export default defineConfig({
     // Jamais la base live (icos_n23_probe) : `createDatabase` refuse toute base
     // non « test » sous Vitest.
     fileParallelism: false,
+    // Les hooks qui composent un conteneur complet (createContainer à froid) dépassent les
+    // 10 s par défaut sur le VPS chargé (e2e-failure.test.ts, 2026-10-14 : hook > 10 s, test
+    // vert à 24 s). Aligné sur le --testTimeout=30000 de la porte : un délai, pas une assertion.
+    hookTimeout: 30_000,
     // Les tests d'intégration PostgreSQL (TRUNCATE/DELETE) sont exécutés
     // séparément via `pnpm test:integration`, jamais par `pnpm test`.
     exclude: [...configDefaults.exclude, "**/*.integration.test.ts"],
