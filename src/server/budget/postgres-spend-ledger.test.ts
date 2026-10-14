@@ -5,8 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import * as spend from "@/core/budget/spend";
 
 import { UNMETERED, type Attribution, type BudgetCap } from "@/core/budget/contracts";
-import type { FreeTierPriceEntry, PriceEntry, PriceTable } from "@/core/budget/price-table";
-import { FREE_TIER_MAX_FRESHNESS_DAYS, staleAfterFrom } from "@/core/pricing/registry";
+import {
+  priceTableFrom,
+  type FreeTierPriceEntry,
+  type PriceEntry,
+  type PriceTable,
+} from "@/core/budget/price-table";
+import {
+  FREE_TIER_MAX_FRESHNESS_DAYS,
+  staleAfterFrom,
+  type FreeTierPriceRecord,
+} from "@/core/pricing/registry";
 
 import { PostgresSpendLedger, type SqlExec } from "./postgres-spend-ledger";
 
@@ -552,5 +561,50 @@ describe("PostgresSpendLedger — FREE_TIER, le troisième mot (décision 0078)"
     db.rows[0].cost_kind = "SOMETHING_NEW";
     db.rows[0].amount = 0;
     expect(await l.windowFor(G1)).toMatchObject({ pricedCalls: 0, unpricedCalls: 1 });
+  });
+});
+
+describe("registre → table → journal : une gratuité refusée par le registre n'atteint jamais la base en FREE_TIER", () => {
+  const record: FreeTierPriceRecord = {
+    kind: "FREE_TIER",
+    provider: "test",
+    modelId: "test/free",
+    currency: "EUR",
+    provenance: { source: "https://example.invalid/terms", verifiedOn: TODAY },
+    conditions: "fixture",
+    verifiedQuota: "fixture",
+    effectiveAt: `${TODAY}T00:00:00.000Z`,
+    staleAfter: staleAfterFrom(`${TODAY}T00:00:00.000Z`, FREE_TIER_MAX_FRESHNESS_DAYS),
+  };
+  const call = { ...metered(100, 50), modelId: "test/free" };
+  const rowFor = async (registryRecord: FreeTierPriceRecord) => {
+    const db = new FakeLedgerDb();
+    await ledger(db, { kind: "UNCAPPED" }, priceTableFrom([registryRecord])).record(call);
+    return db.rows[0]!;
+  };
+
+  it("enregistrement valide : FREE_TIER avec sa preuve", async () => {
+    expect(await rowFor(record)).toMatchObject({ cost_kind: "FREE_TIER", amount: 0 });
+  });
+
+  it("enregistrement portant un tarif (cast/JSON) : UNPRICED avec le défaut du registre", async () => {
+    const forged = { ...record, promptMicrosPerMillion: 0 } as unknown as FreeTierPriceRecord;
+    expect(await rowFor(forged)).toMatchObject({
+      cost_kind: "UNPRICED",
+      amount: null,
+      free_tier_provenance: null,
+      unpriced_reason: expect.stringMatching(/aucun tarif/),
+    });
+  });
+
+  it("date de vérification hors calendrier : UNPRICED, jamais persistée comme preuve", async () => {
+    const impossible = {
+      ...record,
+      provenance: { source: record.provenance.source, verifiedOn: "2026-02-30" },
+    };
+    expect(await rowFor(impossible)).toMatchObject({
+      cost_kind: "UNPRICED",
+      free_tier_verified_on: null,
+    });
   });
 });

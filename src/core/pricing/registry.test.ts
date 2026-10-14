@@ -393,13 +393,88 @@ describe("FREE_TIER — une gratuité vérifiée et datée, jamais un zéro par 
   });
 
   it("UNPRICED_TOKENS ne s'applique pas : la gratuité couvre l'appel, pas des classes de tokens", () => {
-    expect(costMicros(freeRecord(), usage(10, 10, 50))).toMatchObject({ kind: "FREE_TIER" });
+    expect(priceUsageMicros([freeRecord()], "test/free", usage(10, 10, 50), NOW)).toMatchObject({
+      kind: "FREE_TIER",
+    });
   });
 
   it("un décompte illisible reste NOT_REPRESENTABLE, même gratuit", () => {
-    expect(costMicros(freeRecord(), usage(-1, 0))).toMatchObject({
+    expect(priceUsageMicros([freeRecord()], "test/free", usage(-1, 0), NOW)).toMatchObject({
       kind: UNKNOWN_PRICE,
       defect: "NOT_REPRESENTABLE",
+    });
+  });
+
+  describe("costMicros ne produit JAMAIS FREE_TIER : seule une résolution le peut", () => {
+    const asRate = (r: FreeTierPriceRecord) => r as unknown as RatePriceRecord;
+
+    it.each([
+      ["valide", freeRecord()],
+      ["aux conditions vides", freeRecord({ conditions: "" })],
+      [
+        "périmée",
+        freeRecord({
+          provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-01-01" },
+          effectiveAt: "2026-01-01T00:00:00.000Z",
+          staleAfter: "2026-01-15T00:00:00.000Z",
+        }),
+      ],
+    ])("une gratuité %s passée par cast est INVALID_ENTRY, pas 0", (_label, free) => {
+      expect(costMicros(asRate(free), usage(10, 10))).toMatchObject({
+        kind: UNKNOWN_PRICE,
+        defect: "INVALID_ENTRY",
+      });
+    });
+
+    it("le même enregistrement, résolu et valide, est FREE_TIER par priceUsageMicros", () => {
+      expect(priceUsageMicros([freeRecord()], "test/free", usage(10, 10), NOW).kind).toBe(
+        "FREE_TIER",
+      );
+    });
+  });
+
+  describe("une date de preuve doit être un VRAI jour calendaire (Date.parse normalise 02-30)", () => {
+    it.each([
+      ["2026-02-30", "2026-02-30T00:00:00.000Z", "2026-03-15T00:00:00.000Z"],
+      ["2026-04-31", "2026-05-01T00:00:00.000Z", "2026-05-15T00:00:00.000Z"],
+    ])("verifiedOn %s est INVALID_ENTRY", (verifiedOn, effectiveAt, staleAfter) => {
+      const bad = freeRecord({
+        provenance: { source: "https://example.invalid/terms", verifiedOn },
+        effectiveAt,
+        staleAfter,
+      });
+      expect(recordDefect(bad)).toMatch(/hors calendrier/);
+      expect(resolvePrice([bad], "test/free", new Date("2026-03-05T00:00:00.000Z"))).toMatchObject({
+        kind: UNKNOWN_PRICE,
+        defect: "INVALID_ENTRY",
+      });
+    });
+
+    it("effectiveAt ou staleAfter hors calendrier est INVALID_ENTRY, gratuité comme tarif", () => {
+      expect(
+        recordDefect(
+          freeRecord({
+            provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-02-27" },
+            effectiveAt: "2026-02-30T00:00:00.000Z",
+            staleAfter: "2026-03-20T00:00:00.000Z",
+          }),
+        ),
+      ).toMatch(/effectiveAt hors calendrier/);
+      expect(recordDefect(record({ staleAfter: "2026-11-31T00:00:00.000Z" }))).toMatch(
+        /staleAfter hors calendrier/,
+      );
+    });
+
+    it("un vrai 29 février (année bissextile) reste accepté", () => {
+      expect(
+        recordDefect(
+          freeRecord({
+            provenance: { source: "https://example.invalid/terms", verifiedOn: "2028-02-29" },
+            effectiveAt: "2028-02-29T00:00:00.000Z",
+            staleAfter: "2028-03-20T00:00:00.000Z",
+          }),
+        ),
+      ).toBeNull();
     });
   });
 });

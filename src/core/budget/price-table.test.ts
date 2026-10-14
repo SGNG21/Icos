@@ -282,3 +282,67 @@ describe("FREE_TIER dans la forme table (décision 0078)", () => {
     );
   });
 });
+
+describe("priceTableFrom ne blanchit pas une entrée que le registre refuse (revue 4597a7b)", () => {
+  const NOW = new Date("2026-10-02T12:00:00.000Z");
+  const valid: FreeTierPriceRecord = {
+    kind: FREE_TIER,
+    provider: "test",
+    modelId: "test/free",
+    currency: BUDGET_CURRENCY,
+    provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-10-01" },
+    conditions: "fixture",
+    verifiedQuota: "fixture",
+    effectiveAt: "2026-10-01T00:00:00.000Z",
+    staleAfter: "2026-10-31T00:00:00.000Z",
+  };
+
+  it("une gratuité portant un tarif (cast/JSON) reste refusée après projection, avec son défaut", () => {
+    const forged = { ...valid, promptMicrosPerMillion: 0 } as unknown as FreeTierPriceRecord;
+    const table = priceTableFrom([forged]);
+    expect(table["test/free"]).toEqual({
+      kind: "REFUSED",
+      modelId: "test/free",
+      defect: "une gratuité ne porte aucun tarif",
+    });
+    expect(priceUsage(table, "test/free", usage(1, 1), NOW)).toMatchObject({
+      kind: UNPRICED,
+      reason: /aucun tarif/,
+    });
+  });
+
+  it("une gratuité à date de vérification impossible reste refusée après projection", () => {
+    const table = priceTableFrom([
+      { ...valid, provenance: { source: valid.provenance.source, verifiedOn: "2026-09-31" } },
+    ]);
+    expect(table["test/free"]).toMatchObject({ kind: "REFUSED" });
+    expect(priceUsage(table, "test/free", usage(1, 1), NOW).kind).toBe(UNPRICED);
+  });
+
+  it("un tarif de kind inconnu n'est pas projeté en tarif valide", () => {
+    const odd = {
+      provider: "test",
+      modelId: "test/model",
+      currency: BUDGET_CURRENCY,
+      promptMicrosPerMillion: MICROS_PER_UNIT,
+      completionMicrosPerMillion: MICROS_PER_UNIT,
+      provenance: "fixture",
+      effectiveAt: "2026-09-01T00:00:00.000Z",
+      staleAfter: "2026-12-01T00:00:00.000Z",
+      kind: "FREE",
+    } as unknown as RatePriceRecord;
+    expect(priceUsage(priceTableFrom([odd]), "test/model", usage(1, 1), NOW).kind).toBe(UNPRICED);
+  });
+
+  it("une entrée de table à kind inconnu, injectée à la main, est refusée", () => {
+    const odd = { ...entry(), kind: "FREE" } as unknown as PriceEntry;
+    expect(priceUsage({ "test/model": odd }, "test/model", usage(1, 1), NOW)).toMatchObject({
+      kind: UNPRICED,
+      reason: /kind FREE inconnu/,
+    });
+  });
+
+  it("la gratuité valide, elle, traverse la projection", () => {
+    expect(priceUsage(priceTableFrom([valid]), "test/free", usage(1, 1), NOW).kind).toBe(FREE_TIER);
+  });
+});

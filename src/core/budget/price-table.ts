@@ -3,6 +3,7 @@ import {
   MICROS_PER_UNIT,
   ambiguousModelIds,
   microsToAmount,
+  recordDefect,
   priceUsageMicros,
   type FreeTierPriceRecord,
   type PriceRecord,
@@ -69,7 +70,19 @@ export interface FreeTierPriceEntry {
   readonly completionPerMillion?: never;
 }
 
-export type PriceEntry = RatePriceEntry | FreeTierPriceEntry;
+/**
+ * Un enregistrement du registre que `recordDefect` REFUSE, projeté avec son défaut plutôt que
+ * réécrit. Sans cette forme, la projection copiait les champs connus d'une gratuité et laissait
+ * tomber ceux qu'elle interdit (un `promptMicrosPerMillion: 0` glissé par cast ou JSON) : le
+ * registre disait INVALID_ENTRY, la table disait FREE_TIER. Une entrée refusée reste refusée.
+ */
+export interface RefusedPriceEntry {
+  readonly kind: "REFUSED";
+  readonly modelId: string;
+  readonly defect: string;
+}
+
+export type PriceEntry = RatePriceEntry | FreeTierPriceEntry | RefusedPriceEntry;
 
 export type PriceTable = Readonly<Record<string, PriceEntry>>;
 
@@ -90,6 +103,12 @@ export function priceTableFrom(registry: PriceRegistry): PriceTable {
   for (const record of registry) {
     /* Deux tarifs concurrents : une table en écraserait un en silence. Aucun n'est projeté. */
     if (ambiguous.has(record.modelId)) continue;
+    /* VALIDER AVANT DE PROJETER : la projection ne doit jamais rendre valide ce que le registre refuse. */
+    const defect = recordDefect(record);
+    if (defect !== null) {
+      table[record.modelId] = { kind: "REFUSED", modelId: record.modelId, defect };
+      continue;
+    }
     if (record.kind === FREE_TIER) {
       /* Projetée telle quelle : aucun tarif n'est inventé pour une gratuité. */
       table[record.modelId] = {
@@ -142,6 +161,12 @@ function toMicrosPerMillion(value: number): number | null {
 /** Entrée héritée vers `PriceRecord`, ou le motif du refus. */
 function toRecord(key: string, entry: PriceEntry): PriceRecord | string {
   if (entry.modelId !== key) return `entrée ${entry.modelId} rangée sous la clé ${key}`;
+  if (entry.kind === "REFUSED") return entry.defect;
+  const kind = (entry as { kind?: unknown }).kind;
+  /* Un `kind` inconnu (JSON, cast) n'est pas un tarif par défaut. */
+  if (kind !== undefined && kind !== "RATE" && kind !== FREE_TIER) {
+    return `kind ${String(kind)} inconnu`;
+  }
   if (entry.kind === FREE_TIER) {
     const loose = entry as unknown as Record<string, unknown>;
     if (loose.promptPerMillion !== undefined || loose.completionPerMillion !== undefined) {
