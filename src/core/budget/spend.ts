@@ -1,6 +1,7 @@
 import {
   BUDGET_CURRENCY,
   eurToMicros,
+  FREE_TIER,
   MICROS_PER_EUR,
   UNMETERED,
   UNPRICED,
@@ -51,7 +52,13 @@ export interface SpendWindow {
   readonly currency: BudgetCurrency;
   /** Somme des coûts CHIFFRÉS uniquement. Ce n'est le total réel que si `unpricedCalls === 0`. */
   readonly amount: number;
+  /** Appels chiffrés : `COST` ET `FREE_TIER` (une gratuité vérifiée est un coût prouvé de 0). */
   readonly pricedCalls: number;
+  /**
+   * Parmi `pricedCalls`, ceux qui étaient GRATUITS sur preuve datée (décision 0078). Jamais
+   * compté dans `unpricedCalls` : une gratuité vérifiée est prouvable sous un plafond monétaire.
+   */
+  readonly freeTierCalls: number;
   readonly unpricedCalls: number;
   readonly unmeteredCalls: number;
   /** Les totaux ne sont plus exacts (débordement ou valeur non finie) : fenêtre inexploitable. */
@@ -67,6 +74,7 @@ export function emptyWindow(): SpendWindow {
     currency: BUDGET_CURRENCY,
     amount: 0,
     pricedCalls: 0,
+    freeTierCalls: 0,
     unpricedCalls: 0,
     unmeteredCalls: 0,
     saturated: false,
@@ -105,6 +113,7 @@ export function accumulate(window: SpendWindow, observation: SpendObservation): 
 
   let amount = window.amount;
   let pricedCalls = window.pricedCalls;
+  let freeTierCalls = window.freeTierCalls;
   let unpricedCalls = window.unpricedCalls;
 
   if (observation.cost?.kind === "COST") {
@@ -116,6 +125,14 @@ export function accumulate(window: SpendWindow, observation: SpendObservation): 
       /* Un total non finissable ne doit pas se propager : on garde le dernier total sain. */
       saturated = true;
     }
+  } else if (observation.cost?.kind === FREE_TIER && observation.usage.kind !== UNMETERED) {
+    /*
+     * GRATUITÉ VÉRIFIÉE : chiffrée, de montant nul. `amount` n'augmente pas (et ne lit PAS
+     * `observation.cost.amount` : une gratuité ne peut rien ajouter, même mal construite), les
+     * tokens ont déjà été comptés ci-dessus — un plafond de tokens mord donc toujours.
+     */
+    pricedCalls += 1;
+    freeTierCalls += 1;
   } else if (observation.cost?.kind === UNPRICED || observation.usage.kind !== UNMETERED) {
     /*
      * Coût UNPRICED, ou coût absent sur une consommation MESURÉE. Le second cas laissait les
@@ -134,6 +151,7 @@ export function accumulate(window: SpendWindow, observation: SpendObservation): 
     currency: window.currency,
     amount,
     pricedCalls,
+    freeTierCalls,
     unpricedCalls,
     unmeteredCalls,
     saturated,

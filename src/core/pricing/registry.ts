@@ -1,7 +1,9 @@
 import {
   BUDGET_CURRENCY,
+  FREE_TIER,
   UNPRICED,
   type BudgetCurrency,
+  type FreeTierProvenance,
   type TokenUsage,
 } from "@/core/budget/contracts";
 
@@ -73,8 +75,12 @@ export type PriceDefect = (typeof PRICE_DEFECTS)[number];
 /**
  * Un tarif, avec de quoi décider s'il est digne de confiance. Tous les champs sont requis :
  * un prix sans provenance ni date est précisément le prix qu'il ne faut pas appliquer.
+ *
+ * `kind` absent vaut `"RATE"` (forme historique de 0067, inchangée). Une GRATUITÉ, elle, doit
+ * se dire : {@link FreeTierPriceRecord} exige `kind: "FREE_TIER"`, et rien d'autre ne la produit.
  */
-export interface PriceRecord {
+export interface RatePriceRecord {
+  readonly kind?: "RATE";
   /** Fournisseur facturant (passerelle ou éditeur). */
   readonly provider: string;
   readonly modelId: string;
@@ -96,6 +102,37 @@ export interface PriceRecord {
   readonly staleAfter: string;
 }
 
+/**
+ * GRATUITÉ VÉRIFIÉE (décision 0078). Une condition d'usage avec une date d'expiration, PAS un
+ * tarif : il n'y a dans cette forme AUCUN champ de tarif, donc aucun endroit où taper un 0.
+ * Le refus `value <= 0` des tarifs reste entier : un 0 tapé est une faute de frappe jusqu'à
+ * preuve du contraire, et la preuve, c'est cet enregistrement.
+ *
+ * Inscrire un tel enregistrement pour un vrai fournisseur est un ACTE DU PROPRIÉTAIRE : il a lu
+ * les conditions et le quota, et il en écrit la provenance. Un agent n'en écrit pas.
+ */
+export interface FreeTierPriceRecord {
+  readonly kind: "FREE_TIER";
+  readonly provider: string;
+  /** L'identifiant tel que la passerelle l'ÉCHO dans la réponse : c'est lui que le journal écrit. */
+  readonly modelId: string;
+  readonly currency: BudgetCurrency;
+  /** La page de conditions lue (URL) et le jour de la lecture. */
+  readonly provenance: FreeTierProvenance;
+  /** Conditions d'usage constatées (ex. « évaluation seulement, pas de production »). */
+  readonly conditions: string;
+  /** Quota constaté (requêtes/minute, /jour, crédits) ou « non publié » — jamais vide. */
+  readonly verifiedQuota: string;
+  readonly effectiveAt: string;
+  /** Au plus {@link FREE_TIER_MAX_FRESHNESS_DAYS} jours après `provenance.verifiedOn`. */
+  readonly staleAfter: string;
+  /* Inexprimables : une gratuité ne porte pas de tarif. */
+  readonly promptMicrosPerMillion?: never;
+  readonly completionMicrosPerMillion?: never;
+}
+
+export type PriceRecord = RatePriceRecord | FreeTierPriceRecord;
+
 export type PriceRegistry = readonly PriceRecord[];
 
 /**
@@ -109,6 +146,10 @@ export type PriceRegistry = readonly PriceRecord[];
  * peut être déclaré satisfait, et seul un plafond en tokens est applicable. C'est l'état
  * honnête du système, et il doit le rester jusqu'à ce qu'une facture ou une page de tarif
  * fournisse une ligne complète (provenance + effectiveAt + staleAfter).
+ *
+ * Il ne contient pas davantage de GRATUITÉ (`FREE_TIER`, décision 0078) : en inscrire une est
+ * un acte du propriétaire, qui a lu les conditions et le quota du fournisseur pour CE modèle
+ * et en date la lecture. Une mesure « 200 en 0,7 s » n'est pas une lecture des conditions.
  */
 export const ICOS_PRICE_REGISTRY: PriceRegistry = Object.freeze([]);
 
@@ -118,6 +159,13 @@ export const ICOS_PRICE_REGISTRY: PriceRegistry = Object.freeze([]);
  */
 export const DEFAULT_FRESHNESS_DAYS = 90;
 
+/**
+ * Horizon MAXIMAL d'une gratuité, compté depuis le jour de vérification. Une gratuité est une
+ * condition qu'un fournisseur retire sans préavis : l'horizon de 90 jours des factures et des
+ * contrats ne vaut pas pour une page de conditions.
+ */
+export const FREE_TIER_MAX_FRESHNESS_DAYS = 30;
+
 /** Péremption déduite d'une date d'entrée en vigueur. Lève si la date est illisible. */
 export function staleAfterFrom(effectiveAt: string, days = DEFAULT_FRESHNESS_DAYS): string {
   const from = Date.parse(effectiveAt);
@@ -125,11 +173,77 @@ export function staleAfterFrom(effectiveAt: string, days = DEFAULT_FRESHNESS_DAY
   return new Date(from + days * DAY_MS).toISOString();
 }
 
+const blank = (value: unknown) => typeof value !== "string" || value.trim().length === 0;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DAY_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/;
+
+/**
+ * Le jour calendaire en tête d'une date ISO existe-t-il VRAIMENT ? `Date.parse` normalise un
+ * jour impossible au lieu de le refuser (`2026-02-30` devient le 2 mars) : une preuve datée d'un
+ * jour qui n'existe pas serait acceptée ici, puis refusée par la colonne `date` de PostgreSQL —
+ * ou pire, lue comme un autre jour. Aller-retour exact obligatoire. Une chaîne sans préfixe
+ * `YYYY-MM-DD` n'est pas jugée ici (le reste de la validation s'en charge).
+ */
+function impossibleCalendarDay(value: string): boolean {
+  const day = ISO_DAY_PREFIX.exec(value);
+  if (!day) return false;
+  const [, y, m, d] = day;
+  const at = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  return at.toISOString().slice(0, 10) !== `${y}-${m}-${d}`;
+}
+
+/** Défaut d'une gratuité. Chaque champ manquant est un refus : la preuve EST l'enregistrement. */
+function freeTierDefect(record: FreeTierPriceRecord): string | null {
+  const loose = record as unknown as Record<string, unknown>;
+  if (
+    loose.promptMicrosPerMillion !== undefined ||
+    loose.completionMicrosPerMillion !== undefined
+  ) {
+    return "une gratuité ne porte aucun tarif";
+  }
+  const provenance = record.provenance as Partial<FreeTierProvenance> | undefined;
+  if (!provenance || blank(provenance.source)) return "source de la gratuité absente";
+  if (blank(provenance.verifiedOn) || !ISO_DAY.test(String(provenance.verifiedOn))) {
+    return "date de vérification absente ou non ISO (YYYY-MM-DD)";
+  }
+  if (impossibleCalendarDay(String(provenance.verifiedOn))) {
+    return `date de vérification hors calendrier : ${provenance.verifiedOn}`;
+  }
+  const verified = Date.parse(`${provenance.verifiedOn}T00:00:00.000Z`);
+  if (!Number.isFinite(verified))
+    return `date de vérification illisible : ${provenance.verifiedOn}`;
+  if (blank(record.conditions)) return "conditions d'usage absentes";
+  if (blank(record.verifiedQuota)) return "quota vérifié absent";
+  const from = Date.parse(record.effectiveAt);
+  const until = Date.parse(record.staleAfter);
+  if (!Number.isFinite(from)) return `effectiveAt illisible : ${record.effectiveAt}`;
+  if (!Number.isFinite(until)) return `staleAfter illisible : ${record.staleAfter}`;
+  if (until <= from) return "staleAfter n'est pas postérieur à effectiveAt";
+  /* Une gratuité ne s'applique pas avant d'avoir été constatée. */
+  if (from < verified) return "effectiveAt antérieur à la vérification";
+  if (until > verified + FREE_TIER_MAX_FRESHNESS_DAYS * DAY_MS) {
+    return `horizon de gratuité trop long (> ${FREE_TIER_MAX_FRESHNESS_DAYS} jours après la vérification)`;
+  }
+  return null;
+}
+
 /** `null` si l'entrée est exploitable, sinon le motif du refus. */
 export function recordDefect(record: PriceRecord): string | null {
-  if (record.modelId.trim().length === 0) return "modelId absent";
-  if (record.provider.trim().length === 0) return "provider absent";
+  if (blank(record.modelId)) return "modelId absent";
+  if (blank(record.provider)) return "provider absent";
   if (record.currency !== BUDGET_CURRENCY) return `devise ${record.currency} non supportée`;
+  for (const [label, value] of [
+    ["effectiveAt", record.effectiveAt],
+    ["staleAfter", record.staleAfter],
+  ] as const) {
+    if (typeof value === "string" && impossibleCalendarDay(value)) {
+      return `${label} hors calendrier : ${value}`;
+    }
+  }
+  if (record.kind === FREE_TIER) return freeTierDefect(record);
+  /* Un `kind` inconnu (JSON, cast) n'est pas un tarif par défaut : refusé. */
+  if (record.kind !== undefined && record.kind !== "RATE")
+    return `kind ${String(record.kind)} inconnu`;
   for (const [label, value] of [
     ["promptMicrosPerMillion", record.promptMicrosPerMillion],
     ["completionMicrosPerMillion", record.completionMicrosPerMillion],
@@ -176,10 +290,22 @@ export interface UnknownPriceOutcome {
 }
 
 export type PriceResolution =
-  { readonly kind: "PRICE"; readonly record: PriceRecord } | UnknownPriceOutcome;
+  | { readonly kind: "PRICE"; readonly record: RatePriceRecord }
+  | { readonly kind: typeof FREE_TIER; readonly record: FreeTierPriceRecord }
+  | UnknownPriceOutcome;
+
+/** Une gratuité chiffrée : 0 micro, et la preuve datée qui l'autorise. */
+export interface FreeTierCostOutcome {
+  readonly kind: typeof FREE_TIER;
+  readonly modelId: string;
+  readonly currency: BudgetCurrency;
+  readonly micros: 0;
+  readonly provenance: FreeTierProvenance;
+}
 
 export type CostMicrosOutcome =
   | { readonly kind: "COST_MICROS"; readonly currency: BudgetCurrency; readonly micros: number }
+  | FreeTierCostOutcome
   | UnknownPriceOutcome;
 
 const unknown = (modelId: string, defect: PriceDefect, reason: string): UnknownPriceOutcome => ({
@@ -209,28 +335,31 @@ export function resolvePrice(registry: PriceRegistry, modelId: string, now: Date
   if (!Number.isFinite(at)) {
     return unknown(modelId, "UNUSABLE_CLOCK", "horloge illisible : fraîcheur invérifiable");
   }
+  const what = record.kind === FREE_TIER ? "gratuité" : "tarif";
   if (at < Date.parse(record.effectiveAt)) {
     return unknown(
       modelId,
       "NOT_YET_EFFECTIVE",
-      `tarif applicable à partir de ${record.effectiveAt}`,
+      `${what} applicable à partir de ${record.effectiveAt}`,
     );
   }
+  /*
+   * Une gratuité périmée redevient INCONNUE (`STALE`), jamais « encore gratuite » et jamais un
+   * tarif : c'est la façon la plus probable dont un modèle « gratuit » se met à coûter.
+   */
   if (at >= Date.parse(record.staleAfter)) {
-    return unknown(modelId, "STALE", `tarif périmé depuis ${record.staleAfter} : non appliqué`);
+    return unknown(
+      modelId,
+      "STALE",
+      `${what} périmé(e) depuis ${record.staleAfter} : non appliqué(e)`,
+    );
   }
+  if (record.kind === FREE_TIER) return { kind: FREE_TIER, record };
   return { kind: "PRICE", record };
 }
 
-/**
- * Coût d'une consommation mesurée, en micros ENTIERS.
- *
- * Un tarif ne connaît que le prompt et la complétion. Quand le fournisseur facture PLUS que
- * prompt + completion (tokens de raisonnement, tokens de cache), le reste n'a pas de tarif
- * ici — et on ne lui en invente pas un, pas même 0. Le coût n'est alors pas prouvable.
- */
-export function costMicros(record: PriceRecord, usage: TokenUsage): CostMicrosOutcome {
-  const { modelId } = record;
+/** Compteurs illisibles : aucun chiffrage, gratuité comprise. */
+function tokenDefect(modelId: string, usage: TokenUsage): UnknownPriceOutcome | null {
   for (const [label, value] of [
     ["promptTokens", usage.promptTokens],
     ["completionTokens", usage.completionTokens],
@@ -240,6 +369,58 @@ export function costMicros(record: PriceRecord, usage: TokenUsage): CostMicrosOu
       return unknown(modelId, "NOT_REPRESENTABLE", `${label} inexploitable : ${String(value)}`);
     }
   }
+  return null;
+}
+
+/**
+ * Chiffrage d'une GRATUITÉ, INTERNE à ce module. Il ne prend pas un enregistrement mais une
+ * RÉSOLUTION `FREE_TIER`, que seule {@link resolvePrice} produit — après `recordDefect`, la
+ * fenêtre `effectiveAt`/`staleAfter` et l'horloge. Il n'existe donc aucun chemin exporté qui
+ * transforme un enregistrement non validé ou périmé en FREE_TIER.
+ *
+ * Une gratuité couvre l'APPEL, pas des classes de tokens : les tokens de raisonnement ou de
+ * cache au-delà de prompt + completion relèvent des mêmes conditions vérifiées. La validation
+ * des compteurs s'applique néanmoins : un décompte illisible reste NOT_REPRESENTABLE.
+ */
+function freeTierCost(
+  resolved: Extract<PriceResolution, { kind: typeof FREE_TIER }>,
+  usage: TokenUsage,
+): FreeTierCostOutcome | UnknownPriceOutcome {
+  const { record } = resolved;
+  return (
+    tokenDefect(record.modelId, usage) ?? {
+      kind: FREE_TIER,
+      modelId: record.modelId,
+      currency: record.currency,
+      micros: 0,
+      provenance: record.provenance,
+    }
+  );
+}
+
+/**
+ * Coût d'un TARIF sur une consommation mesurée, en micros ENTIERS. N'accepte qu'un tarif : une
+ * gratuité ne se chiffre qu'à travers {@link priceUsageMicros}, après résolution. Un
+ * enregistrement `FREE_TIER` glissé ici par cast est refusé `INVALID_ENTRY` — jamais 0.
+ *
+ * Un tarif ne connaît que le prompt et la complétion. Quand le fournisseur facture PLUS que
+ * prompt + completion (tokens de raisonnement, tokens de cache), le reste n'a pas de tarif
+ * ici — et on ne lui en invente pas un, pas même 0. Le coût n'est alors pas prouvable.
+ */
+export function costMicros(
+  record: RatePriceRecord,
+  usage: TokenUsage,
+): Exclude<CostMicrosOutcome, FreeTierCostOutcome> {
+  const { modelId } = record;
+  if ((record as PriceRecord).kind === FREE_TIER) {
+    return unknown(
+      modelId,
+      "INVALID_ENTRY",
+      "une gratuité ne se chiffre qu'après résolution (resolvePrice/priceUsageMicros)",
+    );
+  }
+  const unreadable = tokenDefect(modelId, usage);
+  if (unreadable) return unreadable;
 
   const billedWithoutPrice = usage.totalTokens - (usage.promptTokens + usage.completionTokens);
   if (billedWithoutPrice > 0) {
@@ -281,7 +462,8 @@ export function priceUsageMicros(
   now: Date,
 ): CostMicrosOutcome {
   const resolved = resolvePrice(registry, modelId, now);
-  if (resolved.kind !== "PRICE") return resolved;
+  if (resolved.kind === UNKNOWN_PRICE) return resolved;
+  if (resolved.kind === FREE_TIER) return freeTierCost(resolved, usage);
   return costMicros(resolved.record, usage);
 }
 

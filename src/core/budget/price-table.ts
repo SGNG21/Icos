@@ -3,16 +3,20 @@ import {
   MICROS_PER_UNIT,
   ambiguousModelIds,
   microsToAmount,
+  recordDefect,
   priceUsageMicros,
+  type FreeTierPriceRecord,
   type PriceRecord,
   type PriceRegistry,
 } from "@/core/pricing/registry";
 
 import {
   BUDGET_CURRENCY,
+  FREE_TIER,
   UNPRICED,
   type BudgetCurrency,
   type CostOutcome,
+  type FreeTierProvenance,
   type TokenUsage,
 } from "./contracts";
 
@@ -28,7 +32,8 @@ import {
  * UNPRICED consomme quand même le budget en tokens et doit être rapporté.
  */
 
-export interface PriceEntry {
+export interface RatePriceEntry {
+  readonly kind?: "RATE";
   /** Doit être égal à la clé qui porte l'entrée (garde contre les copier-coller). */
   readonly modelId: string;
   readonly currency: BudgetCurrency;
@@ -45,6 +50,39 @@ export interface PriceEntry {
   readonly effectiveAt?: string;
   readonly staleAfter?: string;
 }
+
+/**
+ * Une gratuité dans la forme « table ». Contrairement à un tarif injecté à la main, elle n'a
+ * AUCUNE fraîcheur par défaut : `effectiveAt` et `staleAfter` sont requis, parce qu'une gratuité
+ * jamais périmable est exactement le blanchiment que la décision 0078 interdit.
+ */
+export interface FreeTierPriceEntry {
+  readonly kind: typeof FREE_TIER;
+  readonly modelId: string;
+  readonly currency: BudgetCurrency;
+  readonly provider: string;
+  readonly provenance: FreeTierProvenance;
+  readonly conditions: string;
+  readonly verifiedQuota: string;
+  readonly effectiveAt: string;
+  readonly staleAfter: string;
+  readonly promptPerMillion?: never;
+  readonly completionPerMillion?: never;
+}
+
+/**
+ * Un enregistrement du registre que `recordDefect` REFUSE, projeté avec son défaut plutôt que
+ * réécrit. Sans cette forme, la projection copiait les champs connus d'une gratuité et laissait
+ * tomber ceux qu'elle interdit (un `promptMicrosPerMillion: 0` glissé par cast ou JSON) : le
+ * registre disait INVALID_ENTRY, la table disait FREE_TIER. Une entrée refusée reste refusée.
+ */
+export interface RefusedPriceEntry {
+  readonly kind: "REFUSED";
+  readonly modelId: string;
+  readonly defect: string;
+}
+
+export type PriceEntry = RatePriceEntry | FreeTierPriceEntry | RefusedPriceEntry;
 
 export type PriceTable = Readonly<Record<string, PriceEntry>>;
 
@@ -65,6 +103,27 @@ export function priceTableFrom(registry: PriceRegistry): PriceTable {
   for (const record of registry) {
     /* Deux tarifs concurrents : une table en écraserait un en silence. Aucun n'est projeté. */
     if (ambiguous.has(record.modelId)) continue;
+    /* VALIDER AVANT DE PROJETER : la projection ne doit jamais rendre valide ce que le registre refuse. */
+    const defect = recordDefect(record);
+    if (defect !== null) {
+      table[record.modelId] = { kind: "REFUSED", modelId: record.modelId, defect };
+      continue;
+    }
+    if (record.kind === FREE_TIER) {
+      /* Projetée telle quelle : aucun tarif n'est inventé pour une gratuité. */
+      table[record.modelId] = {
+        kind: FREE_TIER,
+        modelId: record.modelId,
+        currency: record.currency,
+        provider: record.provider,
+        provenance: record.provenance,
+        conditions: record.conditions,
+        verifiedQuota: record.verifiedQuota,
+        effectiveAt: record.effectiveAt,
+        staleAfter: record.staleAfter,
+      };
+      continue;
+    }
     table[record.modelId] = {
       modelId: record.modelId,
       currency: record.currency,
@@ -102,6 +161,30 @@ function toMicrosPerMillion(value: number): number | null {
 /** Entrée héritée vers `PriceRecord`, ou le motif du refus. */
 function toRecord(key: string, entry: PriceEntry): PriceRecord | string {
   if (entry.modelId !== key) return `entrée ${entry.modelId} rangée sous la clé ${key}`;
+  if (entry.kind === "REFUSED") return entry.defect;
+  const kind = (entry as { kind?: unknown }).kind;
+  /* Un `kind` inconnu (JSON, cast) n'est pas un tarif par défaut. */
+  if (kind !== undefined && kind !== "RATE" && kind !== FREE_TIER) {
+    return `kind ${String(kind)} inconnu`;
+  }
+  if (entry.kind === FREE_TIER) {
+    const loose = entry as unknown as Record<string, unknown>;
+    if (loose.promptPerMillion !== undefined || loose.completionPerMillion !== undefined) {
+      return "une gratuité ne porte aucun tarif";
+    }
+    const record: FreeTierPriceRecord = {
+      kind: FREE_TIER,
+      provider: entry.provider,
+      modelId: entry.modelId,
+      currency: entry.currency,
+      provenance: entry.provenance,
+      conditions: entry.conditions,
+      verifiedQuota: entry.verifiedQuota,
+      effectiveAt: entry.effectiveAt,
+      staleAfter: entry.staleAfter,
+    };
+    return record;
+  }
   if (entry.asOf.trim().length === 0) return "asOf absent";
   const promptMicrosPerMillion = toMicrosPerMillion(entry.promptPerMillion);
   const completionMicrosPerMillion = toMicrosPerMillion(entry.completionPerMillion);
@@ -145,6 +228,15 @@ export function priceUsage(
   }
 
   const outcome = priceUsageMicros([record], modelId, usage, now);
+  if (outcome.kind === FREE_TIER) {
+    return {
+      kind: FREE_TIER,
+      currency: outcome.currency,
+      amount: 0,
+      modelId,
+      provenance: outcome.provenance,
+    };
+  }
   if (outcome.kind !== "COST_MICROS") {
     return { kind: UNPRICED, modelId, reason: outcome.reason };
   }

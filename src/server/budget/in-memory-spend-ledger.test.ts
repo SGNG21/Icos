@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { UNMETERED, type Attribution, type BudgetCap } from "@/core/budget/contracts";
-import type { PriceEntry, PriceTable } from "@/core/budget/price-table";
+import type { FreeTierPriceEntry, PriceEntry, PriceTable } from "@/core/budget/price-table";
+import { FREE_TIER_MAX_FRESHNESS_DAYS, staleAfterFrom } from "@/core/pricing/registry";
 
 import { InMemorySpendLedger } from "./in-memory-spend-ledger";
 
@@ -14,6 +15,20 @@ const PRICED: PriceEntry = {
   asOf: "2026-10-02",
 };
 const table: PriceTable = { "test/model": PRICED };
+
+/* Gratuité FICTIVE valide aujourd'hui : le journal chiffre à l'horloge murale. */
+const TODAY = new Date().toISOString().slice(0, 10);
+const FREE: FreeTierPriceEntry = {
+  kind: "FREE_TIER",
+  modelId: "test/free",
+  currency: "EUR",
+  provider: "test",
+  provenance: { source: "https://example.invalid/terms", verifiedOn: TODAY },
+  conditions: "fixture",
+  verifiedQuota: "fixture",
+  effectiveAt: `${TODAY}T00:00:00.000Z`,
+  staleAfter: staleAfterFrom(`${TODAY}T00:00:00.000Z`, FREE_TIER_MAX_FRESHNESS_DAYS),
+};
 
 const entry = (
   modelId: string,
@@ -122,5 +137,28 @@ describe("InMemorySpendLedger", () => {
     await l.record(entry("test/model", 1, 2, { missionId: "m1" }));
     expect(l.entries()).toHaveLength(1);
     expect(l.entries()[0]?.modelId).toBe("test/model");
+  });
+});
+
+describe("InMemorySpendLedger — FREE_TIER (décision 0078)", () => {
+  it("une gratuité vérifiée est chiffrée à zéro et ne bloque pas un plafond monétaire", async () => {
+    const l = ledger({ kind: "CAPPED", maxCostMicros: 10 }, { ...table, "test/free": FREE });
+    await l.record(entry("test/free", 100, 50, { goalId: "g" }));
+    expect(await l.windowFor({ goalId: "g" })).toMatchObject({
+      pricedCalls: 1,
+      freeTierCalls: 1,
+      unpricedCalls: 0,
+      amount: 0,
+    });
+    expect(await l.checkBudget({ goalId: "g" })).toEqual({ kind: "ALLOW" });
+  });
+
+  it("le même modèle sans preuve de gratuité est UNPRICED et bloque le plafond monétaire", async () => {
+    const l = ledger({ kind: "CAPPED", maxCostMicros: 10 });
+    await l.record(entry("test/free", 100, 50, { goalId: "g" }));
+    expect(await l.checkBudget({ goalId: "g" })).toMatchObject({
+      kind: "DENY",
+      reason: "UNPRICED_USAGE_IN_WINDOW",
+    });
   });
 });

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { BUDGET_CURRENCY, MICROS_PER_EUR, UNMETERED, UNPRICED, type BudgetCap } from "./contracts";
+import {
+  BUDGET_CURRENCY,
+  FREE_TIER,
+  MICROS_PER_EUR,
+  UNMETERED,
+  UNPRICED,
+  type BudgetCap,
+  type CostOutcome,
+} from "./contracts";
 import {
   accumulate,
   decide,
@@ -54,6 +62,7 @@ describe("emptyWindow / accumulate", () => {
       currency: BUDGET_CURRENCY,
       amount: 0,
       pricedCalls: 0,
+      freeTierCalls: 0,
       unpricedCalls: 0,
       unmeteredCalls: 0,
       saturated: false,
@@ -392,5 +401,72 @@ describe("settleReservation — solde sur la consommation RÉELLE", () => {
       releasedTokens: 0,
       overrunTokens: 0,
     });
+  });
+});
+
+describe("FREE_TIER — une gratuité vérifiée est chiffrée à zéro, bornée en tokens (décision 0078)", () => {
+  const freeCost: CostOutcome = {
+    kind: FREE_TIER,
+    currency: BUDGET_CURRENCY,
+    amount: 0,
+    modelId: "test/free",
+    provenance: { source: "https://example.invalid/terms", verifiedOn: "2026-10-01" },
+  };
+  const freeCall = (prompt: number, completion: number): SpendObservation => ({
+    modelId: "test/free",
+    usage: { kind: "METERED", usage: usageOf(prompt, completion) },
+    cost: freeCost,
+  });
+
+  it("compte l'appel comme chiffré ET gratuit, jamais comme non chiffré", () => {
+    const w = windowOf(freeCall(100, 50));
+    expect(w).toMatchObject({
+      calls: 1,
+      totalTokens: 150,
+      amount: 0,
+      pricedCalls: 1,
+      freeTierCalls: 1,
+      unpricedCalls: 0,
+    });
+  });
+
+  it("n'ajoute RIEN au montant, même si un montant non nul s'y glisse par cast", () => {
+    const forged = { ...freeCost, amount: 5 } as unknown as CostOutcome;
+    const w = windowOf(metered(1, 1, 2), { ...freeCall(1, 1), cost: forged });
+    expect(w.amount).toBe(2);
+    expect(w.freeTierCalls).toBe(1);
+  });
+
+  it("un COST de montant 0 n'est PAS une gratuité : freeTierCalls reste à 0", () => {
+    const w = windowOf(metered(1, 1, 0));
+    expect(w).toMatchObject({ pricedCalls: 1, freeTierCalls: 0, unpricedCalls: 0 });
+  });
+
+  it("decide sous maxCostMicros autorise une fenêtre faite de gratuités et de coûts", () => {
+    const w = windowOf(freeCall(100, 50), metered(10, 10, 0.000_001));
+    expect(decide(w, capped({ maxCostMicros: 10 }))).toEqual({ kind: "ALLOW" });
+  });
+
+  it("…mais refuse toujours dès qu'un appel UNPRICED s'y trouve", () => {
+    const w = windowOf(freeCall(100, 50), metered(10, 10));
+    expect(decide(w, capped({ maxCostMicros: 10 }))).toMatchObject({
+      kind: "DENY",
+      reason: "UNPRICED_USAGE_IN_WINDOW",
+    });
+  });
+
+  it("le plafond de TOKENS mord sur une gratuité comme sur tout appel", () => {
+    const w = windowOf(freeCall(600, 600));
+    expect(decide(w, capped({ maxTotalTokens: 1_000, maxCostMicros: 10 }))).toMatchObject({
+      kind: "DENY",
+      reason: "TOKEN_CAP_REACHED",
+    });
+  });
+
+  it("decideReservation est inchangé : sous plafond monétaire, UNPRICED_RESERVATION", () => {
+    const w = windowOf(freeCall(1, 1));
+    expect(
+      decideReservation(w, 0, 10, capped({ maxTotalTokens: 1_000, maxCostMicros: 10 })),
+    ).toMatchObject({ kind: "DENY", reason: "UNPRICED_RESERVATION" });
   });
 });

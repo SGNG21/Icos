@@ -2,8 +2,13 @@ import type { AuditEntry } from "@/core/contracts/audit";
 import type { DispatchAttemptRepository } from "@/core/contracts/dispatch-attempt";
 import type { QualityControlRepository } from "@/core/contracts/quality-control";
 import type { MissionRepository } from "@/server/mission/ports";
+import { FREE_TIER } from "@/core/budget/contracts";
 import { SPEND_LEDGER_TENANT_ID } from "@/server/budget/compose-spend";
-import { PostgresSpendLedger, type MissionSpend } from "@/server/budget/postgres-spend-ledger";
+import {
+  PostgresSpendLedger,
+  type MissionSpend,
+  type MissionSpendRow,
+} from "@/server/budget/postgres-spend-ledger";
 import type { Container } from "@/server/container";
 import type {
   AuditRepository,
@@ -418,6 +423,23 @@ export function missionTraceDepsFromContainer(container: Container): MissionTrac
   };
 }
 
+/**
+ * What one spend row cost, in words that keep the three facts apart (decision 0078):
+ * a FREE_TIER row prints `0 <currency> (free tier, verified <date>)` from its own dated proof;
+ * an UNPRICED row prints `UNPRICED` (unknown model or unknown cost — never 0); a COST row prints
+ * its amount. A FREE_TIER row without its proof is printed as such, never as a plain zero.
+ */
+export function costLabel(e: MissionSpendRow): string {
+  if (e.costKind === FREE_TIER) {
+    return e.freeTier
+      ? `${["0", e.currency].filter(Boolean).join(" ")} (free tier, verified ${e.freeTier.verifiedOn})`
+      : "FREE_TIER (proof missing)";
+  }
+  if (e.amount === null) return e.costKind ?? "no cost";
+  if (e.costKind !== "COST") return e.costKind ?? "no cost";
+  return `${e.amount} ${e.currency ?? ""}`.trim();
+}
+
 /** The trace as a human-readable timeline (the `pnpm mission:trace` default output). */
 export function formatMissionTrace(trace: MissionTrace): string {
   const lines: string[] = [];
@@ -434,8 +456,7 @@ export function formatMissionTrace(trace: MissionTrace): string {
   } else {
     for (const e of trace.cost.entries) {
       const tokens = e.totalTokens === null ? "unmetered" : `${e.totalTokens} tokens`;
-      const amount =
-        e.amount === null ? (e.costKind ?? "no cost") : `${e.amount} ${e.currency ?? ""}`.trim();
+      const amount = costLabel(e);
       lines.push(
         `  ${e.observedAt}  ${e.scope.padEnd(11)} ${e.modelId}  ${tokens}  ${amount}  cache read=${e.cacheRead ?? "unknown"} creation=${e.cacheCreation ?? "unknown"}`,
       );
@@ -443,7 +464,7 @@ export function formatMissionTrace(trace: MissionTrace): string {
     const t = trace.cost.total;
     lines.push(
       `  mission total: ${t.calls} calls, ${t.totalTokens} tokens (prompt ${t.promptTokens}, completion ${t.completionTokens}), ` +
-        `${t.amount} ${t.currency} priced over ${t.pricedCalls} calls, ${t.unpricedCalls} unpriced, ${t.unmeteredCalls} unmetered`,
+        `${t.amount} ${t.currency} priced over ${t.pricedCalls} calls (${t.freeTierCalls} free tier), ${t.unpricedCalls} unpriced, ${t.unmeteredCalls} unmetered`,
     );
     const missionEntries = trace.cost.entries.filter((e) => e.scope === "mission");
     const knownRead = missionEntries.filter((e) => e.cacheRead !== null).length;

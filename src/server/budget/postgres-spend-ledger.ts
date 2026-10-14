@@ -4,6 +4,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import {
   attributionKey,
+  FREE_TIER,
   UNMETERED,
   UNPRICED,
   type Attribution,
@@ -133,6 +134,35 @@ function toObservation(row: Row): SpendObservation {
       cost: { kind: UNPRICED, modelId, reason: String(row.unpriced_reason) },
     };
   }
+  /*
+   * Le troisième mot (décision 0078) est relu POUR CE QU'IL EST. Avant lui, la branche finale
+   * lisait tout mot autre qu'UNPRICED comme un COST : un FREE_TIER relu par l'ancien code serait
+   * devenu « COST 0 », indiscernable d'un bug de chiffrage. Le lecteur change donc avec l'écrivain.
+   */
+  if (row.cost_kind === FREE_TIER) {
+    return {
+      modelId,
+      usage: { kind: "METERED", usage },
+      cost: {
+        kind: FREE_TIER,
+        currency: row.currency as BudgetCurrency,
+        amount: 0,
+        modelId,
+        provenance: {
+          source: String(row.free_tier_provenance),
+          verifiedOn: isoDay(row.free_tier_verified_on),
+        },
+      },
+    };
+  }
+  if (row.cost_kind !== "COST") {
+    /* Un mot inconnu n'est ni un coût ni une gratuité : il est non chiffré, fermé par défaut. */
+    return {
+      modelId,
+      usage: { kind: "METERED", usage },
+      cost: { kind: UNPRICED, modelId, reason: `cost_kind inconnu : ${String(row.cost_kind)}` },
+    };
+  }
   return {
     modelId,
     usage: { kind: "METERED", usage },
@@ -142,6 +172,12 @@ function toObservation(row: Row): SpendObservation {
       amount: Number(row.amount),
     },
   };
+}
+
+/** `date` PostgreSQL (chaîne ou Date selon le pilote) vers `YYYY-MM-DD`. */
+function isoDay(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
 }
 
 export class PostgresSpendLedger implements SpendLedgerPort {
@@ -197,7 +233,8 @@ export class PostgresSpendLedger implements SpendLedgerPort {
       insert into spend_ledger (
         id, tenant_id, attribution_key, mission_id, goal_id, brain_id, model_id,
         usage_kind, prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation, unmetered_reason,
-        cost_kind, currency, amount, unpriced_reason, observed_at
+        cost_kind, currency, amount, unpriced_reason, free_tier_provenance, free_tier_verified_on,
+        observed_at
       ) values (
         ${this.newId()},
         ${this.tenantId},
@@ -214,9 +251,11 @@ export class PostgresSpendLedger implements SpendLedgerPort {
         ${metered?.cache?.creation ?? null},
         ${entry.usage.kind === UNMETERED ? entry.usage.reason : null},
         ${cost?.kind ?? null},
-        ${cost?.kind === "COST" ? cost.currency : null},
-        ${cost?.kind === "COST" ? cost.amount : null},
+        ${cost?.kind === "COST" || cost?.kind === FREE_TIER ? cost.currency : null},
+        ${cost?.kind === "COST" ? cost.amount : cost?.kind === FREE_TIER ? 0 : null},
         ${cost?.kind === UNPRICED ? cost.reason : null},
+        ${cost?.kind === FREE_TIER ? cost.provenance.source : null},
+        ${cost?.kind === FREE_TIER ? cost.provenance.verifiedOn : null},
         ${entry.at}
       )
     `);
@@ -225,7 +264,8 @@ export class PostgresSpendLedger implements SpendLedgerPort {
   async windowFor(attribution: Attribution | null): Promise<SpendWindow> {
     const rows = (await this.options.db.execute(sql`
       select model_id, usage_kind, prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation,
-             unmetered_reason, cost_kind, currency, amount
+             unmetered_reason, cost_kind, currency, amount, unpriced_reason,
+             free_tier_provenance, free_tier_verified_on
         from spend_ledger
        where tenant_id = ${this.tenantId}
          and attribution_key = ${attributionKey(attribution)}
@@ -252,7 +292,8 @@ export class PostgresSpendLedger implements SpendLedgerPort {
     const rows = (await this.options.db.execute(sql`
       select id, attribution_key, mission_id, goal_id, brain_id, model_id, usage_kind,
              prompt_tokens, completion_tokens, total_tokens, cache_read, cache_creation, unmetered_reason, cost_kind,
-             currency, amount, unpriced_reason, observed_at, recorded_at
+             currency, amount, unpriced_reason, free_tier_provenance, free_tier_verified_on,
+             observed_at, recorded_at
         from spend_ledger
        where tenant_id = ${this.tenantId}
          and (mission_id = ${missionId}
@@ -281,6 +322,13 @@ export class PostgresSpendLedger implements SpendLedgerPort {
       currency: (row.currency as string | null) ?? null,
       amount: row.amount === null ? null : Number(row.amount),
       reason: ((row.unmetered_reason ?? row.unpriced_reason) as string | null) ?? null,
+      freeTier:
+        row.cost_kind === FREE_TIER
+          ? {
+              source: String(row.free_tier_provenance),
+              verifiedOn: isoDay(row.free_tier_verified_on),
+            }
+          : null,
       observedAt: new Date(row.observed_at as string).toISOString(),
       observation: toObservation(row),
     }));
@@ -318,6 +366,8 @@ export interface MissionSpendRow {
   readonly amount: number | null;
   /** Why the row is UNMETERED or UNPRICED, when it is. */
   readonly reason: string | null;
+  /** The dated proof of a FREE_TIER row (decision 0078); `null` for every other row. */
+  readonly freeTier: { readonly source: string; readonly verifiedOn: string } | null;
   readonly observedAt: string;
 }
 
