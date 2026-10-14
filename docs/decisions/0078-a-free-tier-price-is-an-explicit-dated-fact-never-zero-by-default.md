@@ -2,12 +2,41 @@
 
 ## Status
 
-Proposed (FABLE 5.1 convergence, 2026-10-14). Document only: no source, no migration, no
-registry entry is changed by this decision. Extends 0067 (pricing is a dated registry, money is
+Proposed (FABLE 5.1 convergence, 2026-10-14). **Owner's agreement in principle recorded on
+2026-10-14** (verbatim below); the decision stays _Proposed_ because the evidence of gratuity
+gathered on that date (§ Evidence of gratuity) does **not** yet meet the owner's own conditions
+for any provider: NVIDIA publishes no numeric quota and restricts the trial to non-production
+use, OpenRouter's daily quota depends on account facts no agent can read, and no account
+dashboard was read. No registry entry is changed by this decision: the registry ships **empty**
+of `FREE_TIER` records, and adding one is an owner act.
+
+Implementation state (branch `feat/fable-free-tier-pricing`, base `5efdfca`):
+
+- §3 (`auto/*` is never admissible where an operator names a model) is **already implemented**
+  on this base by commits `3222949` (shared `isMetaRoute` in `src/core/workers/meta-route.ts`,
+  refusals `AUTO_COMBO_NOT_ADMISSIBLE` in `src/config/env.ts` and
+  `src/core/autonomy/model-allowlist.ts`, reuse in `compute-fleet.ts`) and `be79d36` (review
+  follow-up: `no-think/` and `claude/` aliases, `claude/combo/<name>`, unrestricted-allowlist
+  admission paths). Nothing in §3 is reimplemented here.
+- §1, §2 and the schema option (a) are implemented and tested (unit, plus PostgreSQL on a
+  throwaway database only — no existing database was migrated), in the commit that follows this
+  document's revision. Option (a) is implemented with **two** proof columns instead of one
+  (`free_tier_provenance`, `free_tier_verified_on`), see § Consequences.
+
+Owner's decision of 2026-10-14, verbatim:
+
+> ADR 0078 : accord de principe pour distinguer explicitement FREE_TIER, UNPRICED et les autres
+> états de tarification. Finaliser l'ADR avec preuve de gratuité par provider et modèle, date de
+> vérification, conditions et quotas. L'implémentation peut être préparée et testée sur une base
+> PostgreSQL jetable, sans migration d'une base existante.
+
+> Ne confonds jamais modèle inconnu, coût inconnu et coût réellement nul.
+
+Extends 0067 (pricing is a dated registry, money is
 integer micros), 0071 §6 (unknown money fails closed in an inference plan), 0054/0071 (OmniRoute
 is the only routing authority) and 0064 (the fleet is reconciled, never enabled). The number is
 provisional; parallel lanes have collided on decision numbers before, so the integrator re-checks
-it. Owner's instruction, verbatim:
+it. Owner's original instruction, verbatim:
 
 > Conçois la prise en charge explicite d'un tarif à zéro pour les fournisseurs dont la gratuité
 > effective, les quotas et les conditions d'utilisation sont vérifiés. Ne confonds jamais modèle
@@ -40,7 +69,7 @@ into one word:
 
 The third fact has no representation today, so the honest system prints "unknown" for it. The
 tempting shortcut — admit a zero rate — would reintroduce the exact laundering 0067 closed: a
-typed `0` is a typo until proven otherwise, and a free tier is a *term of use with an expiry*,
+typed `0` is a typo until proven otherwise, and a free tier is a _term of use with an expiry_,
 not a rate.
 
 The same measurement produced a second finding. OmniRoute's `auto/*` combos are not models:
@@ -58,20 +87,20 @@ operator variables that name a model directly — `ICOS_AUTONOMY_ALLOWED_MODELS`
 Measured provider states on 2026-10-14, from the same document, kept here because the decision
 below relies on them:
 
-| Provider / id                                       | Last dated probe                                   |
-| --------------------------------------------------- | -------------------------------------------------- |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b`          | 200 in 1.0 s                                       |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`          | 200 in 0.7 s; reviewer certification 6/6           |
-| `nvidia/z-ai/glm-5.3`                               | 200 in 2.3 s; timeout on every reviewer task       |
-| `nvidia/*` deepseek-v4.1-flash, kimi-k3             | timeout 45 s; several ids 404 (stale catalogue)    |
-| `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` | 200 in 0.9 s                                       |
-| `openrouter/*:free` (super, gemma-4-31b, north-mini, `openrouter/free`) | **502**, **429** (31 s), **502**, **502** |
-| `groq/*` (gpt-oss-120b, gpt-oss-20b)                | **502** "upstream returned an empty response"      |
-| `oc/*-free` (OpenCode)                              | **403** "free tier can only be used from within OpenCode" / 400 |
-| `gemini/gemini-3.1-flash-lite`                      | 200 in 2.1 s; free tier not confirmed              |
-| `gemini/gemini-3.5-flash`                           | **503** (35 s)                                     |
-| `mistral/codestral-latest`                          | 200 in 0.3 s; free tier not confirmed              |
-| `auto/best-free`                                    | 200, served `claude-opus-5`                        |
+| Provider / id                                                           | Last dated probe                                                |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b`                              | 200 in 1.0 s                                                    |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                              | 200 in 0.7 s; reviewer certification 6/6                        |
+| `nvidia/z-ai/glm-5.3`                                                   | 200 in 2.3 s; timeout on every reviewer task                    |
+| `nvidia/*` deepseek-v4.1-flash, kimi-k3                                 | timeout 45 s; several ids 404 (stale catalogue)                 |
+| `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`                     | 200 in 0.9 s                                                    |
+| `openrouter/*:free` (super, gemma-4-31b, north-mini, `openrouter/free`) | **502**, **429** (31 s), **502**, **502**                       |
+| `groq/*` (gpt-oss-120b, gpt-oss-20b)                                    | **502** "upstream returned an empty response"                   |
+| `oc/*-free` (OpenCode)                                                  | **403** "free tier can only be used from within OpenCode" / 400 |
+| `gemini/gemini-3.1-flash-lite`                                          | 200 in 2.1 s; free tier not confirmed                           |
+| `gemini/gemini-3.5-flash`                                               | **503** (35 s)                                                  |
+| `mistral/codestral-latest`                                              | 200 in 0.3 s; free tier not confirmed                           |
+| `auto/best-free`                                                        | 200, served `claude-opus-5`                                     |
 
 OmniRoute returns no quota header; a 429 surfaces as "Provider returned error" with a per-id
 cooldown. The only place quotas can be read is the gateway dashboard, by the owner.
@@ -84,35 +113,53 @@ cooldown. The only place quotas can be read is the gateway dashboard, by the own
 and never an `UNPRICED` with a friendlier reason. It can only be produced by a registry record of
 a new shape:
 
-- `PriceRecord` becomes a discriminated union. The existing shape carries `kind: "RATE"` and is
-  otherwise unchanged — including the `value <= 0` refusal, which stays exactly as it is. The new
-  arm is `FreeTierPriceRecord`:
-  `{ kind: "FREE_TIER"; provider; modelId; currency; provenance; effectiveAt; staleAfter;
-  verifiedQuota }`. It has **no rate fields at all**: there is no place in it to type a zero.
-- `provenance` must name the terms or pricing page (a URL or document reference) **and** the date
-  the verification was made; `verifiedQuota` is a non-empty note of the quota and conditions
-  observed (credits, requests per minute, "development use only", account tier). A blank in either
-  is `INVALID_ENTRY`.
+- `PriceRecord` becomes a discriminated union. The existing shape is `RatePriceRecord`, whose
+  `kind` is `"RATE"` **or absent** (absent means RATE, so every existing rate record and fixture
+  keeps its meaning); it is otherwise unchanged — including the `value <= 0` refusal, which stays
+  exactly as it is. The new arm is `FreeTierPriceRecord`, and a free tier must say so: only an
+  explicit `kind: "FREE_TIER"` produces one. Any other `kind` value is `INVALID_ENTRY`, never a
+  rate by default.
+- **A `FREE_TIER` record requires the evidence of gratuity, field by field** (all required, a
+  blank is `INVALID_ENTRY`):
+
+  | Field                   | Content                                                                                                                                          |
+  | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `provider`              | the billing provider (e.g. `nvidia`, `openrouter`)                                                                                               |
+  | `modelId`               | the id **as the gateway echoes it** in the answer (that is what the ledger writes, §3)                                                           |
+  | `kind`                  | `"FREE_TIER"`                                                                                                                                    |
+  | `provenance.source`     | URL (or document reference) of the terms / pricing page read                                                                                     |
+  | `provenance.verifiedOn` | day of that reading, ISO `YYYY-MM-DD`                                                                                                            |
+  | `conditions`            | conditions of use read (e.g. "trial, internal testing and evaluation only, not production; inputs may be used to improve the provider's models") |
+  | `verifiedQuota`         | quota read (requests/minute, /day, credits, account tier) — or the explicit statement that the provider publishes none, never blank              |
+  | `effectiveAt`           | not before `provenance.verifiedOn`                                                                                                               |
+  | `staleAfter`            | at most **30 days** after `provenance.verifiedOn`                                                                                                |
+
+  It has **no rate fields at all** (`promptMicrosPerMillion?: never`): there is no place in it to
+  type a zero, and a record that carries one anyway (JSON, cast) is `INVALID_ENTRY`.
+
 - `staleAfter` is required and **short**: `recordDefect` refuses a `FREE_TIER` record whose
-  horizon exceeds `FREE_TIER_MAX_FRESHNESS_DAYS = 30` after `effectiveAt`
-  (defect `INVALID_ENTRY`, reason "free-tier horizon too long"). A free tier is a condition a
-  provider can withdraw without notice; 0067's 90-day default is for invoices and contracts, not
-  for a terms page. `staleAfterFrom(effectiveAt, 30)` is the way to compute it.
+  horizon exceeds `FREE_TIER_MAX_FRESHNESS_DAYS = 30` counted from the **verification day**
+  (not from a later `effectiveAt`, which would let a record outlive its reading). A free tier is
+  a condition a provider can withdraw without notice; 0067's 90-day default is for invoices and
+  contracts, not for a terms page. `staleAfterFrom(effectiveAt, 30)` with
+  `effectiveAt = verifiedOn` is the way to compute it.
 - Freshness is derived at resolution time, exactly as for a rate: `NOT_YET_EFFECTIVE`, `STALE`
   and `UNUSABLE_CLOCK` apply unchanged. `AMBIGUOUS` applies across both arms — a rate and a free
   tier for the same `modelId` is two competing entries, and neither is chosen.
 - `resolvePrice` returns `{ kind: "FREE_TIER", record }`; `costMicros` returns
-  `{ kind: "FREE_TIER", currency, micros: 0, provenance }` after the same token validation as a
+  `{ kind: "FREE_TIER", modelId, currency, micros: 0, provenance }` after the same token validation as a
   rate (`NOT_REPRESENTABLE` still fires on a negative or non-integer count). `UNPRICED_TOKENS`
-  does not apply to a free-tier record: the record prices the *call*, not token classes, so
+  does not apply to a free-tier record: the record prices the _call_, not token classes, so
   reasoning or cache tokens above `prompt + completion` are covered by the same verified terms.
   `priceUsage` projects it to `CostOutcome` as
   `{ kind: "FREE_TIER", currency, amount: 0, modelId, provenance }`.
-- `ICOS_PRICE_REGISTRY` stays `Object.freeze([])`. **No free-tier record for any real provider is
-  written by this decision.** The NVIDIA NIM measurement above is a probe result, not a reading of
-  NVIDIA's terms; writing a record for it from this document would be the fabrication 0067 §6
-  forbids. The first real record enters when the owner has read the terms and the dashboard quota
-  and writes the provenance line.
+- `ICOS_PRICE_REGISTRY` stays `Object.freeze([])`: **the registry ships EMPTY of `FREE_TIER`
+  records, and adding one is an owner act.** No free-tier record for any real provider is written
+  by this decision nor by its implementation. The NVIDIA NIM measurement above is a probe result;
+  the terms read on 2026-10-14 (§ Evidence of gratuity) are evidence, but incomplete evidence
+  (no published quota, non-production clause), and turning them into a record would be a choice
+  the owner has not made. The first real record enters when the owner has read the account's
+  dashboard quota, accepted the conditions for ICOS's use, and writes the provenance line.
 - `UNKNOWN_PRICE === UNPRICED` is unchanged. A zero rate, a missing record, a stale free tier and
   an unknown model all remain `UNPRICED`, each with its own `defect`. Only a usable `FREE_TIER`
   record says `FREE_TIER`.
@@ -148,6 +195,9 @@ from the first two.
   stays `FREE_TIER` after the record expires on day 31; only new calls become `UNPRICED`.
 
 ### 3. `auto/*` combos are never admissible where an operator names a model
+
+_Implemented on the base of this branch by `3222949` and `be79d36` (see Status). The text below
+is the decision as taken; it is not reimplemented._
 
 - `src/config/env.ts` rejects, at `loadEnv`, any entry of `ICOS_AUTONOMY_ALLOWED_MODELS` and any
   value of `ICOS_REVIEWER_MODEL` or `ICOS_PLANNER_MODEL` that starts with `auto/`
@@ -206,9 +256,110 @@ from the first two.
 - Correspondingly, a 200 does not make a free tier: Gemini flash-lite and Mistral codestral
   answered and have no confirmed free tier. They stay `UNPRICED` + `ABSENT`.
 
+## Evidence of gratuity (read 2026-10-14)
+
+Read-only, official sources only (provider pages, terms, public catalogue APIs and docs); no
+model was called, no account page was opened, no key was used. "non vérifié" means the official
+source could not be reached, or does not state the fact — never inferred. Third-party pages and
+forum posts by users were **not** taken as evidence (the frequently quoted "40 requests per
+minute" for NVIDIA comes from forum users and is therefore _non vérifié_). Measured availability
+is copied from `docs/icos/OMNIROUTE_MODEL_STRATEGY_2026-10-14.md` (probes of 2026-10-14, not
+repeated).
+
+Sources (all read on 2026-10-14):
+
+- **[N1]** NVIDIA model page, `https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b`:
+  "The trial service is governed by the NVIDIA API Trial Terms of Service."
+- **[N2]** NVIDIA model page, `https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b`:
+  same sentence.
+- **[N3]** NVIDIA API Trial Terms of Service, version line "v. September 19, 2025",
+  `https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf`
+  (text extracted from the PDF, quotes verbatim):
+  §1.1 "Subject to use limits defined by NVIDIA"; §1.2 "access to the API Service for limited
+  trial purposes only and without use of the API Service or Generated Content in production";
+  §1.4 "Your use of an API Service may be limited to a certain number of API access instances or
+  by API access duration. NVIDIA may extend trial service credits […] NVIDIA will deduct Credits
+  based on your usage […] Unless you purchase a Subscription from NVIDIA or a Service Provider
+  (as applicable), you may only use the API Service for internal testing and evaluation
+  purposes, not in production"; §2.6 no "confidential information, controlled or sensitive data
+  […] personal data (unless expressly permitted by an API Service)"; §3.3 NVIDIA collects
+  "User Content and Generated Content to improve NVIDIA products and services, including AI
+  models", and use "will be logged for security, fraud or abuse monitoring"; §15.7 terms "may
+  update […] effective when published". The terms contain **no fee schedule and no numeric
+  quota**.
+- **[N4]** NVIDIA NIM FAQ by NVIDIA staff (`https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317`,
+  posted 2024-09-11): the API catalog is "a trial experience of NVIDIA NIM" for "evaluation and
+  prototyping needs only"; "The rate of requests will vary per model queried and may vary based
+  on the number of concurrent users." No number.
+- **[O1]** OpenRouter public catalogue `https://openrouter.ai/api/v1/models` (462 models):
+  `pricing.prompt = "0"`, `pricing.completion = "0"` for
+  `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3-super-120b-a12b:free`,
+  `google/gemma-4-31b-it:free`, `cohere/north-mini-code:free`, `openrouter/free`; the paid
+  `nvidia/nemotron-3-ultra-550b-a55b` is listed at 0.0000006 / 0.0000024 USD per token.
+- **[O2]** OpenRouter endpoints API,
+  `https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b:free/endpoints`: one
+  endpoint, provider `Nvidia`, name `nvidia/nemotron-3-ultra-550b-a55b-20260604:free`, pricing
+  0 / 0, `data_policy: null`, context 1 000 000, max completion 65 536.
+- **[O3]** OpenRouter rate limits, `https://openrouter.ai/docs/api-reference/limits`: for a
+  "free model variant (with an ID ending in `:free`)": **20 requests per minute**; **50
+  requests per day** with less than **10** credits purchased (all time), **1 000 per day** with
+  at least 10 (constants `FREE_MODEL_RATE_LIMIT_RPM=20`, `FREE_MODEL_NO_CREDITS_RPD=50`,
+  `FREE_MODEL_HAS_CREDITS_RPD=1e3`, `FREE_MODEL_CREDITS_THRESHOLD=10` in the page); the
+  account's own ceiling is reported by `free_model_daily_requests` on `GET /api/v1/key`; a 429
+  can come from OpenRouter or from the upstream provider.
+- **[O4]** OpenRouter privacy/logging docs (`https://openrouter.ai/docs/features/privacy-and-logging`):
+  training opt-out is an account setting, "There are separate settings for paid and free
+  models"; with opt-out, "OpenRouter will not route to providers that train".
+
+| Provider                       | Model id as OmniRoute serves it                     | Source                     | Conditions of use (read)                                                                                                                                                                                      | Quota / rate limits (read)                                                                                                                                                       | Measured 2026-10-14                               | Gratuity verified?                                                                                                                                       |
+| ------------------------------ | --------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NVIDIA API Catalog (NIM trial) | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`          | [N1] [N3] [N4]             | trial only; **not in production**; "internal testing and evaluation" unless a paid Subscription; credits deducted per use; inputs/outputs may be used to improve NVIDIA models; no confidential/personal data | **non vérifié**: "use limits defined by NVIDIA", "will vary per model", no number published; account credits/limits only on the account page (owner)                             | 200 in 0.7 s; reviewer golden tasks 6/6           | **Partially**: no-charge trial _credits_ and conditions read; quota not published; production clause unresolved for ICOS → **insufficient for a record** |
+| NVIDIA API Catalog (NIM trial) | `nvidia/nvidia/nemotron-3-super-120b-a12b`          | [N2] [N3] [N4]             | same as above                                                                                                                                                                                                 | **non vérifié** (same)                                                                                                                                                           | 200 in 1.0 s; golden PASS (weaker: RCE not named) | **Partially**, same reasons → insufficient                                                                                                               |
+| NVIDIA API Catalog             | `nvidia/z-ai/glm-5.3`                               | model page **not read**    | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | 200 in 2.3 s; **timeout** on every reviewer task  | not a candidate (fails golden)                                                                                                                           |
+| NVIDIA API Catalog             | `nvidia/*` deepseek-v4.1-flash, kimi-k3             | not read                   | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | timeout 45 s; several 404                         | **not operational**                                                                                                                                      |
+| OpenRouter                     | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` | [O1] [O2] [O3] [O4]        | price 0/0 in the catalogue; served upstream by `Nvidia` (endpoint `…-20260604:free`) whose own data use is [N3] §3.3; endpoint `data_policy` **non publié**; OpenRouter general terms of service **not read** | **20 req/min; 50 req/day (< 10 credits purchased) or 1 000 req/day (≥ 10)** — which applies to the ICOS account is **non vérifié** (needs `GET /api/v1/key` with the key, owner) | 200 in 0.9 s                                      | **Partially**: price 0 and platform quota read; account tier and data policy unverified → insufficient                                                   |
+| OpenRouter                     | `openrouter/*nemotron-3-super*:free`                | [O1] [O3]                  | price 0/0                                                                                                                                                                                                     | as above                                                                                                                                                                         | **502**                                           | **not operational**                                                                                                                                      |
+| OpenRouter                     | `openrouter/*gemma-4-31b*:free`                     | [O1] [O3]                  | price 0/0                                                                                                                                                                                                     | as above                                                                                                                                                                         | **429** (31 s)                                    | **not operational**                                                                                                                                      |
+| OpenRouter                     | `openrouter/*north-mini-code*:free`                 | [O1] [O3]                  | price 0/0                                                                                                                                                                                                     | as above                                                                                                                                                                         | **502**                                           | **not operational**                                                                                                                                      |
+| OpenRouter                     | `openrouter/free`                                   | [O1]                       | price 0/0; it is OpenRouter's own router (served model chosen by OpenRouter), i.e. a meta-route like `auto/*`                                                                                                 | as above                                                                                                                                                                         | **502**                                           | **not operational**, and never admissible as one model                                                                                                   |
+| Groq                           | `groq/*` gpt-oss-120b, gpt-oss-20b                  | **not read**               | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | **502** "upstream returned an empty response"     | **not operational**                                                                                                                                      |
+| OpenCode                       | `oc/*-free`                                         | provider's own 403 message | "free tier can only be used from within OpenCode"                                                                                                                                                             | —                                                                                                                                                                                | **403** / 400                                     | **not usable** by ICOS                                                                                                                                   |
+| Google Gemini                  | `gemini/gemini-3.1-flash-lite`                      | not read                   | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | 200 in 2.1 s                                      | **non vérifié** → stays `UNPRICED` + `ABSENT`                                                                                                            |
+| Google Gemini                  | `gemini/gemini-3.5-flash`                           | not read                   | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | **503** (35 s)                                    | **not operational**                                                                                                                                      |
+| Mistral                        | `mistral/codestral-latest`                          | not read                   | non vérifié                                                                                                                                                                                                   | non vérifié                                                                                                                                                                      | 200 in 0.3 s                                      | **non vérifié** → stays `UNPRICED` + `ABSENT`                                                                                                            |
+
+Reading of the table against the owner's conditions (proof per provider and model, verification
+date, conditions, quotas):
+
+- **No row satisfies all four.** The best two (NVIDIA NIM nemotron ultra/super, OpenRouter
+  nemotron-ultra:free) have a dated source and read conditions, but NVIDIA publishes no quota
+  and OpenRouter's applicable daily quota depends on the account's purchase history. Both
+  facts are on account pages that require the owner's session; an agent does not read them.
+- **NVIDIA's trial excludes production.** Whether ICOS's autonomous development loop is
+  "internal testing and evaluation" or "production" in the sense of [N3] is a legal reading for
+  the owner, not an engineering inference. Until the owner answers it, a `FREE_TIER` record for
+  `nvidia/*` would assert a right ICOS may not have.
+- **Data use.** [N3] §3.3 lets NVIDIA use prompts and outputs to improve its models, and the
+  OpenRouter free endpoint is served by NVIDIA. Prompts carrying repository content, secrets or
+  tenant data must not go to these endpoints regardless of price; this is a routing/data policy
+  question that a price record does not answer and must not be read as answering.
+- **The echoed model id is unverified.** A record must be keyed on the id the gateway echoes
+  (§3). The probes recorded the requested ids; the echoed `model` string was not captured, so
+  even a complete record would need one dated probe noting it.
+- Groq, four OpenRouter free variants, Gemini 3.5-flash and every OpenCode `-free` id are **not
+  operational** on 2026-10-14 (502/429/503/403) and must not receive a record whatever their
+  price (§4).
+
+What would make a record admissible (owner act, per model): read the account quota/credits in
+the provider dashboard (NVIDIA) or `free_model_daily_requests` (OpenRouter) and write it in
+`verifiedQuota`; decide that ICOS's use is within the stated conditions and write them in
+`conditions`; take one dated probe noting the echoed model id; set
+`effectiveAt = verifiedOn`, `staleAfter = staleAfterFrom(effectiveAt, 30)`; commit the record.
+
 ## Consequences
 
-**Files that change when this is implemented** (none changed by this document):
+**Files changed by the implementation** (branch `feat/fable-free-tier-pricing`; §3's files were
+already changed on the base by `3222949`/`be79d36`):
 
 - `src/core/pricing/registry.ts` — `PriceRecord` union with `kind: "RATE" | "FREE_TIER"`,
   `FreeTierPriceRecord`, `FREE_TIER_MAX_FRESHNESS_DAYS`, `recordDefect` arms, `FREE_TIER`
@@ -216,35 +367,44 @@ from the first two.
   validation. The `value <= 0` refusal on rate fields is untouched.
 - `src/core/budget/contracts.ts` — `FREE_TIER` constant and the third `CostOutcome` arm;
   `SpendWindow.freeTierCalls`.
-- `src/core/budget/price-table.ts` — `PriceEntry` gains an optional `kind` and `verifiedQuota`;
+- `src/core/budget/price-table.ts` — `PriceEntry` becomes `RatePriceEntry | FreeTierPriceEntry`
+  (the free arm requires `effectiveAt`/`staleAfter`: no `NEVER_STALE` for a free tier);
   `priceTableFrom` projects a free-tier record without inventing rates; `toRecord` maps a
   `kind: "FREE_TIER"` entry to the new arm and refuses one that also carries rates.
 - `src/core/budget/spend.ts` — `accumulate` as in §2.
-- `src/server/budget/postgres-spend-ledger.ts` and `in-memory-spend-ledger.ts` — write
-  `cost_kind = 'FREE_TIER'`, `amount = 0`, `currency`, `free_tier_provenance`; `toObservation`
-  reads the third word back (today its `else` branch would read an unknown word as `COST`, which
-  is why the reader changes in the same commit as the writer).
+- `src/server/budget/postgres-spend-ledger.ts` — writes `cost_kind = 'FREE_TIER'`, `amount = 0`,
+  `currency`, `free_tier_provenance`, `free_tier_verified_on`; `toObservation` reads the third
+  word back, and an **unknown** `cost_kind` is now read as `UNPRICED` instead of falling into the
+  old `else` → `COST` branch (that is why the reader changes in the same commit as the writer).
+  `MissionSpendRow.freeTier` carries the dated proof to the trace. `in-memory-spend-ledger.ts`
+  needs no change: it prices through `priceUsage` and folds through `accumulate`.
 - `src/server/mission/mission-trace.ts` — the entry line prints
   `0 EUR (free tier, verified <date>)` from `costKind` + `free_tier_provenance`, and the total
   line prints `… priced over N calls (M free tier), …`.
-- `src/features/cockpit/truth-projection.ts` — `amount24h` is real when every call in the window
-  is `COST` or `FREE_TIER`; `unpriced24h` keeps counting only `UNPRICED`.
+- `src/features/cockpit/truth-projection.ts` / `load.ts` — **no change needed**, read: the
+  cockpit counts `amount IS NULL` rows as unpriced and sums `amount`; a `FREE_TIER` row has
+  `amount = 0` NOT NULL by CHECK, so `amount24h` is already real when every call is `COST` or
+  `FREE_TIER`, and `unpriced24h` already excludes free-tier rows.
 - `src/core/workers/inference-plan.ts` — `worstCaseCost` returns `{ micros: 0 }` for a
-  `FREE_TIER` resolution; recorded per stage as `costMicros: 0, costKind: "FREE_TIER"` so the
-  evidence does not read as a measured rate.
-- `src/config/env.ts`, `src/core/autonomy/model-allowlist.ts`, `src/server/workers/compute-fleet.ts`
-  — the shared `isMetaRoute` predicate and the three refusals of §3.
+  `FREE_TIER` resolution; the candidate records `worstCaseCostMicros: 0, costKind: "FREE_TIER"`
+  so the evidence does not read as a measured rate.
+- `src/server/database/schema.ts` + `drizzle/0066_spend_ledger_free_tier.sql` + journal entry
+  (idx 62) — see Schema below.
+- (§3, already on the base) `src/config/env.ts`, `src/core/autonomy/model-allowlist.ts`,
+  `src/core/workers/meta-route.ts`, `src/server/workers/compute-fleet.ts`.
 
 **Schema: one migration, and why that option rather than `COST` + `price_kind`.**
 `spend_ledger` carries the distinction in its row shape, not in application convention — that is
 the stated principle of migration 0055 ("no writer, present or future, can launder an unknown into
 a zero"). Two options were weighed:
 
-- *(a)* widen `spend_ledger_cost_kind_check` to `('COST','UNPRICED','FREE_TIER')`, add
-  `free_tier_provenance text`, and extend `spend_ledger_cost_shape` with
-  `WHEN 'FREE_TIER' THEN amount = 0 AND currency IS NOT NULL AND unpriced_reason IS NULL AND
-  free_tier_provenance IS NOT NULL`;
-- *(b)* keep the CHECK, store `COST` with `amount = 0`, and add a `price_kind` column.
+- _(a)_ widen `spend_ledger_cost_kind_check` to `('COST','UNPRICED','FREE_TIER')`, add
+  `free_tier_provenance text` and `free_tier_verified_on date`, and extend
+  `spend_ledger_cost_shape` with `WHEN 'FREE_TIER' THEN amount IS NOT NULL AND amount = 0 AND
+currency IS NOT NULL AND unpriced_reason IS NULL AND free_tier_provenance` non-blank `AND
+free_tier_verified_on IS NOT NULL`, every other arm requiring both proof columns NULL
+  (`amount IS NOT NULL` is explicit because `NULL = 0` is NULL, which a CHECK accepts);
+- _(b)_ keep the CHECK, store `COST` with `amount = 0`, and add a `price_kind` column.
 
 **(a) is chosen.** Today a `COST` row with `amount = 0` is reachable only by a metered call of
 zero tokens (rates are strictly positive and a non-zero remainder rounds up), so "COST 0 with
@@ -258,14 +418,20 @@ the amount proves nothing and the dated verification is the proof; a later regis
 not rewrite it (0055). Data safety: adding a nullable text column and widening two CHECKs is
 catalog-only, rewrites no row, and every existing row satisfies the new constraints (its
 `cost_kind` is `COST` or `UNPRICED`, its new column `NULL`); `ALTER TABLE` takes ACCESS EXCLUSIVE
-briefly, as 0065 did. Rollback: drop the two widened constraints and restore the 0055 text, keep
-the column and every row — any `FREE_TIER` row written in between must first be preserved or the
-narrower CHECK will not validate; the migration header states this, in the 0065 pattern. Next
-free number at the time of writing: `0066` (re-check at integration). Tenant key: `tenant_id`,
-unchanged, first term of the only read index; RLS strategy unchanged (applicative isolation, as
+briefly, as 0065 did. Rollback: drop the two widened constraints and restore the 0055 text
+`NOT VALID`, keep both columns and every row — the table is append-only, so a `FREE_TIER` row
+written in between is kept as evidence while new writes are narrowed back; `VALIDATE
+CONSTRAINT` returns to 0055's validated state when no such row exists. The migration header
+states this, in the 0065 pattern. `0066` was free on every local ref (97) and worktree on
+2026-10-14 (re-check at integration). The verification day is a separate `date` column rather
+than text inside `free_tier_provenance`, so the trace prints it without parsing and a CHECK can
+require it. Tenant key: `tenant_id`, unchanged, first term of the only read index; RLS strategy unchanged (applicative isolation, as
 every ICOS table).
 
-**Tests to add** (each one a mutation the implementation must fail on):
+**Tests** (each one a mutation the implementation must fail on). Registry, budget, inference
+plan, ledger and mission-trace items are added by the implementation commit; the env items were
+added by `3222949`/`be79d36`; the metered-fetch pin already exists
+(`metered-fetch.test.ts`, "impute au modèle rapporté par la réponse, pas à celui demandé"):
 
 - registry: a `FREE_TIER` record resolves `FREE_TIER` with `micros: 0`; the same record with
   `staleAfter` 31 days out is `INVALID_ENTRY`; past `staleAfter` it is `UNPRICED`/`STALE`, never
@@ -329,7 +495,9 @@ the probe states tabulated in Context, `auto/best-free` → `claude-opus-5`, NIM
 6/6 on the reviewer golden tasks, no quota headers). No measurement was repeated and no provider
 was called for this document.
 
-Not evidence, stated as such: no provider's terms of use were read for this decision, which is
-why it writes no record. Completion of the implementation requires the tests above to pass on an
+Terms of use and quotas read on 2026-10-14 are listed in § Evidence of gratuity, with what
+could not be verified. They are evidence for the owner's decision, not a record: the registry
+still writes none. Completion of the implementation requires the tests above to pass on an
 isolated PostgreSQL and the migration to be proven on a fresh database and on one holding 0055
-rows, in the 0065 pattern.
+rows, in the 0065 pattern (done on a throwaway PostgreSQL 14 container; see the implementation
+commit message for the counts).
