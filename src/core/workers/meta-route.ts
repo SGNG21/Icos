@@ -26,10 +26,24 @@
  *   3. What remains is a meta-route iff it is exactly `auto` or starts with `auto/`
  *      (src/sse/handlers/autoRouting.ts:93; combo fuzzy match chat.ts:646-656).
  *
+ *   4. PROVIDER-SIDE AUTOMATIC MODELS. Some providers expose a model whose job is to pick
+ *      another model (`openrouter/auto`, Cursor's `auto`, Kilo's `kilo-auto/*`, the
+ *      "Free Models Router" ...). The gateway forwards them as ordinary provider models, but
+ *      the model that answers is chosen upstream, possibly a paid one. They are matched
+ *      EXACTLY, `<provider id or alias>/<provider model id>`, against the list below, read in
+ *      the installed gateway's registry (open-sse/config/providers/registry, OmniRoute
+ *      3.8.49); a client addresses a provider by its id or its alias
+ *      (open-sse/services/model.ts:414-420, resolveProviderAlias :134). A trailing `[1m]`
+ *      (extended-context marker, stripped by parseModel at model.ts:397-400) is peeled first.
+ *      Exact matching is the point: `./auto`, `src/auto`, `my-openrouter/auto` stay ordinary
+ *      strings.
+ *
  * NOT meta-routes by this rule: `autonomous/x`, `automatic-model`, `x/auto/y`, `AUTO/x`,
- * ` auto/x` (untrimmed). Provider-side automatic models (`openrouter/auto` and the like) and
- * gateway-configured redirections (model-combo mappings, task-aware routing) are NOT detected:
- * the first is a provider model, the second is gateway state no pure predicate can read.
+ * ` auto/x` (untrimmed), `./auto`. A router model a provider adds to its DYNAMIC catalogue
+ * after 3.8.49, and gateway-configured redirections (model-combo mappings, task-aware
+ * routing), are NOT detected: the first is not in the registry this list was read from, the
+ * second is gateway state no pure predicate can read — the metered proxy's served-model check
+ * (`SPEND_MODEL_SUBSTITUTED`) is the runtime net for both.
  *
  * PURE: the one definition of "not one model", shared by every boundary that refuses it.
  */
@@ -39,6 +53,70 @@ const AUTO_ROUTE = "auto";
 const NO_THINK_WRAPPER = "no-think/";
 const CC_DISCOVERY_WRAPPER = "claude/";
 const CC_DISCOVERY_COMBO = "combo/";
+
+const EXTENDED_CONTEXT_SUFFIX = "[1m]";
+
+/**
+ * Provider-side automatic models, as `<provider id or alias>/<model id>`. Each row cites the
+ * registry entry (path under open-sse/config/providers/registry, 3.8.49) that declares the
+ * provider's id/alias and the router model.
+ */
+const PROVIDER_ROUTERS: ReadonlyArray<{
+  readonly prefixes: readonly string[];
+  readonly models: readonly string[];
+}> = [
+  /* openrouter/index.ts:4-5 (id = alias = openrouter), :16 `auto` "Auto (Best Available)".
+   * OpenRouter's own catalogue ids for its routers, `openrouter/auto(-beta)` and
+   * `openrouter/free` "Free Models Router", are named in config/freeModelCatalog.data.ts:273-274;
+   * a synced catalogue exposes them under the provider prefix, and `openrouter/free` is a
+   * listed id measured 502 on 2026-10-14 (OMNIROUTE_MODEL_STRATEGY_2026-10-14.md §1). */
+  {
+    prefixes: ["openrouter"],
+    models: ["auto", "free", "openrouter/auto", "openrouter/auto-beta", "openrouter/free"],
+  },
+  /* factory/index.ts:20-21, :32 `auto` "Factory Auto (best model)". */
+  { prefixes: ["factory"], models: ["auto"] },
+  /* trae/index.ts:4-5 (alias tr), :13 `auto` "Server Picks", :14 `work` "Work (Auto · fast)". */
+  { prefixes: ["trae", "tr"], models: ["auto", "work"] },
+  /* dify/index.ts:4-5, :11 `auto`. */
+  { prefixes: ["dify"], models: ["auto"] },
+  /* cursor/index.ts:5-6 (alias cu), :17 `auto` "Auto (Server Picks)". */
+  { prefixes: ["cursor", "cu"], models: ["auto"] },
+  /* charm-hyper/index.ts:4-5, :12 `hyper/auto`. */
+  { prefixes: ["charm-hyper"], models: ["hyper/auto"] },
+  /* orcarouter/index.ts:12-13, :27 `orcarouter/auto` "Auto (smart routing)". */
+  { prefixes: ["orcarouter"], models: ["orcarouter/auto"] },
+  /* kilo-gateway/index.ts:4-5 (alias kg), :13-15 `kilo-auto/*`; freeModelCatalog.data.ts:273-274
+   * lists `openrouter/auto-beta` and `openrouter/free` under kilo-gateway. */
+  {
+    prefixes: ["kilo-gateway", "kg"],
+    models: [
+      "kilo-auto/frontier",
+      "kilo-auto/balanced",
+      "kilo-auto/free",
+      "openrouter/auto-beta",
+      "openrouter/free",
+    ],
+  },
+  /* kilocode/index.ts:4-5 (alias kc), :27 `openrouter/free` "Free Models Router". */
+  { prefixes: ["kilocode", "kc"], models: ["openrouter/free"] },
+  /* cline/index.ts:4-5 (alias cl), :79-80 `openrouter/free` "Free Models Router". */
+  { prefixes: ["cline", "cl"], models: ["openrouter/free"] },
+  /* dgrid/index.ts:4-5, :13 `dgridai/free` "DGrid Free Models Router". */
+  { prefixes: ["dgrid"], models: ["dgridai/free"] },
+  /* bazaarlink/index.ts:4-5 (alias bzl), :13 `auto:free` "Auto Free (Zero Cost)". */
+  { prefixes: ["bazaarlink", "bzl"], models: ["auto:free"] },
+  /* perplexity/web/index.ts:4-5 (id perplexity-web, alias pplx-web), :12 `pplx-auto`. */
+  { prefixes: ["perplexity-web", "pplx-web"], models: ["pplx-auto"] },
+  /* adapta-web/index.ts:4-5 (alias adp-web), :12 `adapta-one` "Adapta ONE (Auto)". */
+  { prefixes: ["adapta-web", "adp-web"], models: ["adapta-one"] },
+];
+
+export const PROVIDER_AUTO_ROUTES: ReadonlySet<string> = new Set(
+  PROVIDER_ROUTERS.flatMap(({ prefixes, models }) =>
+    prefixes.flatMap((prefix) => models.map((model) => `${prefix}/${model}`)),
+  ),
+);
 
 export function isMetaRoute(modelId: string): boolean {
   let id = modelId;
@@ -54,5 +132,7 @@ export function isMetaRoute(modelId: string): boolean {
     }
   }
 
-  return id === AUTO_ROUTE || id.startsWith(META_ROUTE_PREFIX);
+  if (id.endsWith(EXTENDED_CONTEXT_SUFFIX)) id = id.slice(0, -EXTENDED_CONTEXT_SUFFIX.length);
+
+  return id === AUTO_ROUTE || id.startsWith(META_ROUTE_PREFIX) || PROVIDER_AUTO_ROUTES.has(id);
 }
