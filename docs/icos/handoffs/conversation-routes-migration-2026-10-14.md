@@ -65,7 +65,10 @@ stop instead of a silent paid fallback), but it must be fixed in the env first.
      reviewer's model, as before. Setting `ICOS_CONVERSATION_MODELS` decouples them;
    - a per-class `ICOS_COGNITIVE_MODEL_*` still wins for its class; the list only adds fallbacks.
 5. Re-probe the listed models before relying on them (`pnpm compute:probe` or one manual call):
-   the 2026-10-14 measurement ages (OpenRouter `:free` and Groq answered 502/429 that day).
+   the 2026-10-14 measurement ages (OpenRouter `:free` and Groq answered 502/429 that day). The
+   default NVIDIA pair is a DATED observation (free NIM credits, 200 that day), not a permanent
+   guarantee that it stays free or available: set the list explicitly and check the provider's
+   current terms and quotas before activation.
 6. Deploy, then check one CEO message and one cognitive turn; a `CONVERSATION_MODEL_FALLBACK` line
    on stderr means the first model failed and the second answered.
 
@@ -75,7 +78,19 @@ Rollback: revert the branch; the variables added here are ignored by the previou
 ## Not covered here
 
 - A gateway-side combo, pattern mapping or routing override bound to a concrete-looking id is not
-  visible to a static rule. The metered proxy now logs `SPEND_MODEL_SUBSTITUTED` when the served
-  model differs from the requested one (see the budget commit); it reports, it does not refuse.
+  visible to a static rule. The metered proxy logs `SPEND_MODEL_SUBSTITUTED` when the served
+  model differs from the requested one (see the budget commit).
+- **That event is telemetry, not enforcement.** Reporting rather than refusing does NOT prevent
+  later substituted calls, and does NOT by itself enforce the owner's rule against unauthorised
+  paid models: a combo that redirects a listed free id to a paid model keeps doing so until an
+  operator acts on the log. A durable refusal (a substitution count in the spend window, a new
+  deny reason, a migration) needs its own ADR and owner decision.
 - Which model actually answered a cognitive turn is not yet recorded in the turn's provenance
-  (the engine label names the chain); the spend ledger records the served model per call.
+  (the engine label names the chain). The spend ledger records, per call, the most reliable
+  served identity it has: OmniRoute's `X-OmniRoute-Model` header (the resolved backend model,
+  which the gateway's `echoRequestedModelName` setting does not rewrite), else the body's
+  `model`. If a gateway sends no such header AND echoes the requested name in the body, the
+  ledger can only record the requested name; the header's presence on streaming responses is
+  read from the gateway source (chatCore.ts:4697-4700), not measured live.
+- Ids are matched after whitespace normalisation around `/` (the gateway trims provider and model
+  separately), so `openrouter/ auto` is refused like `openrouter/auto`.

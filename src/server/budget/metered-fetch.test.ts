@@ -959,3 +959,84 @@ describe("SPEND_MODEL_SUBSTITUTED — the served model is checked against the re
     }
   });
 });
+
+describe("the ledger records the SERVED identity: X-OmniRoute-Model first, then the body", () => {
+  const REQUESTED = "cc/claude-haiku-4-5";
+  const raw = { input_tokens: 10, output_tokens: 2 };
+  const json = (bodyModel: string, header?: string) =>
+    new Response(JSON.stringify({ model: bodyModel, choices: [], usage: raw }), {
+      headers: {
+        "content-type": "application/json",
+        ...(header ? { "x-omniroute-model": header } : {}),
+      },
+    });
+  /* Anthropic stream: the only stream whose usage is read (the egress path of workers). */
+  const sse = (bodyModel: string, header?: string) =>
+    new Response(
+      `data: ${JSON.stringify({ type: "message_start", message: { model: bodyModel, usage: raw } })}\n\ndata: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 2 } })}\n\n`,
+      {
+        headers: {
+          "content-type": "text/event-stream",
+          ...(header ? { "x-omniroute-model": header } : {}),
+        },
+      },
+    );
+  const reservedPort = (ledger: SpendLedgerPort) => {
+    const reservation = { id: "id", ownerToken: "o", reservedTokens: 100 };
+    return {
+      reserve: vi.fn(async () => ({ kind: "RESERVED" as const, reservation })),
+      renew: vi.fn(async () => true),
+      release: vi.fn(async () => true),
+      settle: vi.fn(async (_r: SpendReservation, entry: Omit<SpendEntry, "attribution">) => {
+        await ledger.record({ ...entry, attribution: null });
+        return {
+          ...settleReservation(reservation.reservedTokens, entry.usage),
+          closed: false,
+          unauthenticated: true,
+          attributedTo: null,
+        };
+      }),
+    } satisfies SpendReservationPort;
+  };
+
+  for (const reserved of [false, true])
+    for (const [format, url, make] of [
+      ["JSON", URL_UNDER_TEST, json],
+      ["SSE", "https://gateway.invalid/v1/messages", sse],
+    ] as const) {
+      const path = `${reserved ? "reserved" : "unreserved"} ${format}`;
+
+      it(`${path}: echoRequestedModelName (body = requested, header = served) records the header`, async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          const ledger = new FakeLedger();
+          await meteredFetch(async () => make(REQUESTED, "claude-opus-5"), {
+            ledger,
+            ...(reserved ? { reservations: reservedPort(ledger) } : {}),
+          })(url, chatInit(REQUESTED));
+          expect(ledger.recorded.map((e) => e.modelId)).toEqual(["claude-opus-5"]);
+          expect(
+            warn.mock.calls
+              .map((c) => JSON.parse(String(c[0])) as { event: string })
+              .filter((e) => e.event === "SPEND_MODEL_SUBSTITUTED"),
+          ).toMatchObject([{ served: REQUESTED, servedHeader: "claude-opus-5" }]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it(`${path}: without the header, the body's model is recorded`, async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          const ledger = new FakeLedger();
+          await meteredFetch(async () => make("claude-haiku-4-5"), {
+            ledger,
+            ...(reserved ? { reservations: reservedPort(ledger) } : {}),
+          })(url, chatInit(REQUESTED));
+          expect(ledger.recorded.map((e) => e.modelId)).toEqual(["claude-haiku-4-5"]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    }
+});
