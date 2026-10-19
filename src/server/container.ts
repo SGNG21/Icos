@@ -37,6 +37,7 @@ import type { AuthGateway, AuthHttpGateway, RoleRepository } from "@/server/auth
 import { PostgresHumanUserRepository } from "@/server/repositories/postgres/human-user-repository";
 import { PostgresRoleRepository } from "@/server/repositories/postgres/role-repository";
 import { InMemoryAuditLog } from "@/server/audit/in-memory-audit-log";
+import { createDatabaseHealth, type DatabaseHealthPort } from "@/server/database/health";
 import { createDatabase } from "@/server/database/client";
 import type { Database } from "@/server/database/client";
 import { PersistenceUnavailableError } from "@/server/database/errors";
@@ -371,6 +372,8 @@ export interface Container {
   conversationService: ConversationService;
   ceoService: CeoApplicationService;
   db?: Database;
+  /** Sonde de disponibilité PostgreSQL sur le pool partagé (backend PostgreSQL uniquement). */
+  databaseHealth?: DatabaseHealthPort;
   /** Workspace Manager (Phase 8D) */
   workspaceManager?: WorkspaceManager;
   /** Integration Gate (Phase 8D) */
@@ -782,7 +785,9 @@ export async function buildPostgresContainer(
       : { maxOutputTokens: env.ICOS_MAX_OUTPUT_TOKENS }),
     ...(env.ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS === undefined
       ? {}
-      : { maxTotalTokensPerSelfDevelopmentDay: env.ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS }),
+      : {
+          maxTotalTokensPerSelfDevelopmentDay: env.ICOS_SELF_DEVELOPMENT_PROPOSAL_MAX_TOTAL_TOKENS,
+        }),
   });
   const llmReviewer = buildLlmReviewer(env, spend.mission);
   if (!llmReviewer) {
@@ -1025,7 +1030,9 @@ export async function buildPostgresContainer(
     missions: mission,
     tasks: tasks,
     durableMemory: new PostgresDurableMemory(handle.db),
-    ...(env.ICOS_INTEGRATION_TARGET ? { defaultIntegrationTarget: env.ICOS_INTEGRATION_TARGET } : {}),
+    ...(env.ICOS_INTEGRATION_TARGET
+      ? { defaultIntegrationTarget: env.ICOS_INTEGRATION_TARGET }
+      : {}),
   });
 
   return {
@@ -1126,6 +1133,7 @@ export async function buildPostgresContainer(
       () => new OmniRouteCeoClient(spend.conversation),
     ),
     db: handle.db,
+    databaseHealth: createDatabaseHealth(handle.sql),
     /*
      * CLOSE EVERY CLIENT THIS CONTAINER OPENED, not just the shared handle (D1).
      *

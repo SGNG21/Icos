@@ -17,6 +17,7 @@ export type ApiErrorCode =
   | "transient_conflict"
   | "already_exists"
   | "last_owner"
+  | "rate_limited"
   | "internal_error";
 
 export interface ApiErrorBody {
@@ -43,6 +44,7 @@ const statusByCode: Record<ApiErrorCode, number> = {
   transient_conflict: 503,
   already_exists: 409,
   last_owner: 409,
+  rate_limited: 429,
   internal_error: 500,
 };
 
