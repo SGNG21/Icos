@@ -3,7 +3,7 @@
 - **Date :** 2026-10-20 (vérification réelle 2026-10-19 23:44 UTC)
 - **Base autorisée :** `feat/fable-5-1-convergence` = `b4d0968` (2026-10-14), vérifiée : contient `src/core/contracts/scheduler.ts`, `worker-registry.ts`, `features/cockpit/{load,truth,snapshot,live}.ts`, `server/scheduler/durable-scheduler.ts`, `server/budget/postgres-spend-ledger.ts`.
 - **Branche D1 :** `feat/cockpit-live-d1-20261020` (créée par `git switch -c` depuis `b4d0968`, sans reset ni suppression ; l'ancienne branche `feat/cockpit-live-claude-20261020` = `b2ba10d` est conservée).
-- **Commits :** `c362476` (rapport D0, cherry-pick) · `0c02453` (implémentation D1) · ce rapport + script + preuve (commit suivant).
+- **Commits :** `c362476` (rapport D0, cherry-pick) · `0c02453` (implémentation D1) · `470a678` (ce rapport, script de vérification, preuve masquée).
 - **Statut :** D0 `REVIEW_READY` · **D1 `REVIEW_READY`** (reviewer indépendant + IntegrationGate non exécutés) · D2 `NOT_STARTED` · D3 `IN_PROGRESS` (tests d'autorisation et de fraîcheur livrés ; QA navigateur/mobile non faite).
 
 Aucun merge, aucun déploiement, aucune écriture en base de production, aucun appel de modèle, aucun `.env` affiché. Hermes, FABLE et les 40 fichiers indexés de `cockpit-agentic-os` sont intacts (statuts `git` identiques avant/après : 43 / 5 / 0 lignes).
