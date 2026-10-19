@@ -1,0 +1,226 @@
+{
+  "verifiedAt": "2026-10-19T23:44:50.911Z",
+  "overviewMs": 612,
+  "overview": {
+    "generatedAt": "2026-10-19T23:44:39.268Z",
+    "scope": "global",
+    "sources": {
+      "core3": {
+        "collectedAt": "2026-10-19T23:44:39.268Z",
+        "maxAgeMs": 120000,
+        "source": "missions, mission_tasks, dispatch_attempts, scheduled_jobs (PostgreSQL, lecture seule)",
+        "tenantId": "default",
+        "state": "ok",
+        "observedAt": "2026-10-19T23:44:31.200Z",
+        "data": {
+          "missions": {
+            "total": 0,
+            "byStatus": {}
+          },
+          "tasks": {
+            "total": 0,
+            "byStatus": {}
+          },
+          "attempts": {
+            "nonTerminal": 0,
+            "byState": {}
+          },
+          "scheduler": {
+            "activeByKind": {
+              "probe_workers": 1,
+              "reconcile_compute_fleet": 1,
+              "supervisor_observe": 1
+            },
+            "leased": 0,
+            "dead": 0,
+            "lastUpdatedAt": "2026-10-19T23:44:31.200Z"
+          }
+        }
+      },
+      "workers": {
+        "collectedAt": "2026-10-19T23:44:39.268Z",
+        "maxAgeMs": 120000,
+        "source": "workers.last_probe_at (preuve de sonde) + dispatch_attempts non terminaux",
+        "tenantId": "default",
+        "state": "ok",
+        "observedAt": "2026-10-19T23:44:31.173Z",
+        "data": {
+          "registered": 15,
+          "active": 14,
+          "routable": 11,
+          "byProbeOutcome": {
+            "ok": 11,
+            "stale": 1,
+            "failed": 3
+          },
+          "byHealth": {
+            "healthy": 11,
+            "unknown": 1,
+            "unhealthy": 3
+          },
+          "activeAssignments": 0,
+          "lastProbeAt": "2026-10-19T23:44:31.173Z"
+        }
+      },
+      "omniroute": {
+        "collectedAt": "2026-10-19T23:44:39.268Z",
+        "maxAgeMs": 30000,
+        "source": "GET /api/monitoring/health d'OmniRoute (sans clé) + spend_ledger 24 h",
+        "tenantId": "default",
+        "state": "ok",
+        "observedAt": "2026-10-19T23:44:39.417Z",
+        "data": {
+          "health": {
+            "state": "degraded",
+            "detail": "État annoncé : sain. Disjoncteurs : 5 fermé(s), 2 dégradé(s), 0 semi-ouvert(s), 0 ouvert(s).",
+            "checkedAt": "2026-10-19T23:44:39.417Z"
+          },
+          "nemotron": {
+            "state": "operational",
+            "detail": "Disjoncteur CLOSED, 0 échec(s) récent(s)."
+          },
+          "spend": {
+            "calls24h": 25602,
+            "tokens24h": 1380445,
+            "unpriced24h": 25602,
+            "amount24h": null,
+            "currency": null,
+            "lastObservedAt": "2026-10-19T23:44:31.150Z",
+            "priceStatus": "UNPRICED"
+          }
+        }
+      },
+      "memory": {
+        "collectedAt": "2026-10-19T23:44:39.268Z",
+        "maxAgeMs": null,
+        "source": "memory_records, memory_entities, memory_relations, memory_retrieval_log + SELECT 1",
+        "tenantId": "default",
+        "state": "ok",
+        "observedAt": "2026-10-19T16:07:22.808Z",
+        "data": {
+          "records": 99,
+          "active": 99,
+          "retrievals24h": 54,
+          "entities": 2,
+          "relations": 0,
+          "lastWriteAt": "2026-10-19T16:07:22.808Z",
+          "postgres": {
+            "state": "operational",
+            "detail": "Requête exécutée.",
+            "checkedAt": "2026-10-19T23:44:39.421Z"
+          }
+        }
+      },
+      "vps": {
+        "collectedAt": "2026-10-19T23:44:39.268Z",
+        "maxAgeMs": 30000,
+        "source": "/proc, /sys et statfs de l'hôte icos-web (lecture seule)",
+        "tenantId": "default",
+        "state": "ok",
+        "observedAt": "2026-10-19T23:44:39.857Z",
+        "data": {
+          "hostname": "<host-masked>",
+          "sampledAt": "2026-10-19T23:44:39.857Z",
+          "overall": "ok",
+          "cores": 8,
+          "cpuUsage": 0.24747474747474751,
+          "load1": 2.26,
+          "memoryRatio": 0.34928533834232045,
+          "diskRatio": 0.2283594172491688,
+          "vram": "NO_TELEMETRY"
+        }
+      }
+    },
+    "incidents": [
+      {
+        "source": "workers",
+        "code": "WORKER_PROBE_FAILED",
+        "detail": "3 worker(s) avec une sonde en échec datée."
+      }
+    ]
+  },
+  "telemetry": {
+    "first": {
+      "at": "2026-10-19T23:44:39.857Z",
+      "overall": "ok",
+      "cpu": {
+        "available": true,
+        "value": 0.24747474747474751
+      },
+      "load": {
+        "available": true,
+        "value": {
+          "one": 2.26,
+          "five": 2.03,
+          "fifteen": 2.02
+        }
+      },
+      "memory": {
+        "available": true,
+        "value": {
+          "total": 25199173632,
+          "used": 8801701888,
+          "available": 16397471744,
+          "ratio": 0.34928533834232045
+        }
+      },
+      "services": [
+        {
+          "key": "cockpit-api",
+          "state": "operational"
+        },
+        {
+          "key": "telemetry",
+          "state": "operational"
+        }
+      ]
+    },
+    "second": {
+      "at": "2026-10-19T23:44:50.890Z",
+      "overall": "ok",
+      "cpu": {
+        "available": true,
+        "value": 0.12450730350104333
+      },
+      "load": {
+        "available": true,
+        "value": {
+          "one": 2.12,
+          "five": 2.01,
+          "fifteen": 2.01
+        }
+      },
+      "memory": {
+        "available": true,
+        "value": {
+          "total": 25199173632,
+          "used": 8799735808,
+          "available": 16399437824,
+          "ratio": 0.34920731673618716
+        }
+      }
+    },
+    "workers": {
+      "activeJobs": {
+        "available": true,
+        "value": 0
+      },
+      "jobSlots": {
+        "available": true,
+        "value": 14
+      },
+      "perWorkerFootprint": {
+        "available": false,
+        "reason": "Empreinte CPU/RAM d'un worker jamais mesurée : instrumentation de l'exécution réelle à brancher."
+      },
+      "additionalWorkers": {
+        "available": false,
+        "reason": "Consommation CPU/RAM réelle d'un worker non mesurée : aucune estimation publiée."
+      }
+    }
+  },
+  "_evidence": {
+    "note": "Sortie réelle de scripts/cockpit-live-verify.ts (lecture seule, session PostgreSQL default_transaction_read_only=on, container minimal sans scheduler). Hostname masqué ; 0 mission donc aucun identifiant de mission ; aucune donnée sensible.",
+    "command": "pnpm exec tsx scripts/cockpit-live-verify.ts --env-file <icos.env> --out <file> --second-sample"
+  }
+}
