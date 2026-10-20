@@ -99,3 +99,8 @@ Non exécutés : `pnpm build`, suite Vitest complète du hub, tests d'intégrati
 Brancher `readLiveOverview` dans les écrans existants du Control Center (`/cockpit/system` : panneau VPS + services ; `/cockpit/providers` : santé OmniRoute + `priceStatus` ; `/cockpit/workers` : `lastProbeAt`/`stale` ; Overview : fraîcheur par source et incidents), avec `LiveRefresh` existant (polling 15 s), labels source/dernière mesure, et tons vert/orange/gris/rouge de `SOURCE_STATE_TONE`. Aucun redesign ; aucune animation décorative sans flux réel.
 
 Remise au reviewer indépendant : branche `feat/cockpit-live-d1-20261020`, diff `b4d0968..HEAD`, ce rapport, la preuve masquée, la commande de vérification.
+
+
+## Référence d'autorisation
+
+Étape D1 autorisée par le propriétaire dans la session Claude Code du 2026-10-20 (message « Mission COCKPIT-LIVE — Option A autorisée sous conditions de sécurité »). Revues indépendantes et réponse : `docs/reports/reviews/`, `cockpit-live-claude-d3-review-response-2026-10-20.md`.

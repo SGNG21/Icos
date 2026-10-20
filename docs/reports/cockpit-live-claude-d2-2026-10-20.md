@@ -81,3 +81,8 @@ Ce que le labo montre réellement (base vide) : `core3`, `workers`, `memory` en 
 5. Option : libellé `EMPTY` pour un magasin lu mais vide, et stacking mobile du tableau des sources.
 
 Labo : conteneur `cockpit-live-pg-lab` arrêté après captures (`docker start cockpit-live-pg-lab` pour le reviewer ; variables dans le scratchpad de session, jamais dans le dépôt).
+
+
+## Référence d'autorisation
+
+Étape D2 autorisée par le propriétaire dans la session Claude Code du 2026-10-20 (message « ICOS — COCKPIT LIVE — D2 AUTORISÉ »). Revues indépendantes et réponse : `docs/reports/reviews/`, `cockpit-live-claude-d3-review-response-2026-10-20.md`.
