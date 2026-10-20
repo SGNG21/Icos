@@ -481,33 +481,31 @@ describe('ImprovementBacklog', () => {
         priority: 'high' as ImprovementPriority,
         proposedBy: 'tester'
       };
-      const candidate1 = createImprovementCandidate(input);
-      const candidate2 = createImprovementCandidate(input);
-
       /*
-       * Compare WITHOUT createdAt/updatedAt.
-       *
-       * createImprovementCandidate() stamps `new Date().toISOString()` per call,
-       * so two calls that straddle a millisecond boundary produce different
-       * timestamps. Comparing them made this test intermittently fail in the
-       * full suite while passing in isolation — a flaky gate proves nothing.
-       *
-       * Wall-clock timestamps differing between two separate calls is correct
-       * behaviour, not the property under test. The defensive-copy property is
-       * still asserted below (distinct objects, independent mutation), and the
-       * content-derived id is still compared.
+       * Controlled clock. createImprovementCandidate() stamps createdAt, updatedAt AND
+       * proposedAt from `new Date()` on every call, so two calls straddling a millisecond
+       * boundary differ and `toEqual` fails intermittently in the full suite (gate replay
+       * 2026-10-20: proposedAt …32.027Z vs …32.026Z). A previous fix masked createdAt and
+       * updatedAt only. Freezing the clock makes every timestamp explicit, so the test now
+       * asserts the FULL equality of two candidates built from the same input, including
+       * their timestamps, and still proves the defensive copy (distinct objects, independent
+       * mutation) and the content-derived id.
        */
-      const ignoringTimestamps = (
-        candidate: typeof candidate1,
-      ) => ({
-        ...candidate,
-        createdAt: "<when>",
-        updatedAt: "<when>",
-      });
+      const frozenAt = '2026-09-27T12:00:00.000Z';
+      vi.useFakeTimers({ now: new Date(frozenAt) });
+      let candidate1: ImprovementCandidate;
+      let candidate2: ImprovementCandidate;
+      try {
+        candidate1 = createImprovementCandidate(input);
+        candidate2 = createImprovementCandidate(input);
+      } finally {
+        vi.useRealTimers();
+      }
 
-      expect(ignoringTimestamps(candidate1)).toEqual(
-        ignoringTimestamps(candidate2),
-      );
+      expect(candidate1.proposedAt).toBe(frozenAt);
+      expect(candidate1.createdAt).toBe(frozenAt);
+      expect(candidate1.updatedAt).toBe(frozenAt);
+      expect(candidate2).toEqual(candidate1);
       expect(candidate1.id).toBe(candidate2.id);
       expect(candidate1).not.toBe(candidate2);
       // Mutating one should not affect the other

@@ -834,13 +834,27 @@ describe(
         );
     });
 
-    it("renews lease for valid owner and updates leaseUntil using database time", async () => {
-      const repoA = new PostgresAutonomousMissionRuntimeRepository(handleA.db);
-      const repoB = new PostgresAutonomousMissionRuntimeRepository(handleB.db);
-
+    /*
+     * LEASE TIMING. `claim` and `renewClaim` compare `leaseUntil` with the process clock at the
+     * moment of the call. The former single scenario used a 100 ms lease and real waits: under
+     * load, 50 ms plus two PostgreSQL round-trips exceeded the lease and the (correct) refusal
+     * of an expired renewal made the "renew before expiry" assertion intermittent (gate replay
+     * 2026-10-20, 1/837). The scenarios are now separated with explicit margins: a LIVE lease
+     * of 5 s that cannot expire during a test, and a 1 ms lease that has certainly expired
+     * after a 30 ms wait. Every guarantee of the old scenario is still asserted: renewal by the
+     * owner before expiry, refusal of a foreign token, refusal after expiry, single live owner,
+     * takeover after expiry, fencing of the stale owner after takeover, rejection of a stale
+     * saveOwned.
+     */
+    const RUNTIME_ID = "autonomous-runtime-mission";
+    const LIVE_LEASE_MS = 5_000;
+    const EXPIRING_LEASE_MS = 1;
+    const EXPIRY_WAIT_MS = 30;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const createRuntime = async (repo: PostgresAutonomousMissionRuntimeRepository) => {
       const now = new Date("2026-09-13T17:10:00.000Z");
-      await repoA.create({
-        missionId: "autonomous-runtime-mission",
+      await repo.create({
+        missionId: RUNTIME_ID,
         state: "running",
         startedAt: now,
         updatedAt: now,
@@ -857,70 +871,72 @@ describe(
         ownerToken: null,
         leaseUntil: null,
       });
+    };
 
-      // Claim ownership with token A and a short lease
+    it("renews an unexpired lease for the owner token only and extends leaseUntil", async () => {
+      const repoA = new PostgresAutonomousMissionRuntimeRepository(handleA.db);
+      await createRuntime(repoA);
       const tokenA = "token-a";
-      const leaseMs = 100; // 100 ms
-      const claimed = await repoA.claim("autonomous-runtime-mission", tokenA, leaseMs);
-      expect(claimed).toBe(true);
 
-      const runtimeAfterClaim = await repoA.get("autonomous-runtime-mission");
-      expect(runtimeAfterClaim).not.toBeNull();
-      const leaseUntilAfterClaim = runtimeAfterClaim!.leaseUntil!;
+      expect(await repoA.claim(RUNTIME_ID, tokenA, LIVE_LEASE_MS)).toBe(true);
+      const afterClaim = await repoA.get(RUNTIME_ID);
+      expect(afterClaim).not.toBeNull();
+      const leaseUntilAfterClaim = afterClaim!.leaseUntil!;
 
-      // Wait a bit but not exceed lease (e.g., 50 ms)
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // A measurable delay, far below the lease: leaseUntil must strictly move forward.
+      await wait(50);
+      expect(await repoA.renewClaim(RUNTIME_ID, tokenA, LIVE_LEASE_MS)).toBe(true);
 
-      // Renew claim with same token
-      const renewed = await repoA.renewClaim("autonomous-runtime-mission", tokenA, leaseMs);
-      expect(renewed).toBe(true);
-
-      const runtimeAfterRenew = await repoA.get("autonomous-runtime-mission");
-      expect(runtimeAfterRenew).not.toBeNull();
-      const leaseUntilAfterRenew = runtimeAfterRenew!.leaseUntil!;
-      // leaseUntil should have increased (by approximately leaseMs, using DB time)
-      expect(leaseUntilAfterRenew.getTime()).toBeGreaterThan(leaseUntilAfterClaim.getTime());
-
-      // Renewal is based on current PostgreSQL DB time.
-      // Because renewal happens part-way through the original lease,
-      // the new leaseUntil should move forward by approximately the
-      // elapsed time since the original claim, not by a full leaseMs.
-      const extension =
-        leaseUntilAfterRenew.getTime() -
-        leaseUntilAfterClaim.getTime();
-
+      const afterRenew = await repoA.get(RUNTIME_ID);
+      expect(afterRenew).not.toBeNull();
+      const extension = afterRenew!.leaseUntil!.getTime() - leaseUntilAfterClaim.getTime();
+      // Renewed part-way through the lease: the deadline moves by the elapsed time, not by a full lease.
       expect(extension).toBeGreaterThan(0);
-      expect(extension).toBeLessThan(leaseMs);
+      expect(extension).toBeLessThan(LIVE_LEASE_MS);
 
-      // Wrong owner cannot renew
-      const tokenB = "token-b";
-      const renewedByWrong = await repoA.renewClaim("autonomous-runtime-mission", tokenB, leaseMs);
-      expect(renewedByWrong).toBe(false);
+      // A foreign token cannot renew a live lease, and the owner is unchanged.
+      expect(await repoA.renewClaim(RUNTIME_ID, "token-b", LIVE_LEASE_MS)).toBe(false);
+      expect((await repoA.get(RUNTIME_ID))!.ownerToken).toBe(tokenA);
+    });
 
-      // Let lease expire
-      await new Promise((resolve) => setTimeout(resolve, leaseMs + 20));
-
-      // Expired owner cannot renew
-      const renewedExpired = await repoA.renewClaim("autonomous-runtime-mission", tokenA, leaseMs);
-      expect(renewedExpired).toBe(false);
-
-      // Stale owner after takeover: B claims after expiry
-      const claimedByB = await repoB.claim("autonomous-runtime-mission", tokenB, leaseMs);
-      expect(claimedByB).toBe(true);
-
-      // A's renewal attempt after B took over should fail
-      const renewedAfterTakeover = await repoA.renewClaim("autonomous-runtime-mission", tokenA, leaseMs);
-      expect(renewedAfterTakeover).toBe(false);
-
-      // New owner can still take over after abandonment (i.e., after B's lease expires, C can claim)
-      await new Promise((resolve) => setTimeout(resolve, leaseMs + 20));
+    it("refuses to renew an expired lease and admits exactly one new owner", async () => {
+      const repoA = new PostgresAutonomousMissionRuntimeRepository(handleA.db);
+      const repoB = new PostgresAutonomousMissionRuntimeRepository(handleB.db);
       const repoC = new PostgresAutonomousMissionRuntimeRepository(handleC.db);
-      const tokenC = "token-c";
-      const claimedByC = await repoC.claim("autonomous-runtime-mission", tokenC, leaseMs);
-      expect(claimedByC).toBe(true);
+      await createRuntime(repoA);
 
-      // Stale saveOwned remains rejected (sanity)
-      const staleRuntime = await repoA.get("autonomous-runtime-mission");
+      expect(await repoA.claim(RUNTIME_ID, "token-a", EXPIRING_LEASE_MS)).toBe(true);
+      await wait(EXPIRY_WAIT_MS);
+
+      // Expired owner cannot renew, even with its own token.
+      expect(await repoA.renewClaim(RUNTIME_ID, "token-a", LIVE_LEASE_MS)).toBe(false);
+
+      // Exactly one new owner takes over; a third party is refused while that lease is live.
+      expect(await repoB.claim(RUNTIME_ID, "token-b", LIVE_LEASE_MS)).toBe(true);
+      expect(await repoC.claim(RUNTIME_ID, "token-c", LIVE_LEASE_MS)).toBe(false);
+
+      // The stale owner stays fenced after the takeover; the live owner can renew.
+      expect(await repoA.renewClaim(RUNTIME_ID, "token-a", LIVE_LEASE_MS)).toBe(false);
+      expect(await repoB.renewClaim(RUNTIME_ID, "token-b", LIVE_LEASE_MS)).toBe(true);
+      expect((await repoB.get(RUNTIME_ID))!.ownerToken).toBe("token-b");
+    });
+
+    it("allows takeover after the new owner's lease expires and keeps rejecting the stale owner's save", async () => {
+      const repoA = new PostgresAutonomousMissionRuntimeRepository(handleA.db);
+      const repoB = new PostgresAutonomousMissionRuntimeRepository(handleB.db);
+      const repoC = new PostgresAutonomousMissionRuntimeRepository(handleC.db);
+      await createRuntime(repoA);
+      const tokenA = "token-a";
+
+      expect(await repoA.claim(RUNTIME_ID, tokenA, EXPIRING_LEASE_MS)).toBe(true);
+      await wait(EXPIRY_WAIT_MS);
+      expect(await repoB.claim(RUNTIME_ID, "token-b", EXPIRING_LEASE_MS)).toBe(true);
+      await wait(EXPIRY_WAIT_MS);
+      // B abandoned (lease expired): C can take over.
+      expect(await repoC.claim(RUNTIME_ID, "token-c", LIVE_LEASE_MS)).toBe(true);
+
+      // Stale saveOwned by the first owner remains rejected (sanity).
+      const staleRuntime = await repoA.get(RUNTIME_ID);
       expect(staleRuntime).not.toBeNull();
       await expect(
         repoA.saveOwned(
