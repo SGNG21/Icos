@@ -1,8 +1,9 @@
 import Link from "next/link";
 
+import { WorkersSummaryPanel } from "@/components/cockpit/live-sources";
 import { Panel, TruthValue } from "@/components/cockpit/primitives";
 import { WorkerCard } from "@/components/cockpit/worker-card";
-import { loadSnapshot } from "@/features/cockpit/load";
+import { loadLiveOverview, loadSnapshot } from "@/features/cockpit/load";
 import type { Tone, WorkerView } from "@/features/cockpit/snapshot";
 
 export const metadata = { title: "Workers" };
@@ -32,7 +33,7 @@ export default async function WorkersPage({
 }: {
   searchParams: Promise<{ view?: string }>;
 }) {
-  const snapshot = await loadSnapshot();
+  const [snapshot, live] = await Promise.all([loadSnapshot(), loadLiveOverview()]);
   if (!snapshot) return null;
   const view = (await searchParams).view ?? "all";
   const filter = FILTERS.find((f) => f.key === view) ?? FILTERS[0];
@@ -56,6 +57,8 @@ export default async function WorkersPage({
           ))}
         </nav>
       </div>
+
+      {live && <WorkersSummaryPanel workers={live.sources.workers} />}
 
       {snapshot.workers.kind !== "real" ? (
         <Panel title="Workers">

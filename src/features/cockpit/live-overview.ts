@@ -138,6 +138,8 @@ export interface LiveOverview {
     memory: Observed<MemorySummary>;
     vps: Observed<VpsFacts>;
   };
+  /** Services sondés (postgres, omniroute, nemotron, temporal) en trois couches. */
+  services: Observed<ServiceHealth[]>;
   /** Incidents CONFIRMÉS par une mesure (rouge) ; jamais déduits d'une absence. */
   incidents: LiveIncident[];
 }
@@ -293,6 +295,14 @@ export function buildLiveOverview(input: LiveOverviewInputs): LiveOverview {
     observedAt: (v) => v.sampledAt,
   });
 
+  const servicesObserved = observe({
+    ...common,
+    truth: input.services,
+    maxAgeMs: LIVE_MAX_AGE_MS.omniroute,
+    source: "sondes de services (SELECT 1, GET /api/monitoring/health), cache 15 s",
+    observedAt: (v) => latestOf(v.map((s) => s.checkedAt ?? null)),
+  });
+
   // ── Incidents confirmés ───────────────────────────────────────────────────
   const incidents: LiveIncident[] = [];
   if (vps.data?.overall === "incident")
@@ -319,6 +329,7 @@ export function buildLiveOverview(input: LiveOverviewInputs): LiveOverview {
     generatedAt: input.now.toISOString(),
     scope: input.scope,
     sources: { core3, workers, omniroute, memory, vps },
+    services: servicesObserved,
     incidents,
   };
 }

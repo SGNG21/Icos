@@ -119,11 +119,24 @@ export function latestOf(values: readonly (string | Date | null | undefined)[]):
   return best === null ? null : new Date(best).toISOString();
 }
 
-/** Ton d'affichage : vert mesuré et frais, gris inconnu, orange périmé/dégradé, rouge interdit. */
-export const SOURCE_STATE_TONE: Record<SourceState, "ok" | "warn" | "unknown" | "critical"> = {
+/**
+ * Ton d'affichage : vert = mesuré et frais ; orange = périmé ou dégradé ; gris = inconnu,
+ * indisponible ou refusé par la portée (un refus n'est pas un incident : le rouge est
+ * réservé aux incidents confirmés par une mesure).
+ */
+export const SOURCE_STATE_TONE: Record<SourceState, "ok" | "warn" | "unknown"> = {
   ok: "ok",
   stale: "warn",
   degraded: "warn",
   unavailable: "unknown",
-  forbidden: "critical",
+  forbidden: "unknown",
+};
+
+/** Libellé affiché pour chaque état (jamais la couleur seule). */
+export const SOURCE_STATE_LABEL: Record<SourceState, string> = {
+  ok: "LIVE",
+  stale: "STALE",
+  degraded: "DEGRADED",
+  unavailable: "UNAVAILABLE",
+  forbidden: "FORBIDDEN",
 };

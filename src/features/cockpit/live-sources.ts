@@ -16,6 +16,7 @@ import { getServiceProbes } from "@/server/telemetry/service-probes";
 import {
   buildLiveOverview,
   type LiveOverview,
+  type LiveOverviewInputs,
   type MemoryFacts,
   type SchedulerFacts,
   type SpendFacts,
@@ -50,6 +51,11 @@ const iso = (d: Date | string | null | undefined): string | null =>
 
 export interface LiveReadOptions {
   now?: Date;
+  /**
+   * Faits déjà lus par `loadSources()` (même requête, même portée) : évite une seconde
+   * lecture des missions (N+1) et du registre quand une page les a déjà chargés.
+   */
+  preloaded?: Pick<LiveOverviewInputs, "missions" | "attempts" | "workers" | "activeAssignments">;
   /** Injectable pour les tests ; par défaut l'échantillonneur et les sondes du processus. */
   vps?: () => Promise<VpsFacts>;
   services?: () => Promise<ServiceHealth[]>;
@@ -92,23 +98,30 @@ export async function readLiveOverview(
    */
   const tenantId = CURRENT_SINGLE_TENANT_ID;
 
+  const pre = options.preloaded;
   const [missions, workers, activeAssignments, scheduler, spend, memory, services, vps] =
     await Promise.all([
-      read("Missions", async () => {
-        const out: MissionWithTasks[] = [];
-        for (const mission of await container.mission.list()) {
-          const tasks = await container.mission.listTasks(mission.id);
-          if (await isMissionInScope(container, mission.id, scope, tasks))
-            out.push({ mission, tasks });
-        }
-        return out;
-      }),
-      global
-        ? read("Worker registry", () => container.workerRegistryStore.list())
-        : outOfScope<WorkerRegistryEntry[]>(),
-      global
-        ? read("Dispatch ledger", () => container.dispatchAttempts.listActiveWorkerAssignments())
-        : outOfScope<string[]>(),
+      pre
+        ? Promise.resolve(pre.missions)
+        : read("Missions", async () => {
+            const out: MissionWithTasks[] = [];
+            for (const mission of await container.mission.list()) {
+              const tasks = await container.mission.listTasks(mission.id);
+              if (await isMissionInScope(container, mission.id, scope, tasks))
+                out.push({ mission, tasks });
+            }
+            return out;
+          }),
+      pre
+        ? Promise.resolve(pre.workers)
+        : global
+          ? read("Worker registry", () => container.workerRegistryStore.list())
+          : outOfScope<WorkerRegistryEntry[]>(),
+      pre
+        ? Promise.resolve(pre.activeAssignments)
+        : global
+          ? read("Dispatch ledger", () => container.dispatchAttempts.listActiveWorkerAssignments())
+          : outOfScope<string[]>(),
       !global
         ? outOfScope<SchedulerFacts>()
         : !db
@@ -196,8 +209,9 @@ export async function readLiveOverview(
       global ? read("Host telemetry", options.vps ?? defaultVps) : outOfScope<VpsFacts>(),
     ]);
 
-  const attempts: Truth<DispatchAttempt[]> =
-    missions.kind === "real"
+  const attempts: Truth<DispatchAttempt[]> = pre
+    ? pre.attempts
+    : missions.kind === "real"
       ? await read("Dispatch attempts", async () => {
           const active = missions.value
             .flatMap((m) => m.tasks)

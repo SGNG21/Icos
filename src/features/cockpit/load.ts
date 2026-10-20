@@ -12,6 +12,8 @@ import { getContainer, type Container } from "@/server/container";
 import type { AgentScope } from "@/server/repositories/ports";
 
 import { notConnectedBusiness } from "./business";
+import type { LiveOverview } from "./live-overview";
+import { readLiveOverview } from "./live-sources";
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
 import type { QualityFact, WorkspaceFact } from "./pipeline";
 import {
@@ -286,6 +288,31 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
           "BR-06",
         ),
   };
+});
+
+/**
+ * Vue live des cinq sources avec fraîcheur (mission COCKPIT-LIVE, D2). Réutilise les
+ * faits déjà lus par `loadSources()` dans la même requête ; n'ajoute que des agrégats
+ * bornés (scheduler, ledger, mémoire), les sondes de services (cache 15 s) et
+ * l'échantillon hôte (cache 10 s). `null` = pas de contexte cockpit (refus rendu en amont).
+ */
+export const loadLiveOverview = cache(async (): Promise<LiveOverview | null> => {
+  const ctx = await getCockpitContext();
+  if (!ctx) return null;
+  const sources = await loadSources();
+  return readLiveOverview(ctx.container, ctx.session, {
+    now: sources?.now,
+    ...(sources
+      ? {
+          preloaded: {
+            missions: sources.missions,
+            attempts: sources.attempts,
+            workers: sources.workers,
+            activeAssignments: sources.activeAssignments,
+          },
+        }
+      : {}),
+  });
 });
 
 export const loadSnapshot = cache(async () => {

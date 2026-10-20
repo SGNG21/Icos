@@ -59,7 +59,7 @@ async function main(): Promise<void> {
     connect_timeout: 10,
     // Garde-fou : la session refuse toute écriture ; les lectures restent identiques.
     connection: {
-      default_transaction_read_only: "on",
+      default_transaction_read_only: true,
       application_name: "icos-cockpit-live-verify",
     },
   });

@@ -10,8 +10,9 @@ import {
   TruthValue,
   formatTime,
 } from "@/components/cockpit/primitives";
+import { LiveSourcesPanel } from "@/components/cockpit/live-sources";
 import { SystemMap } from "@/components/cockpit/system-map";
-import { loadSnapshot } from "@/features/cockpit/load";
+import { loadLiveOverview, loadSnapshot } from "@/features/cockpit/load";
 import type { CockpitSnapshot, MetricKey, Tone } from "@/features/cockpit/snapshot";
 
 // A layout title template does not apply to a page in the same segment.
@@ -55,7 +56,7 @@ const METRICS: {
 ];
 
 export default async function OverviewPage() {
-  const snapshot = await loadSnapshot();
+  const [snapshot, live] = await Promise.all([loadSnapshot(), loadLiveOverview()]);
   if (!snapshot) return null;
   const healthTone = HEALTH_TONE[snapshot.health.level];
   const p0 = snapshot.alerts.filter((a) => a.severity === "P0");
@@ -142,6 +143,8 @@ export default async function OverviewPage() {
           );
         })}
       </div>
+
+      {live && <LiveSourcesPanel overview={live} />}
 
       <div className="cx-overview">
         <Panel title="ICOS system map" eyebrow="Live topology" className="cx-overview__map">

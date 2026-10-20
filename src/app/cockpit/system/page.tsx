@@ -1,7 +1,13 @@
 import { CommandButton, NotCommandable } from "@/components/cockpit/command-button";
 import { ControlStatePanel } from "@/components/cockpit/control-state";
+import { HostResourcesPanel, IncidentList, ServicesPanel } from "@/components/cockpit/live-sources";
 import { Panel, ToneBadge, TruthValue } from "@/components/cockpit/primitives";
-import { loadSnapshot, loadSystemFacts, loadTruthProjection } from "@/features/cockpit/load";
+import {
+  loadLiveOverview,
+  loadSnapshot,
+  loadSystemFacts,
+  loadTruthProjection,
+} from "@/features/cockpit/load";
 import { CAPABILITY_TONE } from "@/features/cockpit/truth-projection";
 import type { Truth } from "@/features/cockpit/truth";
 
@@ -18,10 +24,11 @@ const NOT_COMMANDABLE = [
 ];
 
 export default async function SystemPage() {
-  const [facts, snapshot, truth] = await Promise.all([
+  const [facts, snapshot, truth, live] = await Promise.all([
     loadSystemFacts(),
     loadSnapshot(),
     loadTruthProjection(),
+    loadLiveOverview(),
   ]);
   if (!facts || !snapshot) return null;
 
@@ -69,6 +76,22 @@ export default async function SystemPage() {
           </ul>
         </div>
       </Panel>
+
+      {live && (
+        <>
+          <div className="cx-grid2">
+            <HostResourcesPanel vps={live.sources.vps} />
+            <Panel
+              title="Confirmed incidents"
+              eyebrow="Red only when a measurement proves it"
+              id="incidents"
+            >
+              <IncidentList incidents={live.incidents} />
+            </Panel>
+          </div>
+          <ServicesPanel services={live.services} />
+        </>
+      )}
 
       <Panel
         title="Measured capabilities"

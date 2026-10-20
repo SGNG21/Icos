@@ -11,6 +11,7 @@ import { getCockpitContext, loadSnapshot } from "@/features/cockpit/load";
 import type { Tone } from "@/features/cockpit/snapshot";
 
 import "./cockpit.css";
+import "./live.css";
 
 export const metadata: Metadata = {
   title: { template: "%s · ICOS", default: "ICOS Control Center" },

@@ -131,6 +131,13 @@ describe("buildLiveOverview", () => {
       data: { entities: 3, postgres: { state: "operational" } },
     });
     expect(o.sources.vps).toMatchObject({ state: "ok", data: { vram: "NO_TELEMETRY", cores: 8 } });
+    expect(o.services).toMatchObject({ state: "ok", observedAt: t(5) });
+    expect(o.services.data?.map((s) => s.key)).toEqual([
+      "postgres",
+      "omniroute",
+      "nemotron",
+      "temporal",
+    ]);
     expect(o.incidents.map((i) => i.code)).toEqual(["WORKER_PROBE_FAILED"]);
   });
 

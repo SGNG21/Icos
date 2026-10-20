@@ -1,0 +1,51 @@
+/* ---------- COCKPIT-LIVE D2: freshness, observed activity, live sources ---------- */
+.cx-fresh {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.cx-fresh__code {
+  font-size: 11px;
+  opacity: 0.85;
+}
+.cx-fresh__meta {
+  overflow-wrap: anywhere;
+}
+.cx-livesrc td:first-child {
+  min-width: 180px;
+}
+.cx-livesrc tr[data-state="stale"] td,
+.cx-livesrc tr[data-state="degraded"] td {
+  background: color-mix(in oklab, var(--cx-warn, #e0a030) 8%, transparent);
+}
+.cx-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  opacity: 0.8;
+}
+.cx-activity__icon {
+  opacity: 0.6;
+}
+/* Only an OBSERVED activity (non-terminal dispatch, held lease) animates; otherwise static. */
+.cx-activity[data-observed] .cx-activity__icon {
+  opacity: 1;
+  animation: cx-pulse 3.6s ease-in-out infinite;
+}
+.cx-incidents li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+@media (max-width: 860px) {
+  .cx-fresh__meta {
+    display: block;
+    width: 100%;
+  }
+}

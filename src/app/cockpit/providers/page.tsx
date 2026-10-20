@@ -7,15 +7,20 @@ import {
   TruthValue,
   Unavailable,
 } from "@/components/cockpit/primitives";
+import { OmniRoutePanel } from "@/components/cockpit/live-sources";
 import { buildCompute } from "@/features/cockpit/compute";
-import { loadSnapshot, loadSources } from "@/features/cockpit/load";
+import { loadLiveOverview, loadSnapshot, loadSources } from "@/features/cockpit/load";
 import { UNDECLARED, buildResourceTree, providerTelemetry } from "@/features/cockpit/resources";
 import { missing } from "@/features/cockpit/truth";
 
 export const metadata = { title: "Providers" };
 
 export default async function ProvidersPage() {
-  const [snapshot, sources] = await Promise.all([loadSnapshot(), loadSources()]);
+  const [snapshot, sources, live] = await Promise.all([
+    loadSnapshot(),
+    loadSources(),
+    loadLiveOverview(),
+  ]);
   if (!snapshot || !sources) return null;
   const compute =
     snapshot.workers.kind === "real"
@@ -52,6 +57,8 @@ export default async function ProvidersPage() {
         <MetricTile label="Cost by client" truth={breakdown} />
         <MetricTile label="Queue pressure" truth={snapshot.metrics.readyQueue} />
       </div>
+
+      {live && <OmniRoutePanel omniroute={live.sources.omniroute} />}
 
       <Panel
         title="Compute fleet"
