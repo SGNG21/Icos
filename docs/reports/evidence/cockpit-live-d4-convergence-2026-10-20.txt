@@ -1,0 +1,75 @@
+COCKPIT-LIVE D4 — preuves de convergence Git (2026-10-20, lecture seule, aucun worktree tiers modifié)
+Worktree auteur : /home/icos/icos-worktrees/cockpit-live-claude, branche feat/cockpit-live-d1-20261020
+Hub : feat/fable-5-1-convergence @ b4d0968 ; déployé : /srv/icos/current -> /srv/icos/releases/5719213
+
+[1] Delta post-revue (code) — 1255bf0..0170172
+  git diff --quiet 1255bf0 HEAD -- src scripts drizzle package.json pnpm-lock.yaml deploy  => CODE IDENTICAL
+  git rev-parse 1255bf0:src = 2995baf4fb3a963440c960028537bc96d97ca102
+  git rev-parse HEAD:src    = 2995baf4fb3a963440c960028537bc96d97ca102
+  Delta docs seul : 5 fichiers docs/reports (+73/-1).
+  pnpm run typecheck (HEAD, 2026-10-20 ~10:30 UTC, charge 1,5/8) => exit 0
+
+[2] Fichiers supprimés par rapport à la base hub
+  git diff --diff-filter=D --name-only b4d0968..1255bf0  => (vide)
+  Les cinq fichiers src/features/cockpit/telemetry-{client,client.test,format,format.test,fixture}.ts
+  n'existent pas dans b4d0968 : ajoutés en 0c02453 (D1), retirés en 964114f (D3). Seule référence au
+  retrait : src/app/api/cockpit/telemetry/route.test.ts (import remplacé dans le même commit par
+  src/server/telemetry/telemetry-contract.ts). Aucune référence dans HEAD (git grep).
+
+[3] Divergence des lanes par rapport au hub (refs Git uniquement ; merge-base / +avance / -retard)
+  main                                      ca138e2  base 0a91604  +80/-577   overlap commité : src/server/container.ts
+  feat/cockpit-agentic-os                   5719213  base 5719213  +0/-58     overlap : aucun (index non commité : voir [4])
+  feat/cockpit-vps-monitor-20261017         5719213  base 5719213  +0/-58     overlap : aucun (5 fichiers non commités, 0 test)
+  feat/vps-monitor-20261017                 bb6ddc8  base 0a91604  +82/-577   overlap : 17 fichiers (origine du port D1 ; lignée main)
+  feat/worker-footprint-20261017            53ff234  base b4d0968  +2/-0      overlap : aucun
+  feat/exec-office-gpt-stream-20261019      5719213  base 5719213  +0/-58     overlap : aucun
+  feat/r1-03c-operator-escalation-20261019  2a3fee0  base b4d0968  +29/-0     overlap : src/server/container.ts
+  lab/chat-p0-20261020                      80f0511  base 5719213  +12/-58    overlap : src/app/cockpit/page.tsx
+  feat/r1-core3-20261019                    6934d68  base b4d0968  +28/-0     overlap : src/server/container.ts
+  feat/p4a-probe-honest-health-20261018     fba8189  base b4d0968  +1/-0      overlap : aucun
+  integration/p4-convergence-20261018       77c0635  base b4d0968  +10/-0     overlap : aucun
+  integration/pilot3-20261018               412b3fe  base b4d0968  +13/-0     overlap : src/server/container.ts
+  fix/review-task-contract-20261019         f2e38e0  base b4d0968  +16/-0     overlap : src/server/container.ts
+  fix/goal-admission-deps-20261019          ada3c31  base b4d0968  +18/-0     overlap : src/server/container.ts
+  feat/icos-003-planner-deps-20261019       01032b4  base b4d0968  +24/-0     overlap : src/server/container.ts
+  feat/reviewer-independence-20261018       b8d2d98  base b4d0968  +11/-0     overlap : src/server/container.ts
+
+[4] Fusions à trois voies EN MÉMOIRE (git merge-tree --write-tree, git 2.43 ; aucun arbre de travail touché)
+  HEAD + feat/r1-03c-operator-escalation-20261019 : CLEAN
+  HEAD + feat/r1-core3-20261019                   : CLEAN
+  HEAD + integration/pilot3-20261018              : CLEAN
+  HEAD + fix/review-task-contract-20261019        : CLEAN
+  HEAD + fix/goal-admission-deps-20261019         : CLEAN
+  HEAD + feat/icos-003-planner-deps-20261019      : CLEAN
+  HEAD + feat/reviewer-independence-20261018      : CLEAN
+  HEAD + integration/p4-convergence-20261018      : CLEAN
+  HEAD + feat/p4a-probe-honest-health-20261018    : CLEAN
+  HEAD + feat/worker-footprint-20261017           : CLEAN
+  HEAD + feat/cockpit-agentic-os (partie commitée): CLEAN (ancêtre)
+  HEAD + feat/exec-office-gpt-stream-20261019     : CLEAN (ancêtre)
+  HEAD + lab/chat-p0-20261020                     : CONFLITS .env.example, src/config/env.ts,
+        src/server/budget/metered-fetch.ts, metered-fetch.test.ts, src/server/cognitive/cognition.ts
+        => conflits HUB (58 commits) vs lane chat-p0, AUCUN de ces fichiers n'est modifié par cockpit-live ;
+           src/app/cockpit/page.tsx auto-fusionné (contrôle sémantique à l'intégration).
+
+  Index non commité de cockpit-agentic-os (40 fichiers, lus en lecture seule, jamais modifiés) :
+    seul fichier commun avec cockpit-live : src/features/cockpit/load.ts.
+    git merge-file --diff3 (scratchpad) base f7da288 (identique dans 5719213 et b4d0968) /
+    cockpit-live (457 l.) / cockpit-agentic-os index (473 l.) => exit 0, 0 conflit, 499 lignes.
+    Régions disjointes : cockpit-live modifie loadTruthProjection/loadSources et ajoute loadLiveOverview ;
+    la lane ajoute loadGraph en fin de fichier et ses imports. Compilation à vérifier à l'intégration
+    (modules graph*, omniroute-telemetry de la lane).
+
+[5] Releases construites sur le VPS (faits Git seulement ; répertoires non lus)
+  /srv/icos/releases : 049a7d9-previous, 5719213 (courant), 9527648 (ancêtre du hub, 2026-10-11),
+  9c1dc99 / 6d930ab / 80f0511 (lane chat-p0, 2026-10-20 02:20–02:42, lignée 5719213, PAS ancêtres du hub).
+  => deux lignées candidates à la release coexistent : décision propriétaire D-1.
+
+[6] Sauvegardes
+  systemctl is-enabled icos-backup.timer => not-found (kit deploy/vps/bin/icos-backup.sh préparé, non installé).
+  /srv/icos/backups existe.
+
+[7] Lectures refusées par le classificateur de permissions (non contournées)
+  - requête SQL lecture seule sur la base de production (migrations appliquées, distribution tenant_id, RLS) ;
+  - lecture détaillée du collecteur de la lane cockpit-vps-monitor ; boucle d'inventaire sur les arbres de travail tiers.
+  Les faits correspondants proviennent des preuves commitées (D0, D3 verify JSON, F1) et des refs Git.
