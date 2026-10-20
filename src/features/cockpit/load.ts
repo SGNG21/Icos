@@ -15,8 +15,9 @@ import type { AgentScope } from "@/server/repositories/ports";
 
 import { notConnectedBusiness } from "./business";
 import { readMemoryFacts, readSpendFacts } from "./live-facts";
-import { priceStatusOf, type LiveOverview } from "./live-overview";
+import { buildLiveOverview, priceStatusOf, type LiveOverview } from "./live-overview";
 import { readLiveOverview } from "./live-sources";
+import { scopeRefused } from "./observed";
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
 import type { QualityFact, WorkspaceFact } from "./pipeline";
 import {
@@ -91,10 +92,8 @@ export const loadTruthProjection = cache(async (): Promise<TruthProjection | nul
   if (!ctx) return null;
   const { container, scope } = ctx;
   if (scope.kind !== "global") {
-    const scoped = missing<never>(
-      "not_available",
-      "Memory, spend and self-development are visible to owner/admin scope only.",
-    );
+    /* Refus de portée STRUCTURÉ (FORBIDDEN_SCOPE) : la vue live le rend `forbidden`, jamais « absent ». */
+    const scoped = scopeRefused<never>("Memory, spend and self-development");
     return { memory: scoped, spend: scoped, selfDevelopment: scoped, capabilities: scoped };
   }
   const db = container.db;
@@ -138,10 +137,7 @@ export const loadSources = cache(async (): Promise<CockpitSources | null> => {
   if (!ctx) return null;
   const { container, session, scope } = ctx;
   const global = scope.kind === "global";
-  const outOfScope = missing(
-    "not_available",
-    "Worker infrastructure is visible to owner/admin scope only.",
-  );
+  const outOfScope = scopeRefused("Worker infrastructure");
 
   const [tasks, missions, workers, activeAssignments, pendingApprovals] = await Promise.all([
     read("Tasks", () => container.tasks.listForScope(scope)),
@@ -295,8 +291,26 @@ export const loadLiveOverview = cache(async (): Promise<LiveOverview | null> => 
         : {}),
     });
   } catch {
-    /* La vue live ne doit jamais faire tomber un écran qui se dégradait déjà sans elle. */
-    return null;
+    /*
+     * La vue live ne doit jamais faire tomber un écran qui se dégradait déjà sans elle, ni
+     * disparaître en silence : chaque source est rendue UNAVAILABLE avec un code explicite.
+     */
+    const failed = <T>() =>
+      missing<T>("unknown", "The live view could not be read (LIVE_VIEW_FAILED).");
+    return buildLiveOverview({
+      now: new Date(),
+      scope: ctx.scope.kind === "global" ? "global" : "linked",
+      tenantId: CURRENT_SINGLE_TENANT_ID,
+      missions: failed(),
+      attempts: failed(),
+      scheduler: failed(),
+      workers: failed(),
+      activeAssignments: failed(),
+      spend: failed(),
+      services: failed(),
+      memory: failed(),
+      vps: failed(),
+    });
   }
 });
 

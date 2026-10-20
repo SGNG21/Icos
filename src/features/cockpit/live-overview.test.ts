@@ -115,10 +115,13 @@ describe("buildLiveOverview", () => {
     expect(o.schema).toBe(1);
     expect(o.generatedAt).toBe(now.toISOString());
     expect(Object.keys(o.sources)).toEqual(["core3", "workers", "omniroute", "memory", "vps"]);
-    for (const s of Object.values(o.sources)) {
+    for (const [key, s] of Object.entries(o.sources)) {
       expect(s.collectedAt).toBe(now.toISOString());
-      expect(s.tenantId).toBe("default");
+      // Le ledger est écrit sous son propre tenant : la source OmniRoute ne porte pas l'estampille de surface.
+      if (key === "omniroute") expect(s.tenantId).toBeUndefined();
+      else expect(s.tenantId).toBe("default");
     }
+    expect(o.sources.omniroute.data?.spend?.ledgerTenantId).toBe("icos-holding");
     expect(o.sources.core3).toMatchObject({
       state: "ok",
       observedAt: t(30),
@@ -375,6 +378,26 @@ describe("buildLiveOverview", () => {
       }),
     );
     expect(inactive.incidents).toEqual([]);
+  });
+
+  it("sonde datée dans le futur : pas une preuve dans l'horizon, incident non affirmé", () => {
+    const o = buildLiveOverview(
+      inputs({
+        workers: real([
+          {
+            ...healthyWorker,
+            lastProbeOutcome: "failed",
+            health: "unhealthy",
+            lastProbeAt: t(-3600),
+          },
+        ]),
+      }),
+    );
+    expect(o.sources.workers).toMatchObject({
+      state: "degraded",
+      data: { staleActive: 1, recentFailed: 0 },
+    });
+    expect(o.incidents).toEqual([]);
   });
 
   it("CPU inconnu : cores null dégrade la source VPS, jamais « 0 vCPU »", () => {

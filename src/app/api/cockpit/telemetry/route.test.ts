@@ -134,13 +134,19 @@ describe("GET /api/cockpit/telemetry", () => {
     });
   });
 
-  it("refuse un opérateur en portée liée : l'infrastructure exige la portée owner/admin", async () => {
-    installSession("operator");
+  it("refuse un opérateur en portée liée (403 audité) : l'infrastructure exige la portée owner/admin", async () => {
+    const container = installSession("operator");
     installProbes();
     setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
     const response = await GET(request());
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("forbidden");
+    const entries = await container.audit.query({ eventType: "auth.access.denied" });
+    expect(entries.at(-1)?.details).toMatchObject({
+      route: "api.cockpit.telemetry",
+      role: "operator",
+      reason: "forbidden",
+    });
   });
 
   it("sert un instantané à un owner (portée globale), sans cache et sans secret", async () => {

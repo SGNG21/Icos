@@ -1,18 +1,18 @@
 {
-  "verifiedAt": "2026-10-20T00:49:24.576Z",
-  "overviewMs": 579,
+  "verifiedAt": "2026-10-20T00:59:07.576Z",
+  "overviewMs": 612,
   "overview": {
     "schema": 1,
-    "generatedAt": "2026-10-20T00:49:24.566Z",
+    "generatedAt": "2026-10-20T00:59:07.558Z",
     "scope": "global",
     "sources": {
       "core3": {
-        "collectedAt": "2026-10-20T00:49:24.566Z",
+        "collectedAt": "2026-10-20T00:59:07.558Z",
         "maxAgeMs": 120000,
         "source": "missions, mission_tasks, dispatch_attempts, scheduled_jobs (PostgreSQL, lecture seule)",
         "tenantId": "default",
         "state": "ok",
-        "observedAt": "2026-10-20T00:49:18.492Z",
+        "observedAt": "2026-10-20T00:59:01.440Z",
         "data": {
           "missions": {
             "total": 0,
@@ -35,17 +35,17 @@
             "leased": 0,
             "dead": 0,
             "dead24h": 0,
-            "lastUpdatedAt": "2026-10-20T00:49:18.492Z"
+            "lastUpdatedAt": "2026-10-20T00:59:01.440Z"
           }
         }
       },
       "workers": {
-        "collectedAt": "2026-10-20T00:49:24.566Z",
+        "collectedAt": "2026-10-20T00:59:07.558Z",
         "maxAgeMs": 120000,
         "source": "workers.last_probe_at (preuve de sonde) + dispatch_attempts non terminaux",
         "tenantId": "default",
         "state": "ok",
-        "observedAt": "2026-10-20T00:49:18.472Z",
+        "observedAt": "2026-10-20T00:59:01.423Z",
         "data": {
           "registered": 15,
           "active": 14,
@@ -63,46 +63,45 @@
           "staleActive": 0,
           "recentFailed": 2,
           "activeAssignments": 0,
-          "lastProbeAt": "2026-10-20T00:49:18.472Z"
+          "lastProbeAt": "2026-10-20T00:59:01.423Z"
         }
       },
       "omniroute": {
-        "collectedAt": "2026-10-20T00:49:24.566Z",
+        "collectedAt": "2026-10-20T00:59:07.558Z",
         "maxAgeMs": 30000,
         "source": "GET /api/monitoring/health d'OmniRoute (sans clé, heure d'acquisition) + spend_ledger 24 h",
-        "tenantId": "default",
         "state": "ok",
-        "observedAt": "2026-10-20T00:49:24.095Z",
+        "observedAt": "2026-10-20T00:59:07.077Z",
         "data": {
           "health": {
             "state": "degraded",
             "detail": "État annoncé : sain. Disjoncteurs : 5 fermé(s), 2 dégradé(s), 0 semi-ouvert(s), 0 ouvert(s).",
-            "checkedAt": "2026-10-20T00:49:24.095Z"
+            "checkedAt": "2026-10-20T00:59:07.077Z"
           },
           "nemotron": {
             "state": "operational",
             "detail": "Disjoncteur CLOSED, 0 échec(s) récent(s)."
           },
           "spend": {
-            "calls24h": 25491,
-            "metered24h": 25491,
+            "calls24h": 25495,
+            "metered24h": 25495,
             "unmetered24h": 0,
             "priced24h": 0,
             "freeTier24h": 0,
-            "unpriced24h": 25491,
-            "tokens24h": 1405273,
+            "unpriced24h": 25495,
+            "tokens24h": 1404887,
             "tokensUnknown24h": 0,
             "amount24h": null,
             "currency": null,
             "currencies": 0,
-            "lastObservedAt": "2026-10-20T00:49:18.139Z",
+            "lastObservedAt": "2026-10-20T00:59:00.955Z",
             "ledgerTenantId": "icos-holding",
             "priceStatus": "UNPRICED"
           }
         }
       },
       "memory": {
-        "collectedAt": "2026-10-20T00:49:24.566Z",
+        "collectedAt": "2026-10-20T00:59:07.558Z",
         "maxAgeMs": null,
         "source": "memory_records, memory_entities, memory_relations, memory_retrieval_log + SELECT 1",
         "tenantId": "default",
@@ -118,37 +117,37 @@
           "postgres": {
             "state": "operational",
             "detail": "Requête exécutée.",
-            "checkedAt": "2026-10-20T00:49:24.104Z"
+            "checkedAt": "2026-10-20T00:59:07.216Z"
           }
         }
       },
       "vps": {
-        "collectedAt": "2026-10-20T00:49:24.566Z",
+        "collectedAt": "2026-10-20T00:59:07.558Z",
         "maxAgeMs": 30000,
         "source": "/proc, /sys et statfs de l'hôte icos-web (lecture seule)",
         "tenantId": "default",
         "state": "ok",
-        "observedAt": "2026-10-20T00:49:24.558Z",
+        "observedAt": "2026-10-20T00:59:07.545Z",
         "data": {
           "hostname": "<host-masked>",
-          "sampledAt": "2026-10-20T00:49:24.558Z",
+          "sampledAt": "2026-10-20T00:59:07.545Z",
           "overall": "ok",
           "cores": 8,
-          "cpuUsage": 0.33164556962025316,
-          "load1": 3.71,
-          "memoryRatio": 0.41537646562774394,
-          "diskRatio": 0.23843472342254543,
+          "cpuUsage": 0.2025,
+          "load1": 1.95,
+          "memoryRatio": 0.3400599335971114,
+          "diskRatio": 0.23836610863973023,
           "vram": "NO_TELEMETRY"
         }
       }
     },
     "services": {
-      "collectedAt": "2026-10-20T00:49:24.566Z",
+      "collectedAt": "2026-10-20T00:59:07.558Z",
       "maxAgeMs": 30000,
       "source": "sondes de services (SELECT 1, GET /api/monitoring/health), heure d'acquisition, cache 15 s",
       "tenantId": "default",
       "state": "ok",
-      "observedAt": "2026-10-20T00:49:24.104Z",
+      "observedAt": "2026-10-20T00:59:07.216Z",
       "data": [
         {
           "key": "postgres",
@@ -160,13 +159,13 @@
           "availability": {
             "state": "operational",
             "detail": "Requête exécutée.",
-            "latencyMs": 111
+            "latencyMs": 263
           },
           "mission": {
             "state": "operational",
             "detail": "Authentification, rôles et audit servis par ce pool."
           },
-          "checkedAt": "2026-10-20T00:49:24.104Z"
+          "checkedAt": "2026-10-20T00:59:07.216Z"
         },
         {
           "key": "omniroute",
@@ -176,19 +175,19 @@
           "source": "GET /api/monitoring/health d'OmniRoute (aucune inférence, aucune clé)",
           "process": {
             "state": "operational",
-            "detail": "Le processus répond (en service depuis 26 h).",
-            "latencyMs": 101
+            "detail": "Le processus répond (en service depuis 27 h).",
+            "latencyMs": 123
           },
           "availability": {
             "state": "degraded",
             "detail": "État annoncé : sain. Disjoncteurs : 5 fermé(s), 2 dégradé(s), 0 semi-ouvert(s), 0 ouvert(s).",
-            "latencyMs": 101
+            "latencyMs": 123
           },
           "mission": {
             "state": "operational",
             "detail": "5 fournisseur(s) au disjoncteur fermé sur 8 actif(s) — capacité déduite, aucune inférence de test."
           },
-          "checkedAt": "2026-10-20T00:49:24.095Z"
+          "checkedAt": "2026-10-20T00:59:07.077Z"
         },
         {
           "key": "temporal",
@@ -224,7 +223,7 @@
             "state": "not_instrumented",
             "detail": "Quota et modèle Nemotron non exposés : aptitude mission non vérifiable sans inférence."
           },
-          "checkedAt": "2026-10-20T00:49:24.095Z"
+          "checkedAt": "2026-10-20T00:59:07.077Z"
         }
       ]
     },
@@ -238,27 +237,27 @@
   },
   "telemetry": {
     "first": {
-      "at": "2026-10-20T00:49:24.558Z",
+      "at": "2026-10-20T00:59:07.545Z",
       "overall": "ok",
       "cpu": {
         "available": true,
-        "value": 0.33164556962025316
+        "value": 0.2025
       },
       "load": {
         "available": true,
         "value": {
-          "one": 3.71,
-          "five": 6.35,
-          "fifteen": 6.56
+          "one": 1.95,
+          "five": 2.84,
+          "fifteen": 4.54
         }
       },
       "memory": {
         "available": true,
         "value": {
           "total": 25199173632,
-          "used": 10467143680,
-          "available": 14732029952,
-          "ratio": 0.41537646562774394
+          "used": 8569229312,
+          "available": 16629944320,
+          "ratio": 0.3400599335971114
         }
       },
       "services": [
@@ -293,7 +292,7 @@
     }
   },
   "_evidence": {
-    "note": "Sortie réelle de scripts/cockpit-live-verify.ts après corrections de revue D3 (commit 964114f) : lecture seule, session PostgreSQL default_transaction_read_only=on, container minimal sans scheduler. Hostname masqué ; 0 mission ; aucune donnée sensible.",
+    "note": "Sortie réelle de scripts/cockpit-live-verify.ts après la seconde passe de corrections D3 (transaction lecture seule + statement_timeout) : lecture seule, container minimal sans scheduler. Hostname masqué ; 0 mission ; aucune donnée sensible.",
     "command": "pnpm exec tsx scripts/cockpit-live-verify.ts --env-file <icos.env> --out <file>"
   }
 }

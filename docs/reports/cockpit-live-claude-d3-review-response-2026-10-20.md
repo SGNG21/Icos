@@ -71,3 +71,24 @@ Ces messages sont des instructions du propriétaire reçues dans la session, non
 2. Deux vocabulaires de tenant dans le hub : `icos-holding` (ledger) vs `default` (mémoire, shim).
 3. Troisième implémentation VPS non commitée dans `cockpit-vps-monitor` (Arch P2-6).
 4. Déploiement : le hub (58 commits, migrations 0065/0066) reste le préalable.
+
+
+## Re-vérifications (2026-10-20)
+
+| Revue | Verdict sur `0f9730d` | Restes |
+| --- | --- | --- |
+| Sécurité | **APPROVE** | P3 : 403 de portée non audité sur `/telemetry` ; délai sans annulation SQL |
+| Architecture | **APPROVE** (préconditions propriétaire : `load.ts`/module OmniRoute unique, lane `cockpit-vps-monitor`, déploiement avec le hub) | P2 propriétaire : vocabulaire tenant ; P3 : `loadLiveOverview` silencieux, délai sans annulation, fenêtre 100 % UNMETERED, estampille tenant sur la source OmniRoute |
+| QA | **REQUEST_CHANGES (restreint)** | P2 : refus de portée non structuré dans `loadSources` ; `PRICED` malgré un appel non métré ; P3 : sonde future, clé de cache, suppressions à mentionner |
+
+### Seconde passe de corrections (commit suivant)
+
+- `loadSources` et `loadTruthProjection` utilisent `scopeRefused` (marqueur `FORBIDDEN_SCOPE`) : les écrans rendent `FORBIDDEN` pour un viewer, comme la route.
+- `priceStatusOf` : tout appel `UNMETERED` (coût inconnu par schéma) rend la fenêtre `UNPRICED` ; `amount24h` nul dès qu'un appel de la fenêtre n'est pas chiffré ; assertions unitaires et PostgreSQL.
+- Preuve de sonde future exclue de l'horizon (`FUTURE_TOLERANCE_MS`) ; test.
+- Agrégats exécutés dans une transaction `transaction_read_only` avec `statement_timeout` côté serveur (5 s) en plus du délai client : plus de requête orpheline ; clé de cache documentée (fenêtre glissante, ±10 s) ; tests du cache (vol partagé, TTL, échec non mis en cache, délai).
+- `/telemetry` : le 403 de portée est audité (`auth.access.denied`, `reason: forbidden`) ; test.
+- `loadLiveOverview` : sur exception, vue avec toutes les sources `UNAVAILABLE` (`LIVE_VIEW_FAILED`) au lieu de panneaux absents.
+- Source OmniRoute sans estampille tenant de surface (le ledger porte `ledgerTenantId`).
+- **Suppressions déclarées :** `src/features/cockpit/telemetry-{client,client.test,format,format.test,fixture}.ts`, fichiers ajoutés par cette branche en D1 (commit `0c02453`), absents de la base ; retirés sur recommandation des revues (code mort). Aucun fichier de la base n'a été supprimé.
+- Non corrigé (choix documenté) : fenêtre 100 % UNMETERED rendue `UNPRICED` (le coût est inconnu : un seul mot, décision 0067).

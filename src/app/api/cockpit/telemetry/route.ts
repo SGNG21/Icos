@@ -1,4 +1,5 @@
 import { resolveOperationalScope } from "@/server/administration/mission-scope";
+import { appendSecurityAudit } from "@/server/auth/security-audit";
 import { getContainer, type Container } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
@@ -44,6 +45,15 @@ export async function GET(request: Request): Promise<Response> {
     }
     const scope = await resolveOperationalScope(container, access.session);
     if (scope.kind !== "global") {
+      /* Même trace que les refus de rôle : un refus de portée est un refus d'accès audité. */
+      await appendSecurityAudit(container.audit, {
+        eventType: "auth.access.denied",
+        userId: access.session.user.id,
+        method: request.method,
+        route: "api.cockpit.telemetry",
+        role: "operator",
+        reason: "forbidden",
+      }).catch(() => {});
       return apiError("forbidden", "La télémétrie d'infrastructure exige la portée owner/admin.");
     }
 

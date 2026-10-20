@@ -41,3 +41,11 @@
 Horodatage futur ; `attempts`/`activeAssignments` manquants ; OmniRoute mixte ; incidents sur données périmées ; âges de sondes mixtes, registre vide, mémoire vide ; chemin SQL de `readLiveOverview` sur PostgreSQL ; tokens NULL, devises mixtes ; `loadLiveOverview` (préchargement, erreur) ; échec d'une seule source ; `/proc/stat` absent ; texte d'activité inconnue ; vocabulaire « ledger UNKNOWN » ; rate limit de `/live`.
 
 Incertitudes signalées : comportement SQL lu sans exécution ; purge des jobs `dead` non vérifiée ; régression des pages déduite du code, non rendue.
+
+## Re-vérification (HEAD `0f9730d`, correctif `964114f`)
+
+- **Verdict : REQUEST_CHANGES (restreint)** — les deux P1 et presque tous les P2 initiaux sont corrigés et vérifiés (27 fichiers / 260 tests PASS, typecheck PASS, sondes jetables R1/R2) ; deux P2 nouveaux, d'une ligne chacun.
+- **P2 nouveau 1 :** `loadSources` (et `loadTruthProjection`) construisent leur refus de portée avec `missing("not_available", …)` sans le marqueur `FORBIDDEN_SCOPE` : sur les quatre écrans (qui préchargent depuis `loadSources`), un viewer verrait Workers `UNAVAILABLE / NOT_AVAILABLE` au lieu de `FORBIDDEN` (la route construit sa propre valeur avec `scopeRefused`, ce qui masquait le cas). → `scopeRefused` dans `load.ts`.
+- **P2 nouveau 2 :** les appels `UNMETERED` ont `cost_kind IS NULL` (coût inconnu) mais ne comptent pas dans `unpriced24h` : 10 appels chiffrés + 1 non métré → `PRICED` avec un montant présenté comme total complet. → `unmetered24h > 0` ⇒ `UNPRICED`, montant nul ; assertions dans les deux tests.
+- **P3 :** horodatage de sonde futur compté « dans l'horizon » (appliquer `FUTURE_TOLERANCE_MS`) ; clé de cache sans `since` (documenter) ; suppressions de fichiers ajoutés par la branche à mentionner dans le rapport D3.
+- **Tests manquants :** `loadSources` en portée liée ; `priceStatusOf` avec UNMETERED ; sonde future ; cache `live-facts` (vol partagé, délai, échec non mis en cache) ; test d'intégration lu mais non exécuté par le reviewer.

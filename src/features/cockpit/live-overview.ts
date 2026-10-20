@@ -2,7 +2,7 @@ import type { ServiceHealth } from "@/core/telemetry";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 
-import { isScopeRefused, latestOf, observe, type Observed } from "./observed";
+import { FUTURE_TOLERANCE_MS, isScopeRefused, latestOf, observe, type Observed } from "./observed";
 import type { MissionWithTasks } from "./snapshot";
 import { isReal, missing, type Truth } from "./truth";
 
@@ -193,7 +193,12 @@ function countBy<T>(items: readonly T[], key: (item: T) => string): Record<strin
 
 export function priceStatusOf(spend: SpendFacts): PriceStatus {
   if (spend.calls24h === 0) return "NO_TRAFFIC";
-  if (spend.unpriced24h > 0 || (spend.priced24h === 0 && spend.freeTier24h === 0))
+  /* Un appel UNMETERED a un coût inconnu (cost_kind NULL par schéma) : la fenêtre n'est pas chiffrée. */
+  if (
+    spend.unpriced24h > 0 ||
+    spend.unmetered24h > 0 ||
+    (spend.priced24h === 0 && spend.freeTier24h === 0)
+  )
     return "UNPRICED";
   if (spend.currencies > 1) return "MIXED_CURRENCY";
   if (spend.priced24h > 0) return "PRICED";
@@ -289,9 +294,10 @@ export function buildLiveOverview(input: LiveOverviewInputs): LiveOverview {
         value: (() => {
           const all = input.workers.value;
           const active = all.filter((w) => w.status === "active");
+          /* Dans l'horizon ET pas dans le futur : une horloge en avance n'est pas une preuve. */
           const within = (w: WorkerRegistryEntry) => {
             const age = ageMs(input.now, w.lastProbeAt);
-            return age !== null && age <= horizon;
+            return age !== null && age <= horizon && age >= -FUTURE_TOLERANCE_MS;
           };
           return {
             registered: all.length,
@@ -358,8 +364,9 @@ export function buildLiveOverview(input: LiveOverviewInputs): LiveOverview {
             ...(isReal(input.spend) ? {} : { spendErrorCode: subCode(input.spend) }),
           },
         };
+  /* Pas d'estampille tenant de surface : le ledger est écrit sous son propre tenant (`spend.ledgerTenantId`). */
   const omniroute = observe({
-    ...common,
+    collectedAt: input.now,
     truth: omniTruth,
     maxAgeMs: LIVE_MAX_AGE_MS.omniroute,
     source:

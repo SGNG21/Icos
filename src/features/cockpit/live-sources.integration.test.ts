@@ -232,7 +232,6 @@ describe("readLiveOverview (PostgreSQL)", () => {
       currency: "EUR",
       priceStatus: "PRICED",
     });
-
     await spendRow({ costKind: "COST", amount: 2, currency: "USD", totalTokens: 10 });
     o = await readOwner();
     expect(o.sources.omniroute.data?.spend).toMatchObject({
@@ -257,6 +256,31 @@ describe("readLiveOverview (PostgreSQL)", () => {
       metered24h: 5,
       tokensUnknown24h: 1,
       tokens24h: 180,
+      amount24h: null,
+      priceStatus: "UNPRICED",
+    });
+  });
+
+  it("priced calls plus one unmetered call: the amount is withheld and the window is UNPRICED", async () => {
+    await spendRow({ costKind: "COST", amount: 1.5, currency: "EUR", totalTokens: 10 });
+    await spendRow({ costKind: "COST", amount: 2.5, currency: "EUR", totalTokens: 10 });
+    let o = await readLiveOverview(container, session("owner"), {
+      vps,
+      services: async () => [],
+      ...opts,
+    });
+    expect(o.sources.omniroute.data?.spend).toMatchObject({ amount24h: 4, priceStatus: "PRICED" });
+    await spendRow({ costKind: null, amount: null, currency: null, totalTokens: null });
+    o = await readLiveOverview(container, session("owner"), {
+      vps,
+      services: async () => [],
+      ...opts,
+    });
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      priced24h: 2,
+      unmetered24h: 1,
+      amount24h: null,
+      priceStatus: "UNPRICED",
     });
   });
 
