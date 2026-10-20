@@ -34,13 +34,54 @@ async function realOverview(): Promise<LiveOverview> {
       "utf8",
     ),
   ) as { overview: LiveOverview };
-  // La preuve D1 précède l'ajout du bloc `services` : reconstruit depuis les services sondés.
+  // La preuve D1 précède l'ajout du bloc `services`, du schéma et des compteurs détaillés
+  // (dead24h, staleActive/recentFailed, décomposition du ledger) : complétés depuis ce que la
+  // preuve porte déjà (3 sondes en échec datées du même balayage, ledger 100 % UNPRICED, 0 dead).
+  const o = raw.overview;
+  const w = o.sources.workers.data!;
+  const sp = o.sources.omniroute.data!.spend!;
+  const sched = o.sources.core3.data!.scheduler!;
   return {
-    ...raw.overview,
-    services: raw.overview.services ?? {
+    ...o,
+    schema: 1,
+    sources: {
+      ...o.sources,
+      core3: {
+        ...o.sources.core3,
+        data: {
+          ...o.sources.core3.data!,
+          scheduler: { ...sched, dead24h: sched.dead24h ?? sched.dead },
+        },
+      },
+      workers: {
+        ...o.sources.workers,
+        data: {
+          ...w,
+          staleActive: w.staleActive ?? 0,
+          recentFailed: w.recentFailed ?? w.byProbeOutcome.failed ?? 0,
+        },
+      },
+      omniroute: {
+        ...o.sources.omniroute,
+        data: {
+          ...o.sources.omniroute.data!,
+          spend: {
+            ...sp,
+            metered24h: sp.metered24h ?? sp.calls24h,
+            unmetered24h: sp.unmetered24h ?? 0,
+            priced24h: sp.priced24h ?? 0,
+            freeTier24h: sp.freeTier24h ?? 0,
+            tokensUnknown24h: sp.tokensUnknown24h ?? 0,
+            currencies: sp.currencies ?? 0,
+            ledgerTenantId: sp.ledgerTenantId ?? "icos-holding",
+          },
+        },
+      },
+    },
+    services: o.services ?? {
       state: "ok",
-      observedAt: raw.overview.sources.omniroute.observedAt,
-      collectedAt: raw.overview.generatedAt,
+      observedAt: o.sources.omniroute.observedAt,
+      collectedAt: o.generatedAt,
       maxAgeMs: 30_000,
       source: "sondes de services",
       data: [
@@ -53,7 +94,7 @@ async function realOverview(): Promise<LiveOverview> {
           process: null,
           availability: { state: "operational", detail: "Requête exécutée.", latencyMs: 4 },
           mission: { state: "operational", detail: "Authentification, rôles et audit servis." },
-          checkedAt: raw.overview.sources.memory.data?.postgres?.checkedAt,
+          checkedAt: o.sources.memory.data?.postgres?.checkedAt,
         },
         {
           key: "temporal",
@@ -119,7 +160,7 @@ describe("live panels on real evidence", () => {
   it("workers: failed probes are a red tile, routable count is proven by dated evidence", async () => {
     const o = await realOverview();
     const out = html(h(WorkersSummaryPanel, { workers: o.sources.workers }));
-    expect(out).toContain("Probes failed");
+    expect(out).toContain("Recent failed probes (active)");
     expect(out).toContain('data-tone="critical"');
     expect(out).toContain("Routable (proven)");
     expect(out).toContain("last_probe_at");
@@ -183,6 +224,74 @@ describe("live panels on missing, stale and forbidden data", () => {
     expect(out).toContain('data-tone="warn"');
     expect(out).toContain("50%");
     expect(out).toContain("2m ago");
+    // Périmée : les tuiles ne jugent plus (ni vert ni rouge), seule la fraîcheur parle.
+    expect(out).not.toContain('data-tone="ok"');
+    expect(out).not.toContain('data-tone="critical"');
+  });
+
+  it("sous-sources illisibles : jamais 0 ni NOT CONNECTED à tort, activité UNKNOWN sans animation", async () => {
+    const o = await realOverview();
+    const partial: LiveOverview = {
+      ...o,
+      sources: {
+        ...o.sources,
+        core3: {
+          ...o.sources.core3,
+          state: "degraded",
+          errorCode: "READ_FAILED",
+          data: { ...o.sources.core3.data!, attempts: null, attemptsErrorCode: "READ_FAILED" },
+        },
+        omniroute: {
+          ...o.sources.omniroute,
+          state: "degraded",
+          errorCode: "LEDGER_UNAVAILABLE",
+          data: { ...o.sources.omniroute.data!, spend: null, spendErrorCode: "READ_FAILED" },
+        },
+      },
+    };
+    expect(observedActivity(partial)).toBeNull();
+    const overview = html(h(LiveSourcesPanel, { overview: partial }));
+    expect(overview).toContain("Activity UNKNOWN");
+    expect(overview).not.toContain("No activity observed");
+    expect(overview).not.toContain('data-observed="true"');
+    expect(overview).toContain("dispatches UNAVAILABLE (READ_FAILED)");
+    expect(overview).not.toContain("0 dispatch");
+    const providers = html(h(OmniRoutePanel, { omniroute: partial.sources.omniroute }));
+    expect(providers).toContain("UNKNOWN");
+    expect(providers).not.toContain("NOT CONNECTED");
+    const disconnected = html(
+      h(OmniRoutePanel, {
+        omniroute: {
+          ...partial.sources.omniroute,
+          data: { ...partial.sources.omniroute.data!, spendErrorCode: "NOT_CONNECTED" },
+        },
+      }),
+    );
+    expect(disconnected).toContain("NOT CONNECTED");
+  });
+
+  it("CPU inconnu : pas de « 0 vCPU », tuile charge sans ton", () => {
+    const o: Observed<VpsFacts> = {
+      ...base,
+      state: "degraded",
+      errorCode: "CPU_COUNT_UNKNOWN",
+      observedAt: "2026-10-19T23:59:59.000Z",
+      data: {
+        hostname: null,
+        sampledAt: "2026-10-19T23:59:59.000Z",
+        overall: "ok",
+        cores: null,
+        cpuUsage: null,
+        load1: 0.1,
+        memoryRatio: 0.5,
+        diskRatio: 0.5,
+        vram: "NO_TELEMETRY",
+      },
+    };
+    const out = html(h(HostResourcesPanel, { vps: o }));
+    expect(out).not.toContain("0 vCPU");
+    expect(out).toContain("vCPU count unknown");
+    expect(out).not.toContain('data-tone="critical"');
   });
 
   it("degraded without source timestamp names NO_SOURCE_TIMESTAMP", () => {
@@ -197,6 +306,8 @@ describe("live panels on missing, stale and forbidden data", () => {
         routable: 0,
         byProbeOutcome: { never: 2 },
         byHealth: { unknown: 2 },
+        staleActive: 2,
+        recentFailed: 0,
         activeAssignments: 0,
         lastProbeAt: null,
       },

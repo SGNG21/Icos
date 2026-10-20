@@ -164,6 +164,8 @@ export async function fetchOmniRouteMonitoring(
     const response = await fetchFn(`${baseUrl.replace(/\/+$/, "")}${OMNIROUTE_MONITORING_PATH}`, {
       method: "GET",
       headers: { Accept: "application/json" },
+      /* Une redirection changerait d'hôte : c'est un relevé non conforme, pas une cible à suivre. */
+      redirect: "error",
       signal,
     });
     if (!response.ok) {

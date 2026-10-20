@@ -1,12 +1,10 @@
+/**
+ * CONTRAT DE RÉPONSE de `GET /api/cockpit/telemetry` (schéma Zod partagé par le test de
+ * route et tout futur consommateur). Aucun client, aucun poller, aucune fixture ici.
+ */
 import { z } from "zod";
 
 import type { HostTelemetrySnapshot } from "@/core/telemetry";
-
-/**
- * Client HTTP de la télémétrie hôte. La réponse est validée strictement : une
- * forme inattendue est rejetée plutôt qu'affichée — le cockpit ne montre
- * jamais une valeur dont il n'a pas vérifié la nature.
- */
 
 const MAX_TEXT = 512;
 const MAX_ITEMS = 256;
@@ -207,62 +205,3 @@ export const telemetrySnapshotSchema = z
       .strict(),
   })
   .strict() satisfies z.ZodType<HostTelemetrySnapshot>;
-
-const responseSchema = z.object({ telemetry: telemetrySnapshotSchema }).strict();
-
-export type TelemetryErrorKind = "unauthenticated" | "forbidden" | "invalid" | "network" | "http";
-
-export class TelemetryHttpError extends Error {
-  constructor(
-    readonly kind: TelemetryErrorKind,
-    message: string,
-  ) {
-    super(message);
-    this.name = "TelemetryHttpError";
-  }
-}
-
-export interface TelemetryClient {
-  fetchSnapshot(signal: AbortSignal): Promise<HostTelemetrySnapshot>;
-}
-
-export function createTelemetryClient(
-  fetchImplementation: typeof fetch = (...args) => globalThis.fetch(...args),
-): TelemetryClient {
-  return {
-    async fetchSnapshot(signal) {
-      let response: Response;
-      try {
-        response = await fetchImplementation("/api/cockpit/telemetry", {
-          credentials: "same-origin",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-          signal,
-        });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        throw new TelemetryHttpError("network", "Impossible de joindre l'API de télémétrie.");
-      }
-      if (response.status === 401) {
-        throw new TelemetryHttpError("unauthenticated", "Session expirée : reconnectez-vous.");
-      }
-      if (response.status === 403) {
-        throw new TelemetryHttpError("forbidden", "Accès réservé aux opérateurs.");
-      }
-      if (!response.ok) {
-        throw new TelemetryHttpError("http", `Télémétrie indisponible (HTTP ${response.status}).`);
-      }
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        throw new TelemetryHttpError("invalid", "Réponse de télémétrie illisible.");
-      }
-      const parsed = responseSchema.safeParse(body);
-      if (!parsed.success) {
-        throw new TelemetryHttpError("invalid", "Réponse de télémétrie non conforme au contrat.");
-      }
-      return parsed.data.telemetry;
-    },
-  };
-}

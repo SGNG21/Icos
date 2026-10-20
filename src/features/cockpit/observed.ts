@@ -1,4 +1,4 @@
-import { isReal, type Truth } from "./truth";
+import { isReal, missing, type Truth } from "./truth";
 
 /**
  * CONTRAT TRANSVERSAL DE FRAÎCHEUR (mission COCKPIT-LIVE, D1).
@@ -11,9 +11,11 @@ import { isReal, type Truth } from "./truth";
  * États, dans l'ordre où ils sont décidés :
  * - `forbidden`   : la portée de l'appelant n'y a pas accès (jamais « vide ») ;
  * - `unavailable` : la lecture a échoué ou la source n'est pas composée ;
- * - `degraded`    : lue, mais sans horodatage source : la fraîcheur est improuvable ;
+ * - `degraded`    : lue, mais sans horodatage source (fraîcheur improuvable), avec un
+ *                   horodatage dans le futur (horloge divergente), ou avec une partie
+ *                   de ses sous-sources illisible (`degradedCode`) ;
  * - `stale`       : lue, horodatée, plus vieille que `maxAgeMs` ;
- * - `ok`          : lue, horodatée, récente.
+ * - `ok`          : lue, horodatée, récente, complète.
  *
  * `maxAgeMs: null` = aucun seuil de fraîcheur documenté pour cette source (journal
  * append-only dont l'âge de la dernière ligne n'est pas une panne). L'état `stale`
@@ -38,6 +40,29 @@ export interface Observed<T> {
   errorCode?: string;
 }
 
+/**
+ * Marqueur STRUCTURÉ d'un refus de portée, porté par `Truth.requirement` : une vérité
+ * `not_available` qui le porte est un refus (`forbidden`), jamais une absence. Le
+ * texte de la raison n'entre pas dans la décision.
+ */
+export const FORBIDDEN_SCOPE_REQUIREMENT = "FORBIDDEN_SCOPE";
+
+/** Vérité manquante « hors portée de l'appelant » (owner/admin seulement). */
+export function scopeRefused<T = never>(what: string): Truth<T> {
+  return missing<T>(
+    "not_available",
+    `${what} is visible to owner/admin scope only.`,
+    FORBIDDEN_SCOPE_REQUIREMENT,
+  );
+}
+
+export function isScopeRefused(truth: Truth<unknown>): boolean {
+  return !isReal(truth) && truth.requirement === FORBIDDEN_SCOPE_REQUIREMENT;
+}
+
+/** Une horloge source en avance de plus d'une minute n'est pas une mesure fraîche. */
+export const FUTURE_TOLERANCE_MS = 60_000;
+
 export interface ObserveInput<T> {
   truth: Truth<T>;
   /** Extrait l'horodatage de mesure d'une valeur réelle ; null si la source n'en porte pas. */
@@ -46,10 +71,18 @@ export interface ObserveInput<T> {
   maxAgeMs: number | null;
   source: string;
   tenantId?: string;
+  /**
+   * Code d'une dégradation PARTIELLE constatée par l'appelant (sous-source illisible,
+   * preuve d'un membre périmée) : la source reste lue, mais n'est plus `ok`.
+   */
+  degradedCode?: string | null;
+  /** Vrai quand la valeur lue est vide (aucune ligne) : `EMPTY_SOURCE` plutôt qu'un silence. */
+  empty?: (value: T) => boolean;
 }
 
 /** Code d'erreur assaini dérivé d'une vérité manquante. */
 export function errorCodeOf(truth: Exclude<Truth<unknown>, { kind: "real" }>): string {
+  if (truth.requirement === FORBIDDEN_SCOPE_REQUIREMENT) return FORBIDDEN_SCOPE_REQUIREMENT;
   switch (truth.kind) {
     case "not_connected":
       return "NOT_CONNECTED";
@@ -59,9 +92,6 @@ export function errorCodeOf(truth: Exclude<Truth<unknown>, { kind: "real" }>): s
       return "READ_FAILED";
   }
 }
-
-/** Une vérité `not_available` motivée par la portée est un refus, pas une absence. */
-const SCOPE_REFUSAL = /scope only|portée/i;
 
 export function observe<T>(input: ObserveInput<T>): Observed<T> {
   const collectedAt = input.collectedAt.toISOString();
@@ -73,23 +103,25 @@ export function observe<T>(input: ObserveInput<T>): Observed<T> {
   };
   const truth = input.truth;
   if (!isReal(truth)) {
-    const forbidden = truth.kind === "not_available" && SCOPE_REFUSAL.test(truth.reason);
+    const forbidden = isScopeRefused(truth);
     return {
       ...base,
       state: forbidden ? "forbidden" : "unavailable",
       observedAt: null,
       data: null,
-      errorCode: forbidden ? "FORBIDDEN_SCOPE" : errorCodeOf(truth),
+      errorCode: errorCodeOf(truth),
     };
   }
+  const partial = input.degradedCode ?? null;
   const observedAt = input.observedAt(truth.value);
   if (observedAt === null) {
+    const empty = input.empty?.(truth.value) === true;
     return {
       ...base,
       state: "degraded",
       observedAt: null,
       data: truth.value,
-      errorCode: "NO_SOURCE_TIMESTAMP",
+      errorCode: partial ?? (empty ? "EMPTY_SOURCE" : "NO_SOURCE_TIMESTAMP"),
     };
   }
   const observedMs = Date.parse(observedAt);
@@ -99,12 +131,33 @@ export function observe<T>(input: ObserveInput<T>): Observed<T> {
       state: "degraded",
       observedAt: null,
       data: truth.value,
-      errorCode: "INVALID_SOURCE_TIMESTAMP",
+      errorCode: partial ?? "INVALID_SOURCE_TIMESTAMP",
     };
   }
   const age = input.collectedAt.getTime() - observedMs;
+  if (age < -FUTURE_TOLERANCE_MS) {
+    return {
+      ...base,
+      state: "degraded",
+      observedAt,
+      data: truth.value,
+      errorCode: partial ?? "FUTURE_SOURCE_TIMESTAMP",
+    };
+  }
   const stale = input.maxAgeMs !== null && age > input.maxAgeMs;
-  return { ...base, state: stale ? "stale" : "ok", observedAt, data: truth.value };
+  if (stale) {
+    return {
+      ...base,
+      state: "stale",
+      observedAt,
+      data: truth.value,
+      ...(partial ? { errorCode: partial } : {}),
+    };
+  }
+  if (partial) {
+    return { ...base, state: "degraded", observedAt, data: truth.value, errorCode: partial };
+  }
+  return { ...base, state: "ok", observedAt, data: truth.value };
 }
 
 /** Le plus récent d'une liste d'horodatages ISO (ou Date) ; null si aucun n'est lisible. */

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession, Role } from "@/core/identity";
 import type { ServiceHealth } from "@/core/telemetry";
+import { OperationalAccessService } from "@/server/administration/operational-access-service";
 import type { AuthGateway } from "@/server/auth/ports";
 import { buildMemoryContainer, type Container } from "@/server/container";
 import { hermesWorker, openhandsWorker } from "@/server/services/worker-registry/fixtures";
@@ -18,7 +19,7 @@ import {
 } from "@/server/telemetry/rate-limit";
 import { ServiceProbes, setServiceProbesForTests } from "@/server/telemetry/service-probes";
 
-import { telemetrySnapshotSchema } from "@/features/cockpit/telemetry-client";
+import { telemetrySnapshotSchema } from "@/server/telemetry/telemetry-contract";
 
 import { GET } from "./route";
 
@@ -50,7 +51,14 @@ function installSession(role: Role | null): Container {
           user: { id: "trusted-human", email: "human@icos.test", name: "Human", status: "active" },
           roles: [role],
         };
-  const container: Container = { ...base, auth: authGateway(session) };
+  const container: Container = {
+    ...base,
+    auth: authGateway(session),
+    // Même service de portée qu'en production : owner/admin → globale, sinon liée.
+    operationalAccess: new OperationalAccessService({
+      listAgentIdsForHuman: async () => new Set<string>(),
+    } as never),
+  };
   (globalThis as Record<string, unknown>)[CONTAINER_KEY] = Promise.resolve(container);
   return container;
 }
@@ -126,8 +134,17 @@ describe("GET /api/cockpit/telemetry", () => {
     });
   });
 
-  it("sert un instantané à un opérateur, sans cache et sans secret", async () => {
+  it("refuse un opérateur en portée liée : l'infrastructure exige la portée owner/admin", async () => {
     installSession("operator");
+    installProbes();
+    setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
+    const response = await GET(request());
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("forbidden");
+  });
+
+  it("sert un instantané à un owner (portée globale), sans cache et sans secret", async () => {
+    installSession("owner");
     installProbes();
     setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
 
@@ -150,7 +167,7 @@ describe("GET /api/cockpit/telemetry", () => {
   });
 
   it("joint la santé des services en trois couches et le compteur workers du registre durable", async () => {
-    const container = installSession("operator");
+    const container = installSession("owner");
     setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
     installProbes();
     // Deux workers enregistrés (jamais sondés), 1 + 1 emplacement, aucun dispatch en cours.
@@ -189,7 +206,7 @@ describe("GET /api/cockpit/telemetry", () => {
   });
 
   it("limite la fréquence par utilisateur (429 + Retry-After) sans sonder au-delà", async () => {
-    installSession("operator");
+    installSession("owner");
     setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
     const monitoringHealth = installProbes();
 
@@ -210,7 +227,7 @@ describe("GET /api/cockpit/telemetry", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-17T12:00:00.000Z"));
-      installSession("operator");
+      installSession("owner");
       setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
       // OmniRoute qui ne répond pas : l'adaptateur abandonne à son délai.
       const monitoringHealth = vi.fn(
@@ -257,7 +274,7 @@ describe("GET /api/cockpit/telemetry", () => {
     vi.stubEnv("OMNIROUTE_BASE_URL", "");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
-      installSession("operator");
+      installSession("owner");
       setHostTelemetrySamplerForTests(new HostTelemetrySampler({ source: fakeSource }));
       const response = await GET(request());
       expect(response.status).toBe(200);

@@ -12,6 +12,10 @@ import {
   type HostSource,
   type ProcPath,
 } from "@/server/telemetry/host-sampler";
+import {
+  resetTelemetryRateLimiterForTests,
+  TELEMETRY_RATE_LIMIT,
+} from "@/server/telemetry/rate-limit";
 import { ServiceProbes, setServiceProbesForTests } from "@/server/telemetry/service-probes";
 
 import { GET } from "./route";
@@ -97,6 +101,7 @@ afterEach(() => {
   delete (globalThis as Record<string, unknown>)[CONTAINER_KEY];
   setHostTelemetrySamplerForTests(null);
   setServiceProbesForTests(null);
+  resetTelemetryRateLimiterForTests();
   vi.restoreAllMocks();
 });
 
@@ -129,7 +134,8 @@ describe("GET /api/cockpit/live", () => {
         errorCode: "FORBIDDEN_SCOPE",
       });
     }
-    expect(body.sources.core3.data?.missions.total).toBe(0);
+    expect(body.sources.core3.data?.missions?.total).toBe(0);
+    expect(body.schema).toBe(1);
     expect(monitoringHealth).not.toHaveBeenCalled();
   });
 
@@ -146,12 +152,20 @@ describe("GET /api/cockpit/live", () => {
     expect(body.sources.workers).toMatchObject({
       // Enregistrés mais jamais sondés : lus, non prouvés → degraded, pas « 2 workers vivants ».
       state: "degraded",
-      errorCode: "NO_SOURCE_TIMESTAMP",
-      data: { registered: 2, routable: 0, byProbeOutcome: { never: 2 }, activeAssignments: 0 },
+      errorCode: "STALE_WORKER_EVIDENCE",
+      data: {
+        registered: 2,
+        routable: 0,
+        staleActive: 2,
+        byProbeOutcome: { never: 2 },
+        activeAssignments: 0,
+      },
       tenantId: "default",
     });
+    // Passerelle sondée mais ledger sans base : la source n'est pas « LIVE », elle est dégradée.
     expect(body.sources.omniroute).toMatchObject({
-      state: "ok",
+      state: "degraded",
+      errorCode: "LEDGER_UNAVAILABLE",
       data: { health: { state: "operational" }, spend: null, spendErrorCode: "NOT_CONNECTED" },
     });
     expect(body.sources.memory).toMatchObject({
@@ -159,6 +173,7 @@ describe("GET /api/cockpit/live", () => {
       data: null,
       errorCode: "NOT_CONNECTED",
     });
+    expect(body.sources.core3).toMatchObject({ state: "degraded", errorCode: "NOT_CONNECTED" });
     expect(body.sources.core3.data).toMatchObject({
       scheduler: null,
       schedulerErrorCode: "NOT_CONNECTED",
@@ -174,6 +189,18 @@ describe("GET /api/cockpit/live", () => {
       /postgres:\/\/|password|secret|bearer|api[_-]?key|session_token|DATABASE_URL|127\.0\.0\.1/i,
     );
     expect(raw).not.toMatch(/"amount24h":0\b/);
+  });
+
+  it("limite la fréquence par utilisateur (429 + Retry-After)", async () => {
+    install("viewer");
+    installInfra();
+    const statuses: number[] = [];
+    for (let i = 0; i < TELEMETRY_RATE_LIMIT.limit; i += 1) statuses.push((await get()).status);
+    expect(statuses.every((s) => s === 200)).toBe(true);
+    const refused = await get();
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("rate_limited");
   });
 
   it("un paramètre client ne change ni la portée ni le tenant", async () => {

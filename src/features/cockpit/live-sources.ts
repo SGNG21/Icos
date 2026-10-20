@@ -1,18 +1,16 @@
-import { count, gte, sql } from "drizzle-orm";
-
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { WorkerRegistryEntry } from "@/core/contracts/worker-registry";
 import type { AuthenticatedSession } from "@/core/identity";
 import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
 import type { ServiceHealth } from "@/core/telemetry";
 import { resolveOperationalScope, isMissionInScope } from "@/server/administration/mission-scope";
-import { memoryEntities, memoryRecords, memoryRelations } from "@/server/cognitive/schema";
+import { SPEND_LEDGER_TENANT_ID } from "@/server/budget/compose-spend";
 import type { Container } from "@/server/container";
-import { memoryRetrievalLog } from "@/server/database/memory-schema";
-import { scheduledJobs, spendLedger } from "@/server/database/schema";
+import type { AgentScope } from "@/server/repositories/ports";
 import { getHostTelemetrySampler } from "@/server/telemetry/host-sampler";
 import { getServiceProbes } from "@/server/telemetry/service-probes";
 
+import { readMemoryFacts, readSchedulerFacts, readSpendFacts, sinceDay } from "./live-facts";
 import {
   buildLiveOverview,
   type LiveOverview,
@@ -22,6 +20,7 @@ import {
   type SpendFacts,
   type VpsFacts,
 } from "./live-overview";
+import { scopeRefused } from "./observed";
 import type { MissionWithTasks } from "./snapshot";
 import { missing, real, type Truth } from "./truth";
 
@@ -31,12 +30,11 @@ import { missing, real, type Truth } from "./truth";
  * l'appelant ; un échec devient une `Truth` manquante, jamais une valeur par défaut.
  *
  * Les sources tenant-wide (scheduler, registre, ledger, mémoire, hôte) ne sont
- * lisibles qu'en portée globale (owner/admin), comme dans `loadTruthProjection`.
+ * lisibles qu'en portée globale (owner/admin), comme dans `loadTruthProjection`, et
+ * répondent alors par un refus STRUCTURÉ (`scopeRefused`). Les agrégats durables
+ * passent par `live-facts.ts` (cache 10 s, délai 5 s, filtre `tenant_id`).
  * Aucune requête SQL n'est paramétrée par le client ; aucune écriture.
  */
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const SCOPE_REASON = "visible to owner/admin scope only";
 
 async function read<T>(label: string, fn: () => Promise<T>): Promise<Truth<T>> {
   try {
@@ -46,11 +44,10 @@ async function read<T>(label: string, fn: () => Promise<T>): Promise<Truth<T>> {
   }
 }
 
-const iso = (d: Date | string | null | undefined): string | null =>
-  d === null || d === undefined ? null : new Date(d).toISOString();
-
 export interface LiveReadOptions {
   now?: Date;
+  /** Portée déjà résolue par l'appelant (page) ; sinon résolue ici (route). */
+  scope?: AgentScope;
   /**
    * Faits déjà lus par `loadSources()` (même requête, même portée) : évite une seconde
    * lecture des missions (N+1) et du registre quand une page les a déjà chargés.
@@ -59,6 +56,8 @@ export interface LiveReadOptions {
   /** Injectable pour les tests ; par défaut l'échantillonneur et les sondes du processus. */
   vps?: () => Promise<VpsFacts>;
   services?: () => Promise<ServiceHealth[]>;
+  /** Tests d'intégration : agrégats sans cache de processus. */
+  noFactsCache?: boolean;
 }
 
 async function defaultVps(): Promise<VpsFacts> {
@@ -69,7 +68,8 @@ async function defaultVps(): Promise<VpsFacts> {
     hostname: snapshot.hostname.available ? snapshot.hostname.value : null,
     sampledAt: c.at,
     overall: snapshot.overall,
-    cores: c.cpu.cores,
+    /* L'échantillonneur rend 0 quand /proc/stat est illisible : ce n'est pas un nombre de cœurs. */
+    cores: c.cpu.cores > 0 ? c.cpu.cores : null,
     cpuUsage: c.cpu.usage.available ? c.cpu.usage.value : null,
     load1: c.cpu.load.available ? c.cpu.load.value.one : null,
     memoryRatio: c.memory.available ? c.memory.value.ratio : null,
@@ -84,19 +84,26 @@ export async function readLiveOverview(
   session: AuthenticatedSession,
   options: LiveReadOptions = {},
 ): Promise<LiveOverview> {
-  const now = options.now ?? new Date();
-  const scope = await resolveOperationalScope(container, session);
+  const started = options.now ?? new Date();
+  const scope = options.scope ?? (await resolveOperationalScope(container, session));
   const global = scope.kind === "global";
-  const outOfScope = <T>() => missing<T>("not_available", `This source is ${SCOPE_REASON}.`);
   const db = container.db;
   const noDb = <T>() => missing<T>("not_connected", "This process has no durable database.");
-  const since = new Date(now.getTime() - DAY_MS);
+  const since = sinceDay(started);
+  const facts = { noCache: options.noFactsCache === true };
 
   /*
    * Mono-tenant canonique (shim `CURRENT_SINGLE_TENANT_ID`) : le tenant vient de la
-   * composition, jamais d'un paramètre, d'un en-tête ou d'un cookie du client.
+   * composition, jamais d'un paramètre, d'un en-tête ou d'un cookie du client, et il
+   * filtre chaque agrégat qui porte une colonne `tenant_id`.
+   *
+   * ÉCART CONSTATÉ (D3) : le ledger de dépense est écrit sous SON propre tenant
+   * (`SPEND_LEDGER_TENANT_ID`, « icos-holding », compose-spend.ts), distinct du shim
+   * (« default ») utilisé par la mémoire durable. Le lecteur suit la constante du writer
+   * pour chaque table ; la réconciliation des deux vocabulaires est une décision propriétaire.
    */
   const tenantId = CURRENT_SINGLE_TENANT_ID;
+  const ledgerTenantId = SPEND_LEDGER_TENANT_ID;
 
   const pre = options.preloaded;
   const [missions, workers, activeAssignments, scheduler, spend, memory, services, vps] =
@@ -116,97 +123,37 @@ export async function readLiveOverview(
         ? Promise.resolve(pre.workers)
         : global
           ? read("Worker registry", () => container.workerRegistryStore.list())
-          : outOfScope<WorkerRegistryEntry[]>(),
+          : scopeRefused<WorkerRegistryEntry[]>("Worker infrastructure"),
       pre
         ? Promise.resolve(pre.activeAssignments)
         : global
           ? read("Dispatch ledger", () => container.dispatchAttempts.listActiveWorkerAssignments())
-          : outOfScope<string[]>(),
+          : scopeRefused<string[]>("Worker infrastructure"),
       !global
-        ? outOfScope<SchedulerFacts>()
+        ? scopeRefused<SchedulerFacts>("The durable scheduler")
         : !db
           ? noDb<SchedulerFacts>()
-          : read("Durable scheduler", async () => {
-              const active = await db
-                .select({ kind: scheduledJobs.kind, n: count() })
-                .from(scheduledJobs)
-                .where(sql`${scheduledJobs.state} in ('scheduled', 'running')`)
-                .groupBy(scheduledJobs.kind);
-              const [agg] = await db
-                .select({
-                  leased: sql<number>`count(*) filter (where ${scheduledJobs.leaseUntil} > now())`,
-                  dead: sql<number>`count(*) filter (where ${scheduledJobs.state} = 'dead')`,
-                  last: sql<Date | null>`max(${scheduledJobs.updatedAt})`,
-                })
-                .from(scheduledJobs);
-              return {
-                activeByKind: Object.fromEntries(active.map((r) => [r.kind, Number(r.n)])),
-                leased: Number(agg?.leased ?? 0),
-                dead: Number(agg?.dead ?? 0),
-                lastUpdatedAt: iso(agg?.last ?? null),
-              };
-            }),
+          : read("Durable scheduler", () => readSchedulerFacts(db, facts)),
       !global
-        ? outOfScope<SpendFacts>()
+        ? scopeRefused<SpendFacts>("The spend ledger")
         : !db
           ? noDb<SpendFacts>()
-          : read("Spend ledger", async () => {
-              const [row] = await db
-                .select({
-                  calls: count(),
-                  tokens: sql<number>`coalesce(sum(${spendLedger.totalTokens}), 0)`,
-                  unpriced: sql<number>`count(*) filter (where ${spendLedger.amount} is null)`,
-                  amount: sql<number | null>`sum(${spendLedger.amount})`,
-                  currency: sql<string | null>`min(${spendLedger.currency})`,
-                  last: sql<Date | null>`max(${spendLedger.observedAt})`,
-                })
-                .from(spendLedger)
-                .where(gte(spendLedger.observedAt, since));
-              const unpriced = Number(row?.unpriced ?? 0);
-              return {
-                calls24h: Number(row?.calls ?? 0),
-                tokens24h: Number(row?.tokens ?? 0),
-                unpriced24h: unpriced,
-                amount24h: unpriced === 0 && row?.amount != null ? Number(row.amount) : null,
-                currency: row?.currency ?? null,
-                lastObservedAt: iso(row?.last ?? null),
-              };
-            }),
+          : read("Spend ledger", () => readSpendFacts(db, ledgerTenantId, since, facts)),
       !global
-        ? outOfScope<MemoryFacts>()
+        ? scopeRefused<MemoryFacts>("Durable memory")
         : !db
           ? noDb<MemoryFacts>()
-          : read("Durable memory", async () => {
-              const [m] = await db
-                .select({
-                  records: count(),
-                  active: sql<number>`count(*) filter (where ${memoryRecords.status} = 'active')`,
-                  last: sql<Date | null>`max(${memoryRecords.updatedAt})`,
-                })
-                .from(memoryRecords);
-              const [r] = await db
-                .select({ n: count() })
-                .from(memoryRetrievalLog)
-                .where(gte(memoryRetrievalLog.retrievedAt, since));
-              const [e] = await db.select({ n: count() }).from(memoryEntities);
-              const [rel] = await db.select({ n: count() }).from(memoryRelations);
-              return {
-                records: Number(m?.records ?? 0),
-                active: Number(m?.active ?? 0),
-                retrievals24h: Number(r?.n ?? 0),
-                entities: Number(e?.n ?? 0),
-                relations: Number(rel?.n ?? 0),
-                lastWriteAt: iso(m?.last ?? null),
-              };
-            }),
+          : read("Durable memory", () => readMemoryFacts(db, tenantId, since, facts)),
       global
         ? read("Service probes", async () =>
             options.services
               ? options.services()
               : (await getServiceProbes(container.databaseHealth).collect()).services,
           )
-        : outOfScope<ServiceHealth[]>(),
-      global ? read("Host telemetry", options.vps ?? defaultVps) : outOfScope<VpsFacts>(),
+        : scopeRefused<ServiceHealth[]>("Service probes"),
+      global
+        ? read("Host telemetry", options.vps ?? defaultVps)
+        : scopeRefused<VpsFacts>("Host telemetry"),
     ]);
 
   const attempts: Truth<DispatchAttempt[]> = pre
@@ -227,7 +174,8 @@ export async function readLiveOverview(
       : missions;
 
   return buildLiveOverview({
-    now,
+    /* Acquisition datée APRÈS les lectures : un âge ne peut pas être négatif par construction. */
+    now: new Date(),
     scope: global ? "global" : "linked",
     tenantId,
     missions,

@@ -1,3 +1,4 @@
+import { resolveOperationalScope } from "@/server/administration/mission-scope";
 import { getContainer, type Container } from "@/server/container";
 import { toErrorResponse } from "@/server/http/map-error";
 import { protectRoute } from "@/server/http/protect-route";
@@ -22,6 +23,10 @@ export const dynamic = "force-dynamic";
  *
  * La capacité des workers vient du registre durable et du journal de dispatch
  * (décision 0031/0032), jamais d'une session ou d'un processus observé.
+ *
+ * Portée : rôle `operator` ET portée opérationnelle globale (owner/admin), la même
+ * règle que `/api/cockpit/live` et `loadSources` pour l'infrastructure tenant-wide.
+ * Un opérateur en portée liée reçoit 403, jamais une vue partielle.
  */
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -36,6 +41,10 @@ export async function GET(request: Request): Promise<Response> {
     });
     if (!access.ok) {
       return access.response;
+    }
+    const scope = await resolveOperationalScope(container, access.session);
+    if (scope.kind !== "global") {
+      return apiError("forbidden", "La télémétrie d'infrastructure exige la portée owner/admin.");
     }
 
     const decision = getTelemetryRateLimiter().check(access.session.user.id);

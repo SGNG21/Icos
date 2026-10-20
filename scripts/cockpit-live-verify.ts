@@ -153,6 +153,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  /* Jamais le message du driver (hôte, port, utilisateur possibles) : un code, c'est tout. */
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "UNKNOWN";
+  console.error(`cockpit-live-verify failed (code ${code})`);
   process.exitCode = 1;
 });

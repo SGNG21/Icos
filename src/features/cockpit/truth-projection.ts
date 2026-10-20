@@ -25,6 +25,8 @@ export interface TruthProjection {
     /** `null` while any 24h call is UNPRICED: an amount that cannot be proven is not shown. */
     amount24h: number | null;
     currency: string | null;
+    /** Window price status (decision 0078): FREE_TIER is verified gratuity, never a 0 cost. */
+    priceStatus?: "PRICED" | "FREE_TIER" | "UNPRICED" | "MIXED_CURRENCY" | "NO_TRAFFIC";
   }>;
   readonly selfDevelopment: Truth<readonly ImprovementCandidate[]>;
   /** The same measured facts the conversation receives as `[runtime:capability.*]`. */
@@ -40,7 +42,11 @@ export const tokenThroughputMetric = (t: TruthProjection["spend"]): Truth<number
 
 export const costMetric = (t: TruthProjection["spend"]): Truth<number | string> => {
   if (t.kind !== "real") return t;
-  const { amount24h, currency, unpriced24h, calls24h } = t.value;
+  const { amount24h, currency, unpriced24h, calls24h, priceStatus } = t.value;
+  if (priceStatus === "FREE_TIER")
+    return real("FREE_TIER (verified)", "every 24h call is a dated free-tier record (0078)");
+  if (priceStatus === "MIXED_CURRENCY")
+    return real("MIXED CURRENCY", "priced calls in several currencies: no single total");
   if (amount24h !== null && currency)
     return real(`${amount24h.toFixed(2)} ${currency}`, "spend_ledger amount, 24h");
   // UNPRICED is a measured state (decision 0066): an empty price table makes every call

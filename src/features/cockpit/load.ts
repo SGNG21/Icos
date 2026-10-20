@@ -3,6 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 
 import { hasPermission, type AuthenticatedSession } from "@/core/identity";
+import { CURRENT_SINGLE_TENANT_ID } from "@/core/identity/tenant";
+import { SPEND_LEDGER_TENANT_ID } from "@/server/budget/compose-spend";
 import type { DispatchAttempt } from "@/core/contracts/dispatch-attempt";
 import type { ReviewDecisionRecord } from "@/core/contracts/review";
 import type { Mission } from "@/core/mission/contracts";
@@ -12,7 +14,8 @@ import { getContainer, type Container } from "@/server/container";
 import type { AgentScope } from "@/server/repositories/ports";
 
 import { notConnectedBusiness } from "./business";
-import type { LiveOverview } from "./live-overview";
+import { readMemoryFacts, readSpendFacts } from "./live-facts";
+import { priceStatusOf, type LiveOverview } from "./live-overview";
 import { readLiveOverview } from "./live-sources";
 import { buildDag, type DagInputTask, type DagModel } from "./dag";
 import type { QualityFact, WorkspaceFact } from "./pipeline";
@@ -22,13 +25,9 @@ import {
   type CockpitSources,
   type MissionWithTasks,
 } from "./snapshot";
-import { count, gte, sql } from "drizzle-orm";
 
 import { DurableImprovementBacklog } from "@/server/autonomy/durable-improvement-backlog";
 import { measureRuntimeCapabilities } from "@/server/cognitive/index";
-import { memoryRecords } from "@/server/cognitive/schema";
-import { memoryRetrievalLog } from "@/server/database/memory-schema";
-import { spendLedger } from "@/server/database/schema";
 
 import type { TruthProjection } from "./truth-projection";
 import { isReal, missing, real, type Truth } from "./truth";
@@ -106,40 +105,20 @@ export const loadTruthProjection = cache(async (): Promise<TruthProjection | nul
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const [memory, spend, selfDevelopment, capabilities] = await Promise.all([
     read("Durable memory", async () => {
-      const [m] = await db
-        .select({
-          records: count(),
-          active: sql<number>`count(*) filter (where ${memoryRecords.status} = 'active')`,
-        })
-        .from(memoryRecords);
-      const [r] = await db
-        .select({ n: count() })
-        .from(memoryRetrievalLog)
-        .where(gte(memoryRetrievalLog.retrievedAt, since));
-      return {
-        records: Number(m?.records ?? 0),
-        active: Number(m?.active ?? 0),
-        retrievals24h: Number(r?.n ?? 0),
-      };
+      const f = await readMemoryFacts(db, CURRENT_SINGLE_TENANT_ID, since);
+      return { records: f.records, active: f.active, retrievals24h: f.retrievals24h };
     }),
     read("Spend ledger", async () => {
-      const [row] = await db
-        .select({
-          calls: count(),
-          tokens: sql<number>`coalesce(sum(${spendLedger.totalTokens}), 0)`,
-          unpriced: sql<number>`count(*) filter (where ${spendLedger.amount} is null)`,
-          amount: sql<number | null>`sum(${spendLedger.amount})`,
-          currency: sql<string | null>`min(${spendLedger.currency})`,
-        })
-        .from(spendLedger)
-        .where(gte(spendLedger.observedAt, since));
-      const unpriced = Number(row?.unpriced ?? 0);
+      /* Même lecteur que la vue live (live-facts.ts) : cost_kind, devise, tenant, cache 10 s. */
+      const f = await readSpendFacts(db, SPEND_LEDGER_TENANT_ID, since);
+      const status = priceStatusOf(f);
       return {
-        calls24h: Number(row?.calls ?? 0),
-        tokens24h: Number(row?.tokens ?? 0),
-        unpriced24h: unpriced,
-        amount24h: unpriced === 0 && row?.amount != null ? Number(row.amount) : null,
-        currency: row?.currency ?? null,
+        calls24h: f.calls24h,
+        tokens24h: f.tokens24h,
+        unpriced24h: f.unpriced24h,
+        amount24h: status === "PRICED" ? f.amount24h : null,
+        currency: f.currency,
+        priceStatus: status,
       };
     }),
     read("Improvement backlog", () =>
@@ -300,19 +279,25 @@ export const loadLiveOverview = cache(async (): Promise<LiveOverview | null> => 
   const ctx = await getCockpitContext();
   if (!ctx) return null;
   const sources = await loadSources();
-  return readLiveOverview(ctx.container, ctx.session, {
-    now: sources?.now,
-    ...(sources
-      ? {
-          preloaded: {
-            missions: sources.missions,
-            attempts: sources.attempts,
-            workers: sources.workers,
-            activeAssignments: sources.activeAssignments,
-          },
-        }
-      : {}),
-  });
+  try {
+    return await readLiveOverview(ctx.container, ctx.session, {
+      now: sources?.now,
+      scope: ctx.scope,
+      ...(sources
+        ? {
+            preloaded: {
+              missions: sources.missions,
+              attempts: sources.attempts,
+              workers: sources.workers,
+              activeAssignments: sources.activeAssignments,
+            },
+          }
+        : {}),
+    });
+  } catch {
+    /* La vue live ne doit jamais faire tomber un écran qui se dégradait déjà sans elle. */
+    return null;
+  }
 });
 
 export const loadSnapshot = cache(async () => {

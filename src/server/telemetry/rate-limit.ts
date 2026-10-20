@@ -48,7 +48,11 @@ export class FixedWindowRateLimiter {
 }
 
 const LIMITER_KEY = "__icosTelemetryRateLimiter__";
-type GlobalWithLimiter = typeof globalThis & { [LIMITER_KEY]?: FixedWindowRateLimiter };
+const LIVE_LIMITER_KEY = "__icosLiveRateLimiter__";
+type GlobalWithLimiter = typeof globalThis & {
+  [LIMITER_KEY]?: FixedWindowRateLimiter;
+  [LIVE_LIMITER_KEY]?: FixedWindowRateLimiter;
+};
 
 /**
  * Un onglet du cockpit consomme 6 lectures par minute (10 s), plus une reprise
@@ -68,6 +72,17 @@ export function getTelemetryRateLimiter(): FixedWindowRateLimiter {
   return globalRef[LIMITER_KEY];
 }
 
+/** Même plafond pour la vue live : un onglet consomme 4 lectures par minute (15 s). */
+export function getLiveRateLimiter(): FixedWindowRateLimiter {
+  const globalRef = globalThis as GlobalWithLimiter;
+  globalRef[LIVE_LIMITER_KEY] ??= new FixedWindowRateLimiter(
+    TELEMETRY_RATE_LIMIT.limit,
+    TELEMETRY_RATE_LIMIT.windowMs,
+  );
+  return globalRef[LIVE_LIMITER_KEY];
+}
+
 export function resetTelemetryRateLimiterForTests(): void {
   delete (globalThis as GlobalWithLimiter)[LIMITER_KEY];
+  delete (globalThis as GlobalWithLimiter)[LIVE_LIMITER_KEY];
 }

@@ -66,10 +66,19 @@ export class ServiceProbes {
   private readonly cache = new Map<string, CacheEntry<unknown>>();
 
   constructor(private readonly deps: ServiceProbeDependencies) {
+    this.deps = { ...deps };
     this.now = deps.now ?? Date.now;
     this.ttlMs = deps.ttlMs ?? 15_000;
     this.databaseTimeoutMs = deps.databaseTimeoutMs ?? 2_000;
     this.omniRouteTimeoutMs = deps.omniRouteTimeoutMs ?? 2_500;
+  }
+
+  /** Le port PostgreSQL suit le container courant (jamais un pool fermé par un reset). */
+  setDatabase(database: DatabaseHealthPort | undefined): void {
+    if (this.deps.database !== database) {
+      this.deps.database = database;
+      this.cache.delete("postgres");
+    }
   }
 
   async collect(): Promise<ServiceProbeReport> {
@@ -463,6 +472,7 @@ export function getServiceProbes(database: DatabaseHealthPort | undefined): Serv
     omniRouteConnected,
     omniRoute: omniRouteConnected ? defaultOmniRoute() : undefined,
   });
+  globalRef[PROBES_KEY].setDatabase(database);
   return globalRef[PROBES_KEY];
 }
 

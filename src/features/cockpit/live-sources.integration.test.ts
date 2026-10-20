@@ -7,6 +7,7 @@ import { OperationalAccessService } from "@/server/administration/operational-ac
 import { memoryRecords } from "@/server/cognitive/schema";
 import type { Container } from "@/server/container";
 import { createDatabase, type DatabaseHandle } from "@/server/database/client";
+import { SPEND_LEDGER_TENANT_ID } from "@/server/budget/compose-spend";
 import { createDatabaseHealth } from "@/server/database/health";
 import { spendLedger } from "@/server/database/schema";
 import { TEST_DATABASE_URL } from "@/server/database/test-database-guard";
@@ -19,6 +20,8 @@ import { hermesWorker } from "@/server/services/worker-registry/fixtures";
 
 import { readLiveOverview } from "./live-sources";
 import type { VpsFacts } from "./live-overview";
+
+const opts = { noFactsCache: true as const };
 
 /**
  * Agrégats RÉELS de `readLiveOverview` sur une base PostgreSQL de test jetable
@@ -74,6 +77,37 @@ describe("readLiveOverview (PostgreSQL)", () => {
   const now = () => new Date();
   const ago = (ms: number) => new Date(Date.now() - ms);
 
+  let seq = 0;
+  /** Lignes conformes aux CHECK du schéma (0055/0066) : chaque forme a sa colonne obligatoire. */
+  async function spendRow(row: {
+    costKind: "COST" | "FREE_TIER" | "UNPRICED" | null;
+    amount: number | null;
+    currency: string | null;
+    totalTokens: number | null;
+    tenantId?: string;
+  }) {
+    seq += 1;
+    const unmetered = row.costKind === null;
+    await handle.db.insert(spendLedger).values({
+      id: `spend-${Date.now()}-${seq}`,
+      tenantId: row.tenantId ?? SPEND_LEDGER_TENANT_ID,
+      attributionKey: "goal:test",
+      modelId: "test/model",
+      usageKind: unmetered ? "UNMETERED" : "METERED",
+      promptTokens: unmetered ? null : 10,
+      completionTokens: unmetered ? null : 5,
+      totalTokens: unmetered ? null : row.totalTokens,
+      unmeteredReason: unmetered ? "USAGE_ABSENT" : null,
+      costKind: row.costKind,
+      amount: row.amount,
+      currency: row.currency,
+      unpricedReason: row.costKind === "UNPRICED" ? "NO_PRICE" : null,
+      freeTierProvenance: row.costKind === "FREE_TIER" ? "test provenance" : null,
+      freeTierVerifiedOn: row.costKind === "FREE_TIER" ? "2026-10-20" : null,
+      observedAt: now(),
+    });
+  }
+
   async function seedFresh(probeAt: Date) {
     await container.workerRegistryStore.upsert({
       ...hermesWorker,
@@ -90,21 +124,7 @@ describe("readLiveOverview (PostgreSQL)", () => {
       payloadHash: "h",
       idempotencyKey: `probe-${Date.now()}`,
     });
-    await handle.db.insert(spendLedger).values({
-      id: `spend-${Date.now()}`,
-      tenantId: "default",
-      attributionKey: "goal:test",
-      modelId: "test/model",
-      usageKind: "METERED",
-      promptTokens: 10,
-      completionTokens: 5,
-      totalTokens: 15,
-      costKind: "UNPRICED",
-      amount: null,
-      currency: null,
-      unpricedReason: "NO_PRICE",
-      observedAt: now(),
-    });
+    await spendRow({ costKind: "UNPRICED", amount: null, currency: null, totalTokens: 15 });
     await handle.db.insert(memoryRecords).values({
       id: `mem-${Date.now()}`,
       tenantId: "default",
@@ -165,17 +185,106 @@ describe("readLiveOverview (PostgreSQL)", () => {
     expect(o.sources.workers).toMatchObject({ state: "stale", data: { registered: 1 } });
   });
 
-  it("empty tables: degraded with NO_SOURCE_TIMESTAMP, zero counts are real rows, price status UNKNOWN", async () => {
+  it("empty tables: degraded with EMPTY_SOURCE, zero counts are real rows, price status NO_TRAFFIC", async () => {
     const o = await readLiveOverview(container, session("owner"), {
       vps,
       services: async () => [],
+      ...opts,
     });
     for (const key of ["core3", "workers", "memory"] as const) {
-      expect(o.sources[key]).toMatchObject({ state: "degraded", errorCode: "NO_SOURCE_TIMESTAMP" });
+      expect(o.sources[key]).toMatchObject({ state: "degraded", errorCode: "EMPTY_SOURCE" });
     }
     expect(o.sources.workers.data?.registered).toBe(0);
-    expect(o.sources.omniroute.data?.spend?.priceStatus).toBe("UNKNOWN");
+    expect(o.sources.omniroute.data?.spend?.priceStatus).toBe("NO_TRAFFIC");
     expect(o.incidents).toEqual([]);
+  });
+
+  it("ledger by cost_kind: FREE_TIER is verified gratuity, mixed currencies never sum, NULL tokens are unknown, other tenants are not counted", async () => {
+    const readOwner = () =>
+      readLiveOverview(container, session("owner"), { vps, services: async () => [], ...opts });
+    await spendRow({ costKind: "FREE_TIER", amount: 0, currency: "EUR", totalTokens: 100 });
+    await spendRow({ costKind: "FREE_TIER", amount: 0, currency: "EUR", totalTokens: 50 });
+    await spendRow({
+      costKind: "COST",
+      amount: 9.99,
+      currency: "EUR",
+      totalTokens: 5,
+      tenantId: "other-tenant",
+    });
+    let o = await readOwner();
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      calls24h: 2,
+      freeTier24h: 2,
+      priced24h: 0,
+      unpriced24h: 0,
+      tokens24h: 150,
+      tokensUnknown24h: 0,
+      amount24h: null,
+      priceStatus: "FREE_TIER",
+      ledgerTenantId: SPEND_LEDGER_TENANT_ID,
+    });
+
+    await spendRow({ costKind: "COST", amount: 1.5, currency: "EUR", totalTokens: 10 });
+    o = await readOwner();
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      priced24h: 1,
+      amount24h: 1.5,
+      currency: "EUR",
+      priceStatus: "PRICED",
+    });
+
+    await spendRow({ costKind: "COST", amount: 2, currency: "USD", totalTokens: 10 });
+    o = await readOwner();
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      currencies: 2,
+      amount24h: null,
+      priceStatus: "MIXED_CURRENCY",
+    });
+
+    await spendRow({ costKind: "UNPRICED", amount: null, currency: null, totalTokens: 10 });
+    o = await readOwner();
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      unpriced24h: 1,
+      amount24h: null,
+      priceStatus: "UNPRICED",
+    });
+
+    // Un appel non métré : tokens inconnus par schéma, jamais 0 ; il ne compte ni chiffré ni gratuit.
+    await spendRow({ costKind: null, amount: null, currency: null, totalTokens: null });
+    o = await readOwner();
+    expect(o.sources.omniroute.data?.spend).toMatchObject({
+      unmetered24h: 1,
+      metered24h: 5,
+      tokensUnknown24h: 1,
+      tokens24h: 180,
+    });
+  });
+
+  it("scheduler: a job dead for more than 24 h is history, not an incident", async () => {
+    await seedFresh(now());
+    const repo = new PostgresScheduledJobRepository(handle.db);
+    const { job } = await repo.enqueue({
+      kind: "wake_mission",
+      payload: {},
+      payloadHash: "d",
+      idempotencyKey: `dead-${Date.now()}`,
+    });
+    await handle.sql`update scheduled_jobs set state = 'dead', updated_at = now() - interval '2 days' where id = ${job.id}`;
+    const o = await readLiveOverview(container, session("owner"), {
+      vps,
+      services: async () => [],
+      ...opts,
+    });
+    expect(o.sources.core3.data?.scheduler).toMatchObject({ dead: 1, dead24h: 0 });
+    expect(o.incidents.map((i) => i.code)).not.toContain("SCHEDULER_DEAD_JOBS");
+    await handle.sql`update scheduled_jobs set updated_at = now() where id = ${job.id}`;
+    const recent = await readLiveOverview(container, session("owner"), {
+      vps,
+      services: async () => [],
+      ...opts,
+    });
+    expect(recent.sources.core3.data?.scheduler?.dead24h).toBe(1);
+    expect(recent.incidents.map((i) => i.code)).toContain("SCHEDULER_DEAD_JOBS");
   });
 
   it("linked scope (viewer): tenant-wide sources are forbidden and no aggregate query runs for them", async () => {
@@ -193,6 +302,7 @@ describe("readLiveOverview (PostgreSQL)", () => {
       });
     }
     expect(o.sources.core3.data?.scheduler).toBeNull();
+    expect(o.sources.core3.data?.schedulerErrorCode).toBe("FORBIDDEN_SCOPE");
   });
 
   it("database unreachable: scheduler, ledger and memory are unavailable with READ_FAILED, nothing fabricated", async () => {
@@ -210,7 +320,11 @@ describe("readLiveOverview (PostgreSQL)", () => {
         dispatchAttempts: new PostgresDispatchAttemptRepository(broken.db),
         workerRegistryStore: new PostgresWorkerRegistryStore(broken.db),
       } as unknown as Container;
-      const o = await readLiveOverview(c, session("owner"), { vps, services: async () => [] });
+      const o = await readLiveOverview(c, session("owner"), {
+        vps,
+        services: async () => [],
+        ...opts,
+      });
       for (const key of ["core3", "workers", "memory"] as const) {
         expect(o.sources[key]).toMatchObject({
           state: "unavailable",
@@ -218,7 +332,10 @@ describe("readLiveOverview (PostgreSQL)", () => {
           errorCode: "READ_FAILED",
         });
       }
-      expect(o.sources.omniroute.data).toMatchObject({ spend: null, spendErrorCode: "UNKNOWN" });
+      expect(o.sources.omniroute.data).toMatchObject({
+        spend: null,
+        spendErrorCode: "READ_FAILED",
+      });
       expect(JSON.stringify(o)).not.toMatch(/postgres(ql)?:\/\/|password|does_not_exist/i);
     } finally {
       await broken.close();
