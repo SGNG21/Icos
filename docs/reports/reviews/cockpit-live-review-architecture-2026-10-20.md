@@ -44,3 +44,13 @@ AGENTS.md (une étape, arrêt) : non vérifiable depuis le dépôt (P2-7) · ADR
 ## Changements requis avant re-revue
 
 1. P1-1 ; 2. P1-2 (une seule correction pour les deux lecteurs) ; 3. P1-3 (décision propriétaire). Recommandés : P2-1 à P2-5, P2-7, P3-1, P3-2.
+
+## Re-vérification (HEAD `0f9730d`, correctif `964114f`)
+
+- **Verdict : APPROVE** (architecture et gouvernance) — prête pour la gate, sous trois préconditions propriétaire à l'intégration.
+- **Exécuté :** `pnpm typecheck` PASS ; 30 fichiers / 294 tests PASS (hors intégration) ; index de `cockpit-agentic-os` relu (toujours 40 fichiers). Test PostgreSQL non exécuté (consigne).
+- **Constats antérieurs :** P1-1 corrigé (valeurs nulles avec codes, état dégradé) ; P1-2 corrigé (`readSpendFacts` par `cost_kind`/devise, FREE_TIER jamais compté comme 0, UNMETERED à part, montant seulement sans impayé et en devise unique, un seul lecteur partagé, colonnes ≤ 0064 donc compatible prod : 25 491 appels UNPRICED relus) ; P1-3 précondition propriétaire (recoupement `load.ts`) ; P2-1/2-2/2-3/2-4/2-5 corrigés ; P2-6 décision propriétaire ; P2-7 références jointes (non vérifiables depuis le dépôt) ; P3-1 à P3-5 corrigés.
+- **Point de gouvernance :** deux vocabulaires de tenant sur le hub (`icos-holding` ledger, `default` mémoire), défaut pré-existant ; suivre chaque writer est le bon choix en lecture seule ; ADR ou décision propriétaire recommandée (deviendra un bug d'isolation dès un second tenant).
+- **Restants (non bloquants) :** P2 propriétaire (vocabulaire tenant) ; P3 `loadLiveOverview` rend `null` sur erreur (panneaux absents plutôt qu'un état « indisponible » explicite) ; P3 délai sans annulation SQL ; P3 fenêtre 100 % UNMETERED rendue `UNPRICED` (état `UNMETERED` ou documentation) ; P3 `tenantId` « default » estampillé sur la source OmniRoute dont le ledger vient d'`icos-holding`.
+- **Matrice ADR :** 0062, 0067, 0078, 0066 désormais conformes ; mission (tenant/auth, backpressure, pas de démo) conforme ; 0044 : la gate peut s'exécuter une fois les trois re-revues favorables.
+- **Préconditions propriétaire avant fusion :** (1) séquencer `load.ts` avec `cockpit-agentic-os` et choisir un module unique d'observation OmniRoute ; (2) arbitrer entre cette branche et la lane `cockpit-vps-monitor` ; (3) déployer uniquement avec le hub (`b4d0968`, migrations 0065/0066).
