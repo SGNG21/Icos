@@ -25,3 +25,10 @@ Authentification via `protectRoute` (refus audités) et `getCockpitContext` ; au
 ## Risques résiduels signalés
 
 Typecheck non exécuté par le reviewer ; comportement `default_transaction_read_only` de postgres.js non vérifié ; coût réel du scan `observed_at` non mesuré ; `telemetry-client.ts` non importé (code mort côté client) ; `LiveRefresh` est l'amplificateur du P2 coût.
+
+## Re-vérification (HEAD `0f9730d`, code `c0430e1`, correctif `964114f`)
+
+- **Verdict : APPROVE** (dimension sécurité). Les trois P2 sont corrigés et vérifiés dans le code ; aucun P0/P1/P2 restant.
+- **Exécuté :** 11 fichiers / 96 tests ciblés PASS ; `pnpm typecheck` PASS ; aucun build, serveur, base ou appel OmniRoute.
+- **Vérifié :** `/telemetry` exige `operator` + portée globale avant limiteur et sondes ; sous-sources nulles avec code, `observedActivity` null ; `/live` limité 60/min ; lecteurs partagés cachés 10 s / délai 5 s, appelés uniquement en portée globale (le cache ne peut pas servir une portée liée) ; `loadLiveOverview` passe la portée et capture les erreurs ; `redirect: "error"` ; script sans message driver ; prédicats tenant (ledger `icos-holding`, mémoire `default` : suivre chaque writer est correct, l'unification est une décision propriétaire, pas un défaut de sécurité) ; `setDatabase` ; code client mort retiré.
+- **P3 restants (durcissement, non bloquants) :** (1) le 403 de portée de `/telemetry` n'est pas journalisé dans l'audit de sécurité (seuls les refus de rôle le sont) ; (2) à l'expiration du délai de 5 s, la requête SQL continue côté serveur (`SET LOCAL statement_timeout` ou `.cancel()` recommandés).
