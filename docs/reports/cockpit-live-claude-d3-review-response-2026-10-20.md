@@ -90,5 +90,5 @@ Ces messages sont des instructions du propriétaire reçues dans la session, non
 - `/telemetry` : le 403 de portée est audité (`auth.access.denied`, `reason: forbidden`) ; test.
 - `loadLiveOverview` : sur exception, vue avec toutes les sources `UNAVAILABLE` (`LIVE_VIEW_FAILED`) au lieu de panneaux absents.
 - Source OmniRoute sans estampille tenant de surface (le ledger porte `ledgerTenantId`).
-- **Suppressions déclarées :** `src/features/cockpit/telemetry-{client,client.test,format,format.test,fixture}.ts`, fichiers ajoutés par cette branche en D1 (commit `0c02453`), absents de la base ; retirés sur recommandation des revues (code mort). Aucun fichier de la base n'a été supprimé.
+- **Suppressions déclarées (effectuées au commit `964114f`, première passe) :** `src/features/cockpit/telemetry-{client,client.test,format,format.test,fixture}.ts`, fichiers ajoutés par cette branche en D1 (commit `0c02453`), absents de la base ; retirés sur recommandation des revues (code mort). Aucun fichier de la base n'a été supprimé ; à faire acter par le propriétaire à la fusion.
 - Non corrigé (choix documenté) : fenêtre 100 % UNMETERED rendue `UNPRICED` (le coût est inconnu : un seul mot, décision 0067).

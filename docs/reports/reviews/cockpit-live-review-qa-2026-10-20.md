@@ -49,3 +49,10 @@ Incertitudes signalées : comportement SQL lu sans exécution ; purge des jobs `
 - **P2 nouveau 2 :** les appels `UNMETERED` ont `cost_kind IS NULL` (coût inconnu) mais ne comptent pas dans `unpriced24h` : 10 appels chiffrés + 1 non métré → `PRICED` avec un montant présenté comme total complet. → `unmetered24h > 0` ⇒ `UNPRICED`, montant nul ; assertions dans les deux tests.
 - **P3 :** horodatage de sonde futur compté « dans l'horizon » (appliquer `FUTURE_TOLERANCE_MS`) ; clé de cache sans `since` (documenter) ; suppressions de fichiers ajoutés par la branche à mentionner dans le rapport D3.
 - **Tests manquants :** `loadSources` en portée liée ; `priceStatusOf` avec UNMETERED ; sonde future ; cache `live-facts` (vol partagé, délai, échec non mis en cache) ; test d'intégration lu mais non exécuté par le reviewer.
+
+## Confirmation sur le delta final (`0f9730d..1255bf0`, HEAD `1255bf0`)
+
+- **Reviewer :** agent vierge `qa-breaker` sur Claude Sonnet (les agents Opus ont été interrompus par une limite de dépense). **Verdict : APPROVE** (dimension QA).
+- **Exécuté :** `pnpm typecheck` PASS ; 24 fichiers / 239 tests PASS (unitaires) ; test PostgreSQL lu et vérifié contre le code, non exécuté.
+- **Constats :** P2 refus de portée structuré → FIXED (`load.ts`, `scopeRefused`, propagation vérifiée dans `observe`/`buildLiveOverview`, y compris `workspaces`) ; P2 appel non métré jamais `PRICED` → FIXED (`priceStatusOf`, `amount24h`, cas PostgreSQL « priced + unmetered ») ; P3 sonde future → FIXED ; P3 cache documenté et testé → FIXED ; aucune régression sur transaction lecture seule, 403 audité, repli `LIVE_VIEW_FAILED`, estampille tenant.
+- **Incertitudes non bloquantes :** pas de test unitaire direct de la propagation du marqueur depuis `load.ts` (couvert au niveau `observe`) ; chemin d'échec en vol partagé du cache non testé ; sémantique PostgreSQL vérifiée par lecture.
