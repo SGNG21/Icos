@@ -96,6 +96,24 @@ describe("readOmniRouteCockpit", () => {
     );
   });
 
+  it("agrège un préfixe fournisseur qui recouvre Object.prototype", async () => {
+    const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
+    const result = await readOmniRouteCockpit(container, {
+      now: new Date("2026-10-21T18:00:00.000Z"),
+      monitor: { monitoringHealth: vi.fn(async () => health) },
+      listModels: vi.fn(async () => ["constructor/model-a", "constructor/model-b"]),
+      spend: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    });
+
+    expect(result.models).toEqual({
+      available: true,
+      value: { listed: 2, byProvider: { constructor: 2 } },
+    });
+    expect(omniRouteCockpitResponseSchema.safeParse(result).success).toBe(true);
+  });
+
   it("isole les sous-sources absentes au lieu d'inventer des zéros", async () => {
     const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
     const result = await readOmniRouteCockpit(container, {

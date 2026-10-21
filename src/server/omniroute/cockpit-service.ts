@@ -210,11 +210,14 @@ export async function readOmniRouteCockpit(
   response.models = modelIds
     ? available({
         listed: modelIds.length,
-        byProvider: modelIds.reduce<Record<string, number>>((counts, id) => {
-          const provider = providerOf(id);
-          counts[provider] = (counts[provider] ?? 0) + 1;
-          return counts;
-        }, {}),
+        byProvider: modelIds.reduce<Record<string, number>>(
+          (counts, id) => {
+            const provider = providerOf(id);
+            counts[provider] = (Object.hasOwn(counts, provider) ? counts[provider] : 0) + 1;
+            return counts;
+          },
+          Object.create(null) as Record<string, number>,
+        ),
       })
     : unavailable("READ_FAILED");
 
