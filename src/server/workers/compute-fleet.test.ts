@@ -58,6 +58,41 @@ describe("listOmniRouteModels is bounded, because the gateway is untrusted input
     await expect(list(listing(atCap))).resolves.toHaveLength(OMNIROUTE_MAX_LISTED_MODELS);
   });
 
+  it("allows a read-only aggregator to set a larger explicit count bound", async () => {
+    const aggregateOnly = Array.from(
+      { length: OMNIROUTE_MAX_LISTED_MODELS + 1 },
+      (_, i) => `p${i}/claude-sonnet-5`,
+    );
+    await expect(
+      listOmniRouteModels({
+        baseUrl: BASE,
+        credential: CREDENTIAL,
+        fetch: gateway(listing(aggregateOnly)),
+        policy: {
+          purpose: "aggregate-only",
+          maxBytes: OMNIROUTE_MAX_LISTING_BYTES,
+          maxModels: OMNIROUTE_MAX_LISTED_MODELS + 1,
+        },
+      }),
+    ).resolves.toHaveLength(OMNIROUTE_MAX_LISTED_MODELS + 1);
+  });
+
+  it("allows a read-only aggregator to set a larger explicit byte bound", async () => {
+    const largeId = `p/${"x".repeat(OMNIROUTE_MAX_LISTING_BYTES)}`;
+    await expect(
+      listOmniRouteModels({
+        baseUrl: BASE,
+        credential: CREDENTIAL,
+        fetch: gateway(listing([largeId])),
+        policy: {
+          purpose: "aggregate-only",
+          maxBytes: OMNIROUTE_MAX_LISTING_BYTES * 2,
+          maxModels: OMNIROUTE_MAX_LISTED_MODELS,
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("drops an id longer than the cap, so it can never become a displayName that long", async () => {
     const monstrous = `${"x".repeat(OMNIROUTE_MAX_MODEL_ID_LENGTH + 1)}/claude-sonnet-5`;
     await expect(list(listing(["claude/claude-sonnet-5", monstrous]))).resolves.toEqual([

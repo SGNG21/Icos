@@ -110,7 +110,7 @@ Le schéma exécutable est `src/server/omniroute/cockpit-contract.ts` et doit re
 ## Sémantique des données
 
 - `health` et `providers` viennent de la sonde monitoring OmniRoute déjà utilisée par ICOS.
-- `models` interroge `/v1/models` côté serveur, puis ne conserve que le nombre total et des comptes par préfixe fournisseur. Les identifiants de modèles ne quittent pas le serveur.
+- `models` interroge `/v1/models` côté serveur, puis ne conserve que le nombre total et des comptes par préfixe fournisseur. Les identifiants de modèles ne quittent pas le serveur. Cette lecture d'agrégats autorise au maximum 2 000 modèles et 512 Kio, sans relever les limites plus strictes du chemin d'enregistrement de flotte.
 - `usage` et `cost` utilisent le ledger de dépenses ICOS sur les dernières 24 heures. Une lecture impossible produit `READ_FAILED`, jamais des zéros inventés.
 - `errors` et la distribution de `latency` ne sont pas instrumentés de façon fiable dans le ledger ou l'API autorisée actuelle. Ils restent explicitement `NOT_INSTRUMENTED`.
 - Une défaillance d'une sous-source n'efface pas les autres sous-sources disponibles.

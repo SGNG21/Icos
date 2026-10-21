@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildMemoryContainer } from "@/server/container";
 import type { OmniRouteMonitoringResult } from "@/server/telemetry/omniroute-monitoring";
+import { OMNIROUTE_MAX_LISTED_MODELS } from "@/server/workers/compute-fleet";
 
 import { omniRouteCockpitResponseSchema } from "./cockpit-contract";
 import { readOmniRouteCockpit } from "./cockpit-service";
@@ -122,6 +123,48 @@ describe("readOmniRouteCockpit", () => {
       cost: { available: false, code: "READ_FAILED" },
     });
     expect(omniRouteCockpitResponseSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("agrège par le chemin réel un catalogue supérieur à la limite d'enregistrement de la flotte", async () => {
+    const container = buildMemoryContainer({ agents: [], tasks: [], actions: [] });
+    const productionSizedListing = Array.from(
+      { length: OMNIROUTE_MAX_LISTED_MODELS + 219 },
+      (_, index) => (index % 2 === 0 ? `nvidia/model-${index}` : `codex/model-${index}`),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: productionSizedListing.map((id) => ({ id })) }),
+      })),
+    );
+
+    try {
+      const result = await readOmniRouteCockpit(container, {
+        now: new Date("2026-10-21T18:00:00.000Z"),
+        environment: {
+          NODE_ENV: "test",
+          OMNIROUTE_BASE_URL: "http://127.0.0.1:20129",
+          OMNIROUTE_API_KEY: "test-credential",
+        },
+        monitor: { monitoringHealth: vi.fn(async () => health) },
+        spend: vi.fn(async () => {
+          throw new Error("database unavailable");
+        }),
+      });
+
+      expect(result.models).toEqual({
+        available: true,
+        value: {
+          listed: 719,
+          byProvider: { codex: 359, nvidia: 360 },
+        },
+      });
+      expect(omniRouteCockpitResponseSchema.safeParse(result).success).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("ne tente aucun appel amont ni ledger si OmniRoute n'est pas configuré", async () => {

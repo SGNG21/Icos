@@ -38,7 +38,13 @@ export interface ComputeSnapshot {
 }
 
 interface ModelsResponse {
-  data?: Array<{ id?: unknown }>;
+  data?: { id?: unknown }[];
+}
+
+export interface OmniRouteModelListingPolicy {
+  purpose: "aggregate-only";
+  maxBytes: number;
+  maxModels: number;
 }
 
 /*
@@ -59,7 +65,12 @@ export const OMNIROUTE_MAX_LISTING_BYTES = 256 * 1_024;
 export const OMNIROUTE_MAX_LISTED_MODELS = 500;
 export const OMNIROUTE_MAX_MODEL_ID_LENGTH = 200;
 
-/** Lists the models OmniRoute serves. The credential is sent, never returned or logged. */
+/**
+ * Lists the models OmniRoute serves. The credential is sent, never returned or logged.
+ *
+ * Callers that only aggregate read-only catalogue facts may opt into a fully explicit,
+ * discriminated policy; callers that register fleet rows cannot alter the default bounds.
+ */
 /**
  * How many times one listing may be asked. Exactly one WARM retry, and only after a timeout:
  * measured on the VPS, OmniRoute's first `/v1/models` after an idle period takes 5–6 s
@@ -78,8 +89,11 @@ export async function listOmniRouteModels(options: {
   credential: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  policy?: OmniRouteModelListingPolicy;
 }): Promise<string[]> {
   const doFetch = options.fetch ?? globalThis.fetch;
+  const maxBytes = options.policy?.maxBytes ?? OMNIROUTE_MAX_LISTING_BYTES;
+  const maxModels = options.policy?.maxModels ?? OMNIROUTE_MAX_LISTED_MODELS;
   const url = `${options.baseUrl.replace(/\/+$/, "")}/v1/models`;
   let response: Response | undefined;
   for (let attempt = 1; attempt <= LISTING_ATTEMPTS; attempt += 1) {
@@ -96,10 +110,8 @@ export async function listOmniRouteModels(options: {
   if (!response) throw new Error("COMPUTE_DISCOVERY_NO_RESPONSE");
   if (!response.ok) throw new Error(`COMPUTE_DISCOVERY_HTTP_${response.status}`);
   const text = await response.text();
-  if (text.length > OMNIROUTE_MAX_LISTING_BYTES) {
-    throw new Error(
-      `COMPUTE_DISCOVERY_LISTING_TOO_LARGE: ${text.length} > ${OMNIROUTE_MAX_LISTING_BYTES} bytes`,
-    );
+  if (text.length > maxBytes) {
+    throw new Error(`COMPUTE_DISCOVERY_LISTING_TOO_LARGE: ${text.length} > ${maxBytes} bytes`);
   }
   let payload: ModelsResponse;
   try {
@@ -114,10 +126,8 @@ export async function listOmniRouteModels(options: {
         typeof id === "string" && id.length > 0 && id.length <= OMNIROUTE_MAX_MODEL_ID_LENGTH,
     )
     .sort();
-  if (ids.length > OMNIROUTE_MAX_LISTED_MODELS) {
-    throw new Error(
-      `COMPUTE_DISCOVERY_TOO_MANY_MODELS: ${ids.length} > ${OMNIROUTE_MAX_LISTED_MODELS}`,
-    );
+  if (ids.length > maxModels) {
+    throw new Error(`COMPUTE_DISCOVERY_TOO_MANY_MODELS: ${ids.length} > ${maxModels}`);
   }
   return ids;
 }

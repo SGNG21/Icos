@@ -17,6 +17,8 @@ import type { OmniRouteCockpitResponse } from "./cockpit-contract";
 const WINDOW_MS = 24 * 60 * 60 * 1_000;
 const MONITORING_TIMEOUT_MS = 2_500;
 const MODELS_TIMEOUT_MS = 10_000;
+const COCKPIT_MAX_MODEL_LISTING_BYTES = 512 * 1_024;
+const COCKPIT_MAX_LISTED_MODELS = 2_000;
 
 type SourceCode =
   | "NOT_CONNECTED"
@@ -110,6 +112,11 @@ function defaultModelListing(environment: Readonly<Record<string, string | undef
       baseUrl: env.OMNIROUTE_BASE_URL,
       credential: env.OMNIROUTE_API_KEY,
       timeoutMs: MODELS_TIMEOUT_MS,
+      policy: {
+        purpose: "aggregate-only",
+        maxBytes: COCKPIT_MAX_MODEL_LISTING_BYTES,
+        maxModels: COCKPIT_MAX_LISTED_MODELS,
+      },
     });
   };
 }
