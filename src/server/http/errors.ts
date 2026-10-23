@@ -18,6 +18,7 @@ export type ApiErrorCode =
   | "already_exists"
   | "last_owner"
   | "rate_limited"
+  | "governance_denied"
   | "internal_error";
 
 export interface ApiErrorBody {
@@ -45,6 +46,9 @@ const statusByCode: Record<ApiErrorCode, number> = {
   already_exists: 409,
   last_owner: 409,
   rate_limited: 429,
+  // Préconditions de gouvernance non satisfaites (ADR 0068) : rôle non actif, preuve de
+  // tests manquante, auto-certification, principal non humain... Jamais un bug serveur.
+  governance_denied: 422,
   internal_error: 500,
 };
 

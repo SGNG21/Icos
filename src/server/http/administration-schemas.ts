@@ -19,3 +19,24 @@ export const setStatusBodySchema = z.object({ status: userStatusSchema }).strict
 export const createAgentLinkBodySchema = z
   .object({ agentId: idSchema, relation: humanAgentRelationSchema })
   .strict();
+
+/**
+ * Certification d'un rôle de la digital workforce (ADR 0068, 0066). `testsPassed` et
+ * `evidenceRef` sont l'attestation du certificateur — jamais vérifiés automatiquement par
+ * cette route : c'est un acte humain, pas un calcul. La route transmet tel quel à
+ * `certifyRole`, qui refuse `MISSING_TESTS` si la liste ne couvre pas `requiredRoleTests`.
+ *
+ * `testsPassed` n'impose PAS un minimum d'un élément : `requiredRoleTests` peut légitimement
+ * être vide (une compétence sans `tests` déclarés), et `certifyRole` accepte alors
+ * `testsPassed: []` sans violation. Un `.min(1)` ici rendrait ce rôle impossible à certifier
+ * par cette route alors que la règle de gouvernance elle-même l'autorise.
+ */
+export const certifyRoleBodySchema = z
+  .object({
+    version: z.string().trim().min(1),
+    testsPassed: z.array(z.string().trim().min(1)),
+    evidenceRef: z.string().trim().min(1),
+  })
+  .strict();
+
+export const activateRoleBodySchema = z.object({ version: z.string().trim().min(1) }).strict();
