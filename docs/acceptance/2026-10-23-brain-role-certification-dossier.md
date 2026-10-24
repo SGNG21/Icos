@@ -24,12 +24,12 @@ entre les deux. Le run du 2026-10-04 (`role.certified ×9` dans
 au sens strict du code, **mais ne constitue pas une preuve technique que quoi que ce soit a
 été testé** — c'est une tautologie, pas une évidence.
 
-Le document `docs/acceptance/2026-10-02-live-activation-plan.md` (étape *b*, « Full
+Le document `docs/acceptance/2026-10-02-live-activation-plan.md` (étape _b_, « Full
 re-certification ») prescrit la vraie preuve à obtenir **avant** de lancer le seeding :
 `pnpm typecheck && pnpm lint && pnpm build`, `pnpm test` (attendu : 3597 tests passés),
-`pnpm test:integration` (Docker requis, sinon 13 fichiers sont *silencieusement* ignorés), et
+`pnpm test:integration` (Docker requis, sinon 13 fichiers sont _silencieusement_ ignorés), et
 `pnpm certify:gateway` (attendu : 2× PROVEN). **Recommandation de ce dossier : traiter le
-passage réel de cette étape *b*, documenté par toi avec son horodatage et ses chiffres, comme
+passage réel de cette étape _b_, documenté par toi avec son horodatage et ses chiffres, comme
 la preuve de `testsPassed` — pas les chaînes fixture elles-mêmes**, qui ne prouvent rien par
 construction.
 
@@ -41,17 +41,17 @@ le code, seulement recommandé par ce plan pour une revue indépendante plus for
 
 ## Les 9 rôles
 
-| Rôle | Version | Statut (bootstrap) | Niveau de risque | Compétence(s) | Tests requis (identifiants fixture — voir constat ci-dessus) | Fichier de test correspondant trouvé | Certification historique (lab, 2026-10-04) |
-|---|---|---|---|---|---|---|---|
-| `ICOS_CENTRAL` | 1.0.0 | draft | **LOW** | `CENTRAL_ORCHESTRATION` | `skill.central_orchestration.fixture` | Non trouvé | Oui (`role.certified` ×9 inclut ce rôle) |
-| `OPERATIONS_MANAGER` | 1.0.0 | draft | **MEDIUM** | `OPERATIONS_MANAGEMENT` | `skill.operations_management.fixture` | Non trouvé | Oui |
-| `SOFTWARE_ARCHITECT` | 1.0.0 | draft | **MEDIUM** | `SOFTWARE_ARCHITECTURE` | `skill.software_architecture.fixture` | Non trouvé | Oui |
-| `FULLSTACK_ENGINEER` | 1.0.0 | draft | **MEDIUM** | `SOFTWARE_ENGINEERING` | `skill.software_engineering.fixture` | Non trouvé | Oui |
-| `INDEPENDENT_REVIEWER` | 1.0.0 | draft | **MEDIUM** | `INDEPENDENT_REVIEW` | `skill.independent_review.fixture` | Non trouvé | Oui |
-| `RESEARCHER` | 1.0.0 | draft | **LOW** | `RESEARCH`, `MARKET_RESEARCH` | `skill.research.fixture`, `skill.market_research.fixture` | Non trouvé (aucun des deux) | Oui |
-| `SALES_DIRECTOR` | 1.0.0 | draft | **MEDIUM** | `SALES_LEADERSHIP`, `INDEPENDENT_REVIEW` | `skill.sales_leadership.fixture`, `skill.independent_review.fixture` | Non trouvé (aucun des deux) | Oui |
-| `DEVOPS_ENGINEER` | 1.0.0 | draft | **HIGH** | `DEVOPS_OPERATIONS` | `skill.devops_operations.fixture` | Non trouvé | Oui |
-| `SEO_SPECIALIST` | 1.0.0 | draft | **LOW** | `SEO_OPTIMIZATION` | `skill.seo_optimization.fixture` | Non trouvé | Oui |
+| Rôle                   | Version | Statut (bootstrap) | Niveau de risque | Compétence(s)                            | Tests requis (identifiants fixture — voir constat ci-dessus)         | Fichier de test correspondant trouvé | Certification historique (lab, 2026-10-04) |
+| ---------------------- | ------- | ------------------ | ---------------- | ---------------------------------------- | -------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| `ICOS_CENTRAL`         | 1.0.0   | draft              | **LOW**          | `CENTRAL_ORCHESTRATION`                  | `skill.central_orchestration.fixture`                                | Non trouvé                           | Oui (`role.certified` ×9 inclut ce rôle)   |
+| `OPERATIONS_MANAGER`   | 1.0.0   | draft              | **MEDIUM**       | `OPERATIONS_MANAGEMENT`                  | `skill.operations_management.fixture`                                | Non trouvé                           | Oui                                        |
+| `SOFTWARE_ARCHITECT`   | 1.0.0   | draft              | **MEDIUM**       | `SOFTWARE_ARCHITECTURE`                  | `skill.software_architecture.fixture`                                | Non trouvé                           | Oui                                        |
+| `FULLSTACK_ENGINEER`   | 1.0.0   | draft              | **MEDIUM**       | `SOFTWARE_ENGINEERING`                   | `skill.software_engineering.fixture`                                 | Non trouvé                           | Oui                                        |
+| `INDEPENDENT_REVIEWER` | 1.0.0   | draft              | **MEDIUM**       | `INDEPENDENT_REVIEW`                     | `skill.independent_review.fixture`                                   | Non trouvé                           | Oui                                        |
+| `RESEARCHER`           | 1.0.0   | draft              | **LOW**          | `RESEARCH`, `MARKET_RESEARCH`            | `skill.research.fixture`, `skill.market_research.fixture`            | Non trouvé (aucun des deux)          | Oui                                        |
+| `SALES_DIRECTOR`       | 1.0.0   | draft              | **MEDIUM**       | `SALES_LEADERSHIP`, `INDEPENDENT_REVIEW` | `skill.sales_leadership.fixture`, `skill.independent_review.fixture` | Non trouvé (aucun des deux)          | Oui                                        |
+| `DEVOPS_ENGINEER`      | 1.0.0   | draft              | **HIGH**         | `DEVOPS_OPERATIONS`                      | `skill.devops_operations.fixture`                                    | Non trouvé                           | Oui                                        |
+| `SEO_SPECIALIST`       | 1.0.0   | draft              | **LOW**          | `SEO_OPTIMIZATION`                       | `skill.seo_optimization.fixture`                                     | Non trouvé                           | Oui                                        |
 
 **`DEVOPS_ENGINEER` (rôle de Delivery) est le seul des 9 à risque HIGH** : `certifyRole`
 refuse un certificateur non humain pour ce rôle (`HUMAN_CERTIFICATION_REQUIRED`) — déjà
@@ -64,7 +64,7 @@ documentaire) — certifier son rôle ne le rend pas délégable.
 Identique pour les 9, car le constat central s'applique uniformément : **« preuve manquante :
 aucun des identifiants `tests` déclarés par la compétence ne correspond à un test exécutable
 du dépôt ; prêt pour certification uniquement si l'opérateur a fait passer, et documenté avec
-horodatage, l'étape *b* (`pnpm test`, `pnpm test:integration`, `pnpm certify:gateway`) du plan
+horodatage, l'étape _b_ (`pnpm test`, `pnpm test:integration`, `pnpm certify:gateway`) du plan
 du 2026-10-02 — pas la seule présence des chaînes fixture dans `testsPassed`. »**
 
 ## Ce que ce dossier ne fait pas
