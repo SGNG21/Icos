@@ -3,6 +3,7 @@ import { apiError, json } from "@/server/http/respond";
 import { protectRoute } from "@/server/http/protect-route";
 import { toErrorResponse } from "@/server/http/map-error";
 import { loadWorkforceBootstrap } from "@/core/workforce/bootstrap";
+import { WorkforceConflictError } from "@/server/workforce/workforce-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,21 @@ export async function POST(request: Request): Promise<Response> {
       inserted: after.roles.length - before.roles.length,
     });
   } catch (error) {
+    // `seedBootstrap` n'écrit qu'en « insert si absent », sans comparer-et-échanger : sous
+    // PostgreSQL le verrou advisory par tenant (`PostgresWorkforceStore.transaction`) sérialise
+    // déjà tout appel concurrent, donc ce chemin ne devrait jamais être pris aujourd'hui. Le
+    // traiter quand même, comme les 3 autres routes d'écriture, évite qu'un futur changement
+    // de `seedBootstrap` vers une écriture CAS régresse silencieusement vers un 500 générique
+    // ici alors que les autres routes renvoient 503 + Retry-After — cohérence du traitement des
+    // conflits sur l'ensemble des routes d'écriture, pas seulement sur trois d'entre elles.
+    if (error instanceof WorkforceConflictError) {
+      return apiError(
+        "transient_conflict",
+        "conflit temporaire lors du chargement, veuillez réessayer",
+        undefined,
+        { "retry-after": "1" },
+      );
+    }
     return toErrorResponse(error);
   }
 }

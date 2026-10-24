@@ -27,6 +27,11 @@ export async function POST(
   request: Request,
   ctx: { params: Promise<{ roleId: string }> },
 ): Promise<Response> {
+  // Déclarés hors du `try` pour rester lisibles dans le `catch` : construire le message
+  // `not_found` contrôlé ci-dessous a besoin de `roleId`/`version` sans jamais retomber sur
+  // `error.message` (forme interne non contractuelle de l'exception).
+  let roleId: string | undefined;
+  let version: string | undefined;
   try {
     const container = await getContainer();
     const access = await protectRoute({
@@ -44,7 +49,7 @@ export async function POST(
       return apiError("persistence_unavailable", "digital workforce indisponible");
     }
 
-    const { roleId } = await ctx.params;
+    ({ roleId } = await ctx.params);
     const dryRun = new URL(request.url).searchParams.get("dryRun") === "true";
 
     const body = await readJson(request);
@@ -55,7 +60,7 @@ export async function POST(
     if (!parsed.success) {
       return apiError("invalid_input", "corps d'activation invalide", zodDetails(parsed.error));
     }
-    const { version } = parsed.data;
+    version = parsed.data.version;
 
     const principal = container.workforce.sessions.fromSession(access.session);
 
@@ -79,7 +84,12 @@ export async function POST(
     return json({ dryRun: false, role, activatedBy: principal.id });
   } catch (error) {
     if (error instanceof WorkforceNotFoundError) {
-      return apiError("not_found", error.message);
+      // Message CONTRÔLÉ par la route (comme le chemin dryRun ci-dessus), jamais
+      // `error.message` tel quel — voir le même commentaire dans certify/route.ts.
+      return apiError("not_found", `rôle ${roleId ?? "?"}@${version ?? "?"} introuvable`, {
+        roleId: roleId ?? null,
+        version: version ?? null,
+      });
     }
     if (error instanceof WorkforceDeniedError) {
       return apiError("governance_denied", "activation refusée par la gouvernance", {

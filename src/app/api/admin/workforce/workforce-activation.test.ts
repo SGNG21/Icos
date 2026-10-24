@@ -6,6 +6,10 @@ import { buildMemoryContainer, type Container } from "@/server/container";
 import { BRAIN_IDS, BRAIN_ROLES } from "@/core/workforce/brains";
 import { loadWorkforceBootstrap } from "@/core/workforce/bootstrap";
 import { requiredRoleTests } from "@/core/workforce/role-composer";
+import {
+  WorkforceConflictError,
+  type WorkforceService,
+} from "@/server/workforce/workforce-service";
 
 /**
  * PHASE 3 — validation de bout en bout du mécanisme d'activation gouvernée (voir le plan,
@@ -186,7 +190,7 @@ describe("garde-fou anti-auto-certification du /brains/activate", () => {
       "POST",
       "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
       {
-        body: { version: "1.0.0", testsPassed: ["x"], evidenceRef: "r" },
+        body: { version: "1.0.0", testsPassed: ["x"], evidenceRef: "test-evidence-404-case" },
         params: { roleId: "ICOS_CENTRAL" },
       },
     );
@@ -398,7 +402,7 @@ describe("couverture des refus HTTP (finding Q10, revue 2026-10-24)", () => {
       "POST",
       "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
       {
-        body: { version: "1.0.0", testsPassed: [], evidenceRef: "r" },
+        body: { version: "1.0.0", testsPassed: [], evidenceRef: "test-evidence-missing-tests" },
         params: { roleId: "ICOS_CENTRAL" },
       },
     );
@@ -421,5 +425,92 @@ describe("couverture des refus HTTP (finding Q10, revue 2026-10-24)", () => {
     const body = await res.json();
     expect(body.error.code).toBe("governance_denied");
     expect(body.error.details.violations).toContain("NOT_CERTIFIED");
+  });
+});
+
+/**
+ * TROIS CORRECTIONS SIGNALÉES PAR CODEX (2026-10-24) — chacune démontrée par un test dédié,
+ * pas seulement par le passage incident des tests existants.
+ */
+describe("corrections Codex 2026-10-24 : attestation, erreurs brutes, conflit non traité", () => {
+  it("400 — evidenceRef trop court (une lettre) est refusé avant d'atteindre la gouvernance", async () => {
+    install("admin");
+    await seedBootstrapData();
+    const res = await call(
+      "./roles/[roleId]/certify/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
+      {
+        body: { version: "1.0.0", testsPassed: ["x"], evidenceRef: "r" },
+        params: { roleId: "ICOS_CENTRAL" },
+      },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe("invalid_input");
+  });
+
+  it("404 — le corps ne porte plus error.message brut : message contrôlé + roleId/version structurés", async () => {
+    install("admin");
+    const res = await call(
+      "./roles/[roleId]/certify/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
+      {
+        body: { version: "9.9.9", testsPassed: ["x"], evidenceRef: "test-evidence-not-found" },
+        params: { roleId: "ICOS_CENTRAL" },
+      },
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    // La forme est maintenant entièrement écrite par la route (roleId/version repris de LA
+    // REQUÊTE, jamais une chaîne interne à `WorkforceNotFoundError`) — testée en vérifiant la
+    // forme exacte, pas juste qu'une chaîne quelconque est présente.
+    expect(body.error).toEqual({
+      code: "not_found",
+      message: "rôle ICOS_CENTRAL@9.9.9 introuvable",
+      details: { roleId: "ICOS_CENTRAL", version: "9.9.9" },
+    });
+  });
+
+  it("404 — même correction sur /roles/[roleId]/activate", async () => {
+    install("admin");
+    const res = await call(
+      "./roles/[roleId]/activate/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/activate",
+      { body: { version: "9.9.9" }, params: { roleId: "ICOS_CENTRAL" } },
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toEqual({
+      code: "not_found",
+      message: "rôle ICOS_CENTRAL@9.9.9 introuvable",
+      details: { roleId: "ICOS_CENTRAL", version: "9.9.9" },
+    });
+  });
+
+  it("503 — bootstrap-data/seed traite enfin WorkforceConflictError comme les 3 autres routes d'écriture", async () => {
+    const container = install("admin");
+    // `seedBootstrap` n'a pas de chemin naturel vers un conflit CAS (voir le commentaire de la
+    // route) : on le force ici au niveau du service pour prouver que LE CÂBLAGE HTTP (pas la
+    // primitive) traite désormais ce cas, exactement comme pour certify/activate/brains-activate.
+    // Double de test délibérément partiel (seule `seedBootstrap` est appelée par cette route) —
+    // d'où le cast explicite plutôt qu'une instance complète de `WorkforceService`.
+    const seedBootstrapThrows = {
+      seedBootstrap: async () => {
+        throw new WorkforceConflictError("bootstrap");
+      },
+    } as unknown as WorkforceService;
+    container.workforce = { ...container.workforce!, service: seedBootstrapThrows };
+    const res = await call(
+      "./bootstrap-data/seed/route",
+      "POST",
+      "/api/admin/workforce/bootstrap-data/seed",
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    const body = await res.json();
+    expect(body.error.code).toBe("transient_conflict");
   });
 });

@@ -41,6 +41,11 @@ export async function POST(
   request: Request,
   ctx: { params: Promise<{ roleId: string }> },
 ): Promise<Response> {
+  // Déclarés hors du `try` pour rester lisibles dans le `catch` : construire le message
+  // `not_found` contrôlé ci-dessous a besoin de `roleId`/`version` sans jamais retomber sur
+  // `error.message` (forme interne non contractuelle de l'exception).
+  let roleId: string | undefined;
+  let version: string | undefined;
   try {
     const container = await getContainer();
     const access = await protectRoute({
@@ -58,7 +63,7 @@ export async function POST(
       return apiError("persistence_unavailable", "digital workforce indisponible");
     }
 
-    const { roleId } = await ctx.params;
+    ({ roleId } = await ctx.params);
     const dryRun = new URL(request.url).searchParams.get("dryRun") === "true";
 
     const body = await readJson(request);
@@ -69,7 +74,8 @@ export async function POST(
     if (!parsed.success) {
       return apiError("invalid_input", "corps de certification invalide", zodDetails(parsed.error));
     }
-    const { version, testsPassed, evidenceRef } = parsed.data;
+    const { testsPassed, evidenceRef } = parsed.data;
+    version = parsed.data.version;
 
     const principal = container.workforce.sessions.fromSession(access.session);
 
@@ -114,7 +120,16 @@ export async function POST(
     return json({ dryRun: false, role, certifiedBy: principal.id, evidenceRef });
   } catch (error) {
     if (error instanceof WorkforceNotFoundError) {
-      return apiError("not_found", error.message);
+      // Message CONTRÔLÉ par la route (comme le chemin dryRun ci-dessus), jamais
+      // `error.message` tel quel : `roleId`/`version` viennent déjà de la requête de
+      // l'appelant (rien de nouveau n'est révélé), mais le texte renvoyé ne doit jamais
+      // dépendre de la forme interne, non contractuelle, d'un message d'exception. Cette
+      // erreur n'est levée qu'après que les deux soient assignés (`certifyRole` est le seul
+      // appelant), donc le repli `?? "?"` ne devrait jamais s'activer en pratique.
+      return apiError("not_found", `rôle ${roleId ?? "?"}@${version ?? "?"} introuvable`, {
+        roleId: roleId ?? null,
+        version: version ?? null,
+      });
     }
     if (error instanceof WorkforceDeniedError) {
       return apiError("governance_denied", "certification refusée par la gouvernance", {
