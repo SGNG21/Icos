@@ -100,8 +100,8 @@ export async function POST(
       testsPassed,
     );
     // Trace structurée, non garantie append-only (voir commentaire d'en-tête) : capturée par
-    // journalctl en production, sans toucher la forme de `role.certified`.
-    console.log(
+    // journalctl en production (via stderr), sans toucher la forme de `role.certified`.
+    console.error(
       JSON.stringify({
         event: "ROLE_CERTIFICATION_EVIDENCE",
         roleId,
