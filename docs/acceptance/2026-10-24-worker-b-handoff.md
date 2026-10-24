@@ -119,12 +119,16 @@ Le propriétaire a confirmé que `SGNG21/Icos` est **PUBLIC**. Avant tout push �
 ## Coordination demandée (FABLE 5.1, responsable IntegrationGate)
 
 FABLE 5.1 (tmux `icos-fable`) était un pair actif plus tôt dans cette session mais a disparu
-de `ListAgents` — session terminée, injoignable au moment de cette mise à jour. Aucune session
-n'est identifiable comme « responsable IntegrationGate » par son nom. J'ai envoyé la question
-(quelle branche cible d'intégration est correcte) à `repo-ad` (North Star, le pair le plus
-proche thématiquement de CORE3/IntegrationGate) — **réponse non reçue à l'heure de cette mise à
-jour**. Si une session future reprend ce travail : la question reste ouverte, ne pas supposer
-que `feat/omniroute-backend-20261021` est la cible définitive sans confirmation.
+de `ListAgents` — session terminée, injoignable. Aucune session n'est identifiable comme
+« responsable IntegrationGate » par son nom. Trois messages envoyés à `repo-ad` (North Star,
+le pair le plus proche thématiquement de CORE3/IntegrationGate) : la question initiale, une
+relance, puis un brief détaillé du propriétaire lui-même (5 questions explicites : branche
+cible, responsable de l'intégration, ordre de dépendance OmniRoute/CORE3, processus
+IntegrationGate, blocages factuels — à répondre en vérifiant le registre des branches,
+les handoffs et l'architecture North Star, sans attendre FABLE). **Réponse non reçue à l'heure
+de cette mise à jour.** Si une session future reprend ce travail : la question reste ouverte,
+ne pas supposer que `feat/omniroute-backend-20261021` est la cible définitive sans
+confirmation de North Star.
 
 ## Prochaine Gate
 
