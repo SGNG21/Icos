@@ -308,3 +308,118 @@ describe("flux complet : bootstrap-data -> certify x9 -> activate x9 -> brains/a
     expect(finalStatus.brains.registered).toBe(BRAIN_IDS.length); // still exactly 12, never duplicated
   });
 });
+
+/**
+ * COUVERTURE DES REFUS HTTP — ajoutée suite à la revue de sécurité indépendante du
+ * 2026-10-24 (agent `abb3b34bc4851d687`, verdict global « sûr pour IntegrationGate »,
+ * finding MEDIUM Q10 : « les 3 autres routes d'écriture n'ont aucun test 401/403/CSRF/
+ * MISSING_TESTS/NOT_CERTIFIED — la logique de gouvernance est prouvée ailleurs
+ * [role-composer.test.ts], mais le câblage HTTP de ces routes pour les refus ne l'est
+ * pas ». Ferme exactement ce point, sans retoucher aux routes elles-mêmes.
+ */
+describe("couverture des refus HTTP (finding Q10, revue 2026-10-24)", () => {
+  const writeRoutes: { name: string; mod: string; path: string; params?: { roleId: string } }[] = [
+    {
+      name: "bootstrap-data/seed",
+      mod: "./bootstrap-data/seed/route",
+      path: "/api/admin/workforce/bootstrap-data/seed",
+    },
+    {
+      name: "roles/[roleId]/certify",
+      mod: "./roles/[roleId]/certify/route",
+      path: "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
+      params: { roleId: "ICOS_CENTRAL" },
+    },
+    {
+      name: "roles/[roleId]/activate",
+      mod: "./roles/[roleId]/activate/route",
+      path: "/api/admin/workforce/roles/ICOS_CENTRAL/activate",
+      params: { roleId: "ICOS_CENTRAL" },
+    },
+    {
+      name: "brains/activate",
+      mod: "./brains/activate/route",
+      path: "/api/admin/workforce/brains/activate",
+    },
+  ];
+
+  for (const r of writeRoutes) {
+    it(`401 sans session sur ${r.name}`, async () => {
+      install("anonymous");
+      const res = await call(r.mod, "POST", r.path, { body: {}, params: r.params });
+      expect(res.status).toBe(401);
+    });
+
+    it(`403 pour un viewer (pas agents.manage) sur ${r.name}`, async () => {
+      install("viewer");
+      const res = await call(r.mod, "POST", r.path, { body: {}, params: r.params });
+      expect(res.status).toBe(403);
+    });
+
+    it(`403 CSRF — origine croisée refusée avant toute lecture du corps sur ${r.name}`, async () => {
+      install("admin");
+      const res = await call(r.mod, "POST", r.path, {
+        body: {},
+        params: r.params,
+        headers: { origin: "https://evil.example" },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it(`403 CSRF — en-tête Origin absent refusé sur ${r.name}`, async () => {
+      install("admin");
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      // `call()` ne permet pas de retirer `origin` par un header vide ; on construit la
+      // requête directement pour ce seul cas, exactement comme le ferait un appelant qui
+      // omet l'en-tête (navigateur non-CORS, script, replay) — `isSameOriginMutation`
+      // doit fermer, pas juste la convention du test harness.
+      const mod = (await import(r.mod)) as Record<
+        string,
+        (req: Request, ctx?: unknown) => Promise<Response>
+      >;
+      const request = new Request(`${ORIGIN}${r.path}`, {
+        method: "POST",
+        headers: { ...headers, cookie: COOKIE },
+        body: JSON.stringify({}),
+      });
+      const res = await mod.POST(
+        request,
+        r.params ? { params: Promise.resolve(r.params) } : undefined,
+      );
+      expect(res.status).toBe(403);
+    });
+  }
+
+  it("422 MISSING_TESTS — testsPassed vide ne certifie pas un rôle qui exige des tests", async () => {
+    install("admin");
+    await seedBootstrapData();
+    const res = await call(
+      "./roles/[roleId]/certify/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/certify",
+      {
+        body: { version: "1.0.0", testsPassed: [], evidenceRef: "r" },
+        params: { roleId: "ICOS_CENTRAL" },
+      },
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe("governance_denied");
+    expect(body.error.details.violations).toContain("MISSING_TESTS");
+  });
+
+  it("422 NOT_CERTIFIED — activer un rôle encore draft (certify sautée) est refusé", async () => {
+    install("admin");
+    await seedBootstrapData();
+    const res = await call(
+      "./roles/[roleId]/activate/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/activate",
+      { body: { version: "1.0.0" }, params: { roleId: "ICOS_CENTRAL" } },
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe("governance_denied");
+    expect(body.error.details.violations).toContain("NOT_CERTIFIED");
+  });
+});
