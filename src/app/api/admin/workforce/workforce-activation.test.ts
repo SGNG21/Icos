@@ -490,6 +490,47 @@ describe("corrections Codex 2026-10-24 : attestation, erreurs brutes, conflit no
     });
   });
 
+  // Revue indépendante n°2 (2026-10-24), finding informationnel : le chemin `dryRun` d'un
+  // rôle introuvable renvoyait le même texte que le chemin réel ci-dessus mais sans `details`
+  // structurés — asymétrie introduite par les deux tests précédents, pas une fuite (les mêmes
+  // valeurs étaient déjà dans le message). Corrigé pour une forme identique des deux côtés.
+  it("404 — dryRun d'un rôle introuvable porte les mêmes details que le chemin réel (certify)", async () => {
+    install("admin");
+    const res = await call(
+      "./roles/[roleId]/certify/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/certify?dryRun=true",
+      {
+        body: { version: "9.9.9", testsPassed: ["x"], evidenceRef: "test-evidence-dry-run" },
+        params: { roleId: "ICOS_CENTRAL" },
+      },
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toEqual({
+      code: "not_found",
+      message: "rôle ICOS_CENTRAL@9.9.9 introuvable",
+      details: { roleId: "ICOS_CENTRAL", version: "9.9.9" },
+    });
+  });
+
+  it("404 — même cohérence dryRun sur /roles/[roleId]/activate", async () => {
+    install("admin");
+    const res = await call(
+      "./roles/[roleId]/activate/route",
+      "POST",
+      "/api/admin/workforce/roles/ICOS_CENTRAL/activate?dryRun=true",
+      { body: { version: "9.9.9" }, params: { roleId: "ICOS_CENTRAL" } },
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toEqual({
+      code: "not_found",
+      message: "rôle ICOS_CENTRAL@9.9.9 introuvable",
+      details: { roleId: "ICOS_CENTRAL", version: "9.9.9" },
+    });
+  });
+
   it("503 — bootstrap-data/seed traite enfin WorkforceConflictError comme les 3 autres routes d'écriture", async () => {
     const container = install("admin");
     // `seedBootstrap` n'a pas de chemin naturel vers un conflit CAS (voir le commentaire de la

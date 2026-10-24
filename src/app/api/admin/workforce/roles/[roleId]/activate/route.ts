@@ -68,7 +68,10 @@ export async function POST(
       const snapshot = await container.workforce.readModel.snapshot(principal);
       const role = snapshot.roles.find((r) => r.roleId === roleId && r.version === version);
       if (!role) {
-        return apiError("not_found", `rôle ${roleId}@${version} introuvable`);
+        // Même forme structurée que le chemin réel (catch ci-dessous) — revue indépendante
+        // n°2, finding informationnel : avant ce commit les deux renvoyaient déjà les mêmes
+        // valeurs en texte, mais sous une forme différente (`details` absent ici).
+        return apiError("not_found", `rôle ${roleId}@${version} introuvable`, { roleId, version });
       }
       return json({
         dryRun: true,
