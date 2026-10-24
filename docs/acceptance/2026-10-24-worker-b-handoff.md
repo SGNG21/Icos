@@ -1,4 +1,4 @@
-# Worker B — handoff, 2026-10-24 (mise à jour n°3 : corrections Codex, dépôt public, pas de push)
+# Worker B — handoff, 2026-10-24 (mise à jour n°4 : revue n°2 reçue, finding corrigé)
 
 Statut factuel au moment de ce handoff. Ne remplace ni ne modifie le dossier Phase 1
 (`2026-10-23-brain-role-certification-dossier.md`) ni le runbook
@@ -7,10 +7,10 @@ qu'une session future (ou le propriétaire) reprenne sans refaire ce qui est dé
 
 ## Position
 
-- Branche `worktree-brain-activation-governance`, **HEAD `2620496`**.
+- Branche `worktree-brain-activation-governance`, **HEAD `b12fc81`**.
 - Descendant fast-forward trivial de `c350399` (tip actuel de `feat/omniroute-backend-20261021`
   — vérifié `git merge-base`, zéro commit divergent, zéro réécriture d'historique).
-- 19 fichiers touchés depuis `c350399`, 0 suppression. Zéro modification de
+- 20 fichiers touchés depuis `c350399`, 0 suppression. Zéro modification de
   `mission-binding.ts`/`chief-delegation.ts`/tout fichier CORE3 (ADR 0070 intact).
 - **Rien n'a été poussé sur `origin`.** Décision explicite du propriétaire (2026-10-24) : pas
   de push tant que la base `feat/omniroute-backend-20261021` (596 commits jamais audités par
@@ -37,15 +37,20 @@ des trois problèmes nommés, et corrigé chacune avec son propre test de régre
    (`seedBootstrap` ne fait que des insertions conditionnelles, verrou advisory par tenant côté
    Postgres) mais fragile sans ce traitement si l'implémentation change un jour.
 
+**Finding informationnel de la revue n°2, corrigé en plus** (commit `b12fc81`) : la branche
+`dryRun` de certify/activate renvoyait un `not_found` sans `details` structurés, devenue
+incohérente avec le chemin réel ci-dessus après le fix n°2. Aucune fuite (les mêmes valeurs
+étaient déjà dans le texte du message) — pure cohérence de forme, corrigée des deux côtés.
+
 ## Preuves (reproduites contre ce HEAD exact)
 
-| Contrôle                                                                                                   | Résultat                                                       |
-| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `pnpm lint`                                                                                                | 0 erreur, 0 avertissement sur les fichiers de cette mission    |
-| `pnpm typecheck`                                                                                           | propre                                                         |
-| `pnpm vitest run` (suite unitaire)                                                                         | 351 fichiers / **5091** tests PASS, 1/4 skip                   |
-| `pnpm vitest run --config vitest.integration.config.ts src/server/workforce/` (PostgreSQL, Testcontainers) | **3 fichiers / 16 tests PASS**                                 |
-| `pnpm vitest run src/app/api/admin/workforce/workforce-activation.test.ts`                                 | **30/30 PASS** (dont les 4 nouveaux tests de régression Codex) |
+| Contrôle                                                                                                   | Résultat                                                    |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `pnpm lint`                                                                                                | 0 erreur, 0 avertissement sur les fichiers de cette mission |
+| `pnpm typecheck`                                                                                           | propre                                                      |
+| `pnpm vitest run` (suite unitaire)                                                                         | 351 fichiers / **5093** tests PASS, 1/4 skip                |
+| `pnpm vitest run --config vitest.integration.config.ts src/server/workforce/` (PostgreSQL, Testcontainers) | **3 fichiers / 16 tests PASS**                              |
+| `pnpm vitest run src/app/api/admin/workforce/workforce-activation.test.ts`                                 | **32/32 PASS**                                              |
 
 **Piège noté pour la suite** : `pnpm test:integration -- <chemin>` ne filtre PAS — il relance
 les 110 fichiers d'intégration au complet. Utiliser `pnpm vitest run --config
@@ -71,13 +76,22 @@ bloquants : 2× MEDIUM = décisions propriétaire déjà documentées (opérateu
 `testsPassed` déclaratif non vérifiable) ; 1× LOW = architecture préexistante non exploitée ;
 1× INFO = aucune fuite de secret.
 
-## Revue de sécurité indépendante n°2 — en cours (couvre les 3 fixes Codex, `2620496`)
+## Revue de sécurité indépendante n°2 — verdict reçu (couvre les 3 fixes Codex, `2620496`)
 
-Lancée après les 3 corrections ci-dessus, bornée à leur diff exact
-(`administration-schemas.ts`, `certify/route.ts`, `activate/route.ts`,
-`bootstrap-data/seed/route.ts`, `workforce-activation.test.ts`) plutôt qu'une relecture
-complète (rien d'autre n'a changé depuis la revue n°1). **Verdict non disponible à l'heure de
-cette mise à jour — ne pas relancer en double, attendre sa notification.**
+Agent `a672b5c670fbc1c3b`, bornée au diff exact des 3 corrections (`administration-schemas.ts`,
+`certify/route.ts`, `activate/route.ts`, `bootstrap-data/seed/route.ts`,
+`workforce-activation.test.ts`) plutôt qu'une relecture complète — confirme par
+`git diff f11ebd8..2620496 --stat` que rien d'autre n'a changé depuis la revue n°1, dont les 9
+PASS restent donc valides tels quels.
+
+**Verdict : « sûr pour proposition d'intégration »** — 6/6 PASS (plancher `evidenceRef`
+honnête et suffisant pour ce qu'il prétend ; pas de fuite de portée `roleId`/`version` dans le
+nouveau `catch` ; l'inatteignabilité du conflit sur `seedBootstrap` vérifiée indépendamment
+dans le code plutôt que simplement reprise ; le test 503 prouve réellement le câblage HTTP
+malgré son mock partiel ; les 9 verdicts PASS de la revue n°1 tiennent ; `roleId`/`version`
+dans `details` ne révèlent rien de nouveau). Un finding informationnel (asymétrie `dryRun`
+sans `details`) — **corrigé** (voir ci-dessus, commit `b12fc81`, 2 tests de régression
+dédiés).
 
 ## Dépôt public — audit effectué, PAS de push
 
@@ -114,9 +128,9 @@ que `feat/omniroute-backend-20261021` est la cible définitive sans confirmation
 
 ## Prochaine Gate
 
-1. Revue indépendante n°2 (sur les 3 fixes Codex) — **en attente**.
-2. Réponse de coordination sur la branche d'intégration correcte — **en attente**.
+1. ~~Revue indépendante n°2.~~ **Reçue : favorable (6/6 PASS), finding informationnel corrigé.**
+2. Réponse de coordination sur la branche d'intégration correcte — **toujours en attente**.
 3. Audit/autorisation séparée de la base `feat/omniroute-backend-20261021` elle-même (596
-   commits) avant tout push — **en attente d'une décision propriétaire distincte**.
+   commits) avant tout push — **toujours en attente d'une décision propriétaire distincte**.
 4. Aucun push, aucune PR ouverte, aucune fusion, aucune migration, aucune action de
-   production tant que (1)-(3) ne sont pas résolus.
+   production tant que (2)-(3) ne sont pas résolus.
