@@ -64,6 +64,7 @@ describe("navigation", () => {
       "Accueil",
       "Overview",
       "Executive",
+      "North Star",
       "Missions",
       "Pipeline",
       "Workers",

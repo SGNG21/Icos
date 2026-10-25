@@ -5,6 +5,7 @@ export const NAV_ITEMS = [
   { href: "/", label: "Accueil", icon: "home" },
   { href: "/cockpit", label: "Overview", icon: "overview" },
   { href: "/cockpit/executive", label: "Executive", icon: "executive" },
+  { href: "/cockpit/north-star", label: "North Star", icon: "northstar" },
   { href: "/cockpit/missions", label: "Missions", icon: "missions" },
   { href: "/cockpit/pipeline", label: "Pipeline", icon: "pipeline" },
   { href: "/cockpit/workers", label: "Workers", icon: "workers" },
