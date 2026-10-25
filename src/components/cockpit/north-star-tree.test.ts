@@ -34,4 +34,10 @@ describe("NorthStarTreeView", () => {
     const out = html(h(NorthStarTreeView, { tree, programs, visible: null, openAll: false }));
     expect((out.match(/UNVERIFIED/g) ?? []).length).toBe(280);
   });
+
+  it("shows the NO_TELEMETRY evidence state on every program, project and capability (Codex MAJOR)", () => {
+    const out = html(h(NorthStarTreeView, { tree, programs, visible: null, openAll: false }));
+    // Badge occurrences only (`>NO_TELEMETRY<`): one seed capability title also contains the word.
+    expect((out.match(/>NO_TELEMETRY</g) ?? []).length).toBe(280);
+  });
 });

@@ -96,7 +96,26 @@ describe("north-star tree", () => {
       baseCapability({ id: "cycle-a", parent_id: "cycle-b" }),
       baseCapability({ id: "cycle-b", parent_id: "cycle-a" }),
     );
-    expect(() => buildNorthStarTree(clone)).toThrow(NorthStarSeedError);
+    expectSeedError(clone, "CYCLE");
+  });
+
+  it("rejects a second root (MULTIPLE_ROOTS)", () => {
+    const clone = cloneSeed();
+    clone.nodes.push(baseCapability({ id: "second-root", parent_id: null, type: "program" }));
+    expectSeedError(clone, "MULTIPLE_ROOTS");
+  });
+
+  it("rejects a capability attached directly to a program (TYPE_HIERARCHY)", () => {
+    const clone = cloneSeed();
+    clone.nodes.push(baseCapability({ id: "misparented", parent_id: "p01" }));
+    expectSeedError(clone, "TYPE_HIERARCHY");
+  });
+
+  it("rejects a non-null maturity (SCHEMA_INVALID)", () => {
+    const clone = cloneSeed();
+    const last = clone.nodes[clone.nodes.length - 1];
+    (last as unknown as { maturity: string }).maturity = "M3";
+    expectSeedError(clone, "SCHEMA_INVALID");
   });
 
   it("rejects a non-null numeric progress (SCHEMA_INVALID)", () => {

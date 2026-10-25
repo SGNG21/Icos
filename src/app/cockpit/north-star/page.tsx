@@ -9,29 +9,27 @@ import {
   nextActions,
 } from "@/core/north-star/tree";
 import type { NorthStarNode, NorthStarPriority } from "@/core/north-star/tree";
+import {
+  northStarHref,
+  parseNorthStarQuery,
+  type RawSearchParams,
+} from "@/features/cockpit/north-star-query";
 
 export const metadata = { title: "North Star" };
-
-function isPriority(value: string | undefined): value is NorthStarPriority {
-  return value === "P0" || value === "P1" || value === "P2";
-}
 
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; priority?: string; program?: string }>;
+  searchParams: Promise<RawSearchParams>;
 }) {
   const ctx = await getCockpitContext();
   if (!ctx) return null;
 
   const tree = loadNorthStarTree();
-  const params = await searchParams;
-
-  const q = params.q?.trim() ?? "";
-  const priority = isPriority(params.priority) ? params.priority : undefined;
   const programs = tree.childrenOf(tree.root.id);
   const programIds = new Set(programs.map((p) => p.id));
-  const program = params.program && programIds.has(params.program) ? params.program : undefined;
+  const query = parseNorthStarQuery(await searchParams, programIds);
+  const { q, priority, program } = query;
 
   const matches: readonly NorthStarNode[] = q ? searchNorthStar(tree, q) : tree.seed.nodes;
   let result: readonly NorthStarNode[] = matches;
@@ -45,13 +43,7 @@ export default async function Page({
   const visible = hasFilter ? visibleSetFor(tree, result) : null;
   const openAll = visible !== null;
 
-  function filterHref(priorityValue?: string) {
-    const sp = new URLSearchParams();
-    if (q) sp.set("q", q);
-    if (priorityValue) sp.set("priority", priorityValue);
-    const qs = sp.toString();
-    return `/cockpit/north-star${qs ? `?${qs}` : ""}`;
-  }
+  const filterHref = (priorityValue?: NorthStarPriority) => northStarHref(query, priorityValue);
 
   return (
     <div>
@@ -68,14 +60,14 @@ export default async function Page({
       <div className="cx-banner">{tree.seed.authority_warning}</div>
 
       <form method="GET" action="/cockpit/north-star">
-        <input type="text" name="q" defaultValue={q} placeholder="Rechercher…" />
-        <select name="priority" defaultValue={priority ?? ""}>
+        <input type="text" name="q" defaultValue={q} placeholder="Rechercher…" aria-label="Rechercher un nœud North Star" />
+        <select name="priority" defaultValue={priority ?? ""} aria-label="Filtrer par priorité">
           <option value="">Toutes priorités</option>
           <option value="P0">P0</option>
           <option value="P1">P1</option>
           <option value="P2">P2</option>
         </select>
-        <select name="program" defaultValue={program ?? ""}>
+        <select name="program" defaultValue={program ?? ""} aria-label="Filtrer par programme">
           <option value="">Tous programmes</option>
           {programs.map((p) => (
             <option key={p.id} value={p.id}>

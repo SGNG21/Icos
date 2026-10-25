@@ -50,6 +50,7 @@ function ProjectDetails({
         <span>{node.title}</span>
         <span className="cx-chip">{node.priority}</span>
         <ToneBadge size="sm" tone={toneFor(node.implementation_status)} label={node.implementation_status} />
+        <span className="cx-badge cx-badge--sm">{evidenceStateOf(node)}</span>
         <span className="cx-badge cx-badge--sm">{children.length}</span>
       </summary>
       <ol className="cx-list">
@@ -86,6 +87,7 @@ export function NorthStarTreeView({
                 <span>{program.title}</span>
                 <ToneBadge size="sm" tone={toneFor(program.implementation_status)} label={program.implementation_status} />
                 <span className="cx-chip">{program.priority}</span>
+                <span className="cx-badge cx-badge--sm">{evidenceStateOf(program)}</span>
                 <span className="cx-badge cx-badge--sm">{projects.length}</span>
               </summary>
               <ol className="cx-list">
